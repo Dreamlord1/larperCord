@@ -16,6 +16,8 @@
 #include <zlib.h>
 #define CURL_DISABLE_TYPECHECK 1
 #include <curl/curl.h>
+#include <webp/decode.h>
+#include <webp/demux.h>
 #define STBI_NO_STDIO
 #include "stb_image.h"
 /* GIF quadro a quadro (third_party/stb/stb_image.c). */

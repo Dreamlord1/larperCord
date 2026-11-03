@@ -1,4 +1,4 @@
-// Só os formatos que o Discord manda (o proxy de mídia converte o resto para PNG).
+// Só os formatos que o Discord manda (WebP fica com a libwebp, em ui/images.zig).
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG

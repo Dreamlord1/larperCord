@@ -1,4 +1,5 @@
-//! Imagens dos anexos: threads de mídia baixam e decodificam (stb_image), a thread
+//! Imagens dos anexos: threads de mídia baixam e decodificam (stb_image para
+//! PNG/JPEG/GIF/BMP, libwebp para WebP, APNG em apng.zig), a thread
 //! principal só cria a textura. Pede ao proxy de mídia do Discord a imagem
 //! já no tamanho em que vai aparecer (menos rede e menos memória), guarda as
 //! texturas num cache com limite e solta o que não é visto há um tempo.
@@ -12,6 +13,7 @@ const platform = @import("../platform/window.zig");
 const media_url = @import("../net/media_url.zig");
 const allowedHost = media_url.allowedHost;
 const proxiedUrl = media_url.proxiedUrl;
+const apng = @import("apng.zig");
 
 const alloc = std.heap.c_allocator;
 
@@ -20,8 +22,8 @@ const budget_bytes: usize = 96 * 1024 * 1024;
 const idle_ms: i64 = 120_000;
 /// Maior arquivo que a gente baixa (o Discord aceita até 10 MB sem Nitro).
 const max_download: usize = 32 * 1024 * 1024;
-/// Limite de um GIF já reduzido: passando disso, pula quadros (o tempo
-/// total continua o mesmo, só fica menos fluido).
+/// Limite de uma animação (GIF, WebP, APNG) já reduzida: passando disso,
+/// pula quadros (o tempo total continua o mesmo, só fica menos fluido).
 const max_gif_bytes: usize = 48 * 1024 * 1024;
 const max_gif_frames: usize = 500;
 const workers = 4;
@@ -30,7 +32,7 @@ pub const Tex = struct {
     ref: c.ImTextureRef,
     w: u16,
     h: u16,
-    /// Tem mais de um quadro (GIF animado).
+    /// Tem mais de um quadro (GIF, WebP ou PNG animado).
     animated: bool = false,
 };
 
@@ -319,14 +321,29 @@ fn load(curl: *?*c.CURL, jb: Job, stop: *std.atomic.Value(bool)) Pixels {
         var pbuf: [1024]u8 = undefined;
         const path = std.fmt.bufPrintSentinel(&pbuf, "{s}", .{jb.url[7..]}, 0) catch return .{};
         var size: usize = 0;
-        const data = c.SDL_LoadFile(path.ptr, &size) orelse return .{};
+        const data = c.SDL_LoadFile(path.ptr, &size) orelse {
+            logFail(jb.url, "não abriu o arquivo", .{});
+            return .{};
+        };
         defer c.SDL_free(data);
-        if (size > max_download) return .{};
+        if (size > max_download) {
+            logFail(jb.url, "grande demais ({d} bytes)", .{size});
+            return .{};
+        }
         bytes.appendSlice(alloc, @as([*]const u8, @ptrCast(data))[0..size]) catch return .{};
     } else {
         if (!download(curl, jb, &bytes, stop)) return .{};
     }
-    return decode(bytes.items, jb.max_w, jb.max_h);
+    const px = decode(bytes.items, jb.max_w, jb.max_h);
+    if (px.frames.len == 0) logFail(jb.url, "não decodificou ({d} bytes, começa com {x})", .{ bytes.items.len, bytes.items[0..@min(4, bytes.items.len)] });
+    return px;
+}
+
+/// Com LARPER_DEBUG_MEDIA, diz no log por que uma imagem falhou. Só host e
+/// caminho: a query das URLs do Discord leva assinaturas.
+fn logFail(url: []const u8, comptime fmt: []const u8, args: anytype) void {
+    if (c.SDL_getenv("LARPER_DEBUG_MEDIA") == null) return;
+    std.log.info("mídia {s}: " ++ fmt, .{media_url.logPart(url)} ++ args);
 }
 
 const Sink = struct { list: *std.ArrayList(u8), too_big: bool = false };
@@ -361,7 +378,10 @@ fn curlGlobalInit() void {
 }
 
 fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8), stop: *std.atomic.Value(bool)) bool {
-    if (!allowedHost(jb.url)) return false;
+    if (!allowedHost(jb.url)) {
+        logFail(jb.url, "domínio não permitido", .{});
+        return false;
+    }
     if (curl.* == null) {
         curlGlobalInit();
         curl.* = c.curl_easy_init();
@@ -385,10 +405,24 @@ fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8), stop: *std.atomic
     _ = c.curl_easy_setopt(h, c.CURLOPT_NOPROGRESS, @as(c_long, 0));
     _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFOFUNCTION, abortCb);
     _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFODATA, stop);
-    if (c.curl_easy_perform(h) != c.CURLE_OK) return false;
+    const rc = c.curl_easy_perform(h);
+    if (rc != c.CURLE_OK) {
+        if (sink.too_big) {
+            logFail(jb.url, "grande demais (mais de {d} MB)", .{max_download / (1024 * 1024)});
+        } else if (!stop.load(.acquire)) logFail(jb.url, "erro do curl: {s}", .{std.mem.span(c.curl_easy_strerror(rc))});
+        return false;
+    }
     var status: c_long = 0;
     _ = c.curl_easy_getinfo(h, c.CURLINFO_RESPONSE_CODE, &status);
-    return status == 200 and out.items.len > 0;
+    if (status != 200) {
+        logFail(jb.url, "HTTP {d}", .{status});
+        return false;
+    }
+    if (out.items.len == 0) {
+        logFail(jb.url, "resposta vazia", .{});
+        return false;
+    }
+    return true;
 }
 
 /// Tamanho final de uma imagem sw×sh cabendo em max_w×max_h (nunca aumenta).
@@ -401,10 +435,16 @@ fn fit(sw: usize, sh: usize, max_w: u16, max_h: u16) [2]usize {
 }
 
 /// Decodifica e reduz para caber em max_w×max_h. Os pixels voltam no
-/// c_allocator (RGBA, 4 bytes por pixel). GIF animado vira vários quadros.
+/// c_allocator (RGBA, 4 bytes por pixel). GIF, WebP e PNG animados viram
+/// vários quadros. O formato vem dos primeiros bytes, não da URL.
 fn decode(data: []const u8, max_w: u16, max_h: u16) Pixels {
+    if (isWebp(data)) return decodeWebp(data, max_w, max_h);
     if (data.len > 6 and std.mem.startsWith(u8, data, "GIF8")) {
         const anim_px = decodeGif(data, max_w, max_h);
+        if (anim_px.frames.len > 0) return anim_px;
+    }
+    if (apng.isAnimated(data)) {
+        const anim_px = decodeApng(data, max_w, max_h);
         if (anim_px.frames.len > 0) return anim_px;
     }
     var w: c_int = 0;
@@ -412,6 +452,11 @@ fn decode(data: []const u8, max_w: u16, max_h: u16) Pixels {
     var comp: c_int = 0;
     const px = c.stbi_load_from_memory(data.ptr, @intCast(data.len), &w, &h, &comp, 4) orelse return .{};
     defer c.stbi_image_free(px);
+    return still(px, w, h, max_w, max_h);
+}
+
+/// Uma imagem só (RGBA w×h), copiada e reduzida.
+fn still(px: [*]const u8, w: c_int, h: c_int, max_w: u16, max_h: u16) Pixels {
     if (w <= 0 or h <= 0 or w > 16384 or h > 16384) return .{};
     const sw: usize = @intCast(w);
     const sh: usize = @intCast(h);
@@ -424,7 +469,15 @@ fn decode(data: []const u8, max_w: u16, max_h: u16) Pixels {
     return Pixels.single(out, dims[0], dims[1]);
 }
 
-const GifSink = struct {
+/// Navegadores tratam atraso < 20 ms de GIF como 100 ms; fazemos igual
+/// (no WebP também, que quase sempre vem de um GIF).
+fn gifDelay(ms: i64) u32 {
+    return if (ms < 20) 100 else @intCast(@min(ms, 60_000));
+}
+
+/// Quadros de uma animação (GIF, WebP, APNG), já reduzidos e com limite de
+/// memória.
+const FrameSink = struct {
     max_w: u16,
     max_h: u16,
     frames: std.ArrayList(PixFrame) = .empty,
@@ -433,14 +486,13 @@ const GifSink = struct {
     /// Guarda 1 de cada `step` quadros (sobe quando passa do limite).
     step: usize = 1,
     seen: usize = 0,
-    failed: bool = false,
 
-    fn bytes(g: *const GifSink) usize {
+    fn bytes(g: *const FrameSink) usize {
         return g.frames.items.len * g.w * g.h * 4;
     }
 
     /// Junta os quadros dois a dois (somando o tempo) para caber no limite.
-    fn halve(g: *GifSink) void {
+    fn halve(g: *FrameSink) void {
         var i: usize = 0;
         var o: usize = 0;
         while (i < g.frames.items.len) : (i += 2) {
@@ -456,47 +508,120 @@ const GifSink = struct {
         g.step *= 2;
     }
 
-    fn cb(ud: ?*anyopaque, rgba: [*c]const u8, w: c_int, h: c_int, delay: c_int) callconv(.c) c_int {
-        const g: *GifSink = @ptrCast(@alignCast(ud.?));
-        if (w <= 0 or h <= 0 or w > 4096 or h > 4096) return 0;
-        const sw: usize = @intCast(w);
-        const sh: usize = @intCast(h);
-        // Navegadores tratam atraso < 20 ms como 100 ms; fazemos igual.
-        const ms: u32 = if (delay < 20) 100 else @intCast(delay);
+    /// Mais um quadro RGBA sw×sh (todos do mesmo tamanho). false = parar.
+    fn add(g: *FrameSink, rgba: []const u8, sw: usize, sh: usize, ms: u32) bool {
         defer g.seen += 1;
         if (g.seen % g.step != 0) {
             if (g.frames.items.len > 0) g.frames.items[g.frames.items.len - 1].delay_ms += ms;
-            return 1;
+            return true;
         }
         const dims = fit(sw, sh, g.max_w, g.max_h);
         g.w = dims[0];
         g.h = dims[1];
-        const out = alloc.alloc(u8, dims[0] * dims[1] * 4) catch {
-            g.failed = true;
-            return 0;
-        };
+        const out = alloc.alloc(u8, dims[0] * dims[1] * 4) catch return false;
         const src = rgba[0 .. sw * sh * 4];
         if (dims[0] == sw and dims[1] == sh) @memcpy(out, src) else resize(src, sw, sh, out, dims[0], dims[1]);
         g.frames.append(alloc, .{ .data = out, .delay_ms = ms }) catch {
             alloc.free(out);
-            g.failed = true;
-            return 0;
+            return false;
         };
         if (g.bytes() > max_gif_bytes or g.frames.items.len > max_gif_frames) g.halve();
-        return 1;
+        return true;
+    }
+
+    fn finish(g: *FrameSink) Pixels {
+        if (g.frames.items.len == 0) return .{};
+        const frames = g.frames.toOwnedSlice(alloc) catch {
+            for (g.frames.items) |f| alloc.free(f.data);
+            g.frames.deinit(alloc);
+            return .{};
+        };
+        return .{ .frames = frames, .w = @intCast(g.w), .h = @intCast(g.h) };
+    }
+
+    fn gifCb(ud: ?*anyopaque, rgba: [*c]const u8, w: c_int, h: c_int, delay: c_int) callconv(.c) c_int {
+        const g: *FrameSink = @ptrCast(@alignCast(ud.?));
+        if (w <= 0 or h <= 0 or w > 4096 or h > 4096) return 0;
+        const sw: usize = @intCast(w);
+        const sh: usize = @intCast(h);
+        return @intFromBool(g.add(rgba[0 .. sw * sh * 4], sw, sh, gifDelay(delay)));
     }
 };
 
 fn decodeGif(data: []const u8, max_w: u16, max_h: u16) Pixels {
-    var sink: GifSink = .{ .max_w = max_w, .max_h = max_h };
-    _ = c.larper_gif_frames(data.ptr, @intCast(data.len), GifSink.cb, &sink);
-    if (sink.frames.items.len == 0) return .{};
-    const frames = sink.frames.toOwnedSlice(alloc) catch {
-        for (sink.frames.items) |f| alloc.free(f.data);
-        sink.frames.deinit(alloc);
-        return .{};
-    };
-    return .{ .frames = frames, .w = @intCast(sink.w), .h = @intCast(sink.h) };
+    var sink: FrameSink = .{ .max_w = max_w, .max_h = max_h };
+    _ = c.larper_gif_frames(data.ptr, @intCast(data.len), FrameSink.gifCb, &sink);
+    return sink.finish();
+}
+
+/// "RIFF", tamanho, "WEBP".
+fn isWebp(data: []const u8) bool {
+    return data.len >= 12 and std.mem.eql(u8, data[0..4], "RIFF") and std.mem.eql(u8, data[8..12], "WEBP");
+}
+
+/// WebP parado vai direto; o animado passa pelo WebPAnimDecoder, que já
+/// compõe cada quadro na tela cheia (os tempos dele são acumulados).
+fn decodeWebp(data: []const u8, max_w: u16, max_h: u16) Pixels {
+    var feat: c.WebPBitstreamFeatures = undefined;
+    if (c.WebPGetFeatures(data.ptr, data.len, &feat) != c.VP8_STATUS_OK) return .{};
+    if (feat.has_animation == 0) {
+        var w: c_int = 0;
+        var h: c_int = 0;
+        const px = c.WebPDecodeRGBA(data.ptr, data.len, &w, &h) orelse return .{};
+        defer c.WebPFree(px);
+        return still(px, w, h, max_w, max_h);
+    }
+    var opts: c.WebPAnimDecoderOptions = undefined;
+    if (c.WebPAnimDecoderOptionsInit(&opts) == 0) return .{};
+    opts.color_mode = c.MODE_RGBA;
+    opts.use_threads = 0;
+    const wd: c.WebPData = .{ .bytes = data.ptr, .size = data.len };
+    const dec = c.WebPAnimDecoderNew(&wd, &opts) orelse return .{};
+    defer c.WebPAnimDecoderDelete(dec);
+    var info: c.WebPAnimInfo = undefined;
+    if (c.WebPAnimDecoderGetInfo(dec, &info) == 0) return .{};
+    if (info.canvas_width == 0 or info.canvas_height == 0 or info.canvas_width > 4096 or info.canvas_height > 4096) return .{};
+    const cw: usize = info.canvas_width;
+    const ch: usize = info.canvas_height;
+    var sink: FrameSink = .{ .max_w = max_w, .max_h = max_h };
+    var last: c_int = 0;
+    while (c.WebPAnimDecoderHasMoreFrames(dec) != 0) {
+        var buf: [*c]u8 = null;
+        var ts: c_int = 0;
+        if (c.WebPAnimDecoderGetNext(dec, &buf, &ts) == 0 or buf == null) break;
+        defer last = ts;
+        if (!sink.add(buf[0 .. cw * ch * 4], cw, ch, gifDelay(ts - last))) break;
+    }
+    return sink.finish();
+}
+
+/// Cada quadro do APNG chega como um PNG avulso, que o stb_image decodifica.
+const ApngCtx = struct {
+    sink: *FrameSink,
+
+    pub fn decode(_: *ApngCtx, png: []const u8, w: u32, h: u32, out: []u8) bool {
+        var iw: c_int = 0;
+        var ih: c_int = 0;
+        var comp: c_int = 0;
+        const px = c.stbi_load_from_memory(png.ptr, @intCast(png.len), &iw, &ih, &comp, 4) orelse return false;
+        defer c.stbi_image_free(px);
+        if (iw != w or ih != h) return false;
+        @memcpy(out, px[0..out.len]);
+        return true;
+    }
+
+    pub fn emit(x: *ApngCtx, rgba: []const u8, w: u32, h: u32, delay_ms: u32) bool {
+        // O tempo do APNG é fracionário (1/60 s existe de verdade): só
+        // ≤ 10 ms vira 100 ms, como nos navegadores.
+        return x.sink.add(rgba, w, h, if (delay_ms <= 10) 100 else @min(delay_ms, 60_000));
+    }
+};
+
+fn decodeApng(data: []const u8, max_w: u16, max_h: u16) Pixels {
+    var sink: FrameSink = .{ .max_w = max_w, .max_h = max_h };
+    var ctx: ApngCtx = .{ .sink = &sink };
+    _ = apng.play(alloc, data, 4096, &ctx) catch {};
+    return sink.finish();
 }
 
 /// Redução por média de área (sem serrilhado), com alpha pré-multiplicado
