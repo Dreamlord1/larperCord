@@ -31,10 +31,10 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord** | **38–45 MB** | **0–0,2%** | **1,8 MB** |
+| **larperCord** | **40–48 MB** | **0–0,2%** | **2,1 MB** |
 
 <sub>¹ média desde a abertura, medida pelo `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`. Medido com
-`tools/membench.sh`. Do total, só ~13 MB são do app; o resto é o driver da NVIDIA.</sub>
+`tools/membench.sh`. Do total, só ~15 MB são do app; o resto é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL).</sub>
 
 ## O que tem
 
