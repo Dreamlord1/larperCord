@@ -28,6 +28,30 @@ pub const Selection = struct {
     }
 };
 
+/// Imagem aberta em tela cheia (cópia da URL: a mensagem pode sumir).
+pub const Viewer = struct {
+    url: [1024]u8 = undefined,
+    url_len: u16 = 0,
+    name: [128]u8 = undefined,
+    name_len: u8 = 0,
+    w: u16 = 0,
+    h: u16 = 0,
+};
+
+/// Arquivo escolhido para ir junto com a próxima mensagem.
+pub const Upload = struct {
+    /// Caminho completo (c_allocator).
+    path: [:0]u8,
+    size: u64,
+    /// Tamanho da imagem (0 = não é imagem).
+    width: u16 = 0,
+    height: u16 = 0,
+
+    pub fn name(u: *const Upload) []const u8 {
+        return std.fs.path.basename(u.path);
+    }
+};
+
 pub const Scroll = struct {
     pos: f32 = -1,
     target: f32 = 0,
@@ -94,6 +118,8 @@ pub const State = struct {
     jump_until_ms: i64 = 0,
     muted_channels: std.AutoHashMapUnmanaged(Id, void) = .empty,
     toast: Toast = .{},
+    viewer: ?Viewer = null,
+    uploads: std.ArrayList(Upload) = .empty,
     /// Contador de "geração" do tema (invalida caches de layout).
     theme_gen: u8 = 0,
     nonce: u64 = 1,

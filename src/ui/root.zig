@@ -114,6 +114,7 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
 
     popup.draw(ctx);
     settings.draw(ctx, previews);
+    @import("attachments.zig").viewer(ctx);
     palette.draw(ctx);
     toast(ctx);
     shortcuts(ctx);

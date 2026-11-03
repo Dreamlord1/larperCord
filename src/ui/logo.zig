@@ -96,6 +96,69 @@ pub fn glow(dl: *c.ImDrawList, cx: f32, cy: f32, rx: f32, ry: f32, color: Rgba) 
     }
 }
 
+/// Copia o caminho que está sendo montado (já em pontos) e o limpa.
+fn takePath(dl: *c.ImDrawList, out: []c.ImVec2) usize {
+    const path = &dl.*._Path;
+    const n: usize = @min(@as(usize, @intCast(path.*.Size)), out.len);
+    @memcpy(out[0..n], path.*.Data[0..n]);
+    c.ImDrawList_PathClear(dl);
+    return n;
+}
+
+/// Faixa por dentro da borda do polígono, mais larga onde a borda está
+/// virada para `light` (luz de desenho animado, sem precisar de recorte).
+fn edgeBand(dl: *c.ImDrawList, poly: []const c.ImVec2, light: [2]f32, width: f32, col: Rgba) void {
+    const n = poly.len;
+    if (n < 3 or col.a <= 0.002) return;
+    // Sentido do polígono, para saber de que lado fica o "para dentro".
+    var area: f32 = 0;
+    for (0..n) |i| {
+        const a = poly[i];
+        const b = poly[(i + 1) % n];
+        area += a.x * b.y - b.x * a.y;
+    }
+    const sgn: f32 = if (area > 0) 1 else -1;
+    var inner: [400]c.ImVec2 = undefined;
+    var fringe: [400]c.ImVec2 = undefined;
+    var wk: [400]f32 = undefined;
+    for (0..n) |i| {
+        const prev = poly[(i + n - 1) % n];
+        const next = poly[(i + 1) % n];
+        var tx = next.x - prev.x;
+        var ty = next.y - prev.y;
+        const len = @max(@sqrt(tx * tx + ty * ty), 0.0001);
+        tx /= len;
+        ty /= len;
+        // Normal para fora.
+        const ox = ty * sgn;
+        const oy = -tx * sgn;
+        const facing = ox * light[0] + oy * light[1];
+        const k = std.math.clamp((facing - 0.15) / 0.6, 0, 1);
+        wk[i] = k * k * (3 - 2 * k);
+        const wd = width * wk[i];
+        inner[i] = .{ .x = poly[i].x - ox * wd, .y = poly[i].y - oy * wd };
+        // 1 px a mais, sumindo: a borda de dentro fica suave.
+        const fw = wd + @min(wd, 1.2);
+        fringe[i] = .{ .x = poly[i].x - ox * fw, .y = poly[i].y - oy * fw };
+    }
+    const uv = c.ImGui_GetFontTexUvWhitePixel();
+    const u = col.u();
+    const clear = col.alpha(0).u();
+    for (0..n) |i| {
+        const j = (i + 1) % n;
+        if (wk[i] < 0.001 and wk[j] < 0.001) continue;
+        c.ImDrawList_PrimReserve(dl, 12, 6);
+        const base: c_uint = @intCast(dl.*._VtxCurrentIdx);
+        c.ImDrawList_PrimWriteVtx(dl, poly[i], uv, u);
+        c.ImDrawList_PrimWriteVtx(dl, poly[j], uv, u);
+        c.ImDrawList_PrimWriteVtx(dl, inner[j], uv, u);
+        c.ImDrawList_PrimWriteVtx(dl, inner[i], uv, u);
+        c.ImDrawList_PrimWriteVtx(dl, fringe[j], uv, clear);
+        c.ImDrawList_PrimWriteVtx(dl, fringe[i], uv, clear);
+        for ([_]c_uint{ 0, 1, 2, 0, 2, 3, 3, 2, 4, 3, 4, 5 }) |o| c.ImDrawList_PrimWriteIdx(dl, @intCast(base + o));
+    }
+}
+
 // --- Caminhos do SVG -------------------------------------------------------------
 
 fn lineTo(dl: *c.ImDrawList, x: Xf, sx: f32, sy: f32) void {
@@ -188,18 +251,14 @@ pub fn draw(dl: *c.ImDrawList, cx: f32, cy: f32, size: f32, pose: Pose) void {
     if (pose.body > 0.001) {
         // O corpo cresce a partir do meio de baixo.
         const x = base.around(700, 700, pose.body);
-        // Luz rosa na borda: o corpo inteiro em rosa, o roxo por cima um
-        // pouco menor (encolhido em direção ao canto de baixo à esquerda).
+        // O corpo em roxo; depois faixas por dentro do contorno: luz rosa
+        // onde a borda olha para cima/direita, sombra onde olha para baixo/esquerda.
         bodyPath(dl, x);
-        c.ImDrawList_PathFillConcave(dl, rim_col.alpha(A).u());
-        bodyPath(dl, x.around(250, 900, 0.95));
-        c.ImDrawList_PathFillConcave(dl, body_col.alpha(A).u());
-        // Sombra embaixo à esquerda.
-        lineTo(dl, x, 156, 690);
-        cubicTo(dl, x, 230, 810, 330, 870, 445, 900);
-        lineTo(dl, x, 428, 938);
-        cubicTo(dl, x, 320, 910, 220, 870, 148, 830);
-        c.ImDrawList_PathFillConcave(dl, shade_col.alpha(A).u());
+        var poly: [400]c.ImVec2 = undefined;
+        const n = takePath(dl, &poly);
+        c.ImDrawList_AddConcavePolyFilled(dl, &poly, @intCast(n), body_col.alpha(A).u());
+        edgeBand(dl, poly[0..n], .{ 0.55, -0.83 }, 52 * x.k, rim_col.alpha(A));
+        edgeBand(dl, poly[0..n], .{ -0.6, 0.8 }, 70 * x.k, shade_col.alpha(A));
         // Contorno.
         bodyPath(dl, x);
         c.ImDrawList_PathStroke(dl, ink.alpha(A).u(), 26 * x.k, c.ImDrawFlags_Closed);

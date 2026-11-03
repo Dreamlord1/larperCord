@@ -16,3 +16,5 @@
 #include <zlib.h>
 #define CURL_DISABLE_TYPECHECK 1
 #include <curl/curl.h>
+#define STBI_NO_STDIO
+#include "stb_image.h"

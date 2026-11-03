@@ -87,46 +87,60 @@ pub const Env = struct {
 
 // --- Cores ---------------------------------------------------------------------
 
+/// Neutra de propósito: a cor da marca fica só no mascote e em detalhes
+/// (foco, interruptor). Nada de degradê no fundo nem no botão.
 const Pal = struct {
-    bg_top: Rgba,
-    bg_bot: Rgba,
+    bg: Rgba,
     card: Rgba,
     card_border: Rgba,
     field: Rgba,
+    field_border: Rgba,
     text: Rgba,
     muted: Rgba,
     faint: Rgba,
     danger: Rgba,
-    star: Rgba,
-    aurora: f32,
+    /// Pontos da grade do fundo.
+    dot: Rgba,
+    /// Botão principal (sólido) e o texto dele.
+    primary: Rgba,
+    on_primary: Rgba,
+    /// Detalhe de cor: foco do campo, interruptor, links.
+    accent: Rgba,
+    link: Rgba,
 };
 
 const dark: Pal = .{
-    .bg_top = Rgba.hex(0x0B0816),
-    .bg_bot = Rgba.hex(0x151030),
-    .card = Rgba.hex(0x17122C).alpha(0.82),
-    .card_border = Rgba.white.alpha(0.09),
-    .field = Rgba.hex(0x0C0919).alpha(0.9),
-    .text = Rgba.hex(0xF4F1FF),
-    .muted = Rgba.hex(0xA9A1CB),
-    .faint = Rgba.hex(0x6F678F),
-    .danger = Rgba.hex(0xFF6B85),
-    .star = Rgba.hex(0xD9CCFF),
-    .aurora = 1,
+    .bg = Rgba.hex(0x0A0A0C),
+    .card = Rgba.hex(0x111114),
+    .card_border = Rgba.hex(0x232329),
+    .field = Rgba.hex(0x0B0B0E),
+    .field_border = Rgba.hex(0x2A2A31),
+    .text = Rgba.hex(0xEDEDEF),
+    .muted = Rgba.hex(0xA0A0AB),
+    .faint = Rgba.hex(0x66666F),
+    .danger = Rgba.hex(0xF2555A),
+    .dot = Rgba.white,
+    .primary = Rgba.hex(0xEDEDEF),
+    .on_primary = Rgba.hex(0x0A0A0C),
+    .accent = Rgba.hex(0x8B5CF6),
+    .link = Rgba.hex(0xB9A4F8),
 };
 
 const light: Pal = .{
-    .bg_top = Rgba.hex(0xFBFAFF),
-    .bg_bot = Rgba.hex(0xEDE8FF),
-    .card = Rgba.white.alpha(0.86),
-    .card_border = Rgba.hex(0x2A1F55).alpha(0.1),
-    .field = Rgba.hex(0xF3F0FC),
-    .text = Rgba.hex(0x17112E),
-    .muted = Rgba.hex(0x5C5480),
-    .faint = Rgba.hex(0x948DB3),
-    .danger = Rgba.hex(0xD6264B),
-    .star = Rgba.hex(0x7C5CFF),
-    .aurora = 0.55,
+    .bg = Rgba.hex(0xFAFAFA),
+    .card = Rgba.white,
+    .card_border = Rgba.hex(0xE4E4E7),
+    .field = Rgba.hex(0xFAFAFA),
+    .field_border = Rgba.hex(0xD4D4D8),
+    .text = Rgba.hex(0x18181B),
+    .muted = Rgba.hex(0x52525B),
+    .faint = Rgba.hex(0x8E8E96),
+    .danger = Rgba.hex(0xDC2626),
+    .dot = Rgba.black,
+    .primary = Rgba.hex(0x18181B),
+    .on_primary = Rgba.white,
+    .accent = Rgba.hex(0x7C3AED),
+    .link = Rgba.hex(0x6D28D9),
 };
 
 // --- Curvas de animação ------------------------------------------------------
@@ -292,7 +306,7 @@ pub fn draw(l: *Login, env: Env) ?Result {
     l.look[0] = anim.step(l.look[0], want[0], 9);
     l.look[1] = anim.step(l.look[1], want[1], 9);
     pose.look = l.look;
-    pose.glow = 0.85 + 0.15 * @sin(t * 2.0);
+    pose.glow = 0.3 + 0.05 * @sin(t * 2.0);
 
     var bob = if (t > 1.4) @sin((t - 1.4) * 1.6) * 5 else 0;
     var shake: f32 = 0;
@@ -318,15 +332,9 @@ pub fn draw(l: *Login, env: Env) ?Result {
     if (card_k <= 0.001) return null;
     const cr: Rect = .{ .x = card_x + shake, .y = card_y + (1 - card_k) * 28 + leave_k * 24, .w = card_w, .h = ch };
     const ca = card_k * f.a;
-    d.shadow(f.dl, cr, 22, 30, Rgba.black.alpha((if (env.light) @as(f32, 0.12) else 0.45) * ca));
-    d.rect(f.dl, cr, f.p.card.alpha(ca), 22);
-    d.border(f.dl, cr, f.p.card_border.alpha(ca), 22, 1);
-    // Fio de luz no topo do cartão.
-    {
-        const start = f.dl.*.VtxBuffer.Size;
-        d.rect(f.dl, .{ .x = cr.x + 40, .y = cr.y, .w = cr.w - 80, .h = 1.5 }, Rgba.white, 1);
-        logo.gradient(f.dl, start, d.v(cr.x + 40, cr.y), d.v(cr.right() - 40, cr.y), 0.8 * ca);
-    }
+    d.shadow(f.dl, cr, 14, 18, Rgba.black.alpha((if (env.light) @as(f32, 0.06) else 0.4) * ca));
+    d.rect(f.dl, cr, f.p.card.alpha(ca), 14);
+    d.border(f.dl, cr, f.p.card_border.alpha(ca), 14, 1);
 
     const saved_a = f.a;
     f.a = ca;
@@ -354,56 +362,37 @@ fn background(f: *Frame) void {
     const dl = f.dl;
     const r = f.win;
     const t = f.l.t;
-    const intro = outCubic(seg(t, 0, 0.6));
+    const intro = outCubic(seg(t, 0, 0.8));
     const a = f.a;
-    c.ImDrawList_AddRectFilledMultiColor(dl, d.v(r.x, r.y), d.v(r.right(), r.bottom()), f.p.bg_top.col(a), f.p.bg_top.col(a), f.p.bg_bot.col(a), f.p.bg_bot.col(a));
+    d.rect(dl, r, f.p.bg.alpha(a), 0);
+    // Uma luz neutra e larga atrás do mascote, só para o fundo não ficar chapado.
+    logo.glow(dl, r.x + r.w * 0.5, r.y - r.h * 0.1, r.w * 0.75, r.h * 0.75, f.p.dot.alpha((if (f.env.light) @as(f32, 0.025) else 0.045) * intro * a));
 
-    // Aurora: três manchas de luz andando devagar, puxadas pelo mouse.
-    const par_x = (f.mouse.x - r.x - r.w / 2) / @max(r.w, 1);
-    const par_y = (f.mouse.y - r.y - r.h / 2) / @max(r.h, 1);
-    const px = if (f.mouse.x < -1000) 0 else par_x * 30;
-    const py = if (f.mouse.x < -1000) 0 else par_y * 30;
-    const ak = f.p.aurora * intro * a;
-    const big = @max(r.w, r.h);
-    logo.glow(dl, r.x + r.w * (0.24 + 0.07 * @sin(t * 0.13)) - px, r.y + r.h * (0.32 + 0.09 * @cos(t * 0.11)) - py, big * 0.48, big * 0.4, logo.violet.alpha(0.34 * ak));
-    logo.glow(dl, r.x + r.w * (0.82 + 0.06 * @cos(t * 0.09)) - px * 1.6, r.y + r.h * (0.78 + 0.07 * @sin(t * 0.12)) - py * 1.6, big * 0.42, big * 0.36, logo.pink.alpha(0.24 * ak));
-    logo.glow(dl, r.x + r.w * (0.58 + 0.1 * @sin(t * 0.07 + 1)) - px * 0.6, r.y + r.h * (0.1 + 0.05 * @cos(t * 0.15)) - py * 0.6, big * 0.34, big * 0.26, logo.magenta.alpha(0.18 * ak));
-
-    // Constelação: pontos subindo devagar, ligados quando estão perto (e ao
-    // mouse) — os "cabos" do nome.
-    const n_pts: usize = 64;
-    var pts: [n_pts][3]f32 = undefined;
-    for (0..n_pts) |i| {
-        const vy = 6 + hash(i, 3) * 16;
-        const ph = hash(i, 4) * std.math.tau;
-        const x = r.x + hash(i, 1) * r.w + @sin(t * 0.25 + ph) * 18 - px * (0.3 + hash(i, 6));
-        var y = hash(i, 2) * (r.h + 40) - t * vy;
-        y = r.y - 20 + @mod(y, r.h + 40) - py * (0.3 + hash(i, 6));
-        const tw = 0.55 + 0.45 * @sin(t * (1 + hash(i, 5) * 2) + ph);
-        pts[i] = .{ x, y, tw };
-    }
-    const link: f32 = 128;
-    for (0..n_pts) |i| {
-        for (i + 1..n_pts) |j| {
-            const dx = pts[i][0] - pts[j][0];
-            const dy = pts[i][1] - pts[j][1];
-            const dist = @sqrt(dx * dx + dy * dy);
-            if (dist < link) d.line(dl, pts[i][0], pts[i][1], pts[j][0], pts[j][1], f.p.star.alpha((1 - dist / link) * 0.16 * intro * a), 1);
+    // Grade de pontos que acende em volta do mouse.
+    const gap: f32 = 26;
+    const base_a: f32 = if (f.env.light) 0.09 else 0.07;
+    const spot: f32 = 240;
+    const has_mouse = f.mouse.x > -1000;
+    var y = r.y + @mod(gap / 2, gap);
+    while (y < r.bottom()) : (y += gap) {
+        var x = r.x + gap / 2;
+        while (x < r.right()) : (x += gap) {
+            var k = base_a;
+            if (has_mouse) {
+                const dx = x - f.mouse.x;
+                const dy = y - f.mouse.y;
+                const dist = @sqrt(dx * dx + dy * dy);
+                if (dist < spot) {
+                    const near = 1 - dist / spot;
+                    k += near * near * 0.28;
+                }
+            }
+            // As bordas somem (vinheta só na grade).
+            const ex = @min(x - r.x, r.right() - x) / (r.w * 0.18);
+            const ey = @min(y - r.y, r.bottom() - y) / (r.h * 0.18);
+            k *= std.math.clamp(@min(ex, ey), 0, 1);
+            if (k > 0.004) c.ImDrawList_AddRectFilled(dl, d.v(x - 0.75, y - 0.75), d.v(x + 0.75, y + 0.75), f.p.dot.col(k * intro * a));
         }
-        const mdx = pts[i][0] - f.mouse.x;
-        const mdy = pts[i][1] - f.mouse.y;
-        const md = @sqrt(mdx * mdx + mdy * mdy);
-        if (md < 170) d.line(dl, pts[i][0], pts[i][1], f.mouse.x, f.mouse.y, f.p.star.alpha((1 - md / 170) * 0.32 * intro * a), 1);
-        const size = 1 + hash(i, 7) * 1.6;
-        d.circle(dl, pts[i][0], pts[i][1], size, f.p.star.alpha((0.25 + 0.55 * pts[i][2]) * intro * a));
-    }
-
-    // Vinheta suave nas bordas (só no escuro).
-    if (!f.env.light) {
-        const e = Rgba.black.col(0.35 * a);
-        const vw = r.h * 0.22;
-        c.ImDrawList_AddRectFilledMultiColor(dl, d.v(r.x, r.y), d.v(r.right(), r.y + vw), e, e, 0, 0);
-        c.ImDrawList_AddRectFilledMultiColor(dl, d.v(r.x, r.bottom() - vw), d.v(r.right(), r.bottom()), 0, 0, e, e);
     }
 }
 
@@ -418,10 +407,7 @@ fn wordmark(f: *Frame, cx: f32, y: f32, size: f32) void {
         const s = word[i .. i + 1];
         const cw = d.width(fb, size, s);
         if (k > 0.001) {
-            const col = if (i < 6) f.p.text else Rgba.white;
-            const start = f.dl.*.VtxBuffer.Size;
-            d.text(f.dl, fb, size, x, y + (1 - k) * 16, col.alpha(k * f.a), s);
-            if (i >= 6) logo.gradient(f.dl, start, d.v(cx, y), d.v(cx + total / 2, y + size), k * f.a);
+            d.text(f.dl, fb, size, x, y + (1 - k) * 16, f.p.text.alpha(k * f.a), s);
         }
         _ = ch;
         x += cw - size * 0.02;
@@ -434,42 +420,38 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
     var result: ?Result = null;
     var y = y0;
 
-    f.text(.bold, 26, x, y, f.p.text, "Entrar");
-    y += 38;
+    f.text(.semibold, 24, x, y, f.p.text, "Entrar");
+    y += 36;
     f.text(.regular, 14.5, x, y, f.p.muted, "Cole o token da sua conta do Discord pra começar.");
     y += 34;
 
     // Campo do token.
-    f.text(.bold, 11.5, x, y, f.p.muted, "TOKEN");
-    y += 20;
-    const fr: Rect = .{ .x = x, .y = y, .w = w, .h = 50 };
+    f.text(.medium, 13, x, y, f.p.text, "Token");
+    y += 22;
+    const fr: Rect = .{ .x = x, .y = y, .w = w, .h = 46 };
     qa.mark(fr, "login:token", .{});
     const has_err = l.err_len > 0;
-    d.rect(dl, fr, f.p.field.alpha(f.a), 12);
-    // Borda: acende no degradê da marca com o foco.
-    const border_col = if (has_err) f.p.danger else f.p.card_border.mix(f.p.muted, 0.25);
-    d.border(dl, fr, border_col.alpha(f.a * (1 - f.l.focus_k)), 12, 1.2);
-    if (l.focus_k > 0.01) {
-        const start = dl.*.VtxBuffer.Size;
-        d.border(dl, fr, Rgba.white, 12, 1.6);
-        logo.gradient(dl, start, d.v(fr.x, fr.y), d.v(fr.right(), fr.bottom()), f.a * l.focus_k);
-        logo.glow(dl, fr.x + fr.w / 2, fr.y + fr.h / 2, fr.w * 0.6, fr.h * 1.1, logo.violet.alpha(0.1 * l.focus_k * f.a));
-    }
-    lockIcon(dl, fr.x + 20, fr.y + fr.h / 2, (if (l.focus_k > 0.5) f.p.text else f.p.faint).alpha(f.a));
+    d.rect(dl, fr, f.p.field.alpha(f.a), 8);
+    // Borda: cor de destaque com o foco, mais um anel suave por fora.
+    const idle_col = if (has_err) f.p.danger else f.p.field_border;
+    const focus_col = if (has_err) f.p.danger else f.p.accent;
+    d.border(dl, fr, idle_col.mix(focus_col, l.focus_k).alpha(f.a), 8, 1);
+    if (l.focus_k > 0.01) d.border(dl, fr.inset(-3, -3), focus_col.alpha(0.22 * l.focus_k * f.a), 11, 3);
+    lockIcon(dl, fr.x + 20, fr.y + fr.h / 2, (if (l.focus_k > 0.5) f.p.muted else f.p.faint).alpha(f.a));
 
     // Botões dentro do campo: colar (vazio) e mostrar/ocultar.
-    const eye_r: Rect = .{ .x = fr.right() - 44, .y = fr.y + 7, .w = 36, .h = 36 };
+    const eye_r: Rect = .{ .x = fr.right() - 42, .y = fr.y + 5, .w = 36, .h = 36 };
     const empty = l.tokenText().len == 0;
     const paste_w = f.width(.semibold, 12.5, "Colar") + 20;
-    const paste_r: Rect = .{ .x = eye_r.x - paste_w - 4, .y = fr.y + 12, .w = paste_w, .h = 26 };
+    const paste_r: Rect = .{ .x = eye_r.x - paste_w - 4, .y = fr.y + 10, .w = paste_w, .h = 26 };
 
     const tx = fr.x + 40;
     c.ImGui_SetCursorScreenPos(d.v(tx, fr.y + (fr.h - 18) / 2 - 1));
-    c.ImGui_PushFontFloat(f.font(.medium), 15.5);
+    c.ImGui_PushFontFloat(f.font(.regular), 15);
     c.ImGui_PushStyleColorImVec4(c.ImGuiCol_Text, v4(f.p.text.alpha(f.a)));
     c.ImGui_PushStyleColorImVec4(c.ImGuiCol_TextDisabled, v4(f.p.faint.alpha(f.a)));
-    c.ImGui_PushStyleColorImVec4(c.ImGuiCol_TextSelectedBg, v4(logo.violet.alpha(0.4)));
-    c.ImGui_PushStyleColorImVec4(c.ImGuiCol_InputTextCursor, v4(logo.magenta));
+    c.ImGui_PushStyleColorImVec4(c.ImGuiCol_TextSelectedBg, v4(f.p.accent.alpha(0.35)));
+    c.ImGui_PushStyleColorImVec4(c.ImGuiCol_InputTextCursor, v4(f.p.text));
     c.ImGui_SetNextItemWidth((if (empty) paste_r.x else eye_r.x) - tx - 8);
     if (l.want_focus and l.t > 1.5) {
         c.ImGui_SetKeyboardFocusHere();
@@ -487,8 +469,9 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
     if (empty) {
         const hp = hit(30, paste_r);
         qa.mark(paste_r, "login:colar", .{});
-        d.rect(dl, paste_r, logo.violet.alpha((if (hp.hovered) @as(f32, 0.3) else 0.18) * f.a), 8);
-        f.text(.semibold, 12.5, paste_r.x + 10, d.centerY(paste_r, 12.5), if (f.env.light) logo.violet else Rgba.hex(0xCBB9FF), "Colar");
+        d.rect(dl, paste_r, f.p.text.alpha((if (hp.hovered) @as(f32, 0.1) else 0.05) * f.a), 6);
+        d.border(dl, paste_r, f.p.field_border.alpha(f.a), 6, 1);
+        f.text(.medium, 12.5, paste_r.x + 10, d.centerY(paste_r, 12.5), f.p.muted, "Colar");
         if (hp.clicked) paste(l);
     }
     const he = hit(31, eye_r);
@@ -503,8 +486,8 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
     if (has_err) {
         y += 9;
         d.circle(dl, x + 6, y + 9, 6, f.p.danger.alpha(f.a));
-        f.text(.bold, 10, x + 3.5, y + 2.5, Rgba.white, "!");
-        _ = d.textClipped(dl, f.font(.medium), 13.5, x + 18, y + 1, f.p.danger.alpha(f.a), l.err(), w - 18);
+        f.text(.bold, 10, x + 3.5, y + 2.5, f.p.card, "!");
+        _ = d.textClipped(dl, f.font(.regular), 13.5, x + 18, y + 1, f.p.danger.alpha(f.a), l.err(), w - 18);
         y += 20;
     }
     y += 16;
@@ -516,51 +499,34 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         qa.mark(row, "login:lembrar", .{});
         if (hr.clicked) l.remember = !l.remember;
         l.remember_k = anim.step(l.remember_k, if (l.remember) 1 else 0, 20);
-        const tr: Rect = .{ .x = x, .y = y + 3, .w = 36, .h = 20 };
-        d.rect(dl, tr, f.p.faint.alpha(0.45 * f.a), 10);
-        if (l.remember_k > 0.01) {
-            const start = dl.*.VtxBuffer.Size;
-            d.rect(dl, tr, Rgba.white, 10);
-            logo.gradient(dl, start, d.v(tr.x, tr.y), d.v(tr.right(), tr.bottom()), f.a * l.remember_k);
-        }
-        d.circle(dl, tr.x + 10 + 16 * l.remember_k, tr.y + 10, 7.5, Rgba.white.alpha(f.a));
-        f.text(.medium, 14, x + 48, y + 3, f.p.text, "Lembrar neste computador");
+        const tr: Rect = .{ .x = x, .y = y + 4, .w = 32, .h = 18 };
+        d.rect(dl, tr, f.p.field_border.mix(f.p.accent, l.remember_k).alpha(f.a), 9);
+        d.circle(dl, tr.x + 9 + 14 * l.remember_k, tr.y + 9, 6.5, Rgba.white.alpha(f.a));
+        f.text(.regular, 14, x + 44, y + 3, f.p.text, "Lembrar neste computador");
         const note = "no chaveiro do sistema";
-        f.text(.regular, 12.5, x + 48 + f.width(.medium, 14, "Lembrar neste computador") + 8, y + 4.5, f.p.faint, note);
+        f.text(.regular, 12.5, x + 44 + f.width(.regular, 14, "Lembrar neste computador") + 8, y + 4.5, f.p.faint, note);
         y += row.h + 22;
     }
 
     // Entrar.
     {
-        const br: Rect = .{ .x = x, .y = y, .w = w, .h = 50 };
+        const br: Rect = .{ .x = x, .y = y, .w = w, .h = 44 };
         const hb = hit(33, br);
         qa.mark(br, "login:entrar", .{});
         if (hb.clicked) result = .submit;
-        const press: f32 = if (hb.held) 1.5 else 0;
-        const lift: f32 = if (hb.hovered and !hb.held) -1 else 0;
-        const r: Rect = .{ .x = br.x + press, .y = br.y + press + lift, .w = br.w - press * 2, .h = br.h - press * 2 };
-        logo.glow(dl, r.x + r.w / 2, r.y + r.h * 0.8, r.w * 0.55, r.h * 0.9, logo.magenta.alpha((if (hb.hovered) @as(f32, 0.34) else 0.2) * f.a));
-        const start = dl.*.VtxBuffer.Size;
-        d.rect(dl, r, Rgba.white, 13);
-        logo.gradient(dl, start, d.v(r.x, r.y), d.v(r.right(), r.bottom() + 60), f.a);
-        if (hb.hovered) d.rect(dl, r, Rgba.white.alpha(0.08 * f.a), 13);
-        // Reflexo que atravessa o botão de tempos em tempos.
-        const sweep = @mod(l.t - 2.2, 3.4) / 0.9;
-        if (sweep >= 0 and sweep <= 1 and !f.env.reduce) {
-            c.ImDrawList_PushClipRect(dl, d.v(r.x, r.y), d.v(r.right(), r.bottom()), true);
-            const sx = r.x - 60 + (r.w + 120) * outCubic(sweep);
-            c.ImDrawList_AddQuadFilled(dl, d.v(sx, r.y), d.v(sx + 34, r.y), d.v(sx + 10, r.bottom()), d.v(sx - 24, r.bottom()), Rgba.white.col(0.22 * f.a));
-            c.ImDrawList_PopClipRect(dl);
-        }
+        const hk = anim.to(anim.id("login-entrar", 0), if (hb.hovered) 1 else 0, 18);
+        const fill = f.p.primary.mix(f.p.card, if (hb.held) 0.2 else 0.1 * hk);
+        d.rect(dl, br, fill.alpha(f.a), 8);
         const label = "Entrar";
-        const lw = f.width(.bold, 16, label);
-        f.text(.bold, 16, r.x + (r.w - lw) / 2 - 10, d.centerY(r, 16), Rgba.white, label);
-        // Setinha que anda no hover.
-        const ax = r.x + (r.w + lw) / 2 + 2 + (if (hb.hovered) @as(f32, 4) else 0);
-        const ay = r.y + r.h / 2;
-        d.line(dl, ax, ay, ax + 12, ay, Rgba.white.alpha(f.a), 2);
-        d.line(dl, ax + 7, ay - 5, ax + 12.5, ay + 0.5, Rgba.white.alpha(f.a), 2);
-        d.line(dl, ax + 7, ay + 5, ax + 12.5, ay - 0.5, Rgba.white.alpha(f.a), 2);
+        const lw = f.width(.semibold, 15, label);
+        f.text(.semibold, 15, br.x + (br.w - lw) / 2 - 9, d.centerY(br, 15), f.p.on_primary, label);
+        // Setinha que anda um pouco no hover.
+        const ax = br.x + (br.w + lw) / 2 + 1 + 3 * hk;
+        const ay = br.y + br.h / 2;
+        const ac = f.p.on_primary.alpha(f.a);
+        d.line(dl, ax, ay, ax + 11, ay, ac, 1.6);
+        d.line(dl, ax + 6.5, ay - 4.5, ax + 11.3, ay + 0.4, ac, 1.6);
+        d.line(dl, ax + 6.5, ay + 4.5, ax + 11.3, ay - 0.4, ac, 1.6);
         y += br.h + 18;
     }
 
@@ -570,7 +536,7 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         const my = y + 8;
         d.line(dl, x, my, x + w / 2 - ow / 2 - 12, my, f.p.card_border.alpha(f.a * 1.4), 1);
         d.line(dl, x + w / 2 + ow / 2 + 12, my, x + w, my, f.p.card_border.alpha(f.a * 1.4), 1);
-        f.centered(.semibold, 12, x + w / 2, y, f.p.faint, "ou");
+        f.centered(.regular, 12, x + w / 2, y, f.p.faint, "ou");
         y += 30;
     }
 
@@ -580,10 +546,10 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         const hb = hit(34, br);
         qa.mark(br, "login:demo", .{});
         if (hb.clicked) result = .demo;
-        d.rect(dl, br, f.p.text.alpha((if (hb.hovered) @as(f32, 0.09) else 0.05) * f.a), 12);
-        d.border(dl, br, f.p.card_border.alpha(f.a), 12, 1);
+        d.rect(dl, br, f.p.text.alpha((if (hb.hovered) @as(f32, 0.06) else 0) * f.a), 8);
+        d.border(dl, br, f.p.field_border.alpha(f.a), 8, 1);
         const label = "Explorar o modo demonstração";
-        f.centered(.semibold, 14.5, x + w / 2, d.centerY(br, 14.5), f.p.text, label);
+        f.centered(.medium, 14.5, x + w / 2, d.centerY(br, 14.5), f.p.text, label);
         y += br.h + 18;
     }
 
@@ -595,8 +561,8 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         const hh = hit(35, lr);
         qa.mark(lr, "login:ajuda", .{});
         if (hh.clicked) l.help = !l.help;
-        const lcol = if (f.env.light) logo.violet else Rgba.hex(0xB69CFF);
-        f.centered(.semibold, 13.5, x + w / 2, y, if (hh.hovered) lcol.mix(f.p.text, 0.3) else lcol, label);
+        const lcol = if (hh.hovered) f.p.text else f.p.muted;
+        f.centered(.medium, 13.5, x + w / 2, y, lcol, label);
         if (hh.hovered) d.line(dl, lr.x + 6, y + 19, lr.right() - 6, y + 19, lcol.alpha(f.a), 1);
         y += 28;
         l.help_k = anim.step(l.help_k, if (l.help) 1 else 0, 14);
@@ -610,19 +576,20 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
             const full_h: f32 = 4 * 26 + 50;
             const hr: Rect = .{ .x = x, .y = y, .w = w, .h = full_h * l.help_k };
             c.ImDrawList_PushClipRect(dl, d.v(hr.x - 2, hr.y), d.v(hr.right() + 2, hr.bottom()), true);
-            d.rect(dl, .{ .x = hr.x, .y = hr.y, .w = hr.w, .h = full_h }, logo.violet.alpha(0.08 * f.a), 12);
+            d.rect(dl, .{ .x = hr.x, .y = hr.y, .w = hr.w, .h = full_h }, f.p.field.alpha(f.a), 8);
+            d.border(dl, .{ .x = hr.x, .y = hr.y, .w = hr.w, .h = full_h }, f.p.card_border.alpha(f.a), 8, 1);
             var hy = hr.y + 12;
             for (steps, 0..) |s, i| {
                 const nc = d.v(hr.x + 22, hy + 9);
-                d.circle(dl, nc.x, nc.y, 9, logo.violet.alpha(0.85 * f.a));
+                c.ImDrawList_AddCircleEx(dl, nc, 9, f.p.field_border.mix(f.p.muted, 0.4).alpha(f.a).u(), 24, 1, 0);
                 var nb: [2]u8 = undefined;
                 const num = std.fmt.bufPrint(&nb, "{d}", .{i + 1}) catch "";
-                f.centered(.bold, 11, nc.x, nc.y - 7, Rgba.white, num);
+                f.centered(.semibold, 11, nc.x, nc.y - 7, f.p.muted, num);
                 _ = d.textClipped(dl, f.font(.regular), 13, hr.x + 40, hy, f.p.text.alpha(f.a), s, hr.w - 52);
                 hy += 26;
             }
             hy += 4;
-            _ = d.textClipped(dl, f.font(.semibold), 12.5, hr.x + 16, hy, f.p.danger.alpha(f.a), "Quem tem o token tem a sua conta. Não mande pra ninguém.", hr.w - 28);
+            _ = d.textClipped(dl, f.font(.medium), 12.5, hr.x + 16, hy, f.p.danger.alpha(f.a), "Quem tem o token tem a sua conta. Não mande pra ninguém.", hr.w - 28);
             c.ImDrawList_PopClipRect(dl);
             y += hr.h + 6;
         }
@@ -639,17 +606,14 @@ fn connecting(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
     const t = l.t;
     var result: ?Result = null;
     var y = y0 + 8;
-    // Anel girando no degradê da marca.
+    // Anel girando.
     const cx = x + w / 2;
     const cy = y + 34;
     const rot = t * 5.2;
     const sweep = 1.7 + 0.9 * @sin(t * 2.6);
-    c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 26, f.p.text.alpha(0.08 * f.a).u(), 48, 5, 0);
-    const start = dl.*.VtxBuffer.Size;
+    c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 26, f.p.text.alpha(0.08 * f.a).u(), 48, 3, 0);
     c.ImDrawList_PathArcTo(dl, d.v(cx, cy), 26, rot, rot + sweep, 40);
-    c.ImDrawList_PathStroke(dl, Rgba.white.u(), 5, 0);
-    logo.gradient(dl, start, d.v(cx - 26, cy - 26), d.v(cx + 26, cy + 26), f.a);
-    d.circle(dl, cx + @cos(rot + sweep) * 26, cy + @sin(rot + sweep) * 26, 2.5, Rgba.white.alpha(f.a));
+    c.ImDrawList_PathStroke(dl, f.p.text.alpha(f.a).u(), 3, 0);
     y += 86;
 
     const dots = @as(usize, @intFromFloat(@mod(t * 2.5, 4)));

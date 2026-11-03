@@ -20,6 +20,7 @@ const anim = @import("ui/anim.zig");
 const root = @import("ui/root.zig");
 const login_mod = @import("ui/login.zig");
 const qa_mod = @import("ui/qa.zig");
+const images = @import("ui/images.zig");
 const widgets = @import("ui/widgets.zig");
 const settings_state = @import("ui/settings_state.zig");
 const kdl = @import("theme/kdl.zig");
@@ -67,6 +68,10 @@ pub const App = struct {
     started_ns: u64,
     layout_key: u32 = 0,
     login: login_mod.Login = .{},
+    images: images.Cache = undefined,
+    /// Arquivos escolhidos no seletor (o SDL pode responder de outra thread).
+    picked: Queue([:0]u8) = undefined,
+    paste_n: u32 = 0,
     curl_on: bool = false,
     /// Guardar o token quando o Discord aceitar (o "Lembrar" do login).
     save_token: bool = false,
@@ -135,6 +140,9 @@ pub const App = struct {
         // Relógio e RAM da barra de status: um tique a cada 2 s.
         app.timer = c.SDL_AddTimer(2000, tick, app);
         app.stats.ram_kb = platform.selfPssKb();
+        app.images = try images.Cache.init(app.win.renderer, app.win.wake_type);
+        try app.images.start();
+        app.picked = try Queue([:0]u8).init(std.heap.c_allocator);
         return app;
     }
 
@@ -144,6 +152,9 @@ pub const App = struct {
         if (app.curl_on) c.curl_global_cleanup();
         app.login.clearToken();
         app.events.deinit();
+        app.clearUploads();
+        app.picked.deinit();
+        app.images.deinit();
         app.store.deinit();
         app.themes.deinit();
         c.cImGui_ImplSDLRenderer3_Shutdown();
@@ -206,8 +217,80 @@ pub const App = struct {
         for (stale.items) |e| app.store.apply(e, now()) catch {};
     }
 
+    // --- Anexos ----------------------------------------------------------------
+
+    /// Limite do Discord para quem não tem Nitro.
+    const max_upload: u64 = 10 * 1024 * 1024;
+
+    fn clearUploads(app: *App) void {
+        for (app.st.uploads.items) |u| std.heap.c_allocator.free(u.path);
+        app.st.uploads.clearRetainingCapacity();
+    }
+
+    /// Coloca um arquivo na bandeja da próxima mensagem.
+    pub fn attachFile(app: *App, path: []const u8) void {
+        const st = &app.st;
+        if (st.uploads.items.len >= 10) return st.showToast(now(), true, "no máximo 10 arquivos por mensagem", .{});
+        const z = std.heap.c_allocator.dupeSentinel(u8, path, 0) catch return;
+        var info: c.SDL_PathInfo = undefined;
+        if (!c.SDL_GetPathInfo(z.ptr, &info) or info.type != c.SDL_PATHTYPE_FILE) {
+            std.heap.c_allocator.free(z);
+            return st.showToast(now(), true, "não consegui abrir esse arquivo", .{});
+        }
+        if (info.size > max_upload) {
+            std.heap.c_allocator.free(z);
+            return st.showToast(now(), true, "arquivo maior que 10 MB (limite do Discord sem Nitro)", .{});
+        }
+        var up: @import("ui/state.zig").Upload = .{ .path = z, .size = info.size };
+        // Imagem? Lê só as dimensões (para reservar o espaço na conversa).
+        var size: usize = 0;
+        if (c.SDL_LoadFile(z.ptr, &size)) |data| {
+            defer c.SDL_free(data);
+            var w: c_int = 0;
+            var h: c_int = 0;
+            var comp: c_int = 0;
+            if (c.stbi_info_from_memory(@ptrCast(data), @intCast(size), &w, &h, &comp) != 0 and w > 0 and h > 0) {
+                up.width = @intCast(@min(w, 65535));
+                up.height = @intCast(@min(h, 65535));
+            }
+        }
+        st.uploads.append(app.gpa, up) catch std.heap.c_allocator.free(z);
+        st.focus_input = true;
+    }
+
+    fn pickedCb(data: ?*anyopaque, list: [*c]const [*c]const u8, _: c_int) callconv(.c) void {
+        const app: *App = @ptrCast(@alignCast(data.?));
+        if (list == null) return;
+        var i: usize = 0;
+        while (list[i] != null) : (i += 1) {
+            const z = std.heap.c_allocator.dupeSentinel(u8, std.mem.span(list[i]), 0) catch continue;
+            app.picked.push(z);
+        }
+        platform.Window.wake(app.win.wake_type, .media);
+    }
+
+    fn pickFiles(app: *App) void {
+        if (app.opts.qa) return;
+        c.SDL_ShowOpenFileDialog(pickedCb, app, app.win.window, null, 0, null, true);
+    }
+
+    /// Imagem colada: vai para um arquivo temporário e entra na bandeja.
+    fn pasteImage(app: *App) void {
+        var size: usize = 0;
+        const data = c.SDL_GetClipboardData("image/png", &size) orelse return;
+        defer c.SDL_free(data);
+        const dir: []const u8 = if (c.SDL_getenv("XDG_RUNTIME_DIR")) |x| std.mem.span(x) else "/tmp";
+        var pbuf: [512]u8 = undefined;
+        app.paste_n += 1;
+        const path = std.fmt.bufPrintSentinel(&pbuf, "{s}/larpercord-colado-{d}-{d}.png", .{ dir, c.getpid(), app.paste_n }, 0) catch return;
+        if (!c.SDL_SaveFile(path.ptr, data, size)) return app.st.showToast(now(), true, "não consegui colar a imagem", .{});
+        app.attachFile(path);
+    }
+
     /// Volta ao estado de antes do login: sem conta, sem abas, sem nada.
     fn resetSession(app: *App) void {
+        app.clearUploads();
+        app.st.viewer = null;
         app.store.deinit();
         app.store = Store.init(app.gpa);
         const st = &app.st;
@@ -463,10 +546,31 @@ pub const App = struct {
             out.appendSlice(app.gpa, word) catch return;
         }
         app.st.nonce += 1;
-        app.store.addPending(ch, out.items, app.st.nonce, reply_to, now()) catch return;
+        // Os arquivos da bandeja vão junto: aparecem na hora na cópia pendente.
+        const ca = std.heap.c_allocator;
+        const ups = app.st.uploads.items;
+        var atts: []types.Attachment = &.{};
+        var files: [][:0]const u8 = &.{};
+        if (ups.len > 0) {
+            atts = ca.alloc(types.Attachment, ups.len) catch return;
+            files = ca.alloc([:0]const u8, ups.len) catch return;
+            for (ups, 0..) |u, i| {
+                atts[i] = .{
+                    .url = std.fmt.allocPrint(ca, "file://{s}", .{u.path}) catch return,
+                    .filename = ca.dupe(u8, u.name()) catch return,
+                    .width = u.width,
+                    .height = u.height,
+                    .size = @intCast(@min(u.size, std.math.maxInt(u32))),
+                };
+                files[i] = u.path;
+            }
+            // Os caminhos passam para o comando; a bandeja esvazia.
+            app.st.uploads.clearRetainingCapacity();
+        }
+        app.store.addPending(ch, out.items, app.st.nonce, reply_to, now(), atts) catch return;
         app.st.scrollOf(ch).stick_bottom = true;
-        const copy = std.heap.c_allocator.dupe(u8, out.items) catch return;
-        app.cmd(.{ .send_message = .{ .channel = ch, .content = copy, .nonce = app.st.nonce, .reply_to = reply_to } });
+        const copy = ca.dupe(u8, out.items) catch return;
+        app.cmd(.{ .send_message = .{ .channel = ch, .content = copy, .nonce = app.st.nonce, .reply_to = reply_to, .files = files } });
     }
 
     fn firstTextChannel(app: *App, guild: types.Id) ?types.Id {
@@ -648,6 +752,12 @@ pub const App = struct {
                 st.focus_input = true;
                 app.saveSettings();
             },
+            .pick_files => app.pickFiles(),
+            .remove_upload => |i| if (i < st.uploads.items.len) {
+                std.heap.c_allocator.free(st.uploads.items[i].path);
+                _ = st.uploads.orderedRemove(i);
+            },
+            .paste_image => app.pasteImage(),
             .logout => {
                 app.saveSettings();
                 if (!app.opts.qa) discord.forgetToken();
@@ -812,16 +922,32 @@ pub const App = struct {
                             app.st.showToast(now(), false, "tema recarregado: {s}", .{app.themes.name()});
                         } else app.st.showToast(now(), true, "{s}", .{app.themes.last_error orelse "erro no tema"}),
                         .tick => {},
+                        .media => {},
                     }
                 } else {
                     _ = c.cImGui_ImplSDL3_ProcessEvent(&e);
                     if (e.type == c.SDL_EVENT_QUIT or e.type == c.SDL_EVENT_WINDOW_CLOSE_REQUESTED) running = false;
+                    // Arquivo arrastado para a janela: vai para a bandeja.
+                    if (e.type == c.SDL_EVENT_DROP_FILE and app.store.ready and app.st.activeChannel() != null)
+                        if (e.drop.data) |p| app.attachFile(std.mem.span(p));
                 }
                 pending = 3;
                 got = c.SDL_PollEvent(&e);
             }
             if (app.store.expireTyping(now())) pending = 2;
 
+            app.images.now_ms = now();
+            if (app.images.pump()) pending = 2;
+            {
+                var picked: std.ArrayList([:0]u8) = .empty;
+                defer picked.deinit(std.heap.c_allocator);
+                app.picked.drain(&picked);
+                for (picked.items) |p| {
+                    defer std.heap.c_allocator.free(p);
+                    if (app.store.ready) app.attachFile(p);
+                }
+                if (picked.items.len > 0) pending = 3;
+            }
             const t0 = c.SDL_GetTicksNS();
             anim.dt = std.math.clamp(@as(f32, @floatFromInt(t0 - last)) / 1e9, 0.001, 1.0 / 30.0);
             last = t0;
@@ -867,6 +993,7 @@ pub const App = struct {
                     .now_ms = now(),
                     .actions = &app.actions,
                     .stats = &app.stats,
+                    .images = &app.images,
                     .win = undefined,
                 };
                 root.frame(&ctx, &app.placed, app.themes.previews.items);
@@ -923,7 +1050,7 @@ pub const App = struct {
                     running = false;
                 }
             } else {
-                const ready = app.store.ready and if (app.st.activeChannel()) |ch| (app.store.channel(ch).?.history == .loaded) else false;
+                const ready = app.store.ready and !app.images.busy() and if (app.st.activeChannel()) |ch| (app.store.channel(ch).?.history == .loaded) else false;
                 settled_frames = if (ready) settled_frames + 1 else 0;
                 if (settled_frames == 12 or c.SDL_GetTicksNS() - app.started_ns > 6 * std.time.ns_per_s) {
                     if (!app.win.screenshot(path)) std.log.err("não consegui salvar {s}", .{path});

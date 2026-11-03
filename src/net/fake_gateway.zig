@@ -64,6 +64,10 @@ pub const Gateway = struct {
             for (cmds.items) |cmd| switch (cmd) {
                 .shutdown => return,
                 .send_message => |m| {
+                    // Os arquivos já aparecem na cópia pendente (o Store
+                    // mantém os anexos dela na confirmação).
+                    for (m.files) |f| alloc.free(f);
+                    if (m.files.len > 0) alloc.free(m.files);
                     // O "servidor" confirma depois de um RTT simulado.
                     try g.nonce_replies.append(alloc, .{ .at_ms = nowMs() + 90, .msg = .{
                         .id = types.makeSnowflake(nowMs(), g.rng.random().int(u22)),
@@ -338,6 +342,22 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
     // Algumas respostas a mensagens um pouco anteriores.
     for (msgs, 0..) |*m, j| {
         if (j > 3 and r.uintLessThan(u8, 9) == 0) m.reply_to = msgs[j - 1 - r.uintLessThan(usize, 3)].id;
+    }
+    // Imagens (geradas na hora pelo carregador: "demo:N") e um arquivo.
+    const pics = [_]struct { back: usize, text: []const u8, url: []const u8, name: []const u8, w: u16, h: u16 }{
+        .{ .back = 5, .text = "olha o pôr do sol daqui de casa 🌅", .url = "demo:1", .name = "por-do-sol.png", .w = 900, .h = 560 },
+        .{ .back = 14, .text = "wallpaper novo, que acharam?", .url = "demo:2", .name = "synthwave.png", .w = 720, .h = 720 },
+        .{ .back = 23, .text = "", .url = "demo:3", .name = "aurora.png", .w = 960, .h = 540 },
+        .{ .back = 31, .text = "o relatório que eu falei", .url = "demo:file", .name = "relatorio-de-ram.pdf", .w = 0, .h = 0 },
+    };
+    for (pics) |p| {
+        const m = &msgs[n - p.back];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, p.text);
+        m.reply_to = 0;
+        const list = try alloc.alloc(types.Attachment, 1);
+        list[0] = .{ .url = try alloc.dupe(u8, p.url), .filename = try alloc.dupe(u8, p.name), .width = p.w, .height = p.h, .size = if (p.w == 0) 482_133 else 0 };
+        m.attachments = list;
     }
     return msgs;
 }

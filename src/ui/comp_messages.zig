@@ -16,6 +16,7 @@ const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const rich = @import("rich.zig");
 const icons = @import("icons.zig");
+const att = @import("attachments.zig");
 const popup = @import("popup.zig");
 const sigil = @import("comp_chat.zig").sigil;
 const store_mod = @import("../core/store.zig");
@@ -102,6 +103,14 @@ fn textOpts(ctx: *const d.Ctx, g: Geo, self_bubble: bool) rich.Opts {
     };
 }
 
+/// Altura do texto (zero numa mensagem só com anexos).
+fn textH(g: Geo, m: *const StoredMessage, t: rich.Measure) f32 {
+    if (m.msg.content.len == 0 and m.msg.attachments.len > 0) return 0;
+    var h = t.h;
+    if (m.msg.edited and t.last_x + editedW(g) > g.wrap) h += g.line_h;
+    return h;
+}
+
 fn editedW(g: Geo) f32 {
     return d.width(g.fam.get(.regular), 11, "(editado)") + 6;
 }
@@ -111,8 +120,8 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     if (m.layout_w == g.wrap and m.layout_variant == key) return m.height;
     const self = m.msg.author == ctx.store.me;
     const t = rich.layout(null, ctx.store, ctx.th, m.spans, 0, 0, g.wrap, textOpts(ctx, g, self and g.variant == .bubbles), ctx.mouse);
-    var text_h = t.h;
-    if (m.msg.edited and t.last_x + editedW(g) > g.wrap) text_h += g.line_h;
+    var text_h = textH(g, m, t);
+    text_h += att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
     const group = flags & flag_group != 0;
     const day = flags & flag_day != 0;
     const reply = flags & flag_reply != 0;
@@ -143,7 +152,7 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     m.layout_w = g.wrap;
     m.layout_variant = key;
     m.height = h;
-    m.natural_w = @max(t.w, if (m.msg.edited) t.last_x + editedW(g) else 0);
+    m.natural_w = @max(@max(t.w, if (m.msg.edited) t.last_x + editedW(g) else 0), att.blockWidth(m.msg.attachments, g.wrap));
     if (reply and g.variant == .bubbles) m.natural_w = @max(m.natural_w, 180);
     return h;
 }
@@ -168,7 +177,10 @@ fn selectionRange(ctx: *d.Ctx, cs: *store_mod.ChannelState) ?SelRange {
     return r;
 }
 
-pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
+pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
+    // A bandeja de arquivos fica entre a conversa e a caixa de texto.
+    var r = r_in;
+    r.h = @max(40, r.h - att.trayHeight(ctx));
     const ch_id = ctx.st.activeChannel() orelse return;
     const cs = ctx.store.channel(ch_id) orelse return;
     const g = geometry(ctx, n, r);
@@ -580,7 +592,10 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             }
             const t = rich.layout(dl, ctx.store, ctx.th, m.spans, tx, y, g.wrap, o, ctx.mouse);
             editedMark(ctx, dl, g, m, tx, y, t);
-            if (m.n_reactions > 0) reactions(ctx, dl, m, tx, y + t.h + (if (m.msg.edited and t.last_x + editedW(g) > g.wrap) g.line_h else 0), under, false, 0);
+            const th = textH(g, m, t);
+            att.draw(ctx, dl, m, tx, y + th, g.wrap, alpha);
+            const ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
+            if (m.n_reactions > 0) reactions(ctx, dl, m, tx, y + th + ah, under, false, 0);
             if (ctx.st.settings.developer_mode and under) {
                 const idt = std.fmt.bufPrint(&buf, "id {d}", .{m.msg.id}) catch "";
                 const iw = d.width(fam.get(.regular), 11, idt);
@@ -625,7 +640,10 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             d.text(dl, fam.get(.regular), g.size, x, ty, ctx.col(.border).mix(ctx.col(.faint), 0.6), " │ ");
             const t = rich.layout(dl, ctx.store, ctx.th, m.spans, r.x + g.content_x, y, g.wrap, o, ctx.mouse);
             editedMark(ctx, dl, g, m, r.x + g.content_x, y, t);
-            if (m.n_reactions > 0) reactions(ctx, dl, m, r.x + g.content_x, y + t.h - 2, under, false, 0);
+            const th = textH(g, m, t);
+            att.draw(ctx, dl, m, r.x + g.content_x, y + th, g.wrap, alpha);
+            const ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
+            if (m.n_reactions > 0) reactions(ctx, dl, m, r.x + g.content_x, y + th + ah - 2, under, false, 0);
             if (show_bar) toolbar(ctx, dl, m, r.right() - 12, row.y - 2);
         },
         .bubbles => {
@@ -667,6 +685,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             }
             const t = rich.layout(dl, ctx.store, ctx.th, m.spans, br.x + 14, ty, g.wrap, o, ctx.mouse);
             editedMark(ctx, dl, g, m, br.x + 14, ty, t);
+            att.draw(ctx, dl, m, br.x + 14, ty + textH(g, m, t), g.wrap, alpha);
             if (m.n_reactions > 0) reactions(ctx, dl, m, br.x, br.bottom(), under, self, br.right());
             if (ctx.hovering(br)) {
                 const ck = w.clock(&buf, m.msg.timestamp);
@@ -732,6 +751,13 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const prompt = std.mem.eql(u8, variant, "prompt");
     const pill = std.mem.eql(u8, variant, "pill");
 
+    // Arquivos que vão junto (acima de tudo que fica preso na caixa).
+    const tray_h = att.trayHeight(ctx);
+    if (tray_h > 0) {
+        const extra: f32 = if (st.reply_to != 0 or st.editing != 0) 32 else 0;
+        att.tray(ctx, dl, .{ .x = r.x + (if (pill) @as(f32, 18) else 0), .y = r.y - extra - tray_h, .w = r.w - (if (pill) @as(f32, 36) else 0), .h = tray_h - (if (extra > 0) @as(f32, 2) else 0) });
+    }
+
     // Barra "Respondendo a…" / "Editando…" presa em cima da caixa.
     var top = r.y;
     if (st.reply_to != 0 or st.editing != 0) {
@@ -777,7 +803,13 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const fs = ctx.th.font_size;
         d.text(dl, fam.get(.bold), fs, r.x + 10, d.centerY(r, fs), ctx.col(.accent), p);
         input_x = r.x + 10 + d.width(fam.get(.bold), fs, p);
-        input_r = r.right() - 44;
+        input_r = r.right() - 78;
+        const pr: d.Rect = .{ .x = r.right() - 70, .y = r.y + r.h / 2 - 13, .w = 30, .h = 26 };
+        const ph = d.hit(ctx, 1, pr);
+        qa.mark(pr, "composer-attach", .{});
+        d.text(dl, fam.get(.bold), fs, pr.x + 4, d.centerY(pr, fs), if (ph.hovered) ctx.col(.accent) else ctx.col(.muted), "[+]");
+        if (ph.clicked) ctx.act(.pick_files);
+        d.tip(ctx, pr, "Anexar arquivo", ph.hovered);
         const er: d.Rect = .{ .x = r.right() - 36, .y = r.y + r.h / 2 - 13, .w = 26, .h = 26 };
         const eh = d.hit(ctx, 2, er);
         qa.mark(er, "composer-emoji", .{});
@@ -793,7 +825,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const ak = anim.to(anim.id("attach", @intFromPtr(n)), if (ah.hovered) 1 else 0, 24);
         d.circle(dl, ar.x + 14, ar.y + 14, 11.5, ctx.col(.muted).mix(ctx.col(.text), ak));
         icons.plus(dl, ar.x + 14, ar.y + 14, 5.5, ctx.col(.elevated).u());
-        if (ah.clicked) st.showToast(ctx.now_ms, false, "anexos ainda não são suportados", .{});
+        if (ah.clicked) ctx.act(.pick_files);
         d.tip(ctx, ar, "Anexar arquivo", ah.hovered);
         const ex = r.right() - (if (pill) @as(f32, 84) else 40);
         const er: d.Rect = .{ .x = ex, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
@@ -839,6 +871,9 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     if (c.ImGui_IsItemEdited() and st.input[0] != 0) ctx.act(.{ .typing = ch_id });
     const active = c.ImGui_IsItemActive();
     c.ImGui_PopFont();
+    // Ctrl+V com imagem copiada (print, imagem do navegador): vira anexo.
+    if (active and ctx.io.*.KeyCtrl and c.ImGui_IsKeyPressed(c.ImGuiKey_V) and c.SDL_HasClipboardData("image/png") and !c.SDL_HasClipboardText())
+        ctx.act(.paste_image);
     if (active and c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and (st.reply_to != 0 or st.editing != 0)) ctx.act(.cancel_compose);
 
     if (st.edit_last) {
@@ -859,7 +894,7 @@ fn submit(ctx: *d.Ctx) void {
     const st = ctx.st;
     const len = std.mem.indexOfScalar(u8, &st.input, 0) orelse st.input.len;
     const s = std.mem.trim(u8, st.input[0..len], " \t");
-    if (s.len > 0) {
+    if (s.len > 0 or (st.uploads.items.len > 0 and st.editing == 0)) {
         const owned = st.gpa.dupe(u8, s) catch return;
         ctx.act(if (st.editing != 0) .{ .save_edit = owned } else .{ .send_message = owned });
     }

@@ -794,20 +794,17 @@ pub const Gateway = struct {
     fn message(g: *Gateway, m: Value) !?types.Message {
         _ = g;
         const author = j.get(m, "author") orelse return null;
+        const msg_id = j.id(j.get(m, "id")) orelse return null;
         var content = try j.simplifyContent(alloc, j.str(j.get(m, "content")) orelse "");
-        // Anexos e figurinhas viram texto até termos imagens.
-        for (j.array(j.get(m, "attachments"))) |a| {
-            const name = j.str(j.get(a, "filename")) orelse "arquivo";
-            const more = try std.fmt.allocPrint(alloc, "{s}{s}📎 `{s}`", .{ content, if (content.len > 0) " " else "", name });
-            alloc.free(content);
-            content = more;
-        }
+        errdefer alloc.free(content);
+        const atts = try attachmentsOf(m);
+        errdefer types.freeAttachments(alloc, atts);
         for (j.array(j.get(m, "sticker_items"))) |s| {
             const more = try std.fmt.allocPrint(alloc, "{s} [figurinha: {s}]", .{ content, j.str(j.get(s, "name")) orelse "?" });
             alloc.free(content);
             content = more;
         }
-        if (content.len == 0 and j.array(j.get(m, "embeds")).len > 0) {
+        if (content.len == 0 and atts.len == 0 and j.array(j.get(m, "embeds")).len > 0) {
             alloc.free(content);
             content = try alloc.dupe(u8, "*[embed]*");
         }
@@ -817,7 +814,7 @@ pub const Gateway = struct {
             if ((j.int(j.get(m, "type")) orelse 0) == 19) reply = j.id(j.get(ref, "message_id")) orelse 0;
         }
         return .{
-            .id = j.id(j.get(m, "id")) orelse return null,
+            .id = msg_id,
             .channel = j.id(j.get(m, "channel_id")) orelse 0,
             .author = j.id(j.get(author, "id")) orelse 0,
             .timestamp = j.isoTime(j.str(j.get(m, "timestamp")) orelse ""),
@@ -825,7 +822,56 @@ pub const Gateway = struct {
             .nonce = nonce,
             .reply_to = reply,
             .edited = !j.isNull(j.get(m, "edited_timestamp")),
+            .attachments = atts,
         };
+    }
+
+    /// Anexos e imagens de links (embeds de imagem/GIF) de uma mensagem.
+    /// Imagens usam o `proxy_url` (media.discordapp.net), que sabe reduzir.
+    fn attachmentsOf(m: Value) ![]types.Attachment {
+        var list: std.ArrayList(types.Attachment) = .empty;
+        errdefer {
+            for (list.items) |a| {
+                alloc.free(a.url);
+                alloc.free(a.filename);
+            }
+            list.deinit(alloc);
+        }
+        for (j.array(j.get(m, "attachments"))) |a| {
+            if (list.items.len >= 10) break;
+            const w = j.int(j.get(a, "width")) orelse 0;
+            const h = j.int(j.get(a, "height")) orelse 0;
+            const image = w > 0 and h > 0;
+            const url = (if (image) j.str(j.get(a, "proxy_url")) else null) orelse j.str(j.get(a, "url")) orelse continue;
+            const name = j.str(j.get(a, "filename")) orelse "arquivo";
+            const ctype = j.str(j.get(a, "content_type")) orelse "";
+            try list.append(alloc, .{
+                .url = try alloc.dupe(u8, url),
+                .filename = try alloc.dupe(u8, name),
+                .width = @intCast(std.math.clamp(w, 0, 65535)),
+                .height = @intCast(std.math.clamp(h, 0, 65535)),
+                .size = @intCast(std.math.clamp(j.int(j.get(a, "size")) orelse 0, 0, std.math.maxInt(u32))),
+                .animated = std.mem.eql(u8, ctype, "image/gif") or std.ascii.endsWithIgnoreCase(name, ".gif"),
+            });
+        }
+        for (j.array(j.get(m, "embeds"))) |e| {
+            if (list.items.len >= 10) break;
+            const kind = j.str(j.get(e, "type")) orelse "";
+            const img = j.get(e, "image") orelse if (std.mem.eql(u8, kind, "image") or std.mem.eql(u8, kind, "gifv")) j.get(e, "thumbnail") else null;
+            const iv = img orelse continue;
+            const url = j.str(j.get(iv, "proxy_url")) orelse continue;
+            const w = j.int(j.get(iv, "width")) orelse 0;
+            const h = j.int(j.get(iv, "height")) orelse 0;
+            if (w <= 0 or h <= 0) continue;
+            try list.append(alloc, .{
+                .url = try alloc.dupe(u8, url),
+                .filename = try alloc.dupe(u8, j.str(j.get(e, "title")) orelse "imagem"),
+                .width = @intCast(@min(w, 65535)),
+                .height = @intCast(@min(h, 65535)),
+                .animated = std.mem.eql(u8, kind, "gifv"),
+            });
+        }
+        return list.toOwnedSlice(alloc);
     }
 
     fn onReady(g: *Gateway, d: Value, arena: std.mem.Allocator) !void {
@@ -1065,6 +1111,11 @@ pub const Gateway = struct {
     }
 
     fn request(g: *Gateway, method: [:0]const u8, path: []const u8, body: ?[]const u8) ?Response {
+        return g.requestEx(method, path, body, null);
+    }
+
+    /// `mime`: corpo multipart (envio de arquivos) no lugar do JSON.
+    fn requestEx(g: *Gateway, method: [:0]const u8, path: []const u8, body: ?[]const u8, mime: ?*c.curl_mime) ?Response {
         const h = g.rest orelse return null;
         var url_buf: [512]u8 = undefined;
         const url = std.fmt.bufPrintSentinel(&url_buf, "{s}{s}", .{ api, path }, 0) catch return null;
@@ -1087,7 +1138,7 @@ pub const Gateway = struct {
             var headers: ?*c.struct_curl_slist = null;
             headers = c.curl_slist_append(headers, auth.ptr);
             headers = c.curl_slist_append(headers, super_line.ptr);
-            headers = c.curl_slist_append(headers, "Content-Type: application/json");
+            if (mime == null) headers = c.curl_slist_append(headers, "Content-Type: application/json");
             headers = c.curl_slist_append(headers, "Origin: https://discord.com");
             headers = c.curl_slist_append(headers, "Referer: https://discord.com/channels/@me");
             headers = c.curl_slist_append(headers, "Sec-Fetch-Dest: empty");
@@ -1108,9 +1159,11 @@ pub const Gateway = struct {
             _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEDATA, &resp.body);
             _ = c.curl_easy_setopt(h, c.CURLOPT_HEADERFUNCTION, headerCb);
             _ = c.curl_easy_setopt(h, c.CURLOPT_HEADERDATA, &rate);
-            _ = c.curl_easy_setopt(h, c.CURLOPT_TIMEOUT, @as(c_long, 20));
+            _ = c.curl_easy_setopt(h, c.CURLOPT_TIMEOUT, @as(c_long, if (mime != null) 180 else 20));
             _ = c.curl_easy_setopt(h, c.CURLOPT_ACCEPT_ENCODING, "");
-            if (body) |b| {
+            if (mime) |mp| {
+                _ = c.curl_easy_setopt(h, c.CURLOPT_MIMEPOST, mp);
+            } else if (body) |b| {
                 _ = c.curl_easy_setopt(h, c.CURLOPT_POSTFIELDS, b.ptr);
                 _ = c.curl_easy_setopt(h, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(b.len)));
             } else if (std.mem.eql(u8, method, "PUT") or std.mem.eql(u8, method, "POST")) {
@@ -1162,7 +1215,11 @@ pub const Gateway = struct {
 
     fn freeCommand(cmd: ev.Command) void {
         switch (cmd) {
-            .send_message => |m| alloc.free(m.content),
+            .send_message => |m| {
+                alloc.free(m.content);
+                for (m.files) |f| alloc.free(f);
+                if (m.files.len > 0) alloc.free(m.files);
+            },
             .edit_message => |m| alloc.free(m.content),
             else => {},
         }
@@ -1193,10 +1250,39 @@ pub const Gateway = struct {
                 j.writeString(&b, alloc, m.content) catch return;
                 b.print(alloc, ",\"nonce\":\"{d}\",\"tts\":false", .{m.nonce}) catch return;
                 if (m.reply_to != 0) b.print(alloc, ",\"message_reference\":{{\"message_id\":\"{d}\"}}", .{m.reply_to}) catch return;
+                if (m.files.len > 0) {
+                    // Como o cliente oficial: payload_json + files[n].
+                    b.appendSlice(alloc, ",\"attachments\":[") catch return;
+                    for (m.files, 0..) |f, i| {
+                        if (i > 0) b.append(alloc, ',') catch return;
+                        b.print(alloc, "{{\"id\":{d},\"filename\":", .{i}) catch return;
+                        j.writeString(&b, alloc, std.fs.path.basename(f)) catch return;
+                        b.append(alloc, '}') catch return;
+                    }
+                    b.append(alloc, ']') catch return;
+                }
                 b.append(alloc, '}') catch return;
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages", .{m.channel}) catch return;
-                var resp = g.request("POST", path, b.items) orelse return;
+                var mime: ?*c.curl_mime = null;
+                defer if (mime) |mp| c.curl_mime_free(mp);
+                if (m.files.len > 0) {
+                    mime = c.curl_mime_init(g.rest);
+                    const mp = mime orelse return;
+                    const pj = c.curl_mime_addpart(mp);
+                    _ = c.curl_mime_name(pj, "payload_json");
+                    _ = c.curl_mime_data(pj, b.items.ptr, b.items.len);
+                    _ = c.curl_mime_type(pj, "application/json");
+                    for (m.files, 0..) |f, i| {
+                        var nbuf: [32]u8 = undefined;
+                        const field = std.fmt.bufPrintSentinel(&nbuf, "files[{d}]", .{i}, 0) catch return;
+                        const fp = c.curl_mime_addpart(mp);
+                        _ = c.curl_mime_name(fp, field.ptr);
+                        _ = c.curl_mime_filedata(fp, f.ptr);
+                    }
+                }
+                var resp = g.requestEx("POST", path, if (mime == null) b.items else null, mime) orelse return;
                 defer resp.body.deinit(alloc);
+                if (resp.status == 413) return g.notice("arquivo grande demais para o Discord (limite de 10 MB sem Nitro)", .{});
                 if (resp.status >= 300) g.noticeHttp("não foi possível enviar", &resp);
             },
             .edit_message => |m| {

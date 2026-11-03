@@ -40,6 +40,7 @@ pub const Ctx = struct {
     now_ms: i64,
     actions: *std.ArrayList(Action),
     stats: *const Stats,
+    images: *@import("images.zig").Cache,
     win: Rect,
     /// Algum elemento clicável está sob o mouse neste quadro.
     hot: bool = false,

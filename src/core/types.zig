@@ -39,6 +39,32 @@ pub const Channel = struct {
     recipient: Id = 0,
 };
 
+/// Anexo de uma mensagem. `url` pode ser https:// (CDN do Discord),
+/// file:// (arquivo nosso ainda subindo) ou demo:N (imagem da demonstração).
+pub const Attachment = struct {
+    url: []const u8,
+    filename: []const u8,
+    /// Tamanho da imagem (0 = não é imagem). Vem junto com a mensagem, então
+    /// dá pra reservar o espaço antes de a imagem chegar.
+    width: u16 = 0,
+    height: u16 = 0,
+    size: u32 = 0,
+    animated: bool = false,
+
+    pub fn isImage(a: *const Attachment) bool {
+        return a.width > 0 and a.height > 0;
+    }
+};
+
+/// Libera os anexos (alocados com `gpa`, como o resto da mensagem).
+pub fn freeAttachments(gpa: std.mem.Allocator, list: []const Attachment) void {
+    for (list) |a| {
+        gpa.free(a.url);
+        gpa.free(a.filename);
+    }
+    if (list.len > 0) gpa.free(list);
+}
+
 pub const Message = struct {
     id: Id,
     channel: Id,
@@ -52,6 +78,7 @@ pub const Message = struct {
     /// Mensagem que esta responde (0 = nenhuma).
     reply_to: Id = 0,
     edited: bool = false,
+    attachments: []const Attachment = &.{},
 };
 
 /// Uma reação: o emoji (UTF-8, até 15 bytes), quantas pessoas e se inclui a gente.

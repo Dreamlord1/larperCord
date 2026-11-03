@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
     translate.addIncludePath(imgui_dir);
     translate.addIncludePath(dcimgui_dir);
     translate.addIncludePath(dcimgui_dir.path(b, "backends"));
+    translate.addIncludePath(b.path("third_party/stb"));
     translate.defineCMacro("IMGUI_USE_WCHAR32", "1");
     translate.linkSystemLibrary("sdl3", .{});
     translate.linkSystemLibrary("fontconfig", .{});
@@ -62,6 +63,9 @@ pub fn build(b: *std.Build) void {
         },
         .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti" },
     });
+    // Decodificador de imagens (PNG/JPEG/GIF) dos anexos.
+    mod.addIncludePath(b.path("third_party/stb"));
+    mod.addCSourceFile(.{ .file = b.path("third_party/stb/stb_image.c"), .flags = &.{"-O2"} });
     mod.linkSystemLibrary("sdl3", .{});
     mod.linkSystemLibrary("freetype2", .{});
     mod.linkSystemLibrary("fontconfig", .{});

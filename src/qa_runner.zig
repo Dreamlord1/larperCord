@@ -207,6 +207,79 @@ fn deleted(app: *App) bool {
     const cs = active(app) orelse return false;
     return cs.messages.items.len == saved_count - 1 and app.store.findAny(saved_id) == null;
 }
+// Imagens.
+fn findAttachment(app: *App, url: []const u8) ?struct { id: Id, i: usize } {
+    const cs = active(app) orelse return null;
+    var k = cs.messages.items.len;
+    while (k > 0) {
+        k -= 1;
+        const m = &cs.messages.items[k];
+        for (m.msg.attachments, 0..) |a, i| if (std.mem.eql(u8, a.url, url)) return .{ .id = m.msg.id, .i = i };
+    }
+    return null;
+}
+fn tDemoImage(app: *App, b: []u8) []const u8 {
+    const f = findAttachment(app, "demo:1") orelse return "";
+    return markFmt(b, "att:{d}:{d}", .{ f.id, f.i });
+}
+fn tDemoFile(app: *App, b: []u8) []const u8 {
+    const f = findAttachment(app, "demo:file") orelse return "";
+    return markFmt(b, "att:{d}:{d}", .{ f.id, f.i });
+}
+fn jumpToFile(app: *App) void {
+    const f = findAttachment(app, "demo:file") orelse return;
+    app.st.jump = f.id;
+}
+fn demoImageReady(app: *App) bool {
+    var it = app.images.map.iterator();
+    while (it.next()) |e| if (std.mem.endsWith(u8, e.key_ptr.*, " demo:1") and e.value_ptr.state == .ready) return true;
+    return false;
+}
+fn noImageLoading(app: *App) bool {
+    return !app.images.busy();
+}
+fn viewerOpen(app: *App) bool {
+    return app.st.viewer != null and qa.find("viewer") != null;
+}
+fn viewerClosed(app: *App) bool {
+    return app.st.viewer == null;
+}
+fn toastDemoFile(app: *App) bool {
+    return std.mem.indexOf(u8, app.st.toast.text(), "arquivo") != null;
+}
+/// Gera um PNG de teste (um degradê) e põe na bandeja, como um arrastar e soltar.
+fn attachQaImage(app: *App) void {
+    const surf = c.SDL_CreateSurface(160, 100, c.SDL_PIXELFORMAT_RGBA32) orelse return;
+    defer c.SDL_DestroySurface(surf);
+    const px: [*]u8 = @ptrCast(surf.*.pixels.?);
+    const pitch: usize = @intCast(surf.*.pitch);
+    for (0..100) |y| for (0..160) |x| {
+        const o = px[y * pitch + x * 4 ..][0..4];
+        o.* = .{ @intCast(x * 255 / 160), @intCast(y * 255 / 100), 200, 255 };
+    };
+    _ = c.SDL_SavePNG(surf, "qa-out/anexo-qa.png");
+    var buf: [1024]u8 = undefined;
+    const cwd = c.SDL_GetCurrentDirectory() orelse return;
+    defer c.SDL_free(cwd);
+    const path = std.fmt.bufPrint(&buf, "{s}qa-out/anexo-qa.png", .{std.mem.span(cwd)}) catch return;
+    app.attachFile(path);
+}
+fn oneUpload(app: *App) bool {
+    return app.st.uploads.items.len == 1 and app.st.uploads.items[0].width == 160 and qa.find("upload:0") != null;
+}
+fn noUploads(app: *App) bool {
+    return app.st.uploads.items.len == 0;
+}
+fn sentWithImage(app: *App) bool {
+    const m = lastMsg(app, 0) orelse return false;
+    return !m.pending and std.mem.eql(u8, m.msg.content, "olha essa imagem") and m.msg.attachments.len == 1 and
+        m.msg.attachments[0].width == 160 and std.mem.startsWith(u8, m.msg.attachments[0].url, "file://");
+}
+fn sentImageOnly(app: *App) bool {
+    const m = lastMsg(app, 0) orelse return false;
+    return !m.pending and m.msg.content.len == 0 and m.msg.attachments.len == 1;
+}
+
 fn toastCopied(app: *App) bool {
     return std.mem.indexOf(u8, app.st.toast.text(), "copiado") != null;
 }
@@ -522,6 +595,46 @@ const ops = [_]Op{
     expect("tema 7 mostra conversa e caixa de texto", composerVisible),
     key(c.ImGuiKey_F2),
     expect("depois do último volta ao primeiro", onClassico),
+
+    s("imagens e anexos"),
+    .{ .hover = .{ .dyn = tDemoImage } },
+    .{ .wait = 400 },
+    .{ .expect = .{ .name = "imagem da conversa carrega", .check = demoImageReady, .timeout_ms = 4000 } },
+    .{ .shot = "26-imagem" },
+    .{ .click = .{ .dyn = tDemoImage } },
+    expect("clicar na imagem abre em tela cheia", viewerOpen),
+    .{ .wait = 300 },
+    .{ .expect = .{ .name = "tela cheia carrega a imagem grande", .check = noImageLoading, .timeout_ms = 4000 } },
+    .{ .shot = "27-imagem-tela-cheia" },
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha a tela cheia", viewerClosed),
+    .{ .click = .{ .dyn = tDemoImage } },
+    expect("abrir de novo", viewerOpen),
+    click("viewer:fechar"),
+    expect("o X fecha a tela cheia", viewerClosed),
+    .{ .run = clearToast },
+    .{ .run = jumpToFile },
+    .{ .wait = 500 },
+    .{ .click = .{ .dyn = tDemoFile } },
+    expect("clicar no arquivo responde", toastDemoFile),
+    .{ .run = attachQaImage },
+    expect("arquivo entra na bandeja", oneUpload),
+    .{ .wait = 200 },
+    .{ .shot = "28-bandeja" },
+    click("upload-remove:0"),
+    expect("tirar o arquivo da bandeja", noUploads),
+    .{ .run = attachQaImage },
+    click("composer"),
+    .{ .text = "olha essa imagem" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "mensagem com imagem enviada", .check = sentWithImage, .timeout_ms = 3000 } },
+    expect("bandeja esvazia depois de enviar", noUploads),
+    .{ .expect = .{ .name = "imagem enviada aparece", .check = noImageLoading, .timeout_ms = 4000 } },
+    .{ .shot = "29-imagem-enviada" },
+    .{ .run = attachQaImage },
+    click("composer"),
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "só a imagem, sem texto", .check = sentImageOnly, .timeout_ms = 3000 } },
 
     s("janela pequena"),
     .{ .resize = .{ 820, 560 } },

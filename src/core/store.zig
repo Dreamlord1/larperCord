@@ -94,6 +94,7 @@ pub const Store = struct {
 
     fn freeMessage(s: *Store, m: *StoredMessage) void {
         ev_alloc.free(m.msg.content);
+        types.freeAttachments(ev_alloc, m.msg.attachments);
         s.gpa.free(m.spans);
     }
 
@@ -237,7 +238,10 @@ pub const Store = struct {
             .history => |h| {
                 defer ev_alloc.free(h.messages);
                 const cs = s.channel(h.channel) orelse {
-                    for (h.messages) |m| ev_alloc.free(m.content);
+                    for (h.messages) |m| {
+                        ev_alloc.free(m.content);
+                        types.freeAttachments(ev_alloc, m.attachments);
+                    }
                     return;
                 };
                 // O histórico vem antes do que já temos.
@@ -430,6 +434,7 @@ pub const Store = struct {
     fn addMessage(s: *Store, m: types.Message, now_ms: i64) !void {
         const cs = s.channel(m.channel) orelse {
             ev_alloc.free(m.content);
+            types.freeAttachments(ev_alloc, m.attachments);
             return;
         };
         // Quem mandou parou de digitar.
@@ -442,8 +447,14 @@ pub const Store = struct {
         if (m.nonce != 0) {
             for (cs.messages.items) |*sm| if (sm.pending and sm.msg.nonce == m.nonce) {
                 const spans = try markdown.parse(s.gpa, m.content);
+                var msg = m;
+                // Sem anexos na confirmação (demonstração): fica com os locais.
+                if (msg.attachments.len == 0) {
+                    msg.attachments = sm.msg.attachments;
+                    sm.msg.attachments = &.{};
+                }
                 s.freeMessage(sm);
-                sm.* = .{ .msg = m, .spans = spans };
+                sm.* = .{ .msg = msg, .spans = spans };
                 cs.version +%= 1;
                 return;
             };
@@ -455,12 +466,13 @@ pub const Store = struct {
     }
 
     /// Mostra na hora uma mensagem que acabamos de enviar.
-    pub fn addPending(s: *Store, channel_id: Id, content: []const u8, nonce: u64, reply_to: Id, now_ms: i64) !void {
-        const cs = s.channel(channel_id) orelse return;
+    /// `attachments` passa a pertencer ao Store (alocado com o c_allocator).
+    pub fn addPending(s: *Store, channel_id: Id, content: []const u8, nonce: u64, reply_to: Id, now_ms: i64, attachments: []const types.Attachment) !void {
+        const cs = s.channel(channel_id) orelse return types.freeAttachments(ev_alloc, attachments);
         const owned = try ev_alloc.dupe(u8, content);
         // As fatias dos trechos apontam para `owned`, que vira o conteúdo.
         try cs.messages.append(s.gpa, .{
-            .msg = .{ .id = 0, .channel = channel_id, .author = s.me, .timestamp = @divTrunc(now_ms, 1000), .content = owned, .nonce = nonce, .reply_to = reply_to },
+            .msg = .{ .id = 0, .channel = channel_id, .author = s.me, .timestamp = @divTrunc(now_ms, 1000), .content = owned, .nonce = nonce, .reply_to = reply_to, .attachments = attachments },
             .spans = try markdown.parse(s.gpa, owned),
             .pending = true,
         });
@@ -606,7 +618,7 @@ test "mensagem pendente é confirmada pelo nonce" {
     chans[0] = .{ .id = 10, .guild = 5, .name = try c_alloc.dupe(u8, "g"), .topic = try c_alloc.dupe(u8, "") };
     try s.apply(.{ .ready = .{ .me = 1, .users = try c_alloc.alloc(types.User, 0), .guilds = try c_alloc.alloc(types.Guild, 0), .channels = chans, .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
 
-    try s.addPending(10, "olá", 77, 0, 0);
+    try s.addPending(10, "olá", 77, 0, 0, &.{});
     try std.testing.expect(s.channel(10).?.messages.items[0].pending);
     try s.apply(.{ .message_create = .{ .id = 5, .channel = 10, .author = 1, .timestamp = 0, .content = try c_alloc.dupe(u8, "olá"), .nonce = 77 } }, 0);
     const cs = s.channel(10).?;

@@ -53,7 +53,8 @@ pub const Event = union(enum) {
 pub const Connection = enum { connecting, ready, reconnecting, failed, offline };
 
 pub const Command = union(enum) {
-    send_message: struct { channel: Id, content: []const u8, nonce: u64, reply_to: Id = 0 },
+    /// `files`: caminhos dos arquivos a enviar (alocados, terminados em 0).
+    send_message: struct { channel: Id, content: []const u8, nonce: u64, reply_to: Id = 0, files: []const [:0]const u8 = &.{} },
     edit_message: struct { channel: Id, id: Id, content: []const u8 },
     delete_message: struct { channel: Id, id: Id },
     react: struct { channel: Id, id: Id, emoji: types.Reaction, add: bool },
@@ -98,4 +99,9 @@ pub const Action = union(enum) {
     set_theme_option: struct { index: usize, value: bool },
     /// "Sair": esquece o token e volta para a tela de login.
     logout,
+    /// Abre o seletor de arquivos para anexar.
+    pick_files,
+    remove_upload: usize,
+    /// Ctrl+V com uma imagem na área de transferência.
+    paste_image,
 };
