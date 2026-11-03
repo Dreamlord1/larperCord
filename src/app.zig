@@ -103,9 +103,10 @@ pub const App = struct {
         app.themes.watch(wakeTheme);
 
         // Conta de verdade se houver token; senão, os dados de demonstração.
-        _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
         const token = if (opts.demo or opts.shot != null) null else discord.loadToken();
         if (token) |t| {
+            // Só inicia o libcurl/OpenSSL quando vai usar (~5 MB a menos no modo demonstração).
+            _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
             app.net = .{ .real = .{
                 .commands = try Queue(ev.Command).init(gpa),
                 .sink = .{ .ctx = app, .push = pushEvent },
@@ -139,9 +140,9 @@ pub const App = struct {
             .real => |*g| {
                 g.stop();
                 g.commands.deinit();
+                c.curl_global_cleanup();
             },
         }
-        c.curl_global_cleanup();
         app.events.deinit();
         app.store.deinit();
         app.themes.deinit();
