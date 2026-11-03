@@ -1,34 +1,33 @@
-// gameboy — quatro tons de verde, bordas grossas e uma tela de LCD.
-theme "gameboy" description="Quatro tons de verde, bordas grossas e cara de portátil de 1989." author="larperCord" preview=gameboy
-
-palette "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#8bac0f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230" "#9bbc0f"
+// gameboy — o portátil de 1989: corpo cinza, moldura escura e a tela de LCD
+// em quatro tons de verde. As cores mudam por pedaço do layout (c-…).
+theme "gameboy" description="O portátil de 1989: corpo cinza, moldura escura e tela de LCD verde." author="larperCord" preview=gameboy
 
 colors {
-    bg          "#8bac0f"
-    rail        "#9bbc0f"
+    bg          "#c7c6bd"
+    rail        "#55556a"
     sidebar     "#9bbc0f"
     surface     "#9bbc0f"
     elevated    "#8bac0f"
     overlay     "#9bbc0f"
-    text        "#0f380f"
-    muted       "#306230"
-    faint       "#306230"
-    accent      "#0f380f"
-    accent-text "#9bbc0f"
+    text        "#2b2b38"
+    muted       "#5d5d6e"
+    faint       "#85858f"
+    accent      "#8b1d58"
+    accent-text "#f2f2ec"
     border      "#0f380f"
     hover       "alpha(#306230, 0.25)"
-    selected    "alpha(#0f380f, 0.25)"
+    selected    "alpha(#0f380f, 0.22)"
     online      "#0f380f"
     idle        "#306230"
     dnd         "#0f380f"
-    danger      "#0f380f"
+    danger      "#8b1d58"
     mention     "#0f380f"
-    link        "#0f380f"
+    link        "#2d2f8f"
     code-bg     "#8bac0f"
     bubble-self "#306230"
     bubble-self-text "#9bbc0f"
     bubble-other "#8bac0f"
-    shadow      "alpha(#0f380f, 0.0)"
+    shadow      "alpha(black, 0.18)"
 }
 roles "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230"
 
@@ -36,22 +35,27 @@ fonts ui="JetBrains Mono" mono="JetBrains Mono" size=14
 metrics radius=0
 
 styles {
-    style "lcd" bg="@surface" border="@border" border-width=3
+    style "bezel" bg="@rail" radius=12 shadow=6
 }
 
 layout {
-    column padding=14 gap=10 {
-        label height=24 text="DOT MATRIX WITH STEREO SOUND  ·  larperCord" size=12 weight=bold color=muted align=center
-        row flex=1 gap=10 {
-            channel-list width=226 style=lcd variant=tree inset-x=4 inset-y=4
-            column flex=1 style=lcd {
-                header height=30 variant=tty inset-x=4
-                messages flex=1 variant=irc avatar=none inset-x=4
-                spacer height=22
-                composer height=36 variant=prompt inset-x=4
+    column padding=18 gap=10 {
+        column flex=1 padding=14 gap=8 style=bezel c-text="#a9a9b8" c-muted="#8a8a9c" {
+            label height=18 text="•  DOT MATRIX WITH STEREO SOUND  •" size=11 weight=bold color=text align=center
+            row flex=1 gap=0 bg=surface c-text="#0f380f" c-muted="#306230" c-faint="#306230" c-accent="#0f380f" c-accent-text="#9bbc0f" c-border="#306230" c-link="#0f380f" c-danger="#0f380f" {
+                channel-list width=224 variant=tree inset-x=4 inset-y=4
+                column flex=1 {
+                    header height=30 variant=tty inset-x=4
+                    messages flex=1 variant=irc avatar=none inset-x=4
+                    spacer height=22
+                    composer height=34 variant=prompt inset-x=4
+                }
             }
         }
-        guild-bar height=34 shape=text style=lcd inset-x=4
-        status-bar height=24 variant=tty items="conn theme ram spacer keys clock"
+        row height=34 gap=12 {
+            label width=160 text="larperCord" size=20 weight=bold color=link
+            guild-bar flex=1 shape=text
+        }
+        status-bar height=22 variant=tty items="conn theme ram spacer keys clock"
     }
 }

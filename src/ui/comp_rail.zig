@@ -4,6 +4,7 @@
 //!   size        = tamanho do ícone (48)
 //!   labels      = mostra o nome ao lado do ícone (horizontal)
 //!   home        = mostra o logo no começo (#true)
+//!   icon-style  = fill | soft | outline   (como pintar o ícone do servidor)
 const std = @import("std");
 const c = @import("c");
 const kdl = @import("../theme/kdl.zig");
@@ -13,6 +14,7 @@ const w = @import("widgets.zig");
 const types = @import("../core/types.zig");
 
 pub fn draw(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
+    icon_style = std.meta.stringToEnum(IconStyle, d.pstr(n, "icon-style", "fill")) orelse .fill;
     const horizontal = if (n.str("orientation")) |o| std.mem.eql(u8, o, "horizontal") else r.w > r.h;
     const shape_s = d.pstr(n, "shape", "circle");
     if (std.mem.eql(u8, shape_s, "text")) return textTabs(ctx, n, r);
@@ -87,14 +89,33 @@ const Indicator = enum { left, bottom };
 
 const GuildRef = struct { g: *types.Guild, i: usize };
 
+pub const IconStyle = enum { fill, soft, outline };
+
+var icon_style: IconStyle = .fill;
+
 fn glyph(ctx: *d.Ctx, dl: *c.ImDrawList, g: *const types.Guild, cx: f32, cy: f32, size: f32, shape: w.Shape, active: bool) void {
     const color = ctx.th.role(g.color);
     const ir: d.Rect = .{ .x = cx - size / 2, .y = cy - size / 2, .w = size, .h = size };
-    d.rect(dl, ir, if (active) color else color.mix(ctx.col(.elevated), 0.55), w.shapeRadius(shape, size));
+    const radius = w.shapeRadius(shape, size);
     const fs = size * (if (g.acronym.len >= 3) @as(f32, 0.3) else 0.36);
     const font = ctx.ui.get(.semibold);
     const tw = d.width(font, fs, g.acronym);
-    d.text(dl, font, fs, cx - tw / 2, cy - fs * 0.62, d.Rgba.white.alpha(0.95), g.acronym);
+    const ink = switch (icon_style) {
+        .fill => blk: {
+            d.rect(dl, ir, if (active) color else color.mix(ctx.col(.elevated), 0.55), radius);
+            break :blk d.Rgba.white.alpha(0.95);
+        },
+        .soft => blk: {
+            d.rect(dl, ir, color.alpha(if (active) 0.32 else 0.18), radius);
+            break :blk color.mix(ctx.col(.text), if (active) 0.25 else 0.45);
+        },
+        .outline => blk: {
+            d.rect(dl, ir, ctx.col(.elevated), radius);
+            d.border(dl, ir, color.alpha(if (active) 1 else 0.45), radius, if (active) 2 else 1.2);
+            break :blk if (active) color.mix(ctx.col(.text), 0.2) else ctx.col(.muted);
+        },
+    };
+    d.text(dl, font, fs, cx - tw / 2, cy - fs * 0.62, ink, g.acronym);
 }
 
 fn icon(ctx: *d.Ctx, dl: *c.ImDrawList, ref: ?GuildRef, cx: f32, y: f32, size: f32, shape: w.Shape, ind: Indicator, bar: d.Rect) void {
@@ -115,11 +136,25 @@ fn icon(ctx: *d.Ctx, dl: *c.ImDrawList, ref: ?GuildRef, cx: f32, y: f32, size: f
     if (ref) |gr| {
         const g = gr.g;
         const color = ctx.th.role(g.color);
-        d.rect(dl, dr, ctx.col(.elevated).mix(color.mix(ctx.col(.elevated), 0.15), fill), radius);
         const fs = size * (if (g.acronym.len >= 3) @as(f32, 0.29) else 0.355);
         const font = ctx.ui.get(.semibold);
         const tw = d.width(font, fs, g.acronym);
-        d.text(dl, font, fs, cx - tw / 2, y + size / 2 - fs * 0.62, ctx.col(.text).mix(d.Rgba.white, fill), g.acronym);
+        const ink = switch (icon_style) {
+            .fill => blk: {
+                d.rect(dl, dr, ctx.col(.elevated).mix(color.mix(ctx.col(.elevated), 0.15), fill), radius);
+                break :blk ctx.col(.text).mix(d.Rgba.white, fill);
+            },
+            .soft => blk: {
+                d.rect(dl, dr, ctx.col(.elevated).mix(color.alpha(0.35), fill), radius);
+                break :blk ctx.col(.muted).mix(color.mix(ctx.col(.text), 0.3), fill);
+            },
+            .outline => blk: {
+                d.rect(dl, dr, ctx.col(.elevated), radius);
+                d.border(dl, dr, ctx.col(.border).mix(color, fill), radius, 1 + fill);
+                break :blk ctx.col(.muted).mix(color.mix(ctx.col(.text), 0.2), fill);
+            },
+        };
+        d.text(dl, font, fs, cx - tw / 2, y + size / 2 - fs * 0.62, ink, g.acronym);
         if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.bottom() - 16, g.mentions);
 
         const target: f32 = if (selected) size * 0.83 else if (hb.hovered) size * 0.42 else if (g.unread) 8 else 0;

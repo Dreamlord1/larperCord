@@ -1,30 +1,37 @@
-// zen — só a conversa: uma coluna central, sem avatares e sem barras laterais.
-// Os servidores e canais continuam a um Ctrl+K de distância.
-theme "zen" description="Uma coluna central, letras maiores e nada de distração." author="larperCord" preview=zen
+// zen — foco: uma coluna central com letras maiores, sem avatares e sem
+// barras laterais. Só uma faixa discreta de servidores à esquerda.
+theme "zen" description="Foco: uma coluna central, letras maiores e quase nada em volta." author="larperCord" preview=zen
 palette "wal"
 
 colors {
-    bg      "mix(wal:0, black, 0.3)"
-    surface "mix(wal:0, black, 0.3)"
-    elevated "mix(wal:0, wal:15, 0.07)"
-    text    "mix(wal:15, wal:0, 0.06)"
+    bg       "mix(wal:0, black, 0.35)"
+    surface  "mix(wal:0, black, 0.35)"
+    rail     "mix(wal:0, black, 0.35)"
+    elevated "mix(mix(wal:0, black, 0.35), wal:15, 0.07)"
+    text     "wal:15"
+    muted    "mix(wal:15, wal:0, 0.38)"
+    faint    "mix(wal:15, wal:0, 0.6)"
+    border   "alpha(wal:15, 0.07)"
 }
 
 fonts ui="Inter" mono="JetBrains Mono" size=17
 metrics radius=10
 
 layout {
-    column {
-        tabs height=46 variant=underline max-width=900
-        column flex=1 max-width=860 {
-            header height=76 variant=minimal inset-x=16
-            messages flex=1 avatar=none spacing=24
-            column height=104 padding-x=16 {
-                spacer flex=1
-                composer height=52
-                spacer height=28
+    row {
+        guild-bar width=64 size=34 icon-style=soft shape=circle
+        column flex=1 {
+            tabs height=48 variant=underline max-width=800
+            column flex=1 max-width=800 {
+                header height=88 variant=minimal inset-x=16
+                messages flex=1 avatar=none spacing=26
+                column height=104 padding-x=16 {
+                    spacer flex=1
+                    composer height=52
+                    spacer height=28
+                }
             }
+            status-bar height=30 variant=plain items="conn spacer theme ram clock"
         }
-        status-bar height=28 variant=plain items="conn spacer theme ram clock"
     }
 }

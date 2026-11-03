@@ -388,8 +388,9 @@ fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, 
         const hb = d.hit(ctx, @truncate((m.msg.id *% 31) +% i), cr);
         if (hb.clicked) ctx.act(.{ .react = .{ .id = m.msg.id, .emoji = rc.* } });
         const bg = if (rc.me) ctx.col(.accent).alpha(0.2) else ctx.col(.elevated);
-        d.rect(dl, cr, if (hb.hovered) bg.mix(ctx.col(.text), 0.06) else bg, 8);
-        if (rc.me or hb.hovered) d.border(dl, cr, if (rc.me) ctx.col(.accent) else ctx.col(.border).mix(ctx.col(.text), 0.1), 8, 1);
+        const cr_r = @min(8, ctx.th.radius + 2);
+        d.rect(dl, cr, if (hb.hovered) bg.mix(ctx.col(.text), 0.06) else bg, cr_r);
+        if (rc.me or hb.hovered) d.border(dl, cr, if (rc.me) ctx.col(.accent) else ctx.col(.border).mix(ctx.col(.text), 0.1), cr_r, 1);
         d.text(dl, fam.get(.regular), 15, cr.x + 6, cr.y + 2, d.Rgba.white, rc.text());
         d.text(dl, fam.get(.semibold), 13, cr.x + 28, d.centerY(cr, 13), if (rc.me) ctx.col(.accent).mix(ctx.col(.text), 0.3) else ctx.col(.muted), cnt);
         xx += cr.w + 4;
@@ -397,7 +398,7 @@ fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, 
     if (show_add) {
         const ar: d.Rect = .{ .x = xx, .y = y + 3, .w = 32, .h = 24 };
         const hb = d.hit(ctx, @truncate(m.msg.id ^ 0xadd), ar);
-        d.rect(dl, ar, ctx.col(.elevated).alpha(if (hb.hovered) 1 else 0.6), 8);
+        d.rect(dl, ar, ctx.col(.elevated).alpha(if (hb.hovered) 1 else 0.6), @min(8, ctx.th.radius + 2));
         icons.plus(dl, ar.x + 16, ar.y + 12, 4.5, ctx.col(.muted).u());
         if (hb.clicked) ctx.popup(.{ .emoji = .{ .target = m.msg.id, .x = ar.x + 200, .y = ar.y } });
     }

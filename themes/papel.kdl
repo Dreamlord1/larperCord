@@ -1,54 +1,55 @@
-// papel — papel e tinta: claro, serifado e com o layout espelhado
-// (conversa à esquerda, canais e servidores à direita).
-theme "papel" description="Papel e tinta: serifado, claro e com o layout espelhado." author="larperCord" preview=mirror
+// papel — um caderno: página cor de papel, tinta escura, títulos em serifa
+// e o "Índice" (servidores + canais) na margem direita, como num livro.
+theme "papel" description="Um caderno: página clara, títulos em serifa e o índice na margem." author="larperCord" preview=mirror
 
 colors {
-    bg          "#f3ead5"
-    rail        "#e6dbbf"
-    sidebar     "#ece2c9"
-    surface     "#f8f1de"
-    elevated    "#e6dbbf"
-    overlay     "#fbf6e8"
-    text        "#2a2017"
-    muted       "#6b5944"
-    faint       "#a08c70"
-    accent      "#a3361e"
-    accent-text "#fbf6e8"
-    border      "#d6c7a3"
-    hover       "alpha(#a3361e, 0.06)"
-    selected    "alpha(#a3361e, 0.13)"
-    online      "#4c7a34"
+    bg          "#efe8da"
+    rail        "#e4dac5"
+    sidebar     "#ebe3d2"
+    surface     "#f8f4ea"
+    elevated    "#ebe3d2"
+    overlay     "#fbf8f1"
+    text        "#29231e"
+    muted       "#6d6357"
+    faint       "#a29785"
+    accent      "#b23a2a"
+    accent-text "#fbf8f1"
+    border      "#dcd2bf"
+    hover       "alpha(#29231e, 0.05)"
+    selected    "alpha(#b23a2a, 0.11)"
+    online      "#4d7a35"
     idle        "#b8860b"
-    dnd         "#a3361e"
-    danger      "#a3361e"
-    mention     "#a3361e"
-    link        "#1f5a8a"
-    code-bg     "#e8dcbc"
-    bubble-self "#a3361e"
-    bubble-other "#e6dbbf"
-    shadow      "alpha(#5a4320, 0.18)"
+    dnd         "#b23a2a"
+    danger      "#b23a2a"
+    mention     "#b23a2a"
+    link        "#2f5d8c"
+    code-bg     "#ece3cf"
+    bubble-self "#b23a2a"
+    bubble-other "#ebe3d2"
+    shadow      "alpha(#5a4320, 0.14)"
 }
-roles "#a3361e" "#1f5a8a" "#4c7a34" "#7a4c8a" "#b8860b" "#2b6b6b" "#8a3b5a" "#5a4320"
+// Cores de tinta: nada de arco-íris.
+roles "#8c3b2a" "#2f5d8c" "#4d6b35" "#6d4b7d" "#94701f" "#2f6e6e" "#8a4060" "#5b4a3a"
 
-fonts ui="DejaVu Serif" mono="JetBrains Mono" size=16
-metrics radius=3
+fonts ui="Inter" mono="JetBrains Mono" size=16
+metrics radius=4
 
 layout {
     row {
         column flex=1 bg=surface {
-            header height=70 variant=minimal inset-x=30
-            messages flex=1 avatar=square spacing=20 inset-x=14
-            column height=92 padding-x=30 {
+            header height=86 variant=minimal inset-x=44 font="Liberation Serif"
+            messages flex=1 avatar=none spacing=22 inset-x=28
+            column height=96 padding-x=44 {
                 spacer flex=1
                 composer height=46
-                spacer height=22
+                spacer height=24
             }
         }
-        column width=252 bg=sidebar {
-            label height=58 text="✒  caderno de conversas" size=17 weight=bold color=accent
+        column width=272 bg=sidebar {
+            label height=68 text="Índice" font="Liberation Serif" size=24 weight=bold color=text
+            guild-bar height=206 variant=list shape=circle size=22 icon-style=soft
             channel-list flex=1 header=#false
             user-panel height=56
         }
-        guild-bar width=66 bg=rail shape=square size=40
     }
 }

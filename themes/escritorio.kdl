@@ -8,7 +8,7 @@ colors {
     rail        "#3f0e40"
     sidebar     "#3f0e40"
     surface     "#ffffff"
-    elevated    "#f4f4f6"
+    elevated    "#f8f8f9"
     overlay     "#ffffff"
     text        "#1d1c1d"
     muted       "#616061"
@@ -41,7 +41,7 @@ layout {
             user-panel height=58 bg=rail
         }
         column flex=1 bg=surface {
-            header height=52
+            header height=52 c-rail="#ffffff" c-sidebar="#f1f1f3"
             messages flex=1 avatar=square avatar-size=36
             column height=90 padding-x=18 {
                 spacer flex=1

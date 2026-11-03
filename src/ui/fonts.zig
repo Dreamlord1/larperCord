@@ -43,6 +43,12 @@ pub const Fonts = struct {
         return f;
     }
 
+    /// Família já carregada (não carrega nada: seguro no meio do quadro).
+    pub fn find(f: *const Fonts, name: []const u8) ?*Family {
+        for (f.families.items) |fam| if (std.mem.eql(u8, fam.name, name)) return fam;
+        return null;
+    }
+
     /// Família pelo nome ("Inter", "JetBrains Mono"...). Carrega se preciso.
     pub fn family(f: *Fonts, name: []const u8) !*Family {
         for (f.families.items) |fam| if (std.mem.eql(u8, fam.name, name)) return fam;

@@ -53,9 +53,13 @@ pub const Ctx = struct {
     }
 
     /// Família pedida pelo nó (`font="mono"`) ou a da interface.
+    /// Família pedida pelo nó: `font=mono`, `font=ui` ou o nome de qualquer
+    /// fonte instalada (`font="Liberation Serif"`), carregada ao aplicar o tema.
     pub fn familyFor(ctx: *const Ctx, n: *const kdl.Node) *Family {
-        if (n.str("font")) |f| if (std.mem.eql(u8, f, "mono")) return ctx.mono;
-        return ctx.ui;
+        const f = n.str("font") orelse return ctx.ui;
+        if (std.mem.eql(u8, f, "mono")) return ctx.mono;
+        if (std.mem.eql(u8, f, "ui")) return ctx.ui;
+        return ctx.fonts.find(f) orelse ctx.ui;
     }
 
     /// Abre um popup (menu de contexto, perfil, emoji) na posição do mouse.

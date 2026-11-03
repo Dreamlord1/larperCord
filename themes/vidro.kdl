@@ -29,7 +29,7 @@ styles {
 layout {
     column padding=12 gap=12 {
         row flex=1 gap=12 {
-            guild-bar width=70 style=card shape=squircle size=44 inset-y=4
+            guild-bar width=70 style=card shape=squircle size=44 inset-y=4 icon-style=soft
             column width=252 gap=12 {
                 channel-list flex=1 style=card inset-y=4
                 user-panel height=62 style=card inset-x=4

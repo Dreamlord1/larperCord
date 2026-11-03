@@ -38,7 +38,7 @@ styles {
 
 layout {
     column padding=16 gap=14 {
-        guild-bar height=56 orientation=horizontal labels=#true size=34 style=bar
+        guild-bar height=56 orientation=horizontal labels=#true size=34 style=bar icon-style=soft
         row flex=1 gap=14 {
             column width=272 style=sheet {
                 channel-list flex=1 variant=pills inset-y=8 inset-x=4

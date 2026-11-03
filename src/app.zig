@@ -218,6 +218,8 @@ pub const App = struct {
         // Fontes do tema (carregadas sob demanda e reaproveitadas).
         _ = app.fonts.family(th.font_ui) catch app.fonts.family("Inter") catch {};
         _ = app.fonts.family(th.font_mono) catch app.fonts.family("monospace") catch {};
+        // Fontes pedidas por componentes (`font="Liberation Serif"`).
+        if (th.layout) |lay| app.loadNodeFonts(lay);
         // O fontconfig guarda o cache de todas as fontes do sistema (~MBs);
         // ele se reinicia sozinho se outro tema pedir uma família nova.
         c.FcFini();
@@ -260,6 +262,13 @@ pub const App = struct {
         defer out.deinit(app.gpa);
         settings_state.write(&app.st.settings, app.themes.name(), &out, app.gpa) catch return;
         _ = c.SDL_SaveFile(path.ptr, out.items.ptr, out.items.len);
+    }
+
+    fn loadNodeFonts(app: *App, n: *const kdl.Node) void {
+        if (n.str("font")) |f| {
+            if (!std.mem.eql(u8, f, "mono") and !std.mem.eql(u8, f, "ui")) _ = app.fonts.family(f) catch {};
+        }
+        for (n.children) |*ch| app.loadNodeFonts(ch);
     }
 
     fn uiFamily(app: *App, name: []const u8) *fonts_mod.Family {

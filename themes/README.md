@@ -92,14 +92,14 @@ Contêineres: `row` (horizontal), `column` (vertical), `stack` (um sobre o outro
 | `hide-below=` | esconde quando a janela é mais estreita que isso |
 | `show=#false` | esconde |
 | `style=` / `bg=` `radius=` | fundo do nó |
-| `font=mono` | usa a fonte monoespaçada no componente |
+| `font=mono` / `font=ui` / `font="Liberation Serif"` | fonte do componente: a mono, a da interface ou **qualquer família instalada** |
 | `c-<token>=cor` | sobrescreve um token de cor **neste nó e nos filhos** (ex.: `c-text="#fff"` numa barra lateral escura) |
 
 ## Componentes
 
 | Componente | Propriedades |
 |---|---|
-| `guild-bar` | `variant=bar\|dock\|list` `orientation=vertical\|horizontal` `shape=circle\|squircle\|square\|text` `size=48` `labels=#true` `home=#false` |
+| `guild-bar` | `variant=bar\|dock\|list` `icon-style=fill\|soft\|outline` `orientation=vertical\|horizontal` `shape=circle\|squircle\|square\|text` `size=48` `labels=#true` `home=#false` |
 | `channel-list` | `variant=discord\|tree\|pills` `header=#false` |
 | `user-panel` | `variant=discord\|tty` |
 | `header` | `variant=discord\|minimal\|tty` `divider=#false` |
@@ -127,3 +127,17 @@ Um nome que não existe aparece com uma borda vermelha e a linha do arquivo, pra
 
 Os testes (`zig build test`) carregam todos os temas embutidos e montam o layout de cada um.
 Se você mandar um tema novo num pull request, ele é verificado automaticamente.
+
+## Dicas de design
+
+O que separa um tema bonito de um tema estranho quase nunca é a cor de destaque. Normalmente é:
+
+- **Um conceito só.** "Caderno", "terminal", "portátil de 1989"… e tudo segue ele: cores,
+  fonte, cantos e bordas.
+- **Superfícies que se separam.** Fundo, painéis e elementos elevados precisam de degraus de
+  luminosidade claros. Roxo sobre roxo sobre roxo vira uma massa só.
+- **Poucas cores acesas.** Uma de destaque e, no máximo, uma secundária. Use `roles` com cores da
+  mesma família para os nomes não virarem um arco-íris.
+- **Uma fonte de texto**, e no máximo uma de títulos (`header … font="Liberation Serif"`).
+- **Contraste suficiente** para `text`, `muted` e `faint` sobre o fundo de cada painel. Use `c-…`
+  quando um pedaço do layout tem fundo bem diferente (barra lateral escura num tema claro).
