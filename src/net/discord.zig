@@ -1086,6 +1086,12 @@ pub const Gateway = struct {
         }
         const embeds = try embedsOf(m);
         errdefer types.freeEmbeds(alloc, embeds);
+        // Mensagens de sistema vêm sem texto: monta o que o Discord mostra.
+        const sys = try systemText(m, author);
+        if (sys.text) |t| {
+            alloc.free(content);
+            content = t;
+        }
         const nonce: u64 = if (j.get(m, "nonce")) |n| @bitCast(j.int(n) orelse 0) else 0;
         var reply: Id = 0;
         if (j.get(m, "message_reference")) |ref| {
@@ -1102,6 +1108,35 @@ pub const Gateway = struct {
             .edited = !j.isNull(j.get(m, "edited_timestamp")),
             .attachments = atts,
             .embeds = embeds,
+            .system = sys.kind,
+        };
+    }
+
+    /// Texto das mensagens de sistema (tipos do Discord), com os nomes em
+    /// negrito: "**ana** adicionou **bruno** ao grupo."
+    fn systemText(m: Value, author: Value) !struct { kind: types.SystemKind = .none, text: ?[]u8 = null } {
+        const kind = j.int(j.get(m, "type")) orelse 0;
+        const who = userName(author);
+        const mentions = j.array(j.get(m, "mentions"));
+        const other = if (mentions.len > 0) userName(mentions[0]) else "?";
+        const same = mentions.len > 0 and j.id(j.get(mentions[0], "id")) == j.id(j.get(author, "id"));
+        const content = j.str(j.get(m, "content")) orelse "";
+        return switch (kind) {
+            1 => .{ .kind = .join, .text = try i18n.allocPrint(alloc, "**{s}** adicionou **{s}** ao grupo.", "**{s}** added **{s}** to the group.", .{ who, other }) },
+            2 => if (same or mentions.len == 0)
+                .{ .kind = .leave, .text = try i18n.allocPrint(alloc, "**{s}** saiu do grupo.", "**{s}** left the group.", .{who}) }
+            else
+                .{ .kind = .leave, .text = try i18n.allocPrint(alloc, "**{s}** removeu **{s}** do grupo.", "**{s}** removed **{s}** from the group.", .{ who, other }) },
+            3 => .{ .kind = .call, .text = try i18n.allocPrint(alloc, "**{s}** começou uma chamada.", "**{s}** started a call.", .{who}) },
+            4 => .{ .kind = .edit, .text = try i18n.allocPrint(alloc, "**{s}** mudou o nome do canal para **{s}**.", "**{s}** changed the channel name to **{s}**.", .{ who, content }) },
+            5 => .{ .kind = .edit, .text = try i18n.allocPrint(alloc, "**{s}** mudou o ícone do grupo.", "**{s}** changed the group icon.", .{who}) },
+            6 => .{ .kind = .pin, .text = try i18n.allocPrint(alloc, "**{s}** fixou uma mensagem neste canal.", "**{s}** pinned a message to this channel.", .{who}) },
+            7 => .{ .kind = .join, .text = try i18n.allocPrint(alloc, "**{s}** entrou no servidor.", "**{s}** joined the server.", .{who}) },
+            8 => .{ .kind = .boost, .text = try i18n.allocPrint(alloc, "**{s}** deu um impulso no servidor!", "**{s}** just boosted the server!", .{who}) },
+            9, 10, 11 => .{ .kind = .boost, .text = try i18n.allocPrint(alloc, "**{s}** deu um impulso no servidor! Ele chegou ao **nível {d}**!", "**{s}** just boosted the server! It reached **Level {d}**!", .{ who, kind - 8 }) },
+            12 => .{ .kind = .other, .text = try i18n.allocPrint(alloc, "**{s}** passou a seguir um canal de anúncios aqui.", "**{s}** followed an announcement channel here.", .{who}) },
+            18 => .{ .kind = .other, .text = try i18n.allocPrint(alloc, "**{s}** criou um tópico: **{s}**", "**{s}** started a thread: **{s}**", .{ who, content }) },
+            else => .{},
         };
     }
 
@@ -1153,7 +1188,12 @@ pub const Gateway = struct {
             // GIF do Tenor/Giphy: o Discord manda MP4; o GIF vem do site deles,
             // com a miniatura do proxy de reserva.
             var gb: [512]u8 = undefined;
-            const gif: ?[]const u8 = if (std.mem.eql(u8, kind, "gifv")) if (j.get(e, "video")) |v| media_url.gifFromVideo(&gb, j.str(j.get(v, "url")) orelse "") else null else null;
+            var gif: ?[]const u8 = if (std.mem.eql(u8, kind, "gifv")) if (j.get(e, "video")) |v| media_url.gifFromVideo(&gb, j.str(j.get(v, "url")) orelse "") else null else null;
+            // Tenor antigo (media.tenor.co, só MP4): vai pela página do GIF.
+            var pb: [600]u8 = undefined;
+            if (gif == null and std.mem.eql(u8, kind, "gifv")) if (j.str(j.get(e, "url"))) |page| {
+                if (std.mem.startsWith(u8, page, "https://tenor.com/")) gif = std.fmt.bufPrint(&pb, "{s}{s}", .{ media_url.tenor_page, page }) catch null;
+            };
             try list.append(alloc, .{
                 .url = try alloc.dupe(u8, gif orelse url),
                 .filename = try alloc.dupe(u8, j.str(j.get(e, "title")) orelse i18n.tr("imagem", "image")),

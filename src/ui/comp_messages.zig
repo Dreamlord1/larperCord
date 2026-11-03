@@ -214,7 +214,11 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
             const prev = &msgs[i - 1].msg;
             if (dayOf(&msgs[i - 1]) != dayOf(m)) flags |= flag_day | flag_group;
             if (prev.author != m.msg.author or m.msg.timestamp - prev.timestamp > 420) flags |= flag_group;
+            // Depois de uma linha de sistema, a próxima mensagem abre grupo.
+            if (prev.system != .none) flags |= flag_group;
         }
+        // Linha de sistema ("fulano entrou"): nunca tem cabeçalho de grupo.
+        if (m.msg.system != .none) flags &= ~(flag_group | flag_reply);
         st.groups.items[i] = flags;
         st.offsets.items[i] = total;
         total += measure(ctx, g, m, flags);
@@ -362,21 +366,22 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     if (!st.selection.empty() and ctx.io.*.KeyCtrl and c.ImGui_IsKeyPressed(c.ImGuiKey_C) and !ctx.io.*.WantTextInput) {
         if (popup.selectionText(ctx)) |txt| ctx.act(.{ .copy = txt });
     }
-    c.ImGui_EndChild();
-
-    // Voltar para o fim.
+    // Voltar para o fim: desenhado dentro da própria região (fica por baixo
+    // das configurações e de menus) e com o clique direto pelo mouse.
     if (!sc.stick_bottom) {
         const br: d.Rect = .{ .x = r.right() - 52, .y = r.bottom() - 52, .w = 36, .h = 36 };
-        const hb = d.hit(ctx, 77, br);
+        const hb = d.hitRaw(ctx, br);
         qa.mark(br, "jump-bottom", .{});
-        d.shadow(ctx.fg, br, 18, 8, ctx.col(.shadow));
-        d.circle(ctx.fg, br.x + 18, br.y + 18, 18, if (hb.hovered) ctx.col(.accent) else ctx.col(.elevated));
-        icons.chevron(ctx.fg, br.x + 18, br.y + 19, (if (hb.hovered) ctx.col(.accent_text) else ctx.col(.text)).u(), 1);
+        d.shadow(dl, br, 18, 8, ctx.col(.shadow));
+        d.circle(dl, br.x + 18, br.y + 18, 18, if (hb.hovered) ctx.col(.accent) else ctx.col(.elevated));
+        icons.chevron(dl, br.x + 18, br.y + 19, (if (hb.hovered) ctx.col(.accent_text) else ctx.col(.text)).u(), 1);
+        d.tip(ctx, br, i18n.tr("Ir para o fim", "Jump to present"), hb.hovered);
         if (hb.clicked) {
             sc.stick_bottom = true;
             sc.target = max_scroll;
         }
     }
+    c.ImGui_EndChild();
 }
 
 fn selectWord(st: anytype, m: *const StoredMessage, off: u32) void {
@@ -583,6 +588,28 @@ fn dayOf(m: *StoredMessage) i64 {
     return m.day;
 }
 
+/// Ícone de uma linha de sistema: entrou (seta verde), saiu (vermelha)…
+fn systemIcon(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, kind: types.SystemKind, cx: f32, cy: f32) void {
+    const glyph: []const u8 = switch (kind) {
+        .join => "→",
+        .leave => "←",
+        .call => "☎",
+        .pin => "📌",
+        .boost => "✦",
+        .edit => "✎",
+        else => "•",
+    };
+    const col = switch (kind) {
+        .join => ctx.col(.online),
+        .leave => ctx.col(.danger),
+        .boost => ctx.col(.accent),
+        else => ctx.col(.muted),
+    };
+    const fs: f32 = 16;
+    const tw = d.width(fam.get(.bold), fs, glyph);
+    d.text(dl, fam.get(.bold), fs, cx - tw / 2, cy - fs * 0.62, col, glyph);
+}
+
 fn guildOf(ctx: *const d.Ctx, channel: types.Id) types.Id {
     return if (ctx.store.channel(channel)) |cs| cs.info.guild else 0;
 }
@@ -601,6 +628,10 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
     const self = m.msg.author == ctx.store.me;
     var o = textOpts(ctx, g, self and g.variant == .bubbles);
     o.color = o.color.alpha(alpha);
+    // Apagada (registro ligado): o texto fica avermelhado.
+    if (m.deleted) o.color = o.color.mix(ctx.col(.danger), 0.55);
+    // Linha de sistema: texto cinza.
+    if (m.msg.system != .none) o.color = ctx.col(.muted);
     o.base = m.msg.content.ptr;
     o.sel_from = sel_from;
     o.sel_to = sel_to;
@@ -653,7 +684,9 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 y += g.line_h;
             } else {
                 y += 1;
-                if (under and g.avatar > 0) {
+                if (m.msg.system != .none) {
+                    systemIcon(ctx, dl, fam, m.msg.system, r.x + 16 + @max(g.avatar, 24) / 2, y + g.line_h / 2);
+                } else if (under and g.avatar > 0) {
                     const ck = w.clock(&buf, m.msg.timestamp);
                     const sw = d.width(fam.get(.medium), 11, ck);
                     d.text(dl, fam.get(.medium), 11, r.x + 16 + g.avatar / 2 - sw / 2, y + 5, ctx.col(.faint), ck);
@@ -778,12 +811,23 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
 }
 
 fn editedMark(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x: f32, y: f32, t: rich.Measure) void {
-    if (!m.msg.edited) return;
+    if (!m.msg.edited and !m.deleted) return;
     const ew = editedW(g);
     const wraps = t.last_x + ew > g.wrap;
     const ex = if (wraps) x else x + t.last_x + 6;
     const ey = y + t.h - g.line_h + (if (wraps) g.line_h else 0);
-    d.text(dl, g.fam.get(.regular), 11, ex, ey + (g.line_h - 13) / 2, ctx.col(.faint), editedLabel());
+    // Registro de mensagens: "(apagada)" em vermelho, e o texto original
+    // de uma editada aparece com o mouse em cima do "(editado)".
+    const lbl = if (m.deleted) i18n.tr("(apagada)", "(deleted)") else editedLabel();
+    const col = if (m.deleted) ctx.col(.danger) else if (m.original != null) ctx.col(.muted) else ctx.col(.faint);
+    const lr: d.Rect = .{ .x = ex, .y = ey, .w = d.width(g.fam.get(.regular), 11, lbl), .h = g.line_h };
+    d.text(dl, g.fam.get(.regular), 11, ex, ey + (g.line_h - 13) / 2, col, lbl);
+    if (m.original) |o| if (ctx.hovering(lr)) {
+        var buf: [200]u8 = undefined;
+        const n = @min(o.len, 120);
+        const tip = i18n.fmt(&buf, "antes: {s}{s}", "before: {s}{s}", .{ o[0..n], if (o.len > n) "…" else "" });
+        d.tip(ctx, lr, tip, true);
+    };
 }
 
 fn daySeparator(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, r: d.Rect, mid: f32, ts: i64, tty: bool) void {

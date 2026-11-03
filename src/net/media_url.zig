@@ -4,7 +4,15 @@ const std = @import("std");
 
 /// GIFs do Tenor/Giphy: o Discord só manda o vídeo (MP4) pelo proxy dele;
 /// o GIF animado vem do site de origem. Configurações → Chat liga/desliga.
-pub var allow_gif_hosts: bool = true;
+/// Desligado por padrão: o Discord não tem versão animada dos GIFs do Tenor
+/// pelo proxy dele (só a prévia parada), e o app oficial também vai direto
+/// no Tenor para animar.
+pub var allow_gif_hosts: bool = false;
+
+/// GIF antigo do Tenor (media.tenor.co/videos/…, só existe em MP4): a URL é
+/// "tenor-page:<página tenor.com/view/…>"; a página traz o vídeo no formato
+/// novo (og:video), que vira o WebP animado.
+pub const tenor_page = "tenor-page:";
 
 fn hostOf(url: []const u8) []const u8 {
     const rest = url[8..];
@@ -22,8 +30,18 @@ pub fn allowedHost(url: []const u8) bool {
 }
 
 fn isGifHost(host: []const u8) bool {
-    return std.mem.eql(u8, host, "media.tenor.com") or std.mem.eql(u8, host, "i.giphy.com") or
+    return std.mem.eql(u8, host, "media.tenor.com") or std.mem.eql(u8, host, "tenor.com") or std.mem.eql(u8, host, "i.giphy.com") or
         (std.mem.startsWith(u8, host, "media") and std.mem.endsWith(u8, host, ".giphy.com"));
+}
+
+/// O vídeo (og:video) da página de um GIF do Tenor, ou null.
+pub fn tenorVideoFromPage(html: []const u8) ?[]const u8 {
+    const key = "property=\"og:video\" content=\"";
+    var i = std.mem.indexOf(u8, html, key) orelse return null;
+    i += key.len;
+    const end = std.mem.indexOfScalarPos(u8, html, i, '"') orelse return null;
+    const url = html[i..end];
+    return if (std.mem.startsWith(u8, url, "https://media.tenor.com/")) url else null;
 }
 
 /// O GIF de um embed "gifv" a partir do vídeo dele:
@@ -50,6 +68,13 @@ pub fn gifFromVideo(buf: []u8, video: []const u8) ?[]const u8 {
     return null;
 }
 
+test "vídeo do tenor a partir da página" {
+    const html = "<meta property=\"og:image\" content=\"https://media.tenor.com/abcAAAAM/x.gif\"><meta property=\"og:video\" content=\"https://media.tenor.com/XhYqu5fu4LgAAAPo/cat.mp4\">";
+    try std.testing.expectEqualStrings("https://media.tenor.com/XhYqu5fu4LgAAAPo/cat.mp4", tenorVideoFromPage(html).?);
+    try std.testing.expect(tenorVideoFromPage("<html></html>") == null);
+    try std.testing.expect(tenorVideoFromPage("<meta property=\"og:video\" content=\"https://evil.com/x.mp4\">") == null);
+}
+
 test "gif do tenor e do giphy a partir do vídeo" {
     var b: [256]u8 = undefined;
     try std.testing.expectEqualStrings("https://media.tenor.com/H5y5Fk9VdKcAAAAx/cat-dance.webp", gifFromVideo(&b, "https://media.tenor.com/H5y5Fk9VdKcAAAPo/cat-dance.mp4").?);
@@ -72,13 +97,17 @@ pub fn proxiedUrl(buf: []u8, url: []const u8, w: u16, h: u16) ?[:0]const u8 {
     // Vídeo: o proxy devolve um quadro (a prévia) em WebP.
     const path = url[0 .. q orelse url.len];
     const video = std.ascii.endsWithIgnoreCase(path, ".mp4") or std.ascii.endsWithIgnoreCase(path, ".webm") or std.ascii.endsWithIgnoreCase(path, ".mov");
-    return std.fmt.bufPrintSentinel(buf, "{s}{s}{s}width={d}&height={d}", .{ url, sep, if (video) "format=webp&" else "", w, h }, 0) catch null;
+    // WebP/GIF: sem `animated=true` o proxy devolve só o primeiro quadro
+    // (é assim que os GIFs do Klipy animam sem sair do Discord).
+    const anim = std.ascii.endsWithIgnoreCase(path, ".webp") or std.ascii.endsWithIgnoreCase(path, ".gif");
+    return std.fmt.bufPrintSentinel(buf, "{s}{s}{s}{s}width={d}&height={d}", .{ url, sep, if (video) "format=webp&" else "", if (anim) "animated=true&" else "", w, h }, 0) catch null;
 }
 
 test "url do proxy pede o tamanho e mantém o WebP" {
     var b: [512]u8 = undefined;
     try std.testing.expectEqualStrings("https://media.discordapp.net/attachments/1/2/a.png?ex=1&width=256&height=128", proxiedUrl(&b, "https://media.discordapp.net/attachments/1/2/a.png?ex=1", 256, 128).?);
     try std.testing.expectEqualStrings("https://media.discordapp.net/a.webp?width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/a.webp", 128, 128).?);
+    try std.testing.expectEqualStrings("https://images-ext-1.discordapp.net/external/x/https/static.klipy.com/a.webp?animated=true&width=232&height=240", proxiedUrl(&b, "https://images-ext-1.discordapp.net/external/x/https/static.klipy.com/a.webp", 232, 240).?);
     try std.testing.expectEqualStrings("https://media.discordapp.net/stickers/1.webp?size=160&width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/stickers/1.webp?size=160", 128, 128).?);
     try std.testing.expectEqualStrings("https://cdn.discordapp.com/avatar-decoration-presets/a.png?size=160&passthrough=true", proxiedUrl(&b, "https://cdn.discordapp.com/avatar-decoration-presets/a.png?size=160&passthrough=true", 128, 128).?);
     try std.testing.expectEqualStrings("https://media.discordapp.net/attachments/1/2/v.mp4?ex=1&format=webp&width=320&height=180", proxiedUrl(&b, "https://media.discordapp.net/attachments/1/2/v.mp4?ex=1", 320, 180).?);

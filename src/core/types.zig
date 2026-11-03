@@ -224,7 +224,12 @@ pub const Message = struct {
     edited: bool = false,
     attachments: []const Attachment = &.{},
     embeds: []const Embed = &.{},
+    /// Mensagem de sistema (entrou, saiu, chamada, fixou…): `content` já
+    /// vem com o texto pronto e a interface desenha como uma linha cinza.
+    system: SystemKind = .none,
 };
+
+pub const SystemKind = enum(u8) { none, join, leave, call, pin, edit, boost, other };
 
 /// Uma reação: o emoji (UTF-8, até 15 bytes), quantas pessoas e se inclui a gente.
 pub const Reaction = struct {

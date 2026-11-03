@@ -109,6 +109,14 @@ pub fn avatar(ctx: *d.Ctx, dl: *c.ImDrawList, cx: f32, cy: f32, size: f32, user_
 
     const ring_col = ring orelse return;
     const status = if (u) |x| x.status else .offline;
+    // Configurações → Aparência: status como anel em volta da foto.
+    if (ctx.st.settings.status_ring) {
+        const t = @max(2, size * 0.07);
+        const out = rr.inset(-t * 0.5 - 1, -t * 0.5 - 1);
+        const col = if (status == .offline) ctx.col(.faint).alpha(0.6 * alpha) else statusColor(ctx, status).alpha(alpha);
+        c.ImDrawList_AddRectEx(dl, d.v(out.x, out.y), d.v(out.right(), out.bottom()), col.u(), shapeRadius(shape, out.w), t, 0);
+        return;
+    }
     const sr = size * 0.15;
     const sx = cx + r * 0.72;
     const sy = cy + r * 0.72;

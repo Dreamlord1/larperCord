@@ -331,6 +331,21 @@ fn load(curl: *?*c.CURL, jb: Job, stop: *std.atomic.Value(bool)) Pixels {
             return .{};
         }
         bytes.appendSlice(alloc, @as([*]const u8, @ptrCast(data))[0..size]) catch return .{};
+    } else if (std.mem.startsWith(u8, jb.url, media_url.tenor_page)) {
+        // GIF antigo do Tenor: a página diz o endereço novo do vídeo, e dele
+        // sai o WebP animado (só com Configurações → Privacidade → GIFs ligado).
+        var page: std.ArrayList(u8) = .empty;
+        defer page.deinit(alloc);
+        var pj = jb;
+        pj.url = @constCast(jb.url[media_url.tenor_page.len..]);
+        if (!download(curl, pj, &page, stop)) return .{};
+        var ub: [512]u8 = undefined;
+        const video = media_url.tenorVideoFromPage(page.items) orelse {
+            logFail(pj.url, "página do Tenor sem og:video", .{});
+            return .{};
+        };
+        pj.url = @constCast(media_url.gifFromVideo(&ub, video) orelse return .{});
+        if (!download(curl, pj, &bytes, stop)) return .{};
     } else {
         if (!download(curl, jb, &bytes, stop)) return .{};
     }

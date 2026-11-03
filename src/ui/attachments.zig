@@ -176,7 +176,19 @@ pub fn playIcon(dl: *c.ImDrawList, cx: f32, cy: f32, alpha: f32) void {
     c.ImDrawList_AddTriangleFilled(dl, d.v(cx - 7, cy - 11), d.v(cx - 7, cy + 11), d.v(cx + 12, cy), d.Rgba.white.col(alpha));
 }
 
+pub var last_opened: [512]u8 = undefined;
+pub var last_opened_len: usize = 0;
+
+/// Abre no navegador; só http(s), nada de file:// ou esquemas estranhos.
 pub fn openUrl(url: []const u8) void {
+    if (!std.mem.startsWith(u8, url, "https://") and !std.mem.startsWith(u8, url, "http://")) return;
+    // No QA não abre o navegador: só anota (o teste confere).
+    if (qa.enabled) {
+        const n = @min(url.len, last_opened.len);
+        @memcpy(last_opened[0..n], url[0..n]);
+        last_opened_len = n;
+        return;
+    }
     var buf: [2048]u8 = undefined;
     const z = std.fmt.bufPrintSentinel(&buf, "{s}", .{url}, 0) catch return;
     _ = c.SDL_OpenURL(z.ptr);

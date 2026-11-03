@@ -28,8 +28,10 @@ pub const Event = union(enum) {
     typing_start: struct { channel: Id, user: Id },
     /// `content` null = não mudou. `embeds`/`attachments` não nulos trocam os
     /// anteriores (a prévia de um link chega assim, segundos depois).
-    message_update: struct { channel: Id, id: Id, content: ?[]const u8, embeds: ?[]types.Embed = null, attachments: ?[]types.Attachment = null },
-    message_delete: struct { channel: Id, id: Id },
+    /// `local`: edição nossa, aplicada na hora (não vai para o registro).
+    message_update: struct { channel: Id, id: Id, content: ?[]const u8, embeds: ?[]types.Embed = null, attachments: ?[]types.Attachment = null, local: bool = false },
+    /// `local`: apagada por nós (some de vez, mesmo com o registro ligado).
+    message_delete: struct { channel: Id, id: Id, local: bool = false },
     reaction: struct { channel: Id, id: Id, emoji: types.Reaction, user: Id, add: bool },
     /// Usuário visto pela primeira vez (ex.: autor de uma mensagem).
     user_upsert: types.User,

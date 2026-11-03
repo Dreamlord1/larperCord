@@ -166,6 +166,28 @@ const Page = struct {
     }
 
     /// Botões lado a lado, um selecionado (como no Discord).
+    /// Bolinhas de cor (0 = "do tema", depois a paleta).
+    fn swatches(p: *Page, colors: []const u32, value: *u8) void {
+        const ctx = p.ctx;
+        const s: f32 = 40;
+        for (0..colors.len + 1) |i| {
+            const r: d.Rect = .{ .x = p.x + @as(f32, @floatFromInt(i)) * (s + 12), .y = p.y, .w = s, .h = s };
+            const hb = d.hit(ctx, p.id(), r);
+            qa.mark(r, "accent:{d}", .{i});
+            if (hb.clicked) value.* = @intCast(i);
+            const col = if (i == 0) p.ctx.th.c(.accent) else d.Rgba.hex(colors[i - 1]);
+            d.circle(p.dl, r.x + s / 2, r.y + s / 2, s / 2 - (if (hb.hovered) @as(f32, 0) else 2), col);
+            if (i == 0) {
+                // "Do tema": meia bolinha com a cor do tema e um T.
+                const tw = d.width(p.font(.bold), 14, "T");
+                d.text(p.dl, p.font(.bold), 14, r.x + (s - tw) / 2, d.centerY(r, 14), p.ctx.col(.accent_text), "T");
+            }
+            if (value.* == i) c.ImDrawList_AddCircleEx(p.dl, d.v(r.x + s / 2, r.y + s / 2), s / 2 + 4, ctx.col(.text).u(), 0, 2.5, 0);
+            d.tip(ctx, r, if (i == 0) i18n.tr("Cor do tema", "Theme color") else i18n.tr("Usar esta cor", "Use this color"), hb.hovered);
+        }
+        p.y += s + 24;
+    }
+
     fn segmented(p: *Page, options: []const []const u8, value: *u8) void {
         const ctx = p.ctx;
         const gap: f32 = 8;
@@ -341,6 +363,12 @@ fn page(p: *Page, previews: []const Preview) void {
             p.toggle(i18n.tr("Modo compacto", "Compact mode"), i18n.tr("Menos espaço entre grupos e avatares menores.", "Less space between groups and smaller avatars."), &s.compact);
             p.toggle(i18n.tr("Mostrar avatares", "Show avatars"), i18n.tr("Exibe a foto ao lado do nome.", "Shows the profile picture next to the name."), &s.show_avatars);
             p.toggle(i18n.tr("Relógio de 24 horas", "24-hour clock"), i18n.tr("Ex.: 21:30 em vez de 9:30 PM.", "E.g. 21:30 instead of 9:30 PM."), &s.clock_24h);
+            p.toggle(i18n.tr("Status em anel", "Status ring"), i18n.tr("Online, ausente e não perturbe como um anel em volta da foto.", "Online, idle and do-not-disturb as a ring around the picture."), &s.status_ring);
+            p.heading(i18n.tr("Cor de destaque", "Accent color"));
+            p.note(i18n.tr("Vale para qualquer tema; \"T\" volta à cor do tema.", "Works with every theme; \"T\" goes back to the theme's color."));
+            p.swatches(&@import("../app.zig").App.accents, &s.accent);
+            p.heading(i18n.tr("Cantos", "Corners"));
+            p.segmented(if (i18n.en()) &.{ "Theme", "Square", "Soft", "Round" } else &.{ "Do tema", "Retos", "Suaves", "Redondos" }, &s.corners);
             p.heading("Layout");
             p.toggle(i18n.tr("Lista de membros", "Member list"), i18n.tr("Mostra quem está no servidor (quando o tema tem uma).", "Shows who's in the server (when the theme has one)."), &s.show_member_list);
             p.toggle(i18n.tr("Barra de status", "Status bar"), i18n.tr("Conexão, ping, RAM e relógio (quando o tema tem uma).", "Connection, ping, RAM and clock (when the theme has one)."), &s.show_status_bar);
@@ -371,8 +399,9 @@ fn page(p: *Page, previews: []const Preview) void {
         .privacidade => {
             p.title(i18n.tr("Privacidade", "Privacy"));
             p.toggle(i18n.tr("Enviar indicador de digitação", "Send typing indicator"), i18n.tr("Os outros veem \"digitando…\" enquanto você escreve.", "Others see \"typing…\" while you write."), &s.send_typing);
-            p.toggle(i18n.tr("GIFs do Tenor e do Giphy", "Tenor and Giphy GIFs"), i18n.tr("Baixa o GIF direto do site deles, que vê o seu IP. Desligado: só a prévia.", "Downloads the GIF from their site, which sees your IP. Off: preview only."), &s.gif_hosts);
+            p.toggle(i18n.tr("Animar GIFs do Tenor e do Giphy", "Animate Tenor and Giphy GIFs"), i18n.tr("Baixa do site deles, que vê o seu IP (o app oficial faz igual). Desligado: prévia parada pelo Discord.", "Downloads from their site, which sees your IP (the official app does too). Off: still preview via Discord."), &s.gif_hosts);
             p.toggle(i18n.tr("Modo streamer", "Streamer Mode"), i18n.tr("Esconde o e-mail e o nome de usuário nas configurações.", "Hides your email and username in settings."), &s.streamer_mode);
+            p.toggle(i18n.tr("Registro de mensagens", "Message log"), i18n.tr("Apagadas continuam na tela (marcadas) e editadas guardam o original. Só aqui.", "Deleted messages stay visible (marked) and edits keep the original. Local only."), &s.message_log);
             p.note(i18n.tr("Fora isso, imagens e avatares só vêm dos servidores do Discord.", "Everything else (images, avatars) only comes from Discord's servers."));
         },
         .atalhos => {
@@ -526,6 +555,19 @@ fn miniature(dl: *c.ImDrawList, pv: Preview, m: d.Rect) void {
     }
 }
 
+/// E-mail só aparece ao clicar em "Mostrar" (não fica na tela num print).
+var show_email = false;
+var mask_buf: [64]u8 = undefined;
+
+/// "ab•••••@g••••.com": as duas primeiras letras e o fim do domínio.
+fn maskEmail(buf: []u8, email: []const u8) []const u8 {
+    const at = std.mem.indexOfScalar(u8, email, '@') orelse return "••••••••";
+    const dot = std.mem.lastIndexOfScalar(u8, email, '.') orelse email.len;
+    const head = email[0..@min(2, at)];
+    const tail = if (dot > at) email[dot..] else "";
+    return std.fmt.bufPrint(buf, "{s}••••••@••••••{s}", .{ head, tail }) catch "••••••••";
+}
+
 fn account(p: *Page) void {
     const ctx = p.ctx;
     const s = &ctx.st.settings;
@@ -548,8 +590,18 @@ fn account(p: *Page) void {
     d.text(p.dl, p.font(.medium), 15, er.x + 14, er.y + 28, ctx.col(.text), uname);
     const ex = er.x + er.w / 2;
     d.text(p.dl, p.font(.bold), 12, ex, er.y + 12, ctx.col(.muted), i18n.tr("E-MAIL", "EMAIL"));
-    const email = if (ctx.store.me_email) |x| (if (s.streamer_mode) "••••••••••@••••••" else x) else if (ctx.store.demo) i18n.tr("— (demonstração)", "— (demo)") else "—";
-    _ = d.textClipped(p.dl, p.font(.medium), 15, ex, er.y + 28, ctx.col(.text), email, er.w / 2 - 14);
+    // Escondido até pedir (botão Mostrar), e sempre no modo streamer.
+    const visible = show_email and !s.streamer_mode;
+    const email = if (ctx.store.me_email) |x| (if (visible) x else maskEmail(&mask_buf, x)) else if (ctx.store.demo) i18n.tr("— (demonstração)", "— (demo)") else "—";
+    const ew = d.textClipped(p.dl, p.font(.medium), 15, ex, er.y + 28, ctx.col(.text), email, er.w / 2 - 80);
+    if (ctx.store.me_email != null and !s.streamer_mode) {
+        const lbl = if (show_email) i18n.tr("Esconder", "Hide") else i18n.tr("Mostrar", "Reveal");
+        const br: d.Rect = .{ .x = ex + ew + 8, .y = er.y + 26, .w = d.width(p.font(.semibold), 13, lbl) + 4, .h = 20 };
+        const hb = d.hit(ctx, p.id(), br);
+        qa.mark(br, "email-toggle", .{});
+        d.text(p.dl, p.font(.semibold), 13, br.x + 2, d.centerY(br, 13), if (hb.hovered) ctx.col(.text) else ctx.col(.link), lbl);
+        if (hb.clicked) show_email = !show_email;
+    }
     d.text(p.dl, p.font(.regular), 12.5, er.x + 14, er.y + 54, ctx.col(.faint), i18n.tr("Nome, foto e senha se mudam pelo app oficial ou pelo site.", "Name, picture and password are changed in the official app or website."));
     p.y += card.h + 24;
     p.heading(i18n.tr("Sessão", "Session"));

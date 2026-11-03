@@ -188,9 +188,17 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
 
     var y2 = y + row_h;
     if (ch.kind == .voice) {
-        for (cs.voice_members.items, 0..) |uid, vi| {
+        for (cs.voice_members.items) |uid| {
             const u = ctx.store.user(uid) orelse continue;
-            const speaking = vi == 1 and !ctx.st.deafened;
+            // Ainda sem voz de verdade: ninguém aparece "falando".
+            const speaking = false;
+            // Clicar em quem está na call abre o perfil (botão direito: menu).
+            const vr: d.Rect = .{ .x = rr.x + 26, .y = y2, .w = rr.w - 26, .h = if (variant == .tree) 20 else 26 };
+            const vh = d.hit(ctx, @truncate(uid *% 31 +% ch.id), vr);
+            qa.mark(vr, "voice-member:{d}:{d}", .{ ch.id, uid });
+            if (vh.hovered and variant != .tree) d.rect(dl, vr, ctx.col(.hover), ctx.th.radius);
+            if (vh.clicked) ctx.popup(.{ .profile = .{ .user = uid, .x = vr.right() + 8, .y = vr.y } });
+            if (vh.right) ctx.popup(.{ .menu = .{ .kind = .user, .id = uid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
             switch (variant) {
                 .tree => {
                     var buf: [80]u8 = undefined;

@@ -79,6 +79,8 @@ pub const App = struct {
     gw_signaled: std.atomic.Value(bool) = .init(false),
     /// Perfis já pedidos nesta sessão (um pedido por pessoa).
     asked_profiles: std.AutoHashMapUnmanaged(types.Id, void) = .empty,
+    /// Cópia do tema com a cor de destaque e os cantos das configurações.
+    th_custom: @import("theme/theme.zig").Theme = undefined,
     /// notify-send em andamento (recolhidos quando terminam).
     notifiers: std.ArrayList(*c.SDL_Process) = .empty,
     paste_n: u32 = 0,
@@ -706,7 +708,7 @@ pub const App = struct {
             .delete_message => |id| {
                 const f = app.store.findAny(id) orelse return;
                 const ch = f.cs.info.id;
-                app.store.apply(.{ .message_delete = .{ .channel = ch, .id = id } }, now()) catch {};
+                app.store.apply(.{ .message_delete = .{ .channel = ch, .id = id, .local = true } }, now()) catch {};
                 app.cmd(.{ .delete_message = .{ .channel = ch, .id = id } });
                 st.showToast(now(), false, "mensagem excluída", "message deleted", .{});
             },
@@ -948,6 +950,32 @@ pub const App = struct {
         }
     }
 
+    /// Paleta de destaque das configurações (índice 1..8).
+    pub const accents = [_]u32{ 0x5865F2, 0x3BA55C, 0xF0B232, 0xED4245, 0xEB459E, 0x9B59B6, 0x1ABC9C, 0xE67E22 };
+
+    /// O tema do quadro: o atual, ou uma cópia com a cor de destaque e os
+    /// cantos escolhidos nas configurações (vale para todos os temas).
+    fn customTheme(app: *App) *const @import("theme/theme.zig").Theme {
+        const base = app.themes.theme_();
+        const set = &app.st.settings;
+        if (set.accent == 0 and set.corners == 0) return base;
+        app.th_custom = base.*;
+        if (set.accent > 0 and set.accent <= accents.len) {
+            const col = d.Rgba.hex(accents[set.accent - 1]);
+            app.th_custom.colors.set(.accent, col);
+            // Texto em cima do destaque: preto ou branco, o que contrastar mais.
+            const lum = 0.2126 * col.r + 0.7152 * col.g + 0.0722 * col.b;
+            app.th_custom.colors.set(.accent_text, if (lum > 0.6) d.Rgba.black else d.Rgba.white);
+        }
+        switch (set.corners) {
+            1 => app.th_custom.radius = 0,
+            2 => app.th_custom.radius = 6,
+            3 => app.th_custom.radius = 12,
+            else => {},
+        }
+        return &app.th_custom;
+    }
+
     fn onReady(app: *App) void {
         if (!app.store.demo) {
             // Conta real: começa pelas DMs (ou pelo primeiro servidor).
@@ -1158,6 +1186,7 @@ pub const App = struct {
             anim.instant = set.reduce_motion;
             @import("net/media_url.zig").allow_gif_hosts = set.gif_hosts;
             @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
+            app.store.keep_log = set.message_log;
             widgets.hour12 = !set.clock_24h;
             const key = set.layoutKey();
             if (key != app.layout_key) {
@@ -1169,7 +1198,7 @@ pub const App = struct {
             c.ImGui_NewFrame();
             qa_mod.beginFrame();
             if (app.store.ready) {
-                const th = app.themes.theme_();
+                const th = app.customTheme();
                 var ctx: d.Ctx = .{
                     .th = th,
                     .theme_name = app.themes.name(),

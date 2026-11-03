@@ -31,6 +31,12 @@ pub const Settings = struct {
     show_status_bar: bool = true,
     underline_links: bool = true,
     role_colors: bool = true,
+    /// Status como um anel em volta da foto (em vez da bolinha).
+    status_ring: bool = false,
+    /// Cor de destaque: 0 = a do tema, 1..8 = as da paleta.
+    accent: u8 = 0,
+    /// Cantos: 0 = os do tema, 1 = retos, 2 = suaves, 3 = redondos.
+    corners: u8 = 0,
 
     // Chat
     show_spoilers: bool = false,
@@ -40,8 +46,11 @@ pub const Settings = struct {
 
     // Privacidade
     send_typing: bool = true,
+    /// Mensagens apagadas ficam na tela (marcadas) e as editadas guardam o
+    /// texto original. Só neste computador.
+    message_log: bool = false,
     /// GIFs do Tenor/Giphy direto do site deles (eles veem o IP).
-    gif_hosts: bool = true,
+    gif_hosts: bool = false,
     /// Esconde o e-mail e o @usuário na conta.
     streamer_mode: bool = false,
 

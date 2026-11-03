@@ -26,6 +26,10 @@ pub const StoredMessage = struct {
     height: f32 = 0,
     /// Largura da linha mais longa (usada pelas bolhas).
     natural_w: f32 = 0,
+    /// Registro de mensagens: apagada pelo autor (fica na tela, marcada) e o
+    /// texto de antes da primeira edição (ev_alloc).
+    deleted: bool = false,
+    original: ?[]const u8 = null,
     /// Dia local da mensagem (para os separadores), calculado uma vez pela interface.
     day: i64 = std.math.minInt(i64),
     reactions: [8]types.Reaction = @splat(.{}),
@@ -74,6 +78,8 @@ pub const Store = struct {
     connection: @import("event.zig").Connection = .connecting,
     /// Dados de demonstração (sem conta conectada).
     demo: bool = false,
+    /// Configurações → Privacidade → Registro de mensagens.
+    keep_log: bool = false,
     /// Da nossa conta (Configurações → Minha conta).
     me_username: ?[]const u8 = null,
     me_email: ?[]const u8 = null,
@@ -189,6 +195,7 @@ pub const Store = struct {
         types.freeEmbeds(ev_alloc, m.msg.embeds);
         s.gpa.free(m.spans);
         s.freeEmbedSpans(m.embed_spans);
+        if (m.original) |o| ev_alloc.free(o);
     }
 
     fn freeRaw(m: types.Message) void {
@@ -510,7 +517,11 @@ pub const Store = struct {
                 };
                 if (up.content) |t| {
                     const spans = markdown.parse(s.gpa, t) catch return ev_alloc.free(t);
-                    ev_alloc.free(m.msg.content);
+                    // Registro: guarda o texto de antes da primeira edição.
+                    const same = std.mem.eql(u8, t, m.msg.content);
+                    if (s.keep_log and !up.local and !same and m.original == null) {
+                        m.original = m.msg.content;
+                    } else ev_alloc.free(m.msg.content);
                     s.gpa.free(m.spans);
                     m.msg.content = t;
                     m.msg.edited = true;
@@ -558,6 +569,13 @@ pub const Store = struct {
             .message_delete => |del| {
                 const cs = s.channel(del.channel) orelse return;
                 for (cs.messages.items, 0..) |*m, i| if (m.msg.id == del.id) {
+                    // Registro: apagada por alguém, continua na tela marcada.
+                    if (s.keep_log and !del.local and m.msg.author != s.me) {
+                        m.deleted = true;
+                        m.layout_w = -1;
+                        cs.version +%= 1;
+                        return;
+                    }
                     s.freeMessage(m);
                     _ = cs.messages.orderedRemove(i);
                     cs.version +%= 1;
@@ -813,7 +831,7 @@ pub const Store = struct {
     /// Edição local imediata (o servidor confirma depois).
     pub fn editLocal(s: *Store, channel_id: Id, id: Id, content: []const u8) !void {
         const owned = try ev_alloc.dupe(u8, content);
-        try s.apply(.{ .message_update = .{ .channel = channel_id, .id = id, .content = owned } }, 0);
+        try s.apply(.{ .message_update = .{ .channel = channel_id, .id = id, .content = owned, .local = true } }, 0);
     }
 
     fn addMessage(s: *Store, m: types.Message, now_ms: i64) !void {

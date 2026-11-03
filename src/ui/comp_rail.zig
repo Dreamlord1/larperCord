@@ -372,7 +372,8 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     d.rect(ctx.dl, bg, ctx.col(.elevated).alpha(0.85), 18);
     d.border(ctx.dl, bg, ctx.col(.border).mix(ctx.col(.accent), 0.3), 18, 1);
 
-    const dl = ctx.fg;
+    // Por cima de tudo, menos das configurações (que cobrem a janela).
+    const dl = if (ctx.st.settings.open) ctx.dl else ctx.fg;
     var x = x0 + gap;
     for (0..count) |i| {
         const cx = x + base / 2;
