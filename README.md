@@ -55,6 +55,9 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   **seleção de texto** com o mouse entre várias mensagens + `Ctrl+C`; **cartão de perfil** com
   "Mensagem @fulano"; seletor de emoji; **mensagens diretas**; menções a você em destaque.
 - **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K`), atalhos de teclado.
+- **Plugins em Lua**: arquivos `.lua` em `~/.config/larpercord/plugins/` que reagem a mensagens e
+  criam comandos locais (`/shrug`) e atalhos, num sandbox com limite de instruções; liga/desliga e
+  erros em Configurações → Plugins. [Guia e API →](docs/plugins.md)
 - **Configurações no estilo Discord** (`Ctrl+,`): 13 páginas, troca de tema com miniaturas,
   cor de destaque/cantos, **cores personalizadas por tema e modo em hex**, escala de fonte,
   modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em

@@ -14,6 +14,7 @@ pub const Page = enum {
     idioma,
     avancado,
     desempenho,
+    plugins,
     sobre,
 };
 

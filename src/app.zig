@@ -27,6 +27,7 @@ const settings_state = @import("ui/settings_state.zig");
 const kdl = @import("theme/kdl.zig");
 const custom = @import("theme/custom.zig");
 const theme_mod = @import("theme/theme.zig");
+const plugin_host = @import("plugins/host.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -94,6 +95,8 @@ pub const App = struct {
     /// Último aviso da rede (vira a mensagem de erro do login).
     last_notice: [200]u8 = undefined,
     last_notice_len: usize = 0,
+    /// Plugins em Lua (~/.config/larpercord/plugins).
+    plugins: plugin_host.Engine = undefined,
 
     pub fn create(gpa: std.mem.Allocator, opts: Options) !*App {
         const started = c.SDL_GetTicksNS();
@@ -162,11 +165,13 @@ pub const App = struct {
         app.images = try images.Cache.init(app.win.renderer, app.win.wake_type);
         try app.images.start();
         app.picked = try Queue([:0]u8).init(std.heap.c_allocator);
+        plugin_host.init(app);
         return app;
     }
 
     pub fn destroy(app: *App) void {
         _ = c.SDL_RemoveTimer(app.timer);
+        app.plugins.deinit();
         app.asked_profiles.deinit(app.gpa);
         var colors_it = app.theme_colors.iterator();
         while (colors_it.next()) |e| app.gpa.free(e.key_ptr.*);
@@ -602,7 +607,7 @@ pub const App = struct {
 
     /// Envia uma mensagem: aparece na hora como "pendente" e vai pra rede.
     /// "@fulano" vira a menção de verdade (<@id>) quando o nome existe.
-    fn sendTo(app: *App, ch: types.Id, text: []const u8, reply_to: types.Id) void {
+    pub fn sendTo(app: *App, ch: types.Id, text: []const u8, reply_to: types.Id) void {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(app.gpa);
         var words = std.mem.splitScalar(u8, text, ' ');
@@ -722,6 +727,8 @@ pub const App = struct {
             },
             .send_message => |text| {
                 defer app.gpa.free(text);
+                // "/nome" de um plugin: roda aqui e não vai para o Discord.
+                if (app.plugins.command(text)) return;
                 const ch = st.activeChannel() orelse return;
                 app.sendTo(ch, text, st.reply_to);
                 st.reply_to = 0;
@@ -901,7 +908,10 @@ pub const App = struct {
                 app.last_notice_len = n;
             }
             if (e == .status and e.status == .failed) failed = true;
-            if (e == .message_create and app.store.ready) app.notify(e.message_create);
+            if (e == .message_create and app.store.ready) {
+                app.notify(e.message_create);
+                plugin_host.onMessage(app, e.message_create);
+            }
             if (app.opts.stats) switch (e) {
                 .status => |st| std.log.info("conexão: {t}", .{st}),
                 .notice => |n| std.log.info("aviso: {s}", .{n}),
@@ -913,6 +923,7 @@ pub const App = struct {
         }
         if (!was_ready and app.store.ready) {
             app.onReady();
+            app.plugins.fireReady();
             if (app.login.phase == .connecting) app.login.setPhase(.leaving);
             // O Discord aceitou: agora sim guarda o token, se pediram.
             if (app.save_token and app.net == .real) {
@@ -1309,6 +1320,7 @@ pub const App = struct {
                 };
                 const tf = c.SDL_GetTicksNS();
                 root.frame(&ctx, &app.placed, app.themes.previews.items);
+                plugin_host.pollKeys(app);
                 if (app.opts.stats) prof_frame += (c.SDL_GetTicksNS() - tf) / 1000;
             }
             if (app.login.visible()) {
