@@ -10,3 +10,8 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <malloc.h>
+#include <poll.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#define CURL_DISABLE_TYPECHECK 1
+#include <curl/curl.h>

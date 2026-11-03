@@ -8,6 +8,7 @@ const Store = @import("core/store.zig").Store;
 const ev = @import("core/event.zig");
 const types = @import("core/types.zig");
 const Gateway = @import("net/fake_gateway.zig").Gateway;
+const discord = @import("net/discord.zig");
 const gw = @import("net/fake_gateway.zig");
 const Queue = @import("net/queue.zig").Queue;
 const themes = @import("theme/manager.zig");
@@ -25,6 +26,8 @@ pub const Options = struct {
     theme: ?[]const u8 = null,
     shot: ?[*:0]const u8 = null,
     live: bool = true,
+    /// Força o modo demonstração mesmo com token.
+    demo: bool = false,
     stats: bool = false,
     settings: bool = false,
 };
@@ -35,6 +38,8 @@ fn wakeTheme() void {
     platform.Window.wake(wake_type_global, .theme);
 }
 
+const Net = union(enum) { fake: Gateway, real: discord.Gateway };
+
 pub const App = struct {
     gpa: std.mem.Allocator,
     win: platform.Window,
@@ -43,7 +48,7 @@ pub const App = struct {
     themes: themes.Manager,
     fonts: fonts_mod.Fonts,
     events: Queue(ev.Event),
-    gateway: Gateway,
+    net: Net,
     actions: std.ArrayList(ev.Action) = .empty,
     placed: std.ArrayList(layout.Placed) = .empty,
     stats: d.Stats = .{},
@@ -76,7 +81,7 @@ pub const App = struct {
             .themes = try themes.Manager.init(gpa),
             .fonts = fonts_mod.Fonts.init(gpa, io.*.Fonts),
             .events = try Queue(ev.Event).init(gpa),
-            .gateway = undefined,
+            .net = undefined,
             .opts = opts,
             .io = io,
             .started_ns = started,
@@ -97,13 +102,26 @@ pub const App = struct {
         app.applyThemeStyle();
         app.themes.watch(wakeTheme);
 
-        app.gateway = .{
-            .commands = try Queue(ev.Command).init(gpa),
-            .sink = .{ .ctx = app, .push = pushEvent },
-            .live = opts.live,
-            .rng = std.Random.DefaultPrng.init(@truncate(started)),
-        };
-        try app.gateway.start();
+        // Conta de verdade se houver token; senão, os dados de demonstração.
+        _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
+        const token = if (opts.demo or opts.shot != null) null else discord.loadToken();
+        if (token) |t| {
+            app.net = .{ .real = .{
+                .commands = try Queue(ev.Command).init(gpa),
+                .sink = .{ .ctx = app, .push = pushEvent },
+                .token = t,
+            } };
+            try app.net.real.start();
+        } else {
+            app.store.demo = true;
+            app.net = .{ .fake = .{
+                .commands = try Queue(ev.Command).init(gpa),
+                .sink = .{ .ctx = app, .push = pushEvent },
+                .live = opts.live,
+                .rng = std.Random.DefaultPrng.init(@truncate(started)),
+            } };
+            try app.net.fake.start();
+        }
 
         // Relógio e RAM da barra de status: um tique a cada 2 s.
         app.timer = c.SDL_AddTimer(2000, tick, app);
@@ -113,8 +131,17 @@ pub const App = struct {
 
     pub fn destroy(app: *App) void {
         _ = c.SDL_RemoveTimer(app.timer);
-        app.gateway.stop();
-        app.gateway.commands.deinit();
+        switch (app.net) {
+            .fake => |*g| {
+                g.stop();
+                g.commands.deinit();
+            },
+            .real => |*g| {
+                g.stop();
+                g.commands.deinit();
+            },
+        }
+        c.curl_global_cleanup();
         app.events.deinit();
         app.store.deinit();
         app.themes.deinit();
@@ -123,6 +150,13 @@ pub const App = struct {
         c.ImGui_DestroyContext(null);
         app.win.deinit();
         app.gpa.destroy(app);
+    }
+
+    fn cmd(app: *App, command: ev.Command) void {
+        switch (app.net) {
+            .fake => |*g| g.commands.push(command),
+            .real => |*g| g.commands.push(command),
+        }
     }
 
     fn pushEvent(ctx: *anyopaque, e: ev.Event) void {
@@ -262,7 +296,7 @@ pub const App = struct {
         app.st.focus_input = true;
         if (cs.history == .none) {
             cs.history = .loading;
-            app.gateway.commands.push(.{ .fetch_history = cs.info.id });
+            app.cmd(.{ .fetch_history = cs.info.id });
         }
     }
 
@@ -292,7 +326,7 @@ pub const App = struct {
         app.store.addPending(ch, out.items, app.st.nonce, reply_to, now()) catch return;
         app.st.scrollOf(ch).stick_bottom = true;
         const copy = std.heap.c_allocator.dupe(u8, out.items) catch return;
-        app.gateway.commands.push(.{ .send_message = .{ .channel = ch, .content = copy, .nonce = app.st.nonce, .reply_to = reply_to } });
+        app.cmd(.{ .send_message = .{ .channel = ch, .content = copy, .nonce = app.st.nonce, .reply_to = reply_to } });
     }
 
     fn firstTextChannel(app: *App, guild: types.Id) ?types.Id {
@@ -361,7 +395,7 @@ pub const App = struct {
                 if (std.mem.eql(u8, f.m.msg.content, text)) return;
                 app.store.editLocal(ch, id, text) catch return;
                 const copy = std.heap.c_allocator.dupe(u8, text) catch return;
-                app.gateway.commands.push(.{ .edit_message = .{ .channel = ch, .id = id, .content = copy } });
+                app.cmd(.{ .edit_message = .{ .channel = ch, .id = id, .content = copy } });
             },
             .cancel_compose => {
                 if (st.editing != 0) {
@@ -375,7 +409,7 @@ pub const App = struct {
                 const f = app.store.findAny(id) orelse return;
                 const ch = f.cs.info.id;
                 app.store.apply(.{ .message_delete = .{ .channel = ch, .id = id } }, now()) catch {};
-                app.gateway.commands.push(.{ .delete_message = .{ .channel = ch, .id = id } });
+                app.cmd(.{ .delete_message = .{ .channel = ch, .id = id } });
                 st.showToast(now(), false, "mensagem excluída", .{});
             },
             .react => |r| {
@@ -385,7 +419,7 @@ pub const App = struct {
                     mine = x.me;
                 };
                 app.store.react(f.m, r.emoji.text(), true, !mine);
-                app.gateway.commands.push(.{ .react = .{ .channel = f.cs.info.id, .id = r.id, .emoji = r.emoji, .add = !mine } });
+                app.cmd(.{ .react = .{ .channel = f.cs.info.id, .id = r.id, .emoji = r.emoji, .add = !mine } });
             },
             .open_dm => |user| {
                 for (app.store.channelsOf(0)) |id| if (app.store.channel(id)) |cs| if (cs.info.recipient == user) {
@@ -418,11 +452,11 @@ pub const App = struct {
             },
             .toggle_voice => |ch| {
                 st.voice = if (st.voice == ch) null else ch;
-                app.gateway.commands.push(.{ .join_voice = st.voice });
+                app.cmd(.{ .join_voice = st.voice });
             },
             .leave_voice => {
                 st.voice = null;
-                app.gateway.commands.push(.{ .join_voice = null });
+                app.cmd(.{ .join_voice = null });
             },
             .toggle_mute => st.muted = !st.muted,
             .toggle_deafen => st.deafened = !st.deafened,
@@ -463,13 +497,29 @@ pub const App = struct {
         defer batch.deinit(app.gpa);
         app.events.drain(&batch);
         const was_ready = app.store.ready;
-        for (batch.items) |e| app.store.apply(e, now()) catch {};
+        for (batch.items) |e| {
+            if (e == .notice) app.st.showToast(now(), true, "{s}", .{e.notice});
+            if (app.opts.stats) switch (e) {
+                .status => |st| std.log.info("conexão: {t}", .{st}),
+                .notice => |n| std.log.info("aviso: {s}", .{n}),
+                .latency => |l| std.log.info("ping: {d} ms", .{l}),
+                .ready => |r| std.log.info("READY: {d} servidores, {d} canais, {d} usuários", .{ r.guilds.len, r.channels.len, r.users.len }),
+                else => {},
+            };
+            app.store.apply(e, now()) catch {};
+        }
         if (!was_ready and app.store.ready) app.onReady();
         // Marca como lido o que chega no canal aberto.
         if (app.st.activeChannel()) |ch| app.store.markRead(ch);
     }
 
     fn onReady(app: *App) void {
+        if (!app.store.demo) {
+            // Conta real: começa pelas DMs (ou pelo primeiro servidor).
+            const g0: types.Id = if (app.store.channelsOf(0).len > 0) 0 else if (app.store.guilds.items.len > 0) app.store.guilds.items[0].id else 0;
+            app.handle(.{ .select_guild = g0 });
+            return;
+        }
         const g0 = app.store.guilds.items[0].id;
         app.st.guild = g0;
         // Algumas abas abertas para mostrar o recurso.

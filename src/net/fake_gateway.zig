@@ -51,6 +51,7 @@ pub const Gateway = struct {
 
     fn run(g: *Gateway) !void {
         g.emit(.{ .ready = try buildReady() });
+        g.emit(.{ .status = .ready });
         g.next_live_ms = nowMs() + 6000;
         g.next_latency_ms = nowMs() + 1500;
 

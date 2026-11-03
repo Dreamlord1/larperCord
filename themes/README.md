@@ -39,7 +39,7 @@ layout {
 
 | Nó | O que faz |
 |---|---|
-| `theme "nome" description=… author=… preview=…` | metadados. `preview` escolhe a miniatura nas configurações: `classic`, `glass`, `terminal`, `bubbles`, `zen` |
+| `theme "nome" description=… author=… preview=…` | metadados. `preview` escolhe a miniatura nas configurações: `classic`, `glass`, `terminal`, `bubbles`, `zen`, `dock`, `mirror`, `gameboy`, `office` |
 | `palette "wal"` ou `palette "#hex" …` | as 16 cores base (`wal:0` … `wal:15`). Sem isso, usa uma paleta padrão |
 | `colors { token "expressão" … }` | sobrescreve tokens de cor (lista abaixo) |
 | `roles "cor" …` | até 8 cores de cargo (nomes de usuário, ícones de servidor) |
@@ -93,12 +93,13 @@ Contêineres: `row` (horizontal), `column` (vertical), `stack` (um sobre o outro
 | `show=#false` | esconde |
 | `style=` / `bg=` `radius=` | fundo do nó |
 | `font=mono` | usa a fonte monoespaçada no componente |
+| `c-<token>=cor` | sobrescreve um token de cor **neste nó e nos filhos** (ex.: `c-text="#fff"` numa barra lateral escura) |
 
 ## Componentes
 
 | Componente | Propriedades |
 |---|---|
-| `guild-bar` | `orientation=vertical\|horizontal` `shape=circle\|squircle\|square\|text` `size=48` `labels=#true` `home=#false` |
+| `guild-bar` | `variant=bar\|dock\|list` `orientation=vertical\|horizontal` `shape=circle\|squircle\|square\|text` `size=48` `labels=#true` `home=#false` |
 | `channel-list` | `variant=discord\|tree\|pills` `header=#false` |
 | `user-panel` | `variant=discord\|tty` |
 | `header` | `variant=discord\|minimal\|tty` `divider=#false` |
@@ -119,6 +120,10 @@ Um nome que não existe aparece com uma borda vermelha e a linha do arquivo, pra
 - [`terminal.kdl`](terminal.kdl): tmux + IRC em fósforo âmbar
 - [`bolhas.kdl`](bolhas.kdl): claro, com balões de conversa
 - [`zen.kdl`](zen.kdl): uma coluna central e mais nada
+- [`neon.kdl`](neon.kdl): synthwave com dock que cresce no mouse (`variant=dock`)
+- [`papel.kdl`](papel.kdl): serifado e espelhado
+- [`gameboy.kdl`](gameboy.kdl): quatro tons de verde
+- [`escritorio.kdl`](escritorio.kdl): estilo Slack, mostra o `c-…` e o `variant=list`
 
 Os testes (`zig build test`) carregam todos os temas embutidos e montam o layout de cada um.
 Se você mandar um tema novo num pull request, ele é verificado automaticamente.

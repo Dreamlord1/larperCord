@@ -25,6 +25,7 @@ pub fn build(b: *std.Build) void {
     translate.defineCMacro("IMGUI_USE_WCHAR32", "1");
     translate.linkSystemLibrary("sdl3", .{});
     translate.linkSystemLibrary("fontconfig", .{});
+    translate.linkSystemLibrary("libcurl", .{});
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -63,6 +64,7 @@ pub fn build(b: *std.Build) void {
     mod.linkSystemLibrary("sdl3", .{});
     mod.linkSystemLibrary("freetype2", .{});
     mod.linkSystemLibrary("fontconfig", .{});
+    mod.linkSystemLibrary("libcurl", .{});
 
     const exe = b.addExecutable(.{ .name = "larpercord", .root_module = mod });
     b.installArtifact(exe);

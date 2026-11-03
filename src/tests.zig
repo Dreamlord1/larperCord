@@ -14,6 +14,7 @@ test {
     _ = @import("theme/layout.zig");
     _ = @import("ui/fuzzy.zig");
     _ = @import("ui/settings_state.zig");
+    _ = @import("net/jsonx.zig");
 }
 
 /// Componentes que a interface sabe desenhar (manter igual a ui/root.zig).

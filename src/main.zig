@@ -11,6 +11,7 @@ const usage =
     \\  --list-themes     lista os temas embutidos
     \\  --settings        abre já nas configurações
     \\  --shot ARQ.png    salva um print quando a tela estabilizar e sai
+    \\  --demo            usa os dados de demonstração mesmo com token
     \\  --no-live         desliga as mensagens automáticas do modo demonstração
     \\  --stats           mostra tempo até o primeiro quadro
     \\
@@ -31,6 +32,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
             opts.live = false;
         } else if (std.mem.eql(u8, arg, "--no-live")) {
             opts.live = false;
+        } else if (std.mem.eql(u8, arg, "--demo")) {
+            opts.demo = true;
         } else if (std.mem.eql(u8, arg, "--settings")) {
             opts.settings = true;
         } else if (std.mem.eql(u8, arg, "--stats")) {

@@ -8,20 +8,21 @@ Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 
 ![Quatro temas do larperCord](docs/themes.png)
 
-*Os mesmos dados e o mesmo binário, com quatro arquivos `.kdl` diferentes.*
+*O mesmo binário e os mesmos dados, só trocando o arquivo `.kdl`. São 9 temas embutidos.*
 
 </div>
 
 > **English TL;DR**: a native Discord client prototype written in Zig. It idles at ~0% CPU,
 > uses ~40 MB of RAM (the official client uses 1.2+ GB on the same machine) and its whole
 > UI (layout, components, colors, fonts) is described by hot-reloadable [KDL](https://kdl.dev) theme
-> files. Network support is not there yet: it currently runs against a fake gateway.
+> files. It speaks the real Discord gateway + REST API (text only, no voice yet) and falls back to a
+> demo mode with fake data when no token is configured.
 
 > [!WARNING]
-> **Protótipo.** Ainda não conecta no Discord de verdade: um *gateway falso* numa thread
-> imita o servidor (READY, histórico, mensagens, "digitando…", presença). Clientes de
-> terceiros violam os Termos de Uso do Discord. Use por sua conta e risco quando a rede chegar.
-> Este projeto não tem relação com a Discord Inc.
+> **Clientes de terceiros violam os Termos de Uso do Discord**, e a sua conta pode ser
+> bloqueada. Use por sua conta e risco, de preferência com uma conta secundária. Este
+> projeto não tem relação com a Discord Inc. Sem token configurado, o app roda num **modo
+> demonstração** com dados falsos.
 
 ## Por quê
 
@@ -38,13 +39,21 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 ## O que tem
 
 - **Temas que reorganizam tudo.** Layout em árvore (`row`/`column`/`flex`/`gap`), 11 componentes
-  com variantes, estilos, tokens de cor com expressões (`mix(wal:0, black, 0.4)`).
+  com variantes, cores sobrescritas por pedaço do layout (`c-text="#fff"`), estilos, tokens de cor com expressões (`mix(wal:0, black, 0.4)`).
   [Guia de temas →](themes/README.md)
 - **Recarrega ao salvar.** Edite o `.kdl` e a janela muda na hora (inotify, sem polling).
   Erros aparecem com `arquivo:linha:coluna`.
 - **Segue o seu wallpaper.** Temas com `palette "wal"` usam as cores do pywal e acompanham a troca.
 - **Blur de verdade.** O tema `vidro` tem fundo transparente e o compositor (Hyprland, KDE…)
   aplica o blur, sem custo pro app.
+- **Conecta no Discord de verdade**: gateway por WebSocket (heartbeat, reconexão, ping real)
+  e REST pra histórico, envio, edição, exclusão e reações, uma requisição por vez e respeitando
+  o rate limit.
+- **Interações do Discord**: menu do botão direito em mensagens, usuários, canais e servidores;
+  barra de ações ao passar o mouse; **responder** (com a "curvinha" e clique para pular até a
+  original); **editar** (`↑` na caixa vazia edita a última); **excluir**; **reações**;
+  **seleção de texto** com o mouse entre várias mensagens + `Ctrl+C`; **cartão de perfil** com
+  "Mensagem @fulano"; seletor de emoji; **mensagens diretas**; menções a você em destaque.
 - **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K`), atalhos de teclado.
 - **Configurações no estilo Discord** (`Ctrl+,`): 13 páginas, troca de tema com miniaturas,
   escala de fonte, modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
@@ -56,9 +65,41 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 
 <div align="center">
 
+![Menu do botão direito, perfil, seleção de texto e barra de ações](docs/interactions.png)
+
 ![Configurações](docs/settings.png)
 
 </div>
+
+## Temas embutidos
+
+| | |
+|---|---|
+| `classico` | o layout que todo mundo conhece, nas cores do pywal |
+| `vidro` | cartões translúcidos com blur do compositor, abas e barra de status |
+| `terminal` | tmux + IRC em fósforo âmbar, canais em árvore, prompt de shell |
+| `bolhas` | claro, com balões de conversa e servidores em pílulas |
+| `zen` | uma coluna central e mais nada |
+| `neon` | synthwave, bordas que acendem e **dock que cresce no mouse** |
+| `papel` | serifado, cor de papel, **layout espelhado** |
+| `gameboy` | quatro tons de verde e tela de LCD |
+| `escritorio` | barra lateral escura com servidores em lista, estilo Slack |
+
+## Conectando sua conta
+
+O token **nunca** fica no código, em log ou em mensagem de erro, e é apagado da memória ao
+sair. O app procura nesta ordem:
+
+1. **Chaveiro do sistema** (recomendado):
+   ```bash
+   secret-tool store --label='larperCord' service larpercord   # cole o token quando pedir
+   ```
+2. A variável `LARPER_TOKEN`
+3. O arquivo `~/.config/larpercord/token`, que precisa ter `chmod 600`
+
+`--demo` força o modo demonstração mesmo com token. Ainda não tem: voz, imagens (avatares,
+anexos e emojis personalizados aparecem como texto), threads/fóruns, permissões por canal
+(canais sem acesso só mostram um aviso) e notificações.
 
 ## Como ele fica leve
 
@@ -82,12 +123,12 @@ Nada de mágica, só muitas decisões pequenas:
 
 ## Compilando
 
-Precisa de **Zig 0.17**, **SDL3**, **FreeType** e **fontconfig**. Fontes recomendadas: Inter,
+Precisa de **Zig 0.17**, **SDL3**, **FreeType**, **fontconfig** e **libcurl** (com WebSocket, 7.86+). Fontes recomendadas: Inter,
 JetBrains Mono e Noto Color Emoji (o fontconfig escolhe substitutas se faltar alguma).
 
 ```bash
 # Arch
-sudo pacman -S zig sdl3 freetype2 fontconfig inter-font ttf-jetbrains-mono noto-fonts-emoji
+sudo pacman -S zig sdl3 freetype2 fontconfig curl inter-font ttf-jetbrains-mono noto-fonts-emoji
 
 zig build -Doptimize=ReleaseFast
 ./zig-out/bin/larpercord --theme vidro
@@ -100,18 +141,19 @@ zig build -Doptimize=ReleaseFast
 | `tools/membench.sh 50` | mede RAM e CPU de cada tema e falha se passar de 50 MB |
 
 ```
-larpercord [--theme NOME] [--settings] [--list-themes] [--no-live] [--shot ARQ.png] [--stats]
+larpercord [--theme NOME] [--demo] [--settings] [--list-themes] [--no-live] [--shot ARQ.png] [--stats]
 ```
 
 Atalhos: `Ctrl+K` paleta · `Ctrl+,` configurações · `F2` próximo tema · `Ctrl+Tab` abas ·
-`Alt+1…9` · `Ctrl+W` fecha aba · `Ctrl+Clique` abre canal em nova aba.
+`Alt+1…9` · `Ctrl+W` fecha aba · `Ctrl+Clique` abre canal em nova aba · `↑` edita a última
+mensagem · `Esc` cancela resposta/edição · `Ctrl+C` copia a seleção · botão direito em tudo.
 
 ## Arquitetura
 
 ```
 src/
   core/       dados puros, sem janela: tipos (snowflakes), Store, markdown, eventos
-  net/        gateway (hoje falso, numa thread) e filas entre threads
+  net/        gateway real (Discord) e de demonstração, cada um na sua thread, mais as filas
   theme/      parser KDL, cores, carregador de tema, motor de layout, gerenciador + inotify
   ui/         componentes, texto rico, paleta, configurações, animações
   platform/   janela, renderizador, "acordar" o laço; o único lugar que conhece o SDL
@@ -125,8 +167,10 @@ gateway falso pelo real não toca na interface.
 
 ## Roadmap
 
-- [ ] Gateway real (WebSocket + zlib-stream, heartbeat, resume) e REST com rate limit
+- [x] Gateway real (WebSocket, heartbeat, reconexão) e REST respeitando o rate limit
+- [ ] RESUME de sessão e zlib-stream
 - [ ] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
+- [ ] Permissões por canal (esconder o que não dá pra ler), threads e fóruns
 - [ ] Notificações nativas via D-Bus
 - [ ] Voz (DAVE/MLS + Opus + RNNoise)
 - [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB

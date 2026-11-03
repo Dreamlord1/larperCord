@@ -52,6 +52,8 @@ pub const Store = struct {
     max_messages: usize = 400,
     latency_ms: u32 = 0,
     connection: @import("event.zig").Connection = .connecting,
+    /// Dados de demonstração (sem conta conectada).
+    demo: bool = false,
     users: std.AutoHashMapUnmanaged(Id, types.User) = .empty,
     guilds: std.ArrayList(types.Guild) = .empty,
     channels: std.AutoHashMapUnmanaged(Id, *ChannelState) = .empty,
@@ -178,6 +180,21 @@ pub const Store = struct {
             },
             .latency => |l| s.latency_ms = l,
             .status => |st| s.connection = st,
+            .notice => |n| ev_alloc.free(n),
+            .reaction_set => |rs| {
+                const cs = s.channel(rs.channel) orelse return;
+                const m = s.find(cs, rs.id) orelse return;
+                for (m.reactions[0..m.n_reactions]) |*r| if (std.mem.eql(u8, r.text(), rs.reaction.text())) {
+                    r.* = rs.reaction;
+                    m.layout_w = -1;
+                    return;
+                };
+                if (m.n_reactions < m.reactions.len) {
+                    m.reactions[m.n_reactions] = rs.reaction;
+                    m.n_reactions += 1;
+                    m.layout_w = -1;
+                }
+            },
             .user_upsert => |u| {
                 if (s.users.contains(u.id)) {
                     ev_alloc.free(u.name);

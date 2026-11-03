@@ -28,6 +28,10 @@ pub const Event = union(enum) {
     user_upsert: types.User,
     /// Estado da conexão, para a barra de status.
     status: Connection,
+    /// Reação já existente (ao carregar o histórico).
+    reaction_set: struct { channel: Id, id: Id, reaction: types.Reaction },
+    /// Aviso para mostrar ao usuário (texto alocado).
+    notice: []const u8,
     presence_update: struct { user: Id, status: types.Status },
     voice_state: struct { channel: ?Id, user: Id },
     latency: u32,

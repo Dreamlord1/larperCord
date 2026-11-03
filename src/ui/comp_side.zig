@@ -111,8 +111,19 @@ pub fn statusBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         var color = ctx.col(.muted);
         const text: []const u8 = switch (item) {
             .conn => blk: {
-                color = if (ctx.store.ready) ctx.col(.online) else ctx.col(.idle);
-                break :blk if (ctx.store.ready) "● conectado" else "◌ conectando…";
+                const conn = ctx.store.connection;
+                color = switch (conn) {
+                    .ready => ctx.col(.online),
+                    .failed, .offline => ctx.col(.danger),
+                    else => ctx.col(.idle),
+                };
+                break :blk switch (conn) {
+                    .ready => if (ctx.store.demo) "● demonstração" else "● conectado",
+                    .connecting => "◌ conectando…",
+                    .reconnecting => "◌ reconectando…",
+                    .failed => "✕ falhou",
+                    .offline => "○ offline",
+                };
             },
             .ping => std.fmt.bufPrint(b, "⌁ {d} ms", .{ctx.store.latency_ms}) catch "",
             .ram => blk: {
