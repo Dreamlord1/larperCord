@@ -7,6 +7,8 @@ var values: std.AutoHashMapUnmanaged(u32, f32) = .empty;
 
 pub var dt: f32 = 1.0 / 60.0;
 pub var active: bool = false;
+/// "Reduzir movimento": tudo chega no alvo na hora.
+pub var instant: bool = false;
 
 pub fn id(comptime tag: []const u8, n: usize) u32 {
     return @truncate(std.hash.Wyhash.hash(n, tag));
@@ -25,6 +27,7 @@ pub fn to(key: u32, target: f32, speed: f32) f32 {
 
 /// Mesmo easing de `to`, para valores guardados fora do mapa.
 pub fn step(value: f32, target: f32, speed: f32) f32 {
+    if (instant) return target;
     const k = 1.0 - @exp(-speed * dt);
     const v = value + (target - value) * k;
     if (@abs(target - v) < 0.01) return target;

@@ -1,0 +1,58 @@
+// bolhas — tema claro de mensageiro: servidores como pílulas no topo,
+// canais grandes e arredondados, conversa em balões (os seus à direita).
+theme "bolhas" description="Claro e arredondado, com balões de conversa estilo mensageiro." author="larperCord" preview=bubbles
+
+colors {
+    bg          "#e9ebf5"
+    rail        "#ffffff"
+    sidebar     "#ffffff"
+    surface     "#ffffff"
+    elevated    "#f0f1f8"
+    overlay     "#ffffff"
+    text        "#1c1f33"
+    muted       "#5b6080"
+    faint       "#9a9fb8"
+    accent      "#6c5ce7"
+    accent-text "#ffffff"
+    border      "#e1e3ee"
+    hover       "alpha(#6c5ce7, 0.07)"
+    selected    "alpha(#6c5ce7, 0.12)"
+    online      "#22c55e"
+    mention     "#6c5ce7"
+    link        "#2563eb"
+    code-bg     "#ecebf8"
+    bubble-self "#6c5ce7"
+    bubble-self-text "#ffffff"
+    bubble-other "#eef0f7"
+    shadow      "alpha(#2b2d6e, 0.13)"
+}
+roles "#6c5ce7" "#ef4444" "#f59e0b" "#10b981" "#3b82f6" "#ec4899" "#8b5cf6" "#14b8a6"
+
+fonts ui="Inter" mono="JetBrains Mono" size=15
+metrics radius=12
+
+styles {
+    style "sheet" bg="@surface" radius=24 shadow=18
+    style "bar" bg="@surface" radius=28 shadow=10
+}
+
+layout {
+    column padding=16 gap=14 {
+        guild-bar height=56 orientation=horizontal labels=#true size=34 style=bar
+        row flex=1 gap=14 {
+            column width=272 style=sheet {
+                channel-list flex=1 variant=pills inset-y=8 inset-x=4
+                user-panel height=64 inset-x=8
+            }
+            column flex=1 style=sheet {
+                header height=64 variant=minimal inset-x=22
+                messages flex=1 variant=bubbles avatar=circle avatar-size=30 spacing=14
+                column height=94 padding-x=20 {
+                    spacer flex=1
+                    composer height=52 variant=pill
+                    spacer height=20
+                }
+            }
+        }
+    }
+}

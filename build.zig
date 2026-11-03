@@ -1,13 +1,19 @@
 const std = @import("std");
 
+/// Temas embutidos (usados também pelo passo `snapshots`).
+const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "bolhas", "zen" };
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Remove símbolos de debug do executável") orelse (optimize != .debug);
 
     const imgui_dir = b.path("third_party/imgui");
     const dcimgui_dir = b.path("third_party/dcimgui");
 
-    // Headers C (SDL3 + bindings C do Dear ImGui) traduzidos para um módulo Zig.
+    const builtin_themes = b.createModule(.{ .root_source_file = b.path("themes/builtin.zig") });
+
+    // Headers C (SDL3, Dear ImGui, fontconfig, libc) traduzidos num módulo Zig.
     const translate = b.addTranslateC(.{
         .root_source_file = b.path("src/c.h"),
         .target = target,
@@ -18,6 +24,7 @@ pub fn build(b: *std.Build) void {
     translate.addIncludePath(dcimgui_dir.path(b, "backends"));
     translate.defineCMacro("IMGUI_USE_WCHAR32", "1");
     translate.linkSystemLibrary("sdl3", .{});
+    translate.linkSystemLibrary("fontconfig", .{});
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -25,8 +32,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
         .link_libcpp = true,
+        .strip = strip,
     });
     mod.addImport("c", translate.createModule());
+    mod.addImport("builtin_themes", builtin_themes);
 
     mod.addIncludePath(imgui_dir);
     mod.addIncludePath(imgui_dir.path(b, "backends"));
@@ -53,6 +62,7 @@ pub fn build(b: *std.Build) void {
     });
     mod.linkSystemLibrary("sdl3", .{});
     mod.linkSystemLibrary("freetype2", .{});
+    mod.linkSystemLibrary("fontconfig", .{});
 
     const exe = b.addExecutable(.{ .name = "larpercord", .root_module = mod });
     b.installArtifact(exe);
@@ -60,4 +70,25 @@ pub fn build(b: *std.Build) void {
     const run = b.addRunArtifact(exe);
     run.step.dependOn(b.getInstallStep());
     b.step("run", "Roda o larperCord").dependOn(&run.step);
+
+    // Testes das partes puras (sem janela nem GPU): rodam em qualquer CI.
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    test_mod.addImport("builtin_themes", builtin_themes);
+    const tests = b.addTest(.{ .root_module = test_mod });
+    b.step("test", "Roda os testes").dependOn(&b.addRunArtifact(tests).step);
+
+    // Um print de cada tema em docs/themes/ (usado no README).
+    const snaps = b.step("snapshots", "Gera docs/themes/<tema>.png para cada tema embutido");
+    for (theme_names) |name| {
+        const shot = b.addRunArtifact(exe);
+        shot.addArgs(&.{ "--theme", name, "--shot" });
+        shot.addArg(b.fmt("docs/themes/{s}.png", .{name}));
+        shot.has_side_effects = true;
+        snaps.dependOn(&shot.step);
+    }
 }

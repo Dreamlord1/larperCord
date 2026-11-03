@@ -1,0 +1,51 @@
+//! Testes das partes que não dependem de janela nem de GPU.
+const std = @import("std");
+const builtin_themes = @import("builtin_themes");
+const theme = @import("theme/theme.zig");
+const layout = @import("theme/layout.zig");
+
+test {
+    _ = @import("core/types.zig");
+    _ = @import("core/markdown.zig");
+    _ = @import("core/store.zig");
+    _ = @import("theme/kdl.zig");
+    _ = @import("theme/color.zig");
+    _ = @import("theme/theme.zig");
+    _ = @import("theme/layout.zig");
+    _ = @import("ui/fuzzy.zig");
+    _ = @import("ui/settings_state.zig");
+}
+
+/// Componentes que a interface sabe desenhar (manter igual a ui/root.zig).
+const known = [_][]const u8{ "row", "column", "stack", "guild-bar", "channel-list", "user-panel", "header", "tabs", "messages", "composer", "member-list", "status-bar", "label", "spacer" };
+
+fn checkNames(n: anytype) !void {
+    for (n.children) |*ch| {
+        var ok = false;
+        for (known) |k| if (std.mem.eql(u8, k, ch.name)) {
+            ok = true;
+        };
+        if (!ok) {
+            std.debug.print("componente desconhecido '{s}' na linha {d}\n", .{ ch.name, ch.line });
+            return error.UnknownComponent;
+        }
+        try checkNames(ch);
+    }
+}
+
+test "todos os temas embutidos carregam e montam o layout" {
+    for (builtin_themes.list) |b| {
+        var d: theme.Diagnostic = .{};
+        var t = theme.load(std.testing.allocator, b.source, null, &d) catch |err| {
+            std.debug.print("tema {s}: linha {d}: {s}\n", .{ b.name, d.line, d.message });
+            return err;
+        };
+        defer t.deinit();
+        try checkNames(t.layout.?);
+        var out: std.ArrayList(layout.Placed) = .empty;
+        defer out.deinit(std.testing.allocator);
+        try layout.solve(std.testing.allocator, t.layout.?, .{ .x = 0, .y = 0, .w = 1280, .h = 800 }, 1280, &out);
+        try std.testing.expect(out.items.len > 3);
+        for (out.items) |p| try std.testing.expect(p.rect.w >= 0 and p.rect.h >= 0);
+    }
+}

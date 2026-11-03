@@ -1,0 +1,59 @@
+// terminal — fósforo âmbar, tudo monoespaçado. Servidores como janelas do
+// tmux no topo, canais em árvore, mensagens estilo IRC e um prompt de shell.
+theme "terminal" description="Fósforo âmbar, monoespaçado, cara de tmux + IRC." author="larperCord" preview=terminal
+
+palette "#0b0906" "#ff6b35" "#a6e22e" "#ffb000" "#ffb000" "#d7a6ff" "#5fd7d7" "#e8d5b0" "#5a4a33" "#ff8f5a" "#b8f05a" "#ffd27a" "#ffc94d" "#e0c2ff" "#8ff0f0" "#fff1d6"
+
+colors {
+    bg         "#0b0906"
+    rail       "#0b0906"
+    sidebar    "#0b0906"
+    surface    "#0b0906"
+    elevated   "#18130b"
+    overlay    "#120e08"
+    text       "#ffcf73"
+    muted      "#b58a45"
+    faint      "#6f5730"
+    accent     "#ffb000"
+    accent-text "#0b0906"
+    border     "#3d301b"
+    hover      "alpha(#ffb000, 0.08)"
+    selected   "alpha(#ffb000, 0.16)"
+    online     "#a6e22e"
+    idle       "#ffb000"
+    dnd        "#ff5f5f"
+    danger     "#ff5f5f"
+    mention    "#ff6b35"
+    link       "#5fd7d7"
+    code-bg    "#1e170d"
+    shadow     "alpha(black, 0.6)"
+}
+roles "#ffd27a" "#ff8f5a" "#a6e22e" "#5fd7d7" "#d7a6ff" "#ffb000" "#ff6b9d" "#e8d5b0"
+
+fonts ui="JetBrains Mono" mono="JetBrains Mono" size=14
+metrics radius=0
+
+styles {
+    style "box" border="@border" border-width=1 glow="@accent"
+}
+
+layout {
+    column {
+        guild-bar height=26 shape=text bg=elevated
+        row flex=1 padding=6 gap=6 {
+            column width=232 style=box {
+                channel-list flex=1 variant=tree inset-x=2
+                user-panel height=46 variant=tty
+            }
+            column flex=1 style=box {
+                header height=28 variant=tty
+                messages flex=1 variant=irc avatar=none
+                spacer height=22
+                composer height=34 variant=prompt
+            }
+            member-list width=192 style=box variant=tty hide-below=1100
+        }
+        tabs height=24 variant=tty bg=elevated
+        status-bar height=24 variant=tty items="conn theme ping ram frame voice spacer keys clock"
+    }
+}

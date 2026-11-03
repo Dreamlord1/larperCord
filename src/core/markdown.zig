@@ -1,0 +1,142 @@
+//! Markdown do Discord -> trechos com estilo. Roda uma única vez, quando a
+//! mensagem chega; a interface só faz layout e desenha os trechos.
+const std = @import("std");
+const Id = @import("types.zig").Id;
+
+pub const Flags = packed struct(u8) {
+    bold: bool = false,
+    italic: bool = false,
+    strike: bool = false,
+    spoiler: bool = false,
+    code: bool = false,
+    link: bool = false,
+    _pad: u2 = 0,
+};
+
+pub const Mention = union(enum) {
+    none,
+    user: Id,
+    channel: Id,
+};
+
+pub const Span = struct {
+    /// Fatia do conteúdo original (não é copiada).
+    text: []const u8,
+    flags: Flags = .{},
+    mention: Mention = .none,
+};
+
+pub fn parse(gpa: std.mem.Allocator, s: []const u8) ![]Span {
+    var out: std.ArrayList(Span) = .empty;
+    errdefer out.deinit(gpa);
+    var flags: Flags = .{};
+    var run_start: usize = 0;
+    var i: usize = 0;
+
+    const Flush = struct {
+        fn run(list: *std.ArrayList(Span), a: std.mem.Allocator, src: []const u8, from: usize, to: usize, f: Flags) !void {
+            if (to > from) try list.append(a, .{ .text = src[from..to], .flags = f });
+        }
+    };
+
+    while (i < s.len) {
+        const rest = s[i..];
+        // Código inline: nada dentro dele é interpretado.
+        if (rest[0] == '`') {
+            if (std.mem.indexOfScalarPos(u8, s, i + 1, '`')) |close| {
+                try Flush.run(&out, gpa, s, run_start, i, flags);
+                var f = flags;
+                f.code = true;
+                if (close > i + 1) try out.append(gpa, .{ .text = s[i + 1 .. close], .flags = f });
+                i = close + 1;
+                run_start = i;
+                continue;
+            }
+        }
+        // Menções: <@123>, <@!123>, <#123>.
+        if (rest[0] == '<' and rest.len > 3 and (rest[1] == '@' or rest[1] == '#')) {
+            if (std.mem.indexOfScalar(u8, rest, '>')) |close| {
+                const is_channel = rest[1] == '#';
+                var digits = rest[2..close];
+                if (digits.len > 0 and digits[0] == '!') digits = digits[1..];
+                if (std.fmt.parseInt(Id, digits, 10)) |id| {
+                    try Flush.run(&out, gpa, s, run_start, i, flags);
+                    try out.append(gpa, .{
+                        .text = rest[0 .. close + 1],
+                        .flags = flags,
+                        .mention = if (is_channel) .{ .channel = id } else .{ .user = id },
+                    });
+                    i += close + 1;
+                    run_start = i;
+                    continue;
+                } else |_| {}
+            }
+        }
+        // Links.
+        if (std.mem.startsWith(u8, rest, "https://") or std.mem.startsWith(u8, rest, "http://")) {
+            var end = i;
+            while (end < s.len and s[end] != ' ' and s[end] != '\n') end += 1;
+            try Flush.run(&out, gpa, s, run_start, i, flags);
+            var f = flags;
+            f.link = true;
+            try out.append(gpa, .{ .text = s[i..end], .flags = f });
+            i = end;
+            run_start = i;
+            continue;
+        }
+        // Marcadores de estilo.
+        const marker: ?struct { len: usize, which: enum { bold, italic, strike, spoiler } } =
+            if (std.mem.startsWith(u8, rest, "**")) .{ .len = 2, .which = .bold } else if (std.mem.startsWith(u8, rest, "~~")) .{ .len = 2, .which = .strike } else if (std.mem.startsWith(u8, rest, "||")) .{ .len = 2, .which = .spoiler } else if ((rest[0] == '*' or rest[0] == '_') and italicBoundary(s, i)) .{ .len = 1, .which = .italic } else null;
+
+        if (marker) |m| {
+            try Flush.run(&out, gpa, s, run_start, i, flags);
+            switch (m.which) {
+                .bold => flags.bold = !flags.bold,
+                .italic => flags.italic = !flags.italic,
+                .strike => flags.strike = !flags.strike,
+                .spoiler => flags.spoiler = !flags.spoiler,
+            }
+            i += m.len;
+            run_start = i;
+            continue;
+        }
+        i += 1;
+    }
+    try Flush.run(&out, gpa, s, run_start, s.len, flags);
+    return out.toOwnedSlice(gpa);
+}
+
+/// `_` e `*` só contam como itálico na borda de uma palavra, para não
+/// quebrar coisas como snake_case.
+fn italicBoundary(s: []const u8, i: usize) bool {
+    const before = if (i == 0) ' ' else s[i - 1];
+    const after = if (i + 1 < s.len) s[i + 1] else ' ';
+    const word = struct {
+        fn f(ch: u8) bool {
+            return std.ascii.isAlphanumeric(ch) or ch >= 0x80;
+        }
+    }.f;
+    return !(word(before) and word(after));
+}
+
+test "estilos, código, menção e link" {
+    const a = std.testing.allocator;
+    const spans = try parse(a, "oi **negrito** e `a **b**` <@42> veja https://ziglang.org snake_case");
+    defer a.free(spans);
+    try std.testing.expectEqualStrings("oi ", spans[0].text);
+    try std.testing.expect(spans[1].flags.bold);
+    try std.testing.expectEqualStrings("negrito", spans[1].text);
+    try std.testing.expect(spans[3].flags.code);
+    try std.testing.expectEqualStrings("a **b**", spans[3].text);
+    try std.testing.expectEqual(@as(Id, 42), spans[5].mention.user);
+    try std.testing.expect(spans[7].flags.link);
+    try std.testing.expectEqualStrings(" snake_case", spans[8].text);
+}
+
+test "spoiler e riscado" {
+    const a = std.testing.allocator;
+    const spans = try parse(a, "||segredo|| ~~não~~");
+    defer a.free(spans);
+    try std.testing.expect(spans[0].flags.spoiler);
+    try std.testing.expect(spans[2].flags.strike);
+}

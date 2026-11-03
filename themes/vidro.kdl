@@ -1,0 +1,53 @@
+// vidro — painéis flutuantes translúcidos. O fundo da janela é transparente,
+// então o compositor (Hyprland, KDE, …) aplica o blur de verdade sobre o seu
+// wallpaper, sem custo nenhum pro app.
+theme "vidro" description="Cartões de vidro flutuando sobre o wallpaper, com blur do compositor." author="larperCord" preview=glass
+palette "wal"
+window transparent=#true
+
+colors {
+    bg        "alpha(mix(wal:0, black, 0.2), 0.30)"
+    surface   "alpha(mix(wal:0, black, 0.15), 0.74)"
+    rail      "alpha(mix(wal:0, black, 0.30), 0.80)"
+    sidebar   "alpha(mix(wal:0, black, 0.15), 0.74)"
+    elevated  "alpha(mix(wal:0, wal:15, 0.12), 0.90)"
+    overlay   "alpha(mix(wal:0, black, 0.35), 0.96)"
+    border    "alpha(wal:15, 0.10)"
+    hover     "alpha(wal:15, 0.06)"
+    selected  "alpha(wal:4, 0.22)"
+    code-bg   "alpha(black, 0.32)"
+    shadow    "alpha(black, 0.45)"
+}
+
+fonts ui="Inter" mono="JetBrains Mono" size=15
+metrics radius=10
+
+styles {
+    style "card" bg="@surface" radius=18 border="@border" glow="alpha(@accent, 0.75)" border-width=1.5 shadow=16
+}
+
+layout {
+    column padding=12 gap=12 {
+        row flex=1 gap=12 {
+            guild-bar width=70 style=card shape=squircle size=44 inset-y=4
+            column width=252 gap=12 {
+                channel-list flex=1 style=card inset-y=4
+                user-panel height=62 style=card inset-x=4
+            }
+            column flex=1 gap=12 {
+                tabs height=48 style=card variant=pills
+                column flex=1 style=card {
+                    header height=52 divider=#false
+                    messages flex=1 avatar=squircle inset-x=4
+                    column height=98 padding-x=16 {
+                        spacer flex=1
+                        composer height=50 variant=pill
+                        spacer height=18
+                    }
+                }
+            }
+            member-list width=236 style=card hide-below=1180 inset-y=4
+        }
+        status-bar height=36 style=card variant=pills items="conn ping ram frame voice spacer theme keys clock"
+    }
+}

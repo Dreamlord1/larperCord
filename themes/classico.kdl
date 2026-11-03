@@ -1,0 +1,30 @@
+// classico — o layout que todo mundo já conhece, com as cores do seu pywal.
+theme "classico" description="O layout familiar, nas cores do seu wallpaper." author="larperCord" preview=classic
+palette "wal"
+
+fonts ui="Inter" mono="JetBrains Mono" size=16
+metrics radius=6
+
+styles {
+    style "panel" bg="mix(@sidebar, @rail, 0.5)"
+}
+
+layout {
+    row {
+        guild-bar width=72 bg=rail
+        column width=240 bg=sidebar {
+            channel-list flex=1
+            user-panel height=52 style=panel
+        }
+        column flex=1 bg=bg {
+            header height=48
+            messages flex=1
+            column height=92 padding-x=16 {
+                spacer flex=1
+                composer height=46
+                spacer height=22
+            }
+        }
+        member-list width=248 bg=sidebar hide-below=1040
+    }
+}
