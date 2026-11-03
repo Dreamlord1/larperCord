@@ -199,7 +199,9 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const st = ctx.st;
     st.offsets.resize(st.gpa, msgs.len) catch return;
     st.groups.resize(st.gpa, msgs.len) catch return;
-    var total: f32 = 8;
+    // Topo: "carregando mensagens antigas…" ou "começo do canal".
+    const top_h: f32 = 52;
+    var total: f32 = 8 + top_h;
     for (msgs, 0..) |*m, i| {
         var flags: u8 = 0;
         if (m.msg.reply_to != 0) flags |= flag_reply | flag_group;
@@ -207,7 +209,7 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
             flags |= flag_group | flag_day;
         } else {
             const prev = &msgs[i - 1].msg;
-            if (w.localTime(prev.timestamp).day_index != w.localTime(m.msg.timestamp).day_index) flags |= flag_day | flag_group;
+            if (dayOf(&msgs[i - 1]) != dayOf(m)) flags |= flag_day | flag_group;
             if (prev.author != m.msg.author or m.msg.timestamp - prev.timestamp > 420) flags |= flag_group;
         }
         st.groups.items[i] = flags;
@@ -234,6 +236,20 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
 
     const sc = st.scrollOf(ch_id);
     const max_scroll = @max(0, total - r.h);
+    // Entraram mensagens antigas em cima: mantém na tela o que estava.
+    if (msgs.len > 0) {
+        if (sc.first_id != 0 and msgs[0].msg.id != sc.first_id and !sc.stick_bottom) {
+            for (msgs, 0..) |m, k| if (m.msg.id == sc.first_id) {
+                const delta = st.offsets.items[k] - st.offsets.items[0];
+                sc.pos += delta;
+                sc.target += delta;
+                break;
+            };
+        }
+        sc.first_id = msgs[0].msg.id;
+    }
+    // Perto do topo: pede as anteriores.
+    if (cs.older == .idle and msgs.len > 0 and sc.pos >= 0 and sc.pos < r.h * 0.6 + 200) ctx.act(.{ .load_older = ch_id });
     // Pulo para uma mensagem (clique numa resposta).
     if (st.jump != 0) {
         for (msgs, 0..) |m, i| if (m.msg.id == st.jump) {
@@ -287,6 +303,8 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         d.line(dl, mx, r.y, mx, r.bottom(), ctx.col(.accent).alpha(0.35), 1);
         d.line(dl, mx + 3, r.y, mx + 3, r.bottom(), ctx.col(.accent).alpha(0.18), 1);
     }
+
+    topOfChannel(ctx, dl, g, cs, r, base + 8, top_h);
 
     const sel = selectionRange(ctx, cs);
     var probe: rich.Probe = .{ .x = ctx.mouse.x, .y = ctx.mouse.y };
@@ -367,6 +385,26 @@ fn selectWord(st: anytype, m: *const StoredMessage, off: u32) void {
     st.selection.a_off = @intCast(a);
     st.selection.b_off = @intCast(b);
     st.selection.dragging = false;
+}
+
+fn topOfChannel(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, cs: anytype, r: d.Rect, y: f32, h: f32) void {
+    const fam = g.fam;
+    const x = r.x + g.content_x;
+    switch (cs.older) {
+        .loading, .idle => {
+            // Três pontinhos enquanto a página chega.
+            if (cs.older == .loading) w.typingDots(dl, r.x + r.w / 2 - 7, y + h / 2, ctx.col(.muted), ctx.now_ms);
+        },
+        .done => {
+            var buf: [128]u8 = undefined;
+            const t = if (cs.info.guild == 0)
+                i18n.fmt(&buf, "Este é o começo da conversa com {s}.", "This is the beginning of your conversation with {s}.", .{cs.info.name})
+            else
+                i18n.fmt(&buf, "Este é o começo de #{s}.", "This is the start of #{s}.", .{cs.info.name});
+            _ = d.textClipped(dl, fam.get(.semibold), 15, x, y + h / 2 - 10, ctx.col(.muted), t, r.w - g.content_x - 16);
+        },
+    }
+    qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = h }, "channel-top", .{});
 }
 
 fn skeleton(ctx: *d.Ctx, g: Geo, r: d.Rect) void {
@@ -535,6 +573,11 @@ fn nameHit(ctx: *d.Ctx, uid: Id, msg_id: Id, r: d.Rect, salt: u64) void {
     qa.mark(r, "user:{d}", .{uid});
     if (hb.clicked) ctx.popup(.{ .profile = .{ .user = uid, .x = r.right() + 4, .y = r.y } });
     if (hb.right) ctx.popup(.{ .menu = .{ .kind = .user, .id = uid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+}
+
+fn dayOf(m: *StoredMessage) i64 {
+    if (m.day == std.math.minInt(i64)) m.day = w.localTime(m.msg.timestamp).day_index;
+    return m.day;
 }
 
 fn guildOf(ctx: *const d.Ctx, channel: types.Id) types.Id {

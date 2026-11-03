@@ -99,6 +99,12 @@ pub const Gateway = struct {
                     try g.history_replies.append(alloc, .{ .at_ms = nowMs() + 140, .channel = ch });
                 },
                 .typing => {},
+                .fetch_older => |o| {
+                    const msgs = try buildOlder(o.channel, o.before);
+                    // Duas semanas para trás é o "começo do canal" na demonstração.
+                    const more = @divTrunc(nowMs(), 1000) - msgs[0].timestamp < 14 * 86400;
+                    g.emit(.{ .history = .{ .channel = o.channel, .messages = msgs, .older = true, .more = more } });
+                },
                 .subscribe_guild => |sg| try g.memberList(sg.guild),
                 .relationship => |r| g.emit(.{ .relationship = .{ .user = r.user, .kind = if (r.accept) .friend else .none } }),
                 .create_dm => |u| {
@@ -466,6 +472,29 @@ fn buildReady() !ev.Ready {
         vn += 1;
     }
     return .{ .me = me_id, .users = us, .guilds = gs, .channels = chs, .voice = voice, .username = try alloc.dupe(u8, "rsha") };
+}
+
+/// 50 mensagens antes de `before` (rolou para cima na demonstração).
+fn buildOlder(channel: Id, before: Id) ![]types.Message {
+    var prng = std.Random.DefaultPrng.init(channel ^ before);
+    const r = prng.random();
+    const n: usize = 50;
+    const msgs = try alloc.alloc(types.Message, n);
+    var t: i64 = @divTrunc(types.snowflakeTime(before), 1000) - 300;
+    var i: usize = n;
+    while (i > 0) {
+        i -= 1;
+        const author = if (dmRecipient(channel)) |u| (if (r.boolean()) u else me_id) else users[r.uintLessThan(usize, 8)].id;
+        msgs[i] = .{
+            .id = types.makeSnowflake(t * 1000, i),
+            .channel = channel,
+            .author = author,
+            .timestamp = t,
+            .content = try alloc.dupe(u8, phrase(r.uintLessThan(usize, phrases.len))),
+        };
+        t -= if (r.uintLessThan(u8, 6) == 0) r.intRangeLessThan(i64, 3600, 40000) else r.intRangeLessThan(i64, 20, 600);
+    }
+    return msgs;
 }
 
 fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {

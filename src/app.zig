@@ -609,6 +609,16 @@ pub const App = struct {
                 if (g == 0 and st.last_channel.get(0) == null) return app.handle(.open_friends);
                 app.openChannel(ch, false);
             },
+            .load_older => |id| {
+                const cs = app.store.channel(id) orelse return;
+                if (cs.older != .idle or cs.history != .loaded) return;
+                // A mais antiga que já veio do servidor (a pendente não tem ID).
+                const before = for (cs.messages.items) |m| {
+                    if (m.msg.id != 0) break m.msg.id;
+                } else return;
+                cs.older = .loading;
+                app.cmd(.{ .fetch_older = .{ .channel = id, .before = before } });
+            },
             .open_friends => {
                 st.guild = 0;
                 st.friends = true;

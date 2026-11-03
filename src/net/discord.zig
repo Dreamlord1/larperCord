@@ -1494,7 +1494,15 @@ pub const Gateway = struct {
                     }
                     return g.emit(.{ .history = .{ .channel = ch, .messages = &.{} } });
                 }
-                g.history(ch, resp.body.items) catch g.emit(.{ .history = .{ .channel = ch, .messages = &.{} } });
+                g.history(ch, resp.body.items, false) catch g.emit(.{ .history = .{ .channel = ch, .messages = &.{} } });
+            },
+            .fetch_older => |o| {
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages?before={d}&limit=50", .{ o.channel, o.before }) catch return;
+                const none: ev.Event = .{ .history = .{ .channel = o.channel, .messages = &.{}, .older = true, .more = false } };
+                var resp = g.request("GET", path, null) orelse return g.emit(none);
+                defer resp.body.deinit(alloc);
+                if (resp.status != 200) return g.emit(none);
+                g.history(o.channel, resp.body.items, true) catch g.emit(none);
             },
             .send_message => |m| {
                 var b: std.ArrayList(u8) = .empty;
@@ -1596,7 +1604,7 @@ pub const Gateway = struct {
         }
     }
 
-    fn history(g: *Gateway, ch: Id, body: []const u8) !void {
+    fn history(g: *Gateway, ch: Id, body: []const u8, older: bool) !void {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
         const root = try std.json.parseFromSliceLeaky(Value, arena.allocator(), body, .{});
@@ -1610,7 +1618,8 @@ pub const Gateway = struct {
             if (try g.message(items[i])) |m| try list.append(alloc, m);
         }
         const msgs = try list.toOwnedSlice(alloc);
-        g.emit(.{ .history = .{ .channel = ch, .messages = msgs } });
+        // Veio a página cheia: pode ter mais antigas.
+        g.emit(.{ .history = .{ .channel = ch, .messages = msgs, .older = older, .more = items.len >= 50 } });
         // Reações já existentes.
         for (items) |m| {
             const mid = j.id(j.get(m, "id")) orelse continue;

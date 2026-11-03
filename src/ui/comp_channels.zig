@@ -67,6 +67,7 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         r.h -= hh;
     }
 
+    if (ctx.st.voice != null) r.h -= voiceBarHeight(variant == .tree);
     const dl = d.beginRegion(ctx, "##channels", r, c.ImGuiWindowFlags_NoScrollbar);
     const o = c.ImGui_GetCursorScreenPos();
     var y = o.y + (if (variant == .tree) @as(f32, 2) else 8);
@@ -217,12 +218,14 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
 pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const fam = ctx.familyFor(n);
     const tty = d.is(n, "variant", "tty", "discord");
-    var pr = r;
+    const pr = r;
+    // Em call: a faixa de voz fica logo acima do painel (a lista de canais
+    // deixa esse espaço livre), sem empurrar o nome para fora da tela.
     if (ctx.st.voice) |vc| {
-        const vh: f32 = if (tty) 22 else 54;
-        voicePanel(ctx, fam, .{ .x = r.x, .y = r.y, .w = r.w, .h = vh }, vc, tty);
-        pr.y += vh;
-        pr.h -= vh;
+        const vh = voiceBarHeight(tty);
+        const vr: d.Rect = .{ .x = r.x, .y = r.y - vh, .w = r.w, .h = vh };
+        d.rect(ctx.dl, vr, ctx.col(.sidebar).mix(ctx.col(.rail), 0.35), 0);
+        voicePanel(ctx, fam, vr, vc, tty);
     }
     const me = ctx.store.user(ctx.store.me) orelse return;
     if (tty) {
@@ -288,6 +291,11 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     }
 }
 
+/// Altura da faixa "Voz conectada" (a lista de canais reserva esse espaço).
+pub fn voiceBarHeight(tty: bool) f32 {
+    return if (tty) 22 else 54;
+}
+
 fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     const cs = ctx.store.channel(vc) orelse return;
     const g = ctx.store.guild(cs.info.guild);
@@ -295,7 +303,7 @@ fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     if (tty) {
         const t = i18n.fmt(&buf, "♪ {s}  [sair]", "♪ {s}  [leave]", .{cs.info.name});
         d.text(ctx.dl, fam.get(.bold), ctx.th.font_size - 2, r.x + 10, d.centerY(r, ctx.th.font_size - 2), ctx.col(.online), t);
-        const hb = d.hit(ctx, 50, r);
+        const hb = d.hitRaw(ctx, r);
         qa.mark(r, "hangup", .{});
         if (hb.clicked) ctx.act(.leave_voice);
         return;
@@ -305,7 +313,7 @@ fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     const sub = std.fmt.bufPrint(&buf, "{s} / {s}", .{ cs.info.name, if (g) |x| x.name else "" }) catch "";
     _ = d.textClipped(ctx.dl, fam.get(.regular), 13, r.x + 14, r.y + 29, ctx.col(.muted), sub, r.w - 70);
     const br: d.Rect = .{ .x = r.right() - 44, .y = r.y + 11, .w = 32, .h = 32 };
-    const hb = d.hit(ctx, 51, br);
+    const hb = d.hitRaw(ctx, br);
     qa.mark(br, "hangup", .{});
     const k = anim.to(anim.id("hangup", 0), if (hb.hovered) 1 else 0, 24);
     d.rect(ctx.dl, br, ctx.col(.hover).alpha(k * 1.5), ctx.th.radius);
@@ -341,6 +349,7 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
         r.y += hh;
         r.h -= hh;
     }
+    if (ctx.st.voice != null) r.h -= voiceBarHeight(tree);
     const dl = d.beginRegion(ctx, "##dms", r, c.ImGuiWindowFlags_NoScrollbar);
     const o = c.ImGui_GetCursorScreenPos();
     var y = o.y + 10;

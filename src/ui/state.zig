@@ -57,6 +57,9 @@ pub const Scroll = struct {
     pos: f32 = -1,
     target: f32 = 0,
     stick_bottom: bool = true,
+    /// Primeira mensagem da última vez: se mudou (chegaram mais antigas em
+    /// cima), a rolagem anda junto para a tela não pular.
+    first_id: Id = 0,
 };
 
 pub const Toast = struct {

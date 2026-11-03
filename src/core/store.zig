@@ -23,6 +23,8 @@ pub const StoredMessage = struct {
     height: f32 = 0,
     /// Largura da linha mais longa (usada pelas bolhas).
     natural_w: f32 = 0,
+    /// Dia local da mensagem (para os separadores), calculado uma vez pela interface.
+    day: i64 = std.math.minInt(i64),
     reactions: [8]types.Reaction = @splat(.{}),
     n_reactions: u8 = 0,
 
@@ -39,6 +41,8 @@ pub const ChannelState = struct {
     info: types.Channel,
     messages: std.ArrayList(StoredMessage) = .empty,
     history: History = .none,
+    /// Mensagens mais antigas (rolando para cima).
+    older: enum { idle, loading, done } = .idle,
     typing: std.ArrayList(Typing) = .empty,
     voice_members: std.ArrayList(Id) = .empty,
     /// Muda sempre que a lista de mensagens muda (invalida offsets na UI).
@@ -60,7 +64,9 @@ pub const Store = struct {
     gpa: std.mem.Allocator,
     me: Id = 0,
     ready: bool = false,
-    max_messages: usize = 400,
+    /// Limite por canal das que chegam ao vivo; o que veio rolando para cima
+    /// não é cortado (a pessoa está lendo).
+    max_messages: usize = 1500,
     latency_ms: u32 = 0,
     connection: @import("event.zig").Connection = .connecting,
     /// Dados de demonstração (sem conta conectada).
@@ -320,7 +326,12 @@ pub const Store = struct {
                 cs.messages.deinit(s.gpa);
                 cs.messages = fresh;
                 cs.history = .loaded;
-                s.trim(cs);
+                if (h.older) {
+                    cs.older = if (h.more and h.messages.len > 0) .idle else .done;
+                } else {
+                    if (!h.more) cs.older = .done;
+                    s.trim(cs);
+                }
                 cs.version +%= 1;
             },
             .typing_start => |t| {

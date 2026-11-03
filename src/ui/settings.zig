@@ -298,7 +298,9 @@ pub fn draw(ctx: *d.Ctx, previews: []const Preview) void {
     // Fechar (ESC).
     const cx = @min(content.x + 40 + cw + 60, win.right() - 40);
     const cr: d.Rect = .{ .x = cx - 18, .y = win.y + 60, .w = 36, .h = 36 };
-    const hb = d.hit(ctx, 98, cr);
+    // A página rolável fica por cima desta área e pegaria o clique: o
+    // botão olha o mouse direto.
+    const hb = d.hitRaw(ctx, cr);
     qa.mark(cr, "settings-close", .{});
     c.ImDrawList_AddCircleEx(dl, d.v(cx, cr.y + 18), 17, (if (hb.hovered) ctx.col(.text) else ctx.col(.muted)).u(), 0, 2, 0);
     const xc = if (hb.hovered) ctx.col(.text) else ctx.col(.muted);

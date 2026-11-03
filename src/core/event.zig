@@ -22,7 +22,9 @@ pub const Ready = struct {
 pub const Event = union(enum) {
     ready: Ready,
     message_create: types.Message,
-    history: struct { channel: Id, messages: []types.Message },
+    /// `older`: página antes da mais antiga que já temos (rolou para cima).
+    /// `more`: o Discord ainda tem mais antigas.
+    history: struct { channel: Id, messages: []types.Message, older: bool = false, more: bool = true },
     typing_start: struct { channel: Id, user: Id },
     message_update: struct { channel: Id, id: Id, content: []const u8 },
     message_delete: struct { channel: Id, id: Id },
@@ -73,6 +75,8 @@ pub const Command = union(enum) {
     delete_message: struct { channel: Id, id: Id },
     react: struct { channel: Id, id: Id, emoji: types.Reaction, add: bool },
     fetch_history: Id,
+    /// Mais 50 mensagens antes de `before` (rolagem para cima).
+    fetch_older: struct { channel: Id, before: Id },
     /// "fulano está digitando" (o Discord limita a um a cada ~8 s).
     typing: Id,
     join_voice: ?Id,
@@ -126,6 +130,8 @@ pub const Action = union(enum) {
     paste_image,
     /// Tela de amigos (no lugar da conversa, dentro das mensagens diretas).
     open_friends,
+    /// Chegou perto do topo da conversa: busca as mais antigas.
+    load_older: Id,
     accept_friend: Id,
     /// Recusa um pedido, cancela o nosso ou desbloqueia.
     remove_relationship: Id,

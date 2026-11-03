@@ -281,6 +281,19 @@ fn hitEx(ctx: *Ctx, id: usize, r: Rect, under: bool) Hit {
     return .{ .hovered = hovered, .clicked = clicked and !middle and !right, .held = held, .middle = middle, .right = right, .ctrl = ctx.io.*.KeyCtrl };
 }
 
+/// Clique direto pelo mouse, para o que fica por cima de uma região com
+/// rolagem (a janela filha do ImGui pegaria o clique de um `hit`).
+pub fn hitRaw(ctx: *Ctx, r: Rect) Hit {
+    // Só se a janela onde se desenha (ou uma filha dela) é a que está sob o
+    // mouse: nada de clicar através das configurações ou de um menu.
+    const over = r.contains(ctx.mouse.x, ctx.mouse.y) and c.ImGui_IsWindowHovered(c.ImGuiHoveredFlags_RootAndChildWindows);
+    if (over) {
+        c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_Hand);
+        ctx.hot = true;
+    }
+    return .{ .hovered = over, .clicked = over and c.ImGui_IsMouseClicked(0), .held = over and c.ImGui_IsMouseDown(0), .middle = over and c.ImGui_IsMouseClicked(2), .right = over and c.ImGui_IsMouseClicked(1), .ctrl = ctx.io.*.KeyCtrl };
+}
+
 /// Região com rolagem própria (lista de canais, membros, mensagens).
 pub fn beginRegion(ctx: *Ctx, id: [*:0]const u8, r: Rect, flags: c_int) *c.ImDrawList {
     _ = ctx;
