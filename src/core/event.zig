@@ -26,7 +26,9 @@ pub const Event = union(enum) {
     /// `more`: o Discord ainda tem mais antigas.
     history: struct { channel: Id, messages: []types.Message, older: bool = false, more: bool = true },
     typing_start: struct { channel: Id, user: Id },
-    message_update: struct { channel: Id, id: Id, content: []const u8 },
+    /// `content` null = não mudou. `embeds`/`attachments` não nulos trocam os
+    /// anteriores (a prévia de um link chega assim, segundos depois).
+    message_update: struct { channel: Id, id: Id, content: ?[]const u8, embeds: ?[]types.Embed = null, attachments: ?[]types.Attachment = null },
     message_delete: struct { channel: Id, id: Id },
     reaction: struct { channel: Id, id: Id, emoji: types.Reaction, user: Id, add: bool },
     /// Usuário visto pela primeira vez (ex.: autor de uma mensagem).

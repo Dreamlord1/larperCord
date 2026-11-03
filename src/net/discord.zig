@@ -659,11 +659,26 @@ pub const Gateway = struct {
             return;
         }
         if (std.mem.eql(u8, t, "MESSAGE_UPDATE")) {
-            const content = j.str(j.get(d, "content")) orelse return;
+            // Pode vir só com os embeds (a prévia de um link, segundos depois).
+            const ch = j.id(j.get(d, "channel_id")) orelse return;
+            const id = j.id(j.get(d, "id")) orelse return;
+            const content: ?[]const u8 = if (j.str(j.get(d, "content"))) |t2| try j.simplifyContent(alloc, t2) else null;
+            const has_embeds = j.get(d, "embeds") != null;
+            var atts: ?[]types.Attachment = null;
+            if (j.get(d, "attachments") != null) {
+                atts = try attachmentsOf(d);
+            } else if (has_embeds) {
+                // Só os embeds de imagem: o Store junta com os anexos que já tinha.
+                var list: std.ArrayList(types.Attachment) = .empty;
+                try embedAttachments(d, &list);
+                atts = try list.toOwnedSlice(alloc);
+            }
             g.emit(.{ .message_update = .{
-                .channel = j.id(j.get(d, "channel_id")) orelse return,
-                .id = j.id(j.get(d, "id")) orelse return,
-                .content = try j.simplifyContent(alloc, content),
+                .channel = ch,
+                .id = id,
+                .content = content,
+                .embeds = if (has_embeds) try embedsOf(d) else null,
+                .attachments = atts,
             } });
             return;
         }
@@ -1023,10 +1038,8 @@ pub const Gateway = struct {
             alloc.free(content);
             content = more;
         }
-        if (content.len == 0 and atts.len == 0 and j.array(j.get(m, "embeds")).len > 0) {
-            alloc.free(content);
-            content = try alloc.dupe(u8, "*[embed]*");
-        }
+        const embeds = try embedsOf(m);
+        errdefer types.freeEmbeds(alloc, embeds);
         const nonce: u64 = if (j.get(m, "nonce")) |n| @bitCast(j.int(n) orelse 0) else 0;
         var reply: Id = 0;
         if (j.get(m, "message_reference")) |ref| {
@@ -1042,6 +1055,7 @@ pub const Gateway = struct {
             .reply_to = reply,
             .edited = !j.isNull(j.get(m, "edited_timestamp")),
             .attachments = atts,
+            .embeds = embeds,
         };
     }
 
@@ -1049,35 +1063,43 @@ pub const Gateway = struct {
     /// Imagens usam o `proxy_url` (media.discordapp.net), que sabe reduzir.
     fn attachmentsOf(m: Value) ![]types.Attachment {
         var list: std.ArrayList(types.Attachment) = .empty;
-        errdefer {
-            for (list.items) |a| {
-                alloc.free(a.url);
-                alloc.free(a.filename);
-            }
-            list.deinit(alloc);
-        }
+        errdefer types.freeAttachments(alloc, list.toOwnedSlice(alloc) catch &.{});
         for (j.array(j.get(m, "attachments"))) |a| {
             if (list.items.len >= 10) break;
             const w = j.int(j.get(a, "width")) orelse 0;
             const h = j.int(j.get(a, "height")) orelse 0;
-            const image = w > 0 and h > 0;
-            const url = (if (image) j.str(j.get(a, "proxy_url")) else null) orelse j.str(j.get(a, "url")) orelse continue;
             const name = j.str(j.get(a, "filename")) orelse i18n.tr("arquivo", "file");
             const ctype = j.str(j.get(a, "content_type")) orelse "";
+            const gif = std.mem.eql(u8, ctype, "image/gif") or std.ascii.endsWithIgnoreCase(name, ".gif");
+            const video = std.mem.startsWith(u8, ctype, "video/");
+            const image = w > 0 and h > 0;
+            const cdn = j.str(j.get(a, "url")) orelse continue;
+            // Imagem pelo proxy (que reduz); GIF do arquivo original (o proxy
+            // pode devolver parado); vídeo: um quadro pelo proxy, e o link.
+            const url = if (image and !gif) j.str(j.get(a, "proxy_url")) orelse cdn else cdn;
             try list.append(alloc, .{
                 .url = try alloc.dupe(u8, url),
                 .filename = try alloc.dupe(u8, name),
                 .width = @intCast(std.math.clamp(w, 0, 65535)),
                 .height = @intCast(std.math.clamp(h, 0, 65535)),
                 .size = @intCast(std.math.clamp(j.int(j.get(a, "size")) orelse 0, 0, std.math.maxInt(u32))),
-                .animated = std.mem.eql(u8, ctype, "image/gif") or std.ascii.endsWithIgnoreCase(name, ".gif"),
+                .animated = gif,
+                .video = video and image,
+                .link = if (video and image) try alloc.dupe(u8, cdn) else "",
             });
         }
+        try embedAttachments(m, &list);
+        return list.toOwnedSlice(alloc);
+    }
+
+    /// Embeds que são só uma imagem ou GIF (link direto, Tenor…) aparecem
+    /// como anexo; os outros viram cartão (`embedsOf`).
+    fn embedAttachments(m: Value, list: *std.ArrayList(types.Attachment)) !void {
         for (j.array(j.get(m, "embeds"))) |e| {
             if (list.items.len >= 10) break;
             const kind = j.str(j.get(e, "type")) orelse "";
-            const img = j.get(e, "image") orelse if (std.mem.eql(u8, kind, "image") or std.mem.eql(u8, kind, "gifv")) j.get(e, "thumbnail") else null;
-            const iv = img orelse continue;
+            if (!std.mem.eql(u8, kind, "image") and !std.mem.eql(u8, kind, "gifv")) continue;
+            const iv = j.get(e, "image") orelse j.get(e, "thumbnail") orelse continue;
             const url = j.str(j.get(iv, "proxy_url")) orelse continue;
             const w = j.int(j.get(iv, "width")) orelse 0;
             const h = j.int(j.get(iv, "height")) orelse 0;
@@ -1096,7 +1118,61 @@ pub const Gateway = struct {
                 .embed = true,
             });
         }
+    }
+
+    /// Cartões (embeds de bots e prévias de links).
+    fn embedsOf(m: Value) ![]types.Embed {
+        var list: std.ArrayList(types.Embed) = .empty;
+        errdefer types.freeEmbeds(alloc, list.toOwnedSlice(alloc) catch &.{});
+        for (j.array(j.get(m, "embeds"))) |e| {
+            if (list.items.len >= 6) break;
+            const kind = j.str(j.get(e, "type")) orelse "rich";
+            if (std.mem.eql(u8, kind, "image") or std.mem.eql(u8, kind, "gifv")) continue;
+            var out: types.Embed = .{};
+            if (j.int(j.get(e, "color"))) |col| {
+                out.color = @intCast(std.math.clamp(col, 0, 0xffffff));
+                out.has_color = true;
+            }
+            const sub = struct {
+                fn f(v: Value, obj: []const u8, key: []const u8) []const u8 {
+                    return if (j.get(v, obj)) |o| j.str(j.get(o, key)) orelse "" else "";
+                }
+            }.f;
+            out.provider = try dupeOpt(sub(e, "provider", "name"));
+            out.author = try dupeOpt(sub(e, "author", "name"));
+            out.title = try dupeOpt(j.str(j.get(e, "title")) orelse "");
+            out.url = try dupeOpt(j.str(j.get(e, "url")) orelse "");
+            out.description = try dupeOpt(j.str(j.get(e, "description")) orelse "");
+            out.footer = try dupeOpt(sub(e, "footer", "text"));
+            var fields: std.ArrayList(types.EmbedField) = .empty;
+            for (j.array(j.get(e, "fields"))) |fv| {
+                if (fields.items.len >= 25) break;
+                try fields.append(alloc, .{ .name = try alloc.dupe(u8, j.str(j.get(fv, "name")) orelse ""), .value = try alloc.dupe(u8, j.str(j.get(fv, "value")) orelse "") });
+            }
+            out.fields = try fields.toOwnedSlice(alloc);
+            // Vídeo (YouTube…): a miniatura grande vira a imagem, com play.
+            out.video = j.get(e, "video") != null;
+            const big = j.get(e, "image") orelse if (out.video) j.get(e, "thumbnail") else null;
+            if (big) |iv| if (j.str(j.get(iv, "proxy_url"))) |u| {
+                out.image = try alloc.dupe(u8, u);
+                out.image_w = @intCast(std.math.clamp(j.int(j.get(iv, "width")) orelse 400, 1, 65535));
+                out.image_h = @intCast(std.math.clamp(j.int(j.get(iv, "height")) orelse 225, 1, 65535));
+            };
+            if (!out.video) if (j.get(e, "thumbnail")) |tv| {
+                out.thumb = try dupeOpt(j.str(j.get(tv, "proxy_url")) orelse "");
+            };
+            const empty = out.title.len == 0 and out.description.len == 0 and out.author.len == 0 and out.fields.len == 0 and out.image.len == 0 and out.thumb.len == 0;
+            if (empty) {
+                types.freeEmbed(alloc, out);
+                continue;
+            }
+            try list.append(alloc, out);
+        }
         return list.toOwnedSlice(alloc);
+    }
+
+    fn dupeOpt(t: []const u8) ![]const u8 {
+        return if (t.len == 0) "" else try alloc.dupe(u8, t);
     }
 
     fn onReady(g: *Gateway, d: Value, arena: std.mem.Allocator) !void {

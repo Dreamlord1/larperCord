@@ -16,6 +16,9 @@ const ev_alloc = std.heap.c_allocator;
 pub const StoredMessage = struct {
     msg: types.Message,
     spans: []const markdown.Span,
+    /// Markdown dos embeds: para cada embed, a descrição e depois o valor de
+    /// cada campo, nessa ordem.
+    embed_spans: []const []const markdown.Span = &.{},
     pending: bool = false,
     /// Cache de layout (preenchido pela interface).
     layout_w: f32 = -1,
@@ -154,7 +157,42 @@ pub const Store = struct {
     fn freeMessage(s: *Store, m: *StoredMessage) void {
         ev_alloc.free(m.msg.content);
         types.freeAttachments(ev_alloc, m.msg.attachments);
+        types.freeEmbeds(ev_alloc, m.msg.embeds);
         s.gpa.free(m.spans);
+        s.freeEmbedSpans(m.embed_spans);
+    }
+
+    fn freeRaw(m: types.Message) void {
+        ev_alloc.free(m.content);
+        types.freeAttachments(ev_alloc, m.attachments);
+        types.freeEmbeds(ev_alloc, m.embeds);
+    }
+
+    fn freeEmbedSpans(s: *Store, list: []const []const markdown.Span) void {
+        for (list) |sp| s.gpa.free(sp);
+        if (list.len > 0) s.gpa.free(list);
+    }
+
+    fn parseEmbeds(s: *Store, embeds: []const types.Embed) ![]const []const markdown.Span {
+        var n: usize = 0;
+        for (embeds) |e| n += 1 + e.fields.len;
+        if (n == 0) return &.{};
+        const out = try s.gpa.alloc([]const markdown.Span, n);
+        var k: usize = 0;
+        for (embeds) |e| {
+            out[k] = try markdown.parse(s.gpa, e.description);
+            k += 1;
+            for (e.fields) |f| {
+                out[k] = try markdown.parse(s.gpa, f.value);
+                k += 1;
+            }
+        }
+        return out;
+    }
+
+    /// Mensagem pronta para guardar: o markdown já interpretado.
+    fn stored(s: *Store, m: types.Message) !StoredMessage {
+        return .{ .msg = m, .spans = try markdown.parse(s.gpa, m.content), .embed_spans = try s.parseEmbeds(m.embeds) };
     }
 
     /// READY pode chegar mais de uma vez (sessão nova depois de uma queda).
@@ -312,16 +350,13 @@ pub const Store = struct {
             .history => |h| {
                 defer ev_alloc.free(h.messages);
                 const cs = s.channel(h.channel) orelse {
-                    for (h.messages) |m| {
-                        ev_alloc.free(m.content);
-                        types.freeAttachments(ev_alloc, m.attachments);
-                    }
+                    for (h.messages) |m| freeRaw(m);
                     return;
                 };
                 // O histórico vem antes do que já temos.
                 var fresh: std.ArrayList(StoredMessage) = .empty;
                 try fresh.ensureTotalCapacity(s.gpa, h.messages.len + cs.messages.items.len);
-                for (h.messages) |m| fresh.appendAssumeCapacity(.{ .msg = m, .spans = try markdown.parse(s.gpa, m.content) });
+                for (h.messages) |m| fresh.appendAssumeCapacity(try s.stored(m));
                 fresh.appendSliceAssumeCapacity(cs.messages.items);
                 cs.messages.deinit(s.gpa);
                 cs.messages = fresh;
@@ -431,14 +466,57 @@ pub const Store = struct {
                 cs.version +%= 1;
             },
             .message_update => |up| {
-                const cs = s.channel(up.channel) orelse return ev_alloc.free(up.content);
-                const m = s.find(cs, up.id) orelse return ev_alloc.free(up.content);
-                const spans = markdown.parse(s.gpa, up.content) catch return ev_alloc.free(up.content);
-                ev_alloc.free(m.msg.content);
-                s.gpa.free(m.spans);
-                m.msg.content = up.content;
-                m.msg.edited = true;
-                m.spans = spans;
+                const found = if (s.channel(up.channel)) |cs| if (s.find(cs, up.id)) |m| .{ cs, m } else null else null;
+                const cs, const m = found orelse {
+                    if (up.content) |t| ev_alloc.free(t);
+                    if (up.embeds) |e| types.freeEmbeds(ev_alloc, e);
+                    if (up.attachments) |a| types.freeAttachments(ev_alloc, a);
+                    return;
+                };
+                if (up.content) |t| {
+                    const spans = markdown.parse(s.gpa, t) catch return ev_alloc.free(t);
+                    ev_alloc.free(m.msg.content);
+                    s.gpa.free(m.spans);
+                    m.msg.content = t;
+                    m.msg.edited = true;
+                    m.spans = spans;
+                }
+                if (up.embeds) |e| {
+                    types.freeEmbeds(ev_alloc, m.msg.embeds);
+                    s.freeEmbedSpans(m.embed_spans);
+                    m.msg.embeds = e;
+                    m.embed_spans = s.parseEmbeds(e) catch &.{};
+                }
+                if (up.attachments) |a| merge: {
+                    // Só imagens de embed (a atualização não trouxe os anexos):
+                    // fica com os anexos de verdade que já tinha.
+                    const only_embeds = for (a) |x| {
+                        if (!x.embed) break false;
+                    } else true;
+                    if (only_embeds) {
+                        var keep: usize = 0;
+                        for (m.msg.attachments) |x| if (!x.embed) {
+                            keep += 1;
+                        };
+                        const merged = ev_alloc.alloc(types.Attachment, keep + a.len) catch break :merge;
+                        var k: usize = 0;
+                        for (m.msg.attachments) |x| {
+                            if (x.embed) {
+                                types.freeAttachment(ev_alloc, x);
+                                continue;
+                            }
+                            merged[k] = x;
+                            k += 1;
+                        }
+                        @memcpy(merged[k..], a);
+                        if (m.msg.attachments.len > 0) ev_alloc.free(m.msg.attachments);
+                        if (a.len > 0) ev_alloc.free(a);
+                        m.msg.attachments = merged;
+                    } else {
+                        types.freeAttachments(ev_alloc, m.msg.attachments);
+                        m.msg.attachments = a;
+                    }
+                }
                 m.layout_w = -1;
                 cs.version +%= 1;
             },
@@ -604,11 +682,7 @@ pub const Store = struct {
     }
 
     fn addMessage(s: *Store, m: types.Message, now_ms: i64) !void {
-        const cs = s.channel(m.channel) orelse {
-            ev_alloc.free(m.content);
-            types.freeAttachments(ev_alloc, m.attachments);
-            return;
-        };
+        const cs = s.channel(m.channel) orelse return freeRaw(m);
         // Quem mandou parou de digitar.
         for (cs.typing.items, 0..) |ty, i| if (ty.user == m.author) {
             _ = cs.typing.swapRemove(i);
@@ -618,20 +692,20 @@ pub const Store = struct {
         // Confirmação de uma mensagem nossa: troca a cópia pendente.
         if (m.nonce != 0) {
             for (cs.messages.items) |*sm| if (sm.pending and sm.msg.nonce == m.nonce) {
-                const spans = try markdown.parse(s.gpa, m.content);
                 var msg = m;
                 // Sem anexos na confirmação (demonstração): fica com os locais.
                 if (msg.attachments.len == 0) {
                     msg.attachments = sm.msg.attachments;
                     sm.msg.attachments = &.{};
                 }
+                const fresh = try s.stored(msg);
                 s.freeMessage(sm);
-                sm.* = .{ .msg = msg, .spans = spans };
+                sm.* = fresh;
                 cs.version +%= 1;
                 return;
             };
         }
-        try cs.messages.append(s.gpa, .{ .msg = m, .spans = try markdown.parse(s.gpa, m.content) });
+        try cs.messages.append(s.gpa, try s.stored(m));
         if (m.author != s.me and m.channel != 0) cs.info.unread = true;
         s.trim(cs);
         cs.version +%= 1;

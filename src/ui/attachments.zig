@@ -137,13 +137,18 @@ fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale:
             if (r.h > 60) d.text(dl, f, 13, r.x + (r.w - tw) / 2, r.y + r.h / 2 + 8, ctx.col(.faint), msg);
         },
     }
+    if (a.video) playIcon(dl, r.x + r.w / 2, r.y + r.h / 2, alpha);
     if (a.animated and !playing) {
         const br: d.Rect = .{ .x = r.x + 8, .y = r.bottom() - 26, .w = 34, .h = 18 };
         d.rect(dl, br, d.Rgba.black.alpha(0.6 * alpha), 4);
         const f = ctx.ui.get(.bold);
         d.text(dl, f, 11, br.x + (br.w - d.width(f, 11, "GIF")) / 2, d.centerY(br, 11), d.Rgba.white.alpha(alpha), "GIF");
     }
-    if (hb.clicked) open(ctx, a, url);
+    if (hb.clicked) {
+        // Vídeo abre no navegador (ainda não tocamos vídeo aqui).
+        if (a.video and a.link.len > 0) openUrl(a.link) else open(ctx, a, url);
+    }
+    if (a.video) d.tip(ctx, r, i18n.tr("Abrir o vídeo no navegador", "Open video in browser"), hb.hovered);
     if (hb.right and msg_id != 0) ctx.popup(.{ .menu = .{ .kind = .message, .id = msg_id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
 }
 
@@ -165,19 +170,30 @@ fn fileCard(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, alp
     }
 }
 
-fn openUrl(url: []const u8) void {
+/// Botão de play no meio de uma prévia de vídeo.
+pub fn playIcon(dl: *c.ImDrawList, cx: f32, cy: f32, alpha: f32) void {
+    d.circle(dl, cx, cy, 24, d.Rgba.black.alpha(0.55 * alpha));
+    c.ImDrawList_AddTriangleFilled(dl, d.v(cx - 7, cy - 11), d.v(cx - 7, cy + 11), d.v(cx + 12, cy), d.Rgba.white.col(alpha));
+}
+
+pub fn openUrl(url: []const u8) void {
     var buf: [2048]u8 = undefined;
     const z = std.fmt.bufPrintSentinel(&buf, "{s}", .{url}, 0) catch return;
     _ = c.SDL_OpenURL(z.ptr);
 }
 
 fn open(ctx: *d.Ctx, a: *const Attachment, url: []const u8) void {
-    var v: state.Viewer = .{ .w = a.width, .h = a.height };
+    openImage(ctx, url, a.filename, a.width, a.height);
+}
+
+/// Abre uma imagem em tela cheia (anexo, embed, foto de perfil…).
+pub fn openImage(ctx: *d.Ctx, url: []const u8, name: []const u8, w: u16, h: u16) void {
+    var v: state.Viewer = .{ .w = w, .h = h };
     const n = @min(url.len, v.url.len);
     @memcpy(v.url[0..n], url[0..n]);
     v.url_len = @intCast(n);
-    const fnl = @min(a.filename.len, v.name.len);
-    @memcpy(v.name[0..fnl], a.filename[0..fnl]);
+    const fnl = @min(name.len, v.name.len);
+    @memcpy(v.name[0..fnl], name[0..fnl]);
     v.name_len = @intCast(fnl);
     ctx.st.viewer = v;
 }

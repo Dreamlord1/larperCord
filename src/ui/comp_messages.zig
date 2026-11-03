@@ -17,6 +17,7 @@ const w = @import("widgets.zig");
 const rich = @import("rich.zig");
 const icons = @import("icons.zig");
 const att = @import("attachments.zig");
+const emb = @import("embeds.zig");
 const popup = @import("popup.zig");
 const sigil = @import("comp_chat.zig").sigil;
 const store_mod = @import("../core/store.zig");
@@ -106,7 +107,7 @@ fn textOpts(ctx: *const d.Ctx, g: Geo, self_bubble: bool) rich.Opts {
 
 /// Altura do texto (zero numa mensagem só com anexos).
 fn textH(g: Geo, m: *const StoredMessage, t: rich.Measure) f32 {
-    if (m.msg.content.len == 0 and m.msg.attachments.len > 0) return 0;
+    if (m.msg.content.len == 0 and (m.msg.attachments.len > 0 or m.msg.embeds.len > 0)) return 0;
     var h = t.h;
     if (m.msg.edited and t.last_x + editedW(g) > g.wrap) h += g.line_h;
     return h;
@@ -128,6 +129,7 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     const t = rich.layout(null, ctx.store, ctx.th, m.spans, 0, 0, g.wrap, textOpts(ctx, g, self and g.variant == .bubbles), ctx.mouse);
     var text_h = textH(g, m, t);
     text_h += att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
+    text_h += emb.block(ctx, null, m, 0, 0, g.wrap, 1);
     const group = flags & flag_group != 0;
     const day = flags & flag_day != 0;
     const reply = flags & flag_reply != 0;
@@ -159,6 +161,7 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     m.layout_variant = key;
     m.height = h;
     m.natural_w = @max(@max(t.w, if (m.msg.edited) t.last_x + editedW(g) else 0), att.blockWidth(m.msg.attachments, g.wrap));
+    if (m.msg.embeds.len > 0) m.natural_w = @max(m.natural_w, @min(g.wrap, 520));
     if (reply and g.variant == .bubbles) m.natural_w = @max(m.natural_w, 180);
     return h;
 }
@@ -660,7 +663,8 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             editedMark(ctx, dl, g, m, tx, y, t);
             const th = textH(g, m, t);
             att.draw(ctx, dl, m, tx, y + th, g.wrap, alpha);
-            const ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
+            var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
+            ah += emb.block(ctx, dl, m, tx, y + th + ah, g.wrap, alpha);
             if (m.n_reactions > 0) reactions(ctx, dl, m, tx, y + th + ah, under, false, 0);
             if (ctx.st.settings.developer_mode and under) {
                 const idt = std.fmt.bufPrint(&buf, "id {d}", .{m.msg.id}) catch "";
@@ -708,7 +712,8 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             editedMark(ctx, dl, g, m, r.x + g.content_x, y, t);
             const th = textH(g, m, t);
             att.draw(ctx, dl, m, r.x + g.content_x, y + th, g.wrap, alpha);
-            const ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
+            var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
+            ah += emb.block(ctx, dl, m, r.x + g.content_x, y + th + ah, g.wrap, alpha);
             if (m.n_reactions > 0) reactions(ctx, dl, m, r.x + g.content_x, y + th + ah - 2, under, false, 0);
             if (show_bar) toolbar(ctx, dl, m, r.right() - 12, row.y - 2);
         },
@@ -752,6 +757,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             const t = rich.layout(dl, ctx.store, ctx.th, m.spans, br.x + 14, ty, g.wrap, o, ctx.mouse);
             editedMark(ctx, dl, g, m, br.x + 14, ty, t);
             att.draw(ctx, dl, m, br.x + 14, ty + textH(g, m, t), g.wrap, alpha);
+            _ = emb.block(ctx, dl, m, br.x + 14, ty + textH(g, m, t) + att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0), g.wrap, alpha);
             if (m.n_reactions > 0) reactions(ctx, dl, m, br.x, br.bottom(), under, self, br.right());
             if (ctx.hovering(br)) {
                 const ck = w.clock(&buf, m.msg.timestamp);

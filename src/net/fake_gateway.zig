@@ -543,6 +543,64 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         list[0] = .{ .url = try alloc.dupe(u8, p.url), .filename = try alloc.dupe(u8, pick(p.name, p.name_en)), .width = p.w, .height = p.h, .size = if (p.w == 0) 482_133 else 0, .animated = gif, .embed = gif };
         m.attachments = list;
     }
+    // Embeds: prévia de link, cartão de bot com campos e um vídeo.
+    {
+        const m = &msgs[n - 3];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, "https://ziglang.org");
+        m.reply_to = 0;
+        const e = try alloc.alloc(types.Embed, 1);
+        e[0] = .{
+            .provider = try alloc.dupe(u8, "ziglang.org"),
+            .title = try alloc.dupe(u8, "Zig Programming Language"),
+            .url = try alloc.dupe(u8, "https://ziglang.org"),
+            .description = try alloc.dupe(u8, pick("Zig é uma linguagem de uso geral para software **robusto**, **ótimo** e **reutilizável**.", "Zig is a general-purpose language for **robust**, **optimal** and **reusable** software.")),
+            .color = 0xF7A41D,
+            .has_color = true,
+            .thumb = try alloc.dupe(u8, "demo:icon:2"),
+        };
+        m.embeds = e;
+    }
+    {
+        const m = &msgs[n - 18];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, "");
+        m.reply_to = 0;
+        const fields = try alloc.alloc(types.EmbedField, 2);
+        fields[0] = .{ .name = try alloc.dupe(u8, pick("Membros", "Members")), .value = try alloc.dupe(u8, "**12** (7 online)") };
+        fields[1] = .{ .name = try alloc.dupe(u8, pick("Ping", "Ping")), .value = try alloc.dupe(u8, "`42 ms`") };
+        const e = try alloc.alloc(types.Embed, 1);
+        e[0] = .{
+            .author = try alloc.dupe(u8, "larperBot"),
+            .title = try alloc.dupe(u8, pick("Status do servidor", "Server status")),
+            .description = try alloc.dupe(u8, pick("Tudo funcionando. Use `/ajuda` para ver os comandos.", "All systems go. Use `/help` to see the commands.")),
+            .fields = fields,
+            .footer = try alloc.dupe(u8, pick("atualizado agora", "updated just now")),
+            .color = 0x5865F2,
+            .has_color = true,
+        };
+        m.embeds = e;
+    }
+    {
+        const m = &msgs[n - 27];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, pick("esse vídeo explica tudo", "this video explains everything"));
+        m.reply_to = 0;
+        const e = try alloc.alloc(types.Embed, 1);
+        e[0] = .{
+            .provider = try alloc.dupe(u8, "YouTube"),
+            .author = try alloc.dupe(u8, "Zig SHOWTIME"),
+            .title = try alloc.dupe(u8, pick("Comptime sem medo", "Comptime without fear")),
+            .url = try alloc.dupe(u8, "https://www.youtube.com/"),
+            .image = try alloc.dupe(u8, "demo:3"),
+            .image_w = 960,
+            .image_h = 540,
+            .video = true,
+            .color = 0xFF0000,
+            .has_color = true,
+        };
+        m.embeds = e;
+    }
     return msgs;
 }
 

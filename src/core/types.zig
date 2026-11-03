@@ -113,6 +113,10 @@ pub const Attachment = struct {
     /// Veio de um link (embed), não foi anexado: some com
     /// Configurações → Chat → Mostrar imagens de links desligado.
     embed: bool = false,
+    /// Vídeo: `url` é a prévia (um quadro, pelo proxy) e `link` o vídeo,
+    /// que abre no navegador.
+    video: bool = false,
+    link: []const u8 = "",
 
     pub fn isImage(a: *const Attachment) bool {
         return a.width > 0 and a.height > 0;
@@ -121,12 +125,55 @@ pub const Attachment = struct {
 
 /// Libera os anexos (alocados com `gpa`, como o resto da mensagem).
 pub fn freeAttachments(gpa: std.mem.Allocator, list: []const Attachment) void {
-    for (list) |a| {
-        gpa.free(a.url);
-        gpa.free(a.filename);
-        if (a.still.len > 0) gpa.free(a.still);
-    }
+    for (list) |a| freeAttachment(gpa, a);
     if (list.len > 0) gpa.free(list);
+}
+
+/// Só os textos de um anexo (a lista em que ele está não).
+pub fn freeAttachment(gpa: std.mem.Allocator, a: Attachment) void {
+    gpa.free(a.url);
+    gpa.free(a.filename);
+    if (a.still.len > 0) gpa.free(a.still);
+    if (a.link.len > 0) gpa.free(a.link);
+}
+
+/// Cartão de link/bot (embed "rich", "article", "link", "video"…).
+/// Textos alocados com o mesmo alocador da mensagem; vazio = não tem.
+pub const Embed = struct {
+    /// 0xRRGGBB; `has_color` diz se veio cor (preto também é cor).
+    color: u32 = 0,
+    has_color: bool = false,
+    provider: []const u8 = "",
+    author: []const u8 = "",
+    title: []const u8 = "",
+    url: []const u8 = "",
+    description: []const u8 = "",
+    footer: []const u8 = "",
+    fields: []const EmbedField = &.{},
+    /// Imagem grande (ou a prévia do vídeo) e a miniatura do canto.
+    image: []const u8 = "",
+    image_w: u16 = 0,
+    image_h: u16 = 0,
+    thumb: []const u8 = "",
+    /// Tem vídeo (YouTube…): a imagem ganha um botão de play que abre `url`.
+    video: bool = false,
+};
+
+pub const EmbedField = struct { name: []const u8, value: []const u8 };
+
+pub fn freeEmbeds(gpa: std.mem.Allocator, list: []const Embed) void {
+    for (list) |e| freeEmbed(gpa, e);
+    if (list.len > 0) gpa.free(list);
+}
+
+/// Só os textos de um embed (a lista em que ele está não).
+pub fn freeEmbed(gpa: std.mem.Allocator, e: Embed) void {
+    for ([_][]const u8{ e.provider, e.author, e.title, e.url, e.description, e.footer, e.image, e.thumb }) |t| if (t.len > 0) gpa.free(t);
+    for (e.fields) |f| {
+        gpa.free(f.name);
+        gpa.free(f.value);
+    }
+    if (e.fields.len > 0) gpa.free(e.fields);
 }
 
 pub const Message = struct {
@@ -143,6 +190,7 @@ pub const Message = struct {
     reply_to: Id = 0,
     edited: bool = false,
     attachments: []const Attachment = &.{},
+    embeds: []const Embed = &.{},
 };
 
 /// Uma reação: o emoji (UTF-8, até 15 bytes), quantas pessoas e se inclui a gente.

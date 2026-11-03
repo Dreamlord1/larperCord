@@ -27,7 +27,10 @@ fn isGifHost(host: []const u8) bool {
 }
 
 /// O GIF de um embed "gifv" a partir do vídeo dele:
-///   media.tenor.com/<id>AAAPo/nome.mp4  -> media.tenor.com/<id>AAAAC/nome.gif
+///   media.tenor.com/<id>AAAPo/nome.mp4  -> media.tenor.com/<id>AAAAx/nome.webp
+/// (os 2 últimos caracteres do id dizem o formato: Po = mp4, AC = gif,
+/// Ax = webp animado, bem menor que o GIF; tabela em
+/// wiki.archiveteam.org/index.php/Tenor)
 ///   media.giphy.com/media/<id>/giphy.mp4 -> .../giphy.gif
 pub fn gifFromVideo(buf: []u8, video: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, video, "https://")) return null;
@@ -41,7 +44,7 @@ pub fn gifFromVideo(buf: []u8, video: []const u8) ?[]const u8 {
         const slash = std.mem.indexOfScalarPos(u8, path, start, '/') orelse return null;
         if (slash - start < 6) return null;
         const name = path[slash + 1 .. path.len - 4];
-        return std.fmt.bufPrint(buf, "https://media.tenor.com/{s}AAAAC/{s}.gif", .{ path[start .. slash - 5], name }) catch null;
+        return std.fmt.bufPrint(buf, "https://media.tenor.com/{s}AAAAx/{s}.webp", .{ path[start .. slash - 5], name }) catch null;
     }
     if (isGifHost(host)) return std.fmt.bufPrint(buf, "{s}.gif", .{path[0 .. path.len - 4]}) catch null;
     return null;
@@ -49,7 +52,7 @@ pub fn gifFromVideo(buf: []u8, video: []const u8) ?[]const u8 {
 
 test "gif do tenor e do giphy a partir do vídeo" {
     var b: [256]u8 = undefined;
-    try std.testing.expectEqualStrings("https://media.tenor.com/H5y5Fk9VdKcAAAAC/cat-dance.gif", gifFromVideo(&b, "https://media.tenor.com/H5y5Fk9VdKcAAAPo/cat-dance.mp4").?);
+    try std.testing.expectEqualStrings("https://media.tenor.com/H5y5Fk9VdKcAAAAx/cat-dance.webp", gifFromVideo(&b, "https://media.tenor.com/H5y5Fk9VdKcAAAPo/cat-dance.mp4").?);
     try std.testing.expectEqualStrings("https://media.giphy.com/media/abc/giphy.gif", gifFromVideo(&b, "https://media.giphy.com/media/abc/giphy.mp4").?);
     try std.testing.expect(gifFromVideo(&b, "https://evil.com/x.mp4") == null);
     allow_gif_hosts = false;
@@ -64,8 +67,12 @@ test "gif do tenor e do giphy a partir do vídeo" {
 pub fn proxiedUrl(buf: []u8, url: []const u8, w: u16, h: u16) ?[:0]const u8 {
     const is_media = std.mem.indexOf(u8, url, "media.discordapp.net/") != null or std.mem.indexOf(u8, url, ".discordapp.net/external/") != null;
     if (!is_media) return std.fmt.bufPrintSentinel(buf, "{s}", .{url}, 0) catch null;
-    const sep: []const u8 = if (std.mem.indexOfScalar(u8, url, '?') != null) "&" else "?";
-    return std.fmt.bufPrintSentinel(buf, "{s}{s}width={d}&height={d}", .{ url, sep, w, h }, 0) catch null;
+    const q = std.mem.indexOfScalar(u8, url, '?');
+    const sep: []const u8 = if (q != null) "&" else "?";
+    // Vídeo: o proxy devolve um quadro (a prévia) em WebP.
+    const path = url[0 .. q orelse url.len];
+    const video = std.ascii.endsWithIgnoreCase(path, ".mp4") or std.ascii.endsWithIgnoreCase(path, ".webm") or std.ascii.endsWithIgnoreCase(path, ".mov");
+    return std.fmt.bufPrintSentinel(buf, "{s}{s}{s}width={d}&height={d}", .{ url, sep, if (video) "format=webp&" else "", w, h }, 0) catch null;
 }
 
 test "url do proxy pede o tamanho e mantém o WebP" {
@@ -74,6 +81,7 @@ test "url do proxy pede o tamanho e mantém o WebP" {
     try std.testing.expectEqualStrings("https://media.discordapp.net/a.webp?width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/a.webp", 128, 128).?);
     try std.testing.expectEqualStrings("https://media.discordapp.net/stickers/1.webp?size=160&width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/stickers/1.webp?size=160", 128, 128).?);
     try std.testing.expectEqualStrings("https://cdn.discordapp.com/avatar-decoration-presets/a.png?size=160&passthrough=true", proxiedUrl(&b, "https://cdn.discordapp.com/avatar-decoration-presets/a.png?size=160&passthrough=true", 128, 128).?);
+    try std.testing.expectEqualStrings("https://media.discordapp.net/attachments/1/2/v.mp4?ex=1&format=webp&width=320&height=180", proxiedUrl(&b, "https://media.discordapp.net/attachments/1/2/v.mp4?ex=1", 320, 180).?);
     try std.testing.expect(allowedHost("https://cdn.discordapp.com/x"));
     try std.testing.expect(!allowedHost("https://evil.com/cdn.discordapp.com/x"));
     try std.testing.expect(!allowedHost("http://cdn.discordapp.com/x"));
