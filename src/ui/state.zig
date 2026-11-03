@@ -110,6 +110,8 @@ pub const State = struct {
     muted: bool = false,
     deafened: bool = false,
     collapsed: std.AutoHashMapUnmanaged(Id, void) = .empty,
+    /// Pastas de servidores abertas na barra.
+    open_folders: std.AutoHashMapUnmanaged(u64, void) = .empty,
     input: [2000]u8 = @splat(0),
     focus_input: bool = true,
     scroll: std.AutoHashMapUnmanaged(Id, Scroll) = .empty,

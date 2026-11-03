@@ -88,6 +88,8 @@ pub const Store = struct {
     /// (servidor, usuário) -> cor do nome e cargos.
     members: std.AutoHashMapUnmanaged([2]Id, types.MemberInfo) = .empty,
     relationships: std.AutoHashMapUnmanaged(Id, types.Relationship) = .empty,
+    /// Pastas e ordem dos servidores (vazio = a ordem em que vieram).
+    folders: []types.GuildFolder = &.{},
     /// Perfis completos já buscados (e a bio já interpretada).
     profiles: std.AutoHashMapUnmanaged(Id, types.Profile) = .empty,
     bios: std.AutoHashMapUnmanaged(Id, []const markdown.Span) = .empty,
@@ -115,6 +117,7 @@ pub const Store = struct {
         s.member_lists.deinit(s.gpa);
         s.members.deinit(s.gpa);
         s.relationships.deinit(s.gpa);
+        freeFolders(s.folders);
         var pi = s.profiles.valueIterator();
         while (pi.next()) |pr| freeProfile(pr.*);
         s.profiles.deinit(s.gpa);
@@ -138,6 +141,14 @@ pub const Store = struct {
         if (u.activity) |a| ev_alloc.free(a);
         if (u.avatar) |a| ev_alloc.free(a);
         if (u.decoration) |a| ev_alloc.free(a);
+    }
+
+    fn freeFolders(list: []const types.GuildFolder) void {
+        for (list) |f| {
+            ev_alloc.free(f.name);
+            ev_alloc.free(f.guilds);
+        }
+        if (list.len > 0) ev_alloc.free(list);
     }
 
     fn freeProfile(p: types.Profile) void {
@@ -581,6 +592,10 @@ pub const Store = struct {
                 };
             },
             .member_info => |mi| try s.members.put(s.gpa, .{ mi.guild, mi.user }, mi.info),
+            .guild_folders => |list| {
+                freeFolders(s.folders);
+                s.folders = list;
+            },
             .profile => |pr| {
                 const gop = try s.profiles.getOrPut(s.gpa, pr.user);
                 if (gop.found_existing) freeProfile(gop.value_ptr.*);
@@ -656,6 +671,43 @@ pub const Store = struct {
     pub fn memberInfo(s: *const Store, guild_id: Id, user_id: Id) ?types.MemberInfo {
         if (guild_id == 0) return null;
         return s.members.get(.{ guild_id, user_id });
+    }
+
+    /// Servidores na ordem da barra lateral: primeiro os que não estão na
+    /// lista de pastas (novos, como faz o Discord), depois a ordem dela.
+    /// Cada item é um servidor solto ou uma pasta.
+    pub const RailItem = union(enum) { guild: *types.Guild, folder: *const types.GuildFolder };
+
+    pub fn railOrder(s: *const Store, out: []RailItem) []RailItem {
+        var n: usize = 0;
+        for (s.guilds.items) |*g| {
+            if (n == out.len) break;
+            const listed = for (s.folders) |f| {
+                if (std.mem.indexOfScalar(Id, f.guilds, g.id) != null) break true;
+            } else false;
+            if (!listed) {
+                out[n] = .{ .guild = g };
+                n += 1;
+            }
+        }
+        for (s.folders) |*f| {
+            if (n == out.len) break;
+            if (f.id == 0) {
+                for (f.guilds) |gid| if (s.guild(gid)) |g| if (n < out.len) {
+                    out[n] = .{ .guild = g };
+                    n += 1;
+                };
+                continue;
+            }
+            // Pasta sem nenhum servidor que ainda existe: some.
+            const any = for (f.guilds) |gid| {
+                if (s.guild(gid) != null) break true;
+            } else false;
+            if (!any) continue;
+            out[n] = .{ .folder = f };
+            n += 1;
+        }
+        return out[0..n];
     }
 
     /// Nossas permissões no servidor (sem contar as exceções por canal).

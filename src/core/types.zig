@@ -31,6 +31,15 @@ pub const Profile = struct {
     pronouns: []const u8 = "",
 };
 
+/// Pasta de servidores da barra lateral (como no cliente oficial).
+/// `id` 0 = servidor solto (não é pasta de verdade, tem um servidor só).
+pub const GuildFolder = struct {
+    id: u64,
+    name: []const u8,
+    color: u32,
+    guilds: []const Id,
+};
+
 /// Permissões do Discord que o cliente usa.
 pub const perm = struct {
     pub const administrator: u64 = 1 << 3;

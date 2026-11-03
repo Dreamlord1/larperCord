@@ -21,6 +21,7 @@ const nowMs = @import("fake_gateway.zig").nowMs;
 const j = @import("jsonx.zig");
 const i18n = @import("../ui/i18n.zig");
 const media_url = @import("media_url.zig");
+const settings_proto = @import("settings_proto.zig");
 const Id = types.Id;
 const Value = std.json.Value;
 
@@ -575,6 +576,25 @@ pub const Gateway = struct {
         g.emit(.{ .member_info = .{ .guild = gid, .user = uid, .info = g.infoOf(j.array(j.get(m, "roles"))) } });
     }
 
+    /// Passa as pastas para o Store (só se vieram: uma atualização parcial
+    /// sem pastas não apaga as que já temos).
+    fn emitFolders(g: *Gateway, layout: settings_proto.Layout) void {
+        defer layout.deinit(alloc);
+        if (layout.folders.len == 0) return;
+        const out = alloc.alloc(types.GuildFolder, layout.folders.len) catch return;
+        var n: usize = 0;
+        for (layout.folders) |f| {
+            const guilds = alloc.dupe(Id, f.guilds) catch continue;
+            const name = alloc.dupe(u8, f.name) catch {
+                alloc.free(guilds);
+                continue;
+            };
+            out[n] = .{ .id = f.id, .name = name, .color = f.color, .guilds = guilds };
+            n += 1;
+        }
+        g.emit(.{ .guild_folders = out[0..n] });
+    }
+
     /// Grupo da lista de membros: "online", "offline" ou o ID de um cargo.
     fn groupId(s: []const u8) Id {
         if (std.mem.eql(u8, s, "online")) return types.group_online;
@@ -756,6 +776,14 @@ pub const Gateway = struct {
             const gid = j.id(j.get(d, "guild_id")) orelse return;
             const role = j.get(d, "role") orelse return;
             g.ingestRoles(gid, &.{role});
+            return;
+        }
+        if (std.mem.eql(u8, t, "USER_SETTINGS_PROTO_UPDATE")) {
+            // Mudou a pasta/ordem em outro dispositivo (tipo 1 = configurações gerais).
+            const st = j.get(d, "settings") orelse return;
+            if ((j.int(j.get(st, "type")) orelse 0) != 1) return;
+            const b64 = j.str(j.get(st, "proto")) orelse return;
+            if (settings_proto.fromProtoBase64(alloc, b64)) |layout| g.emitFolders(layout) else |_| {}
             return;
         }
         if (std.mem.eql(u8, t, "GUILD_MEMBER_LIST_UPDATE")) {
@@ -1309,6 +1337,13 @@ pub const Gateway = struct {
             const uid = j.id(j.get(rv, "user_id")) orelse j.id(j.get(rv, "id")) orelse continue;
             g.emit(.{ .relationship = .{ .user = uid, .kind = relationshipKind(j.get(rv, "type")) } });
         }
+        // Pastas e ordem dos servidores: protobuf das configurações (contas
+        // atuais) ou o JSON antigo.
+        if (j.str(j.get(d, "user_settings_proto"))) |b64| {
+            if (settings_proto.fromProtoBase64(alloc, b64)) |layout| g.emitFolders(layout) else |_| {}
+        } else if (j.get(d, "user_settings")) |us| if (j.get(us, "guild_folders")) |gf| {
+            if (settings_proto.fromJson(alloc, gf)) |layout| g.emitFolders(layout) else |_| {}
+        };
         g.emit(.{ .status = .ready });
         // Sessão nova: a lista de membros que estava aberta precisa ser pedida de novo.
         if (g.sub_guild != 0) g.subscribe(g.sub_guild, g.sub_channel);

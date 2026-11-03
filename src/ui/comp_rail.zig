@@ -26,6 +26,94 @@ pub fn draw(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     if (horizontal) horizontalBar(ctx, n, r, w.shapeOf(shape_s)) else verticalBar(ctx, n, r, w.shapeOf(shape_s));
 }
 
+const Store = @import("../core/store.zig").Store;
+
+/// Servidores na ordem da barra, sem pastas (para os formatos que não as mostram).
+fn flatOrder(ctx: *d.Ctx, out: []*types.Guild) []*types.Guild {
+    var items: [256]Store.RailItem = undefined;
+    var n: usize = 0;
+    for (ctx.store.railOrder(&items)) |it| switch (it) {
+        .guild => |g| if (n < out.len) {
+            out[n] = g;
+            n += 1;
+        },
+        .folder => |f| for (f.guilds) |gid| if (ctx.store.guild(gid)) |g| if (n < out.len) {
+            out[n] = g;
+            n += 1;
+        },
+    };
+    return out[0..n];
+}
+
+/// Índice estável de um servidor (para os IDs de animação e clique).
+fn indexOf(ctx: *d.Ctx, g: *const types.Guild) usize {
+    return (@intFromPtr(g) - @intFromPtr(ctx.store.guilds.items.ptr)) / @sizeOf(types.Guild);
+}
+
+/// Pasta: fechada mostra os ícones em miniatura; aberta, os servidores
+/// embaixo dela numa faixa com a cor da pasta.
+fn folder(ctx: *d.Ctx, dl: *c.ImDrawList, f: *const types.GuildFolder, cx: f32, y_in: f32, size: f32, shape: w.Shape, bar: d.Rect, step: f32) f32 {
+    var y = y_in;
+    const open = ctx.st.open_folders.contains(f.id);
+    const ir: d.Rect = .{ .x = cx - size / 2, .y = y, .w = size, .h = size };
+    const hb = d.hit(ctx, @truncate(f.id *% 7 +% 5000), ir);
+    qa.mark(ir, "folder:{d}", .{f.id});
+    if (hb.clicked) {
+        if (open) _ = ctx.st.open_folders.remove(f.id) else ctx.st.open_folders.put(ctx.st.gpa, f.id, {}) catch {};
+    }
+    const fcol = if (f.color != 0) d.Rgba.hex(f.color) else ctx.col(.accent);
+    const radius = w.shapeRadius(shape, size);
+    var mentions: u32 = 0;
+    var unread = false;
+    var selected = false;
+    for (f.guilds) |gid| if (ctx.store.guild(gid)) |g| {
+        mentions += g.mentions;
+        unread = unread or g.unread;
+        selected = selected or ctx.st.guild == g.id;
+    };
+    const k = anim.to(anim.id("folder", @truncate(f.id)), if (open) 1 else 0, 18);
+    if (open or k > 0.01) {
+        // Faixa atrás dos servidores da pasta aberta.
+        var count: f32 = 0;
+        for (f.guilds) |gid| {
+            if (ctx.store.guild(gid) != null) count += 1;
+        }
+        const band: d.Rect = .{ .x = ir.x - 4, .y = ir.y - 4, .w = size + 8, .h = size + 8 + count * step * k };
+        d.rect(dl, band, fcol.alpha(0.16 * k), radius + 4);
+    }
+    if (open) {
+        d.rect(dl, ir, fcol.alpha(if (hb.hovered) 0.4 else 0.28), radius);
+        folderGlyph(dl, cx, y + size / 2, size * 0.42, fcol.mix(d.Rgba.white, 0.2));
+    } else {
+        d.rect(dl, ir, fcol.alpha(if (hb.hovered) 0.32 else 0.2), radius);
+        // Até 4 ícones pequenos, 2×2.
+        const ms = size * 0.36;
+        const off = ms / 2 + 2;
+        for (f.guilds[0..@min(f.guilds.len, 4)], 0..) |gid, i| {
+            const g = ctx.store.guild(gid) orelse continue;
+            const mx = cx + (if (i % 2 == 0) -off else off);
+            const my = y + size / 2 + (if (i / 2 == 0) -off else off);
+            glyph(ctx, dl, g, mx, my, ms, shape, false);
+        }
+        if (mentions > 0) badge(ctx, dl, ir.right() + 2, ir.bottom() - 16, @intCast(@min(mentions, 999)));
+    }
+    const pill: f32 = if (selected and !open) size * 0.83 else if (hb.hovered) size * 0.42 else if (unread and !open) 8 else 0;
+    const pk = anim.to(anim.id("f-pill", @truncate(f.id)), pill, 18);
+    if (pk > 0.5) d.rectFlags(dl, .{ .x = bar.x, .y = y + size / 2 - pk / 2, .w = 4, .h = pk }, ctx.col(.text), 4, c.ImDrawFlags_RoundRight);
+    tooltip(ctx, @truncate(f.id *% 13 +% 7000), ir.right() + 14, y + size / 2, if (f.name.len > 0) f.name else i18n.tr("Pasta", "Folder"), hb.hovered);
+    y += step;
+    if (open) for (f.guilds) |gid| if (ctx.store.guild(gid)) |g| {
+        icon(ctx, dl, .{ .g = g, .i = indexOf(ctx, g) }, cx, y, size, shape, .left, bar);
+        y += step;
+    };
+    return y;
+}
+
+fn folderGlyph(dl: *c.ImDrawList, cx: f32, cy: f32, s: f32, col: d.Rgba) void {
+    d.rect(dl, .{ .x = cx - s, .y = cy - s * 0.55, .w = s * 0.9, .h = s * 0.4 }, col, s * 0.15);
+    d.rect(dl, .{ .x = cx - s, .y = cy - s * 0.35, .w = s * 2, .h = s * 1.2 }, col, s * 0.2);
+}
+
 fn verticalBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     const size = d.pnum(n, "size", 48);
     const step = size + 8;
@@ -40,10 +128,14 @@ fn verticalBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void 
         d.rect(dl, .{ .x = cx - size * 0.25, .y = y - 4, .w = size * 0.5, .h = 2 }, ctx.col(.text).alpha(0.08), 1);
         y += 6;
     }
-    for (ctx.store.guilds.items, 0..) |*g, i| {
-        icon(ctx, dl, .{ .g = g, .i = i }, cx, y, size, shape, .left, r);
-        y += step;
-    }
+    var items: [256]Store.RailItem = undefined;
+    for (ctx.store.railOrder(&items)) |it| switch (it) {
+        .guild => |g| {
+            icon(ctx, dl, .{ .g = g, .i = indexOf(ctx, g) }, cx, y, size, shape, .left, r);
+            y += step;
+        },
+        .folder => |f| y = folder(ctx, dl, f, cx, y, size, shape, r, step),
+    };
     d.endRegion(ctx, y, r.x);
 }
 
@@ -59,7 +151,9 @@ fn horizontalBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) voi
         icon(ctx, dl, null, x + size / 2, cy - size / 2, size, shape, .bottom, r);
         x += size + 12;
     }
-    for (ctx.store.guilds.items, 0..) |*g, i| {
+    var fb: [256]*types.Guild = undefined;
+    for (flatOrder(ctx, &fb)) |g| {
+        const i = indexOf(ctx, g);
         if (!labels) {
             if (x + size > r.right()) break;
             icon(ctx, dl, .{ .g = g, .i = i }, x + size / 2, cy - size / 2, size, shape, .bottom, r);
@@ -245,7 +339,8 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         d.tip(ctx, tr, i18n.tr("Mensagens diretas", "Direct Messages"), hb.hovered);
         x += tw + 2;
     }
-    for (ctx.store.guilds.items, 0..) |*g, i| {
+    var fb: [256]*types.Guild = undefined;
+    for (flatOrder(ctx, &fb), 0..) |g, i| {
         const sel = ctx.st.guild == g.id;
         const lbl = std.fmt.bufPrint(&buf, " {d}:{s} ", .{ i + 1, g.acronym }) catch continue;
         const tw = d.width(if (sel) bold else font, fs, lbl);
@@ -264,7 +359,9 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
 /// Dock no estilo do macOS: os ícones crescem perto do mouse.
 fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     const base = @min(d.pnum(n, "size", 40), r.h - 12);
-    const count = ctx.store.guilds.items.len + 1;
+    var fb: [256]*types.Guild = undefined;
+    const order = flatOrder(ctx, &fb);
+    const count = order.len + 1;
     const gap: f32 = 10;
     const total = @as(f32, @floatFromInt(count)) * (base + gap) + gap;
     const x0 = r.x + (r.w - total) / 2;
@@ -286,8 +383,8 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
         const by = bg.bottom() - 7;
         const ir: d.Rect = .{ .x = cx - size / 2, .y = by - size, .w = size, .h = size };
         const hb = d.hit(ctx, 3000 + i, ir);
-        qa.mark(ir, "guild:{d}", .{if (i == 0) @as(types.Id, 0) else ctx.store.guilds.items[i - 1].id});
-        const g: ?*types.Guild = if (i == 0) null else &ctx.store.guilds.items[i - 1];
+        qa.mark(ir, "guild:{d}", .{if (i == 0) @as(types.Id, 0) else order[i - 1].id});
+        const g: ?*types.Guild = if (i == 0) null else order[i - 1];
         const gid: types.Id = if (g) |x_| x_.id else 0;
         if (hb.clicked) ctx.act(.{ .select_guild = gid });
         if (hb.right) if (g) |gg| ctx.popup(.{ .menu = .{ .kind = .guild, .id = gg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
@@ -323,8 +420,10 @@ fn list(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     const dl = d.beginRegion(ctx, "##guildlist", r, c.ImGuiWindowFlags_NoScrollbar);
     const o = c.ImGui_GetCursorScreenPos();
     var y = o.y + 6;
-    for (0..ctx.store.guilds.items.len + 1) |i| {
-        const g: ?*types.Guild = if (i == 0) null else &ctx.store.guilds.items[i - 1];
+    var fb: [256]*types.Guild = undefined;
+    const order = flatOrder(ctx, &fb);
+    for (0..order.len + 1) |i| {
+        const g: ?*types.Guild = if (i == 0) null else order[i - 1];
         const gid: types.Id = if (g) |x| x.id else 0;
         const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
         const hb = d.hit(ctx, 4000 + i, rr);

@@ -59,6 +59,7 @@ pub const Gateway = struct {
     fn run(g: *Gateway) !void {
         g.emit(.{ .ready = try buildReady() });
         for (relations) |rel| g.emit(.{ .relationship = .{ .user = rel.user, .kind = rel.kind } });
+        g.emit(.{ .guild_folders = try demoFolders() });
         g.emit(.{ .status = .ready });
         g.next_live_ms = nowMs() + 6000;
         if (c.SDL_getenv("LARPER_FLOOD")) |f| {
@@ -403,6 +404,26 @@ pub fn guildId(i: usize) Id {
 
 pub fn channelId(guild_index: usize, i: usize) Id {
     return guildId(guild_index) + 1 + @as(Id, i);
+}
+
+/// Pastas da demonstração: soltos, "Programação" e "Jogos".
+fn demoFolders() ![]types.GuildFolder {
+    const spec = [_]struct { id: u64, name: []const u8, name_en: []const u8, color: u32, guilds: []const usize }{
+        .{ .id = 0, .name = "", .name_en = "", .color = 0, .guilds = &.{0} },
+        .{ .id = 0, .name = "", .name_en = "", .color = 0, .guilds = &.{1} },
+        .{ .id = 77, .name = "Programação", .name_en = "Programming", .color = 0x3BA55C, .guilds = &.{ 2, 8, 4 } },
+        .{ .id = 0, .name = "", .name_en = "", .color = 0, .guilds = &.{5} },
+        .{ .id = 78, .name = "Jogos", .name_en = "Games", .color = 0xF0B232, .guilds = &.{ 6, 3 } },
+        .{ .id = 0, .name = "", .name_en = "", .color = 0, .guilds = &.{7} },
+        .{ .id = 0, .name = "", .name_en = "", .color = 0, .guilds = &.{9} },
+    };
+    const out = try alloc.alloc(types.GuildFolder, spec.len);
+    for (spec, 0..) |f, i| {
+        const ids = try alloc.alloc(Id, f.guilds.len);
+        for (f.guilds, 0..) |gi, k| ids[k] = guildId(gi);
+        out[i] = .{ .id = f.id, .name = try alloc.dupe(u8, pick(f.name, f.name_en)), .color = f.color, .guilds = ids };
+    }
+    return out;
 }
 
 fn buildReady() !ev.Ready {

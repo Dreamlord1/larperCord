@@ -64,6 +64,8 @@ pub const Event = union(enum) {
     member_list: struct { guild: Id, list_id: u64, online: u32, total: u32, ops: []types.MemberOp, counts: []const [2]u64 = &.{} },
     /// Cargos e cor do nome de alguém num servidor.
     member_info: struct { guild: Id, user: Id, info: types.MemberInfo },
+    /// Ordem dos servidores e pastas (READY / mudança nas configurações).
+    guild_folders: []types.GuildFolder,
     /// Perfil completo de alguém (o Store assume os textos).
     profile: struct { user: Id, profile: types.Profile },
     /// Amizade/pedido/bloqueio (`none` = deixou de existir).
