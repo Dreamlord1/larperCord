@@ -107,6 +107,18 @@ pub const Gateway = struct {
                 },
                 .subscribe_guild => |sg| try g.memberList(sg.guild),
                 .relationship => |r| g.emit(.{ .relationship = .{ .user = r.user, .kind = if (r.accept) .friend else .none } }),
+                .fetch_profile => |fp| {
+                    const seed = for (users) |x| {
+                        if (x.id == fp.user) break x;
+                    } else continue;
+                    g.emit(.{ .profile = .{ .user = fp.user, .profile = .{
+                        .banner = if (fp.user % 2 == 1) try alloc.dupe(u8, "demo:1") else "",
+                        .accent = 0x5865F2,
+                        .bio = try i18n.allocPrint(alloc, "oi! sou **{s}** 👋\nfalo de zig, rice e café.", "hi! I'm **{s}** 👋\ninto zig, ricing and coffee.", .{seed.name}),
+                        .pronouns = try alloc.dupe(u8, if (fp.user % 3 == 0) "ela/dela" else "ele/dele"),
+                    } } });
+                },
+                .member_role => {},
                 .create_dm => |u| {
                     const seed = for (users) |x| {
                         if (x.id == u) break x;
@@ -412,6 +424,8 @@ fn buildReady() !ev.Ready {
         .unread = g.unread,
         .mentions = g.mentions,
         .icon = if (g.icon) try std.fmt.allocPrint(alloc, "demo:icon:{d}", .{i}) else null,
+        // O primeiro servidor é nosso (dá para mexer em cargos e mensagens).
+        .owner = if (i == 0) me_id else 1001,
     };
     const chs = try alloc.alloc(types.Channel, guilds.len * channel_tree.len + 7);
     var n: usize = 0;

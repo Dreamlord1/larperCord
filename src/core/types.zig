@@ -17,6 +17,25 @@ pub const User = struct {
     /// Hash do avatar no CDN do Discord (null = sem foto).
     /// Na demonstração: "demo:av:N" (gerado, não baixa nada).
     avatar: ?[]const u8 = null,
+    /// Decoração do avatar (o "asset" da loja; animada em APNG).
+    decoration: ?[]const u8 = null,
+};
+
+/// Perfil completo, buscado quando o cartão de alguém abre
+/// (GET /users/{id}/profile). Textos alocados; vazio = não tem.
+pub const Profile = struct {
+    banner: []const u8 = "",
+    /// Cor do banner quando não há imagem (0xRRGGBB, 0 = sem).
+    accent: u32 = 0,
+    bio: []const u8 = "",
+    pronouns: []const u8 = "",
+};
+
+/// Permissões do Discord que o cliente usa.
+pub const perm = struct {
+    pub const administrator: u64 = 1 << 3;
+    pub const manage_messages: u64 = 1 << 13;
+    pub const manage_roles: u64 = 1 << 28;
 };
 
 /// Cargo de um servidor. `color` é 0xRRGGBB (0 = sem cor).
@@ -26,6 +45,9 @@ pub const Role = struct {
     name: []const u8,
     color: u32 = 0,
     position: i32 = 0,
+    permissions: u64 = 0,
+    /// Cargo de bot/integração: ninguém dá ou tira à mão.
+    managed: bool = false,
 };
 
 /// O que a pessoa é da gente (os números são os do Discord).
@@ -74,6 +96,8 @@ pub const Guild = struct {
     mentions: u16 = 0,
     /// Hash do ícone no CDN (null = mostra a sigla).
     icon: ?[]const u8 = null,
+    /// Dono do servidor (tem todas as permissões).
+    owner: Id = 0,
 };
 
 pub const Channel = struct {

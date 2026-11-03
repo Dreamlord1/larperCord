@@ -88,6 +88,9 @@ pub const Store = struct {
     /// (servidor, usuário) -> cor do nome e cargos.
     members: std.AutoHashMapUnmanaged([2]Id, types.MemberInfo) = .empty,
     relationships: std.AutoHashMapUnmanaged(Id, types.Relationship) = .empty,
+    /// Perfis completos já buscados (e a bio já interpretada).
+    profiles: std.AutoHashMapUnmanaged(Id, types.Profile) = .empty,
+    bios: std.AutoHashMapUnmanaged(Id, []const markdown.Span) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) Store {
         return .{ .gpa = gpa };
@@ -112,6 +115,12 @@ pub const Store = struct {
         s.member_lists.deinit(s.gpa);
         s.members.deinit(s.gpa);
         s.relationships.deinit(s.gpa);
+        var pi = s.profiles.valueIterator();
+        while (pi.next()) |pr| freeProfile(pr.*);
+        s.profiles.deinit(s.gpa);
+        var bi = s.bios.valueIterator();
+        while (bi.next()) |b| s.gpa.free(b.*);
+        s.bios.deinit(s.gpa);
         var gc = s.guild_channels.valueIterator();
         while (gc.next()) |l| l.deinit(s.gpa);
         s.guild_channels.deinit(s.gpa);
@@ -128,6 +137,11 @@ pub const Store = struct {
         ev_alloc.free(u.name);
         if (u.activity) |a| ev_alloc.free(a);
         if (u.avatar) |a| ev_alloc.free(a);
+        if (u.decoration) |a| ev_alloc.free(a);
+    }
+
+    fn freeProfile(p: types.Profile) void {
+        for ([_][]const u8{ p.banner, p.bio, p.pronouns }) |t| if (t.len > 0) ev_alloc.free(t);
     }
 
     fn freeGuildInfo(g: types.Guild) void {
@@ -143,15 +157,19 @@ pub const Store = struct {
         if (ch.icon) |i| ev_alloc.free(i);
     }
 
-    /// Troca o avatar guardado se o novo for diferente (fica com `fresh`
-    /// ou o libera).
+    /// Troca o avatar e a decoração guardados pelos novos, se vieram
+    /// (fica com eles ou os libera).
     fn takeAvatar(old: *types.User, fresh: ?[]const u8) void {
+        takeOpt(&old.avatar, fresh);
+    }
+
+    fn takeOpt(slot: *?[]const u8, fresh: ?[]const u8) void {
         const f = fresh orelse return;
-        if (old.avatar) |a| {
+        if (slot.*) |a| {
             if (std.mem.eql(u8, a, f)) return ev_alloc.free(f);
             ev_alloc.free(a);
         }
-        old.avatar = f;
+        slot.* = f;
     }
 
     fn freeMessage(s: *Store, m: *StoredMessage) void {
@@ -202,6 +220,7 @@ pub const Store = struct {
             ev_alloc.free(u.name);
             if (u.activity) |a| ev_alloc.free(a);
             takeAvatar(old, u.avatar);
+            takeOpt(&old.decoration, u.decoration);
             if (old.status == .offline and u.status != .offline) old.status = u.status;
             return;
         }
@@ -215,10 +234,13 @@ pub const Store = struct {
             const old_status = old.status;
             const old_activity = old.activity;
             const old_avatar = old.avatar;
+            const old_deco = old.decoration;
             ev_alloc.free(old.name);
             old.* = u;
             old.avatar = old_avatar;
+            old.decoration = old_deco;
             takeAvatar(old, u.avatar);
+            takeOpt(&old.decoration, u.decoration);
             if (u.status == .offline) old.status = old_status;
             if (u.activity == null) {
                 old.activity = old_activity;
@@ -240,6 +262,7 @@ pub const Store = struct {
             old.acronym = g.acronym;
             old.color = g.color;
             old.icon = g.icon;
+            if (g.owner != 0) old.owner = g.owner;
             return;
         }
         try s.guilds.append(s.gpa, g);
@@ -422,6 +445,7 @@ pub const Store = struct {
                     ev_alloc.free(u.name);
                     if (u.activity) |a| ev_alloc.free(a);
                     takeAvatar(old, u.avatar);
+                    takeOpt(&old.decoration, u.decoration);
                     return;
                 }
                 try s.users.put(s.gpa, u.id, u);
@@ -557,6 +581,15 @@ pub const Store = struct {
                 };
             },
             .member_info => |mi| try s.members.put(s.gpa, .{ mi.guild, mi.user }, mi.info),
+            .profile => |pr| {
+                const gop = try s.profiles.getOrPut(s.gpa, pr.user);
+                if (gop.found_existing) freeProfile(gop.value_ptr.*);
+                gop.value_ptr.* = pr.profile;
+                const spans = try markdown.parse(s.gpa, pr.profile.bio);
+                const bg = try s.bios.getOrPut(s.gpa, pr.user);
+                if (bg.found_existing) s.gpa.free(bg.value_ptr.*);
+                bg.value_ptr.* = spans;
+            },
             .relationship => |r| {
                 if (r.kind == .none) {
                     _ = s.relationships.remove(r.user);
@@ -623,6 +656,56 @@ pub const Store = struct {
     pub fn memberInfo(s: *const Store, guild_id: Id, user_id: Id) ?types.MemberInfo {
         if (guild_id == 0) return null;
         return s.members.get(.{ guild_id, user_id });
+    }
+
+    /// Nossas permissões no servidor (sem contar as exceções por canal).
+    pub fn permissions(s: *const Store, guild_id: Id) u64 {
+        const g = s.guild(guild_id) orelse return 0;
+        if (g.owner != 0 and g.owner == s.me) return std.math.maxInt(u64);
+        // @everyone tem o mesmo ID do servidor.
+        var p: u64 = if (s.roles.get(guild_id)) |r| r.permissions else 0;
+        if (s.memberInfo(guild_id, s.me)) |mi| for (mi.roleSlice()) |rid| {
+            if (s.roles.get(rid)) |r| p |= r.permissions;
+        };
+        if (p & types.perm.administrator != 0) return std.math.maxInt(u64);
+        return p;
+    }
+
+    pub fn can(s: *const Store, guild_id: Id, bit: u64) bool {
+        return guild_id != 0 and s.permissions(guild_id) & bit != 0;
+    }
+
+    /// Posição do nosso cargo mais alto (só se mexe em cargos abaixo dele).
+    pub fn topRolePosition(s: *const Store, guild_id: Id) i32 {
+        const g = s.guild(guild_id) orelse return 0;
+        if (g.owner == s.me) return std.math.maxInt(i32);
+        var top: i32 = 0;
+        if (s.memberInfo(guild_id, s.me)) |mi| for (mi.roleSlice()) |rid| {
+            if (s.roles.get(rid)) |r| top = @max(top, r.position);
+        };
+        return top;
+    }
+
+    /// Dar/tirar um cargo, na hora (o servidor confirma depois).
+    pub fn memberRoleLocal(s: *Store, guild_id: Id, user_id: Id, role: Id, add: bool) !void {
+        const gop = try s.members.getOrPut(s.gpa, .{ guild_id, user_id });
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        const mi = gop.value_ptr;
+        const has = std.mem.indexOfScalar(Id, mi.roleSlice(), role);
+        if (add and has == null and mi.n_roles < mi.roles.len) {
+            mi.roles[mi.n_roles] = role;
+            mi.n_roles += 1;
+        } else if (!add) if (has) |i| {
+            std.mem.copyForwards(Id, mi.roles[i .. mi.n_roles - 1], mi.roles[i + 1 .. mi.n_roles]);
+            mi.n_roles -= 1;
+        };
+        // Cor do nome: a do cargo mais alto com cor.
+        var best: i32 = std.math.minInt(i32);
+        mi.color = 0;
+        for (mi.roleSlice()) |rid| if (s.roles.get(rid)) |r| if (r.color != 0 and r.position > best) {
+            best = r.position;
+            mi.color = r.color;
+        };
     }
 
     pub fn relationship(s: *const Store, user_id: Id) types.Relationship {

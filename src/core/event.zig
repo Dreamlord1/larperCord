@@ -64,6 +64,8 @@ pub const Event = union(enum) {
     member_list: struct { guild: Id, list_id: u64, online: u32, total: u32, ops: []types.MemberOp, counts: []const [2]u64 = &.{} },
     /// Cargos e cor do nome de alguém num servidor.
     member_info: struct { guild: Id, user: Id, info: types.MemberInfo },
+    /// Perfil completo de alguém (o Store assume os textos).
+    profile: struct { user: Id, profile: types.Profile },
     /// Amizade/pedido/bloqueio (`none` = deixou de existir).
     relationship: struct { user: Id, kind: types.Relationship },
 };
@@ -88,6 +90,10 @@ pub const Command = union(enum) {
     relationship: struct { user: Id, accept: bool },
     /// Abre (ou acha) a DM com alguém; chega como CHANNEL_CREATE.
     create_dm: Id,
+    /// Perfil completo (banner, bio…) ao abrir o cartão de alguém.
+    fetch_profile: struct { user: Id, guild: Id },
+    /// Dá (add) ou tira um cargo de alguém.
+    member_role: struct { guild: Id, user: Id, role: Id, add: bool },
     shutdown,
 };
 
@@ -134,6 +140,9 @@ pub const Action = union(enum) {
     open_friends,
     /// Chegou perto do topo da conversa: busca as mais antigas.
     load_older: Id,
+    /// O cartão de perfil abriu: busca o perfil completo (uma vez por pessoa).
+    want_profile: Id,
+    member_role: struct { guild: Id, user: Id, role: Id, add: bool },
     accept_friend: Id,
     /// Recusa um pedido, cancela o nosso ou desbloqueia.
     remove_relationship: Id,

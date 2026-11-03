@@ -77,6 +77,8 @@ pub const App = struct {
     /// Já tem um aviso da rede na fila do SDL: os próximos eventos só entram
     /// na fila de eventos, sem acordar a janela de novo.
     gw_signaled: std.atomic.Value(bool) = .init(false),
+    /// Perfis já pedidos nesta sessão (um pedido por pessoa).
+    asked_profiles: std.AutoHashMapUnmanaged(types.Id, void) = .empty,
     /// notify-send em andamento (recolhidos quando terminam).
     notifiers: std.ArrayList(*c.SDL_Process) = .empty,
     paste_n: u32 = 0,
@@ -159,6 +161,7 @@ pub const App = struct {
 
     pub fn destroy(app: *App) void {
         _ = c.SDL_RemoveTimer(app.timer);
+        app.asked_profiles.deinit(app.gpa);
         for (app.notifiers.items) |p| c.SDL_DestroyProcess(p);
         app.notifiers.deinit(app.gpa);
         app.stopNet();
@@ -304,6 +307,7 @@ pub const App = struct {
 
     /// Volta ao estado de antes do login: sem conta, sem abas, sem nada.
     fn resetSession(app: *App) void {
+        app.asked_profiles.clearRetainingCapacity();
         app.clearUploads();
         app.st.viewer = null;
         app.store.deinit();
@@ -608,6 +612,15 @@ pub const App = struct {
                 const ch = st.last_channel.get(g) orelse app.firstTextChannel(g) orelse return app.handle(.open_friends);
                 if (g == 0 and st.last_channel.get(0) == null) return app.handle(.open_friends);
                 app.openChannel(ch, false);
+            },
+            .want_profile => |user| {
+                if (app.asked_profiles.contains(user)) return;
+                app.asked_profiles.put(app.gpa, user, {}) catch return;
+                app.cmd(.{ .fetch_profile = .{ .user = user, .guild = st.guild } });
+            },
+            .member_role => |mr| {
+                app.store.memberRoleLocal(mr.guild, mr.user, mr.role, mr.add) catch return;
+                app.cmd(.{ .member_role = .{ .guild = mr.guild, .user = mr.user, .role = mr.role, .add = mr.add } });
             },
             .load_older => |id| {
                 const cs = app.store.channel(id) orelse return;

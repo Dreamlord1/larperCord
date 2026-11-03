@@ -116,6 +116,8 @@ pub const State = struct {
     palette: Palette = .{},
     settings: Settings = .{},
     popup: Popup = .none,
+    /// Lista de cargos para dar, aberta no cartão de perfil.
+    role_picker: bool = false,
     /// Caixa de texto do cartão de perfil ("Mensagem @fulano").
     popup_input: [256]u8 = @splat(0),
     reply_to: Id = 0,

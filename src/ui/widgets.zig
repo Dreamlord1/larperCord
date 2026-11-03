@@ -93,6 +93,20 @@ pub fn avatar(ctx: *d.Ctx, dl: *c.ImDrawList, cx: f32, cy: f32, size: f32, user_
         d.text(dl, font, fs, cx - tw / 2, cy - fs * 0.6, d.Rgba.white.alpha(0.92 * alpha), initial);
     }
 
+    // Decoração (moldura da loja do Discord): anima só nos avatares grandes.
+    if (size >= 30) if (u) |x| if (x.decoration) |asset| {
+        var db: [192]u8 = undefined;
+        const big = size >= 64;
+        const deco_url = std.fmt.bufPrint(&db, "https://cdn.discordapp.com/avatar-decoration-presets/{s}.png?size={d}&passthrough={s}", .{ asset, @as(u32, if (big) 160 else 96), if (big) "true" else "false" }) catch "";
+        const ds = size * 1.2;
+        const dr: d.Rect = .{ .x = cx - ds / 2, .y = cy - ds / 2, .w = ds, .h = ds };
+        const scale = ctx.io.*.DisplayFramebufferScale.x;
+        if (!no_pics) switch (ctx.images.getEx(deco_url, ds * scale, ds * scale, big)) {
+            .ready => |t| c.ImDrawList_AddImageEx(dl, t.ref, d.v(dr.x, dr.y), d.v(dr.right(), dr.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(alpha)),
+            else => {},
+        };
+    };
+
     const ring_col = ring orelse return;
     const status = if (u) |x| x.status else .offline;
     const sr = size * 0.15;

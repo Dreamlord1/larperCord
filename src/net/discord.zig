@@ -497,6 +497,19 @@ pub const Gateway = struct {
         return optDupe(j.str(j.get(u, "avatar")));
     }
 
+    /// Decoração do avatar ("asset" da loja de colecionáveis).
+    fn decorationOf(u: Value) ?[]u8 {
+        const dd = j.get(u, "avatar_decoration_data") orelse return null;
+        return optDupe(j.str(j.get(dd, "asset")));
+    }
+
+    /// Dono do servidor (no READY pode vir dentro de `properties`).
+    fn ownerOf(v: Value) Id {
+        if (j.id(j.get(v, "owner_id"))) |o| return o;
+        if (j.get(v, "properties")) |p| return j.id(j.get(p, "owner_id")) orelse 0;
+        return 0;
+    }
+
     fn guildIcon(v: Value) ?[]u8 {
         if (j.str(j.get(v, "icon"))) |i| return optDupe(i);
         if (j.get(v, "properties")) |p| return optDupe(j.str(j.get(p, "icon")));
@@ -512,12 +525,16 @@ pub const Gateway = struct {
             const color: u32 = @intCast(std.math.clamp(j.int(j.get(rv, "color")) orelse 0, 0, 0xffffff));
             const pos = j.int(j.get(rv, "position")) orelse 0;
             g.role_info.put(alloc, rid, .{ .color = color, .pos = pos }) catch {};
+            const perms = std.fmt.parseInt(u64, j.str(j.get(rv, "permissions")) orelse "0", 10) catch 0;
+            const managed = if (j.get(rv, "managed")) |mv| mv == .bool and mv.bool else false;
             out.append(alloc, .{
                 .id = rid,
                 .guild = gid,
                 .name = dupe(j.str(j.get(rv, "name")) orelse "?"),
                 .color = color,
                 .position = @intCast(std.math.clamp(pos, -1000, 100000)),
+                .permissions = perms,
+                .managed = managed,
             }) catch {};
         }
         g.emit(.{ .roles = .{ .guild = gid, .roles = out.toOwnedSlice(alloc) catch return } });
@@ -731,7 +748,7 @@ pub const Gateway = struct {
         if (std.mem.eql(u8, t, "GUILD_MEMBER_UPDATE") or std.mem.eql(u8, t, "USER_UPDATE")) {
             const u = j.get(d, "user") orelse d;
             const uid = j.id(j.get(u, "id")) orelse return;
-            g.emit(.{ .user_update = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u) } });
+            g.emit(.{ .user_update = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u), .decoration = decorationOf(u) } });
             if (j.id(j.get(d, "guild_id"))) |gid| g.memberColor(gid, uid, d);
             return;
         }
@@ -851,7 +868,7 @@ pub const Gateway = struct {
 
     fn upsert(g: *Gateway, u: Value) void {
         const uid = j.id(j.get(u, "id")) orelse return;
-        g.emit(.{ .user_upsert = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u) } });
+        g.emit(.{ .user_upsert = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u), .decoration = decorationOf(u) } });
     }
 
     fn upsertUsers(g: *Gateway, m: Value) void {
@@ -1018,6 +1035,7 @@ pub const Gateway = struct {
                 .acronym = try j.acronym(alloc, name),
                 .color = @intCast((gid >> 22) % 8),
                 .icon = guildIcon(d),
+                .owner = ownerOf(d),
             },
             .channels = try channels.toOwnedSlice(alloc),
             .voice = try voice.toOwnedSlice(alloc),
@@ -1206,7 +1224,7 @@ pub const Gateway = struct {
                 const uid = j.id(j.get(u, "id")) orelse return;
                 if (set.contains(uid)) return;
                 set.put(alloc, uid, {}) catch return;
-                list.append(alloc, .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = status, .avatar = avatarOf(u) }) catch {};
+                list.append(alloc, .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = status, .avatar = avatarOf(u), .decoration = decorationOf(u) }) catch {};
             }
         }.f;
         addUser(&users, &seen, me, .online);
@@ -1226,13 +1244,24 @@ pub const Gateway = struct {
             const gid = j.id(j.get(gv, "id")) orelse continue;
             const props = j.get(gv, "properties");
             const name = j.str(j.get(gv, "name")) orelse (if (props) |p| j.str(j.get(p, "name")) else null) orelse i18n.tr("servidor", "server");
-            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv) });
+            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv), .owner = ownerOf(gv) });
             g.ingestRoles(gid, j.array(j.get(gv, "roles")));
             try appendChannels(&channels, gid, j.array(j.get(gv, "channels")));
             for (j.array(j.get(gv, "voice_states"))) |vs| {
                 const ch = j.id(j.get(vs, "channel_id")) orelse continue;
                 const uid = j.id(j.get(vs, "user_id")) orelse continue;
                 try voice.append(alloc, .{ ch, uid });
+            }
+        }
+        // Os nossos cargos em cada servidor (merged_members vem na mesma ordem
+        // dos servidores): é o que decide o que podemos fazer em cada um.
+        for (j.array(j.get(d, "merged_members")), 0..) |members, gi| {
+            const gv = j.array(j.get(d, "guilds"));
+            if (gi >= gv.len) break;
+            const gid = j.id(j.get(gv[gi], "id")) orelse continue;
+            for (j.array(members)) |m| {
+                const uid = j.id(j.get(m, "user_id")) orelse (if (j.get(m, "user")) |u| j.id(j.get(u, "id")) else null) orelse continue;
+                if (uid == g.me) g.memberColor(gid, uid, m);
             }
         }
         // DMs e grupos (os participantes vêm em `users`, pelo ID).
@@ -1660,6 +1689,34 @@ pub const Gateway = struct {
                 var resp = g.request(if (r.accept) "PUT" else "DELETE", path, if (r.accept) "{}" else null) orelse return;
                 defer resp.body.deinit(alloc);
                 if (resp.status >= 300) g.noticeHttp(i18n.tr("não deu para mudar a amizade", "couldn't update the friendship"), &resp);
+            },
+            .fetch_profile => |fp| {
+                const path = if (fp.guild != 0)
+                    std.fmt.bufPrint(&path_buf, "/users/{d}/profile?with_mutual_guilds=false&with_mutual_friends=false&guild_id={d}", .{ fp.user, fp.guild }) catch return
+                else
+                    std.fmt.bufPrint(&path_buf, "/users/{d}/profile?with_mutual_guilds=false&with_mutual_friends=false", .{fp.user}) catch return;
+                var resp = g.request("GET", path, null) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status != 200) return; // perfil fechado: fica o que já sabemos
+                var arena = std.heap.ArenaAllocator.init(alloc);
+                defer arena.deinit();
+                const v = std.json.parseFromSliceLeaky(Value, arena.allocator(), resp.body.items, .{}) catch return;
+                const u = j.get(v, "user") orelse return;
+                const up = j.get(v, "user_profile");
+                g.upsert(u);
+                const bio = (if (up) |p| j.str(j.get(p, "bio")) else null) orelse j.str(j.get(u, "bio")) orelse "";
+                g.emit(.{ .profile = .{ .user = fp.user, .profile = .{
+                    .banner = dupeOpt(j.str(j.get(u, "banner")) orelse "") catch "",
+                    .accent = @intCast(std.math.clamp(j.int(j.get(u, "accent_color")) orelse 0, 0, 0xffffff)),
+                    .bio = dupeOpt(bio) catch "",
+                    .pronouns = dupeOpt((if (up) |p| j.str(j.get(p, "pronouns")) else null) orelse "") catch "",
+                } } });
+            },
+            .member_role => |mr| {
+                const path = std.fmt.bufPrint(&path_buf, "/guilds/{d}/members/{d}/roles/{d}", .{ mr.guild, mr.user, mr.role }) catch return;
+                var resp = g.request(if (mr.add) "PUT" else "DELETE", path, null) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status >= 300) g.noticeHttp(i18n.tr("não deu para mudar o cargo", "couldn't change the role"), &resp);
             },
             .create_dm => |user| {
                 var b: [64]u8 = undefined;
