@@ -97,6 +97,100 @@ pub const Store = struct {
         s.gpa.free(m.spans);
     }
 
+    /// READY pode chegar mais de uma vez (sessão nova depois de uma queda).
+    /// Funde por ID em vez de duplicar servidores, canais e usuários.
+    fn mergeUser(s: *Store, u: types.User) !void {
+        if (s.users.getPtr(u.id)) |old| {
+            ev_alloc.free(u.name);
+            if (u.activity) |a| ev_alloc.free(a);
+            if (old.status == .offline and u.status != .offline) old.status = u.status;
+            return;
+        }
+        try s.users.put(s.gpa, u.id, u);
+    }
+
+    /// Substitui um usuário existente (nome/atividade novos), preservando o
+    /// status e a atividade que o evento de update não carrega.
+    fn putUser(s: *Store, u: types.User) !void {
+        if (s.users.getPtr(u.id)) |old| {
+            const old_status = old.status;
+            const old_activity = old.activity;
+            ev_alloc.free(old.name);
+            old.* = u;
+            if (u.status == .offline) old.status = old_status;
+            if (u.activity == null) {
+                old.activity = old_activity;
+            } else if (old_activity) |a| {
+                ev_alloc.free(a);
+            }
+            return;
+        }
+        try s.users.put(s.gpa, u.id, u);
+    }
+
+    fn mergeGuild(s: *Store, g: types.Guild) !void {
+        for (s.guilds.items) |*old| {
+            if (old.id != g.id) continue;
+            ev_alloc.free(old.name);
+            ev_alloc.free(old.acronym);
+            old.name = g.name;
+            old.acronym = g.acronym;
+            old.color = g.color;
+            return;
+        }
+        try s.guilds.append(s.gpa, g);
+    }
+
+    fn mergeChannel(s: *Store, ch: types.Channel) !void {
+        if (s.channels.get(ch.id)) |cs| {
+            const unread = cs.info.unread or ch.unread;
+            ev_alloc.free(cs.info.name);
+            ev_alloc.free(cs.info.topic);
+            cs.info = ch;
+            cs.info.unread = unread;
+        } else {
+            const cs = try s.gpa.create(ChannelState);
+            cs.* = .{ .info = ch };
+            try s.channels.put(s.gpa, ch.id, cs);
+        }
+        const gop = try s.guild_channels.getOrPut(s.gpa, ch.guild);
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        if (std.mem.indexOfScalar(Id, gop.value_ptr.items, ch.id) == null) {
+            try gop.value_ptr.append(s.gpa, ch.id);
+        }
+    }
+
+    fn removeChannel(s: *Store, id: Id) void {
+        const kv = s.channels.fetchRemove(id) orelse return;
+        const cs = kv.value;
+        for (cs.messages.items) |*m| s.freeMessage(m);
+        cs.messages.deinit(s.gpa);
+        cs.typing.deinit(s.gpa);
+        cs.voice_members.deinit(s.gpa);
+        ev_alloc.free(cs.info.name);
+        ev_alloc.free(cs.info.topic);
+        s.gpa.destroy(cs);
+        var it = s.guild_channels.valueIterator();
+        while (it.next()) |list| {
+            if (std.mem.indexOfScalar(Id, list.items, id)) |i| _ = list.orderedRemove(i);
+        }
+    }
+
+    fn removeGuild(s: *Store, id: Id) void {
+        if (s.guild_channels.fetchRemove(id)) |kv| {
+            var list = kv.value;
+            for (list.items) |ch| s.removeChannel(ch);
+            list.deinit(s.gpa);
+        }
+        for (s.guilds.items, 0..) |g, i| {
+            if (g.id != id) continue;
+            ev_alloc.free(g.name);
+            ev_alloc.free(g.acronym);
+            _ = s.guilds.orderedRemove(i);
+            return;
+        }
+    }
+
     pub fn user(s: *const Store, id: Id) ?*const types.User {
         return s.users.getPtr(id);
     }
@@ -119,18 +213,19 @@ pub const Store = struct {
         switch (ev) {
             .ready => |r| {
                 s.me = r.me;
-                for (r.users) |u| try s.users.put(s.gpa, u.id, u);
-                try s.guilds.appendSlice(s.gpa, r.guilds);
-                for (r.channels) |ch| {
-                    const cs = try s.gpa.create(ChannelState);
-                    cs.* = .{ .info = ch };
-                    try s.channels.put(s.gpa, ch.id, cs);
-                    const gop = try s.guild_channels.getOrPut(s.gpa, ch.guild);
-                    if (!gop.found_existing) gop.value_ptr.* = .empty;
-                    try gop.value_ptr.append(s.gpa, ch.id);
-                }
+                for (r.users) |u| try s.mergeUser(u);
+                for (r.guilds) |g| try s.mergeGuild(g);
+                for (r.channels) |ch| try s.mergeChannel(ch);
+                // READY é o retrato atual da conta: refaz os estados de voz
+                // em vez de empilhar em cima do que sobrou da sessão anterior.
+                var vit = s.channels.valueIterator();
+                while (vit.next()) |cs| cs.*.voice_members.clearRetainingCapacity();
                 for (r.voice) |pair| {
-                    if (s.channel(pair[0])) |cs| try cs.voice_members.append(s.gpa, pair[1]);
+                    if (s.channel(pair[0])) |cs| {
+                        if (std.mem.indexOfScalar(Id, cs.voice_members.items, pair[1]) == null) {
+                            try cs.voice_members.append(s.gpa, pair[1]);
+                        }
+                    }
                 }
                 ev_alloc.free(r.users);
                 ev_alloc.free(r.guilds);
@@ -164,8 +259,17 @@ pub const Store = struct {
                 };
                 try cs.typing.append(s.gpa, .{ .user = t.user, .until_ms = now_ms + 8000 });
             },
-            .presence_update => |p| if (s.users.getPtr(p.user)) |u| {
-                u.status = p.status;
+            .presence_update => |p| {
+                if (s.users.getPtr(p.user)) |u| {
+                    u.status = p.status;
+                    if (p.activity) |a| {
+                        if (u.activity) |old| ev_alloc.free(old);
+                        u.activity = if (a.len == 0) null else a;
+                    }
+                } else if (p.activity) |a| {
+                    // Usuário desconhecido: o texto veio alocado, não vaza.
+                    if (a.len > 0) ev_alloc.free(@constCast(a));
+                }
             },
             .voice_state => |v| {
                 var it = s.channels.valueIterator();
@@ -202,6 +306,45 @@ pub const Store = struct {
                     return;
                 }
                 try s.users.put(s.gpa, u.id, u);
+            },
+            .user_update => |u| try s.putUser(u),
+            .guild_create => |gc| {
+                defer {
+                    ev_alloc.free(gc.channels);
+                    ev_alloc.free(gc.voice);
+                }
+                try s.mergeGuild(gc.guild);
+                for (gc.channels) |ch| try s.mergeChannel(ch);
+                for (gc.channels) |ch| {
+                    if (s.channel(ch.id)) |cs| cs.voice_members.clearRetainingCapacity();
+                }
+                for (gc.voice) |pair| {
+                    if (s.channel(pair[0])) |cs| {
+                        if (std.mem.indexOfScalar(Id, cs.voice_members.items, pair[1]) == null) {
+                            try cs.voice_members.append(s.gpa, pair[1]);
+                        }
+                    }
+                }
+            },
+            .guild_delete => |id| s.removeGuild(id),
+            .channel_upsert => |ch| try s.mergeChannel(ch),
+            .channel_delete => |id| s.removeChannel(id),
+            .read => |id| s.markRead(id),
+            .reaction_clear => |rc| {
+                const cs = s.channel(rc.channel) orelse return;
+                const m = s.find(cs, rc.id) orelse return;
+                if (rc.emoji) |e| {
+                    for (m.reactions[0..m.n_reactions], 0..) |*r, i| {
+                        if (!std.mem.eql(u8, r.text(), e.text())) continue;
+                        std.mem.copyForwards(types.Reaction, m.reactions[i .. m.n_reactions - 1], m.reactions[i + 1 .. m.n_reactions]);
+                        m.n_reactions -= 1;
+                        break;
+                    }
+                } else {
+                    m.n_reactions = 0;
+                }
+                m.layout_w = -1;
+                cs.version +%= 1;
             },
             .message_update => |up| {
                 const cs = s.channel(up.channel) orelse return ev_alloc.free(up.content);
@@ -375,6 +518,84 @@ test "limite de mensagens por canal libera as antigas" {
     const cs = s.channel(10).?;
     try std.testing.expectEqual(@as(usize, 3), cs.messages.items.len);
     try std.testing.expectEqual(@as(Id, 102), cs.messages.items[0].msg.id);
+}
+
+test "READY repetido funde estado e CHANNEL/GUILD_DELETE limpam" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+
+    const us1 = try c_alloc.alloc(types.User, 1);
+    us1[0] = .{ .id = 1, .name = try c_alloc.dupe(u8, "eu") };
+    const g1 = try c_alloc.alloc(types.Guild, 1);
+    g1[0] = .{ .id = 5, .name = try c_alloc.dupe(u8, "g"), .acronym = try c_alloc.dupe(u8, "G") };
+    const c1 = try c_alloc.alloc(types.Channel, 1);
+    c1[0] = .{ .id = 10, .guild = 5, .name = try c_alloc.dupe(u8, "geral"), .topic = try c_alloc.dupe(u8, "") };
+    try s.apply(.{ .ready = .{ .me = 1, .users = us1, .guilds = g1, .channels = c1, .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
+    try s.apply(.{ .message_create = .{
+        .id = 100,
+        .channel = 10,
+        .author = 2,
+        .timestamp = 0,
+        .content = try c_alloc.dupe(u8, "oi"),
+    } }, 0);
+
+    // Uma segunda sessão manda o mesmo servidor/canal + um canal novo.
+    const us2 = try c_alloc.alloc(types.User, 1);
+    us2[0] = .{ .id = 1, .name = try c_alloc.dupe(u8, "eu") };
+    const g2 = try c_alloc.alloc(types.Guild, 1);
+    g2[0] = .{ .id = 5, .name = try c_alloc.dupe(u8, "g"), .acronym = try c_alloc.dupe(u8, "G") };
+    const c2 = try c_alloc.alloc(types.Channel, 2);
+    c2[0] = .{ .id = 10, .guild = 5, .name = try c_alloc.dupe(u8, "geral"), .topic = try c_alloc.dupe(u8, "") };
+    c2[1] = .{ .id = 11, .guild = 5, .name = try c_alloc.dupe(u8, "novo"), .topic = try c_alloc.dupe(u8, "") };
+    try s.apply(.{ .ready = .{ .me = 1, .users = us2, .guilds = g2, .channels = c2, .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
+
+    try std.testing.expectEqual(@as(usize, 1), s.guilds.items.len);
+    try std.testing.expectEqual(@as(usize, 2), s.channelsOf(5).len);
+    try std.testing.expectEqual(@as(usize, 1), s.channel(10).?.messages.items.len);
+
+    try s.apply(.{ .channel_delete = 11 }, 0);
+    try std.testing.expect(s.channel(11) == null);
+    try std.testing.expectEqual(@as(usize, 1), s.channelsOf(5).len);
+
+    try s.apply(.{ .guild_delete = 5 }, 0);
+    try std.testing.expect(s.channel(10) == null);
+    try std.testing.expectEqual(@as(usize, 0), s.guilds.items.len);
+}
+
+test "presença, atividade e troca de nome não vazam" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+
+    const us = try c_alloc.alloc(types.User, 1);
+    us[0] = .{ .id = 1, .name = try c_alloc.dupe(u8, "eu") };
+    try s.apply(.{ .ready = .{
+        .me = 1,
+        .users = us,
+        .guilds = try c_alloc.alloc(types.Guild, 0),
+        .channels = try c_alloc.alloc(types.Channel, 0),
+        .voice = try c_alloc.alloc([2]Id, 0),
+    } }, 0);
+
+    try s.apply(.{ .presence_update = .{
+        .user = 1,
+        .status = .online,
+        .activity = try c_alloc.dupe(u8, "Jogando X"),
+    } }, 0);
+    try std.testing.expectEqualStrings("Jogando X", s.user(1).?.activity.?);
+
+    try s.apply(.{ .presence_update = .{ .user = 1, .status = .idle, .activity = "" } }, 0);
+    try std.testing.expect(s.user(1).?.activity == null);
+
+    try s.apply(.{ .user_update = .{
+        .id = 1,
+        .name = try c_alloc.dupe(u8, "novo"),
+        .role = 2,
+        .status = .offline,
+    } }, 0);
+    try std.testing.expectEqualStrings("novo", s.user(1).?.name);
+    try std.testing.expectEqual(types.Status.idle, s.user(1).?.status);
 }
 
 test "mensagem pendente é confirmada pelo nonce" {

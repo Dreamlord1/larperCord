@@ -97,6 +97,8 @@ pub const State = struct {
     /// Contador de "geração" do tema (invalida caches de layout).
     theme_gen: u8 = 0,
     nonce: u64 = 1,
+    /// Último "digitando" enviado (o Discord pede no máximo um a cada 8 s).
+    typing_sent_ms: i64 = 0,
     /// Buffers reaproveitados a cada quadro pela lista de mensagens.
     offsets: std.ArrayList(f32) = .empty,
     groups: std.ArrayList(u8) = .empty,

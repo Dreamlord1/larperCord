@@ -82,6 +82,7 @@ pub const Gateway = struct {
                     g.hot_channel = ch;
                     try g.history_replies.append(alloc, .{ .at_ms = nowMs() + 140, .channel = ch });
                 },
+                .typing => {},
                 .join_voice => |ch| g.emit(.{ .voice_state = .{ .channel = ch, .user = me_id } }),
             };
             cmds.clearRetainingCapacity();

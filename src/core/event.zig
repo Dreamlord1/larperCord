@@ -26,13 +26,26 @@ pub const Event = union(enum) {
     reaction: struct { channel: Id, id: Id, emoji: types.Reaction, user: Id, add: bool },
     /// Usuário visto pela primeira vez (ex.: autor de uma mensagem).
     user_upsert: types.User,
+    /// Nome/avatar de um usuário mudou (GUILD_MEMBER_UPDATE, USER_UPDATE).
+    user_update: types.User,
+    /// Servidor que ficou disponível depois do READY (GUILD_CREATE).
+    guild_create: struct { guild: types.Guild, channels: []types.Channel, voice: []const [2]Id },
+    guild_delete: Id,
+    /// CHANNEL_CREATE / CHANNEL_UPDATE.
+    channel_upsert: types.Channel,
+    channel_delete: Id,
+    /// MESSAGE_ACK: outro dispositivo leu o canal.
+    read: Id,
+    /// Reações removidas de uma vez (emoji = null limpa todas).
+    reaction_clear: struct { channel: Id, id: Id, emoji: ?types.Reaction },
     /// Estado da conexão, para a barra de status.
     status: Connection,
     /// Reação já existente (ao carregar o histórico).
     reaction_set: struct { channel: Id, id: Id, reaction: types.Reaction },
     /// Aviso para mostrar ao usuário (texto alocado).
     notice: []const u8,
-    presence_update: struct { user: Id, status: types.Status },
+    /// `activity` vazio limpa a atividade; null mantém a anterior.
+    presence_update: struct { user: Id, status: types.Status, activity: ?[]const u8 = null },
     voice_state: struct { channel: ?Id, user: Id },
     latency: u32,
 };
@@ -45,6 +58,8 @@ pub const Command = union(enum) {
     delete_message: struct { channel: Id, id: Id },
     react: struct { channel: Id, id: Id, emoji: types.Reaction, add: bool },
     fetch_history: Id,
+    /// "fulano está digitando" (o Discord limita a um a cada ~8 s).
+    typing: Id,
     join_voice: ?Id,
     shutdown,
 };
@@ -60,6 +75,7 @@ pub const Action = union(enum) {
     leave_voice,
     toggle_mute,
     toggle_deafen,
+    typing: Id,
     toggle_category: Id,
     set_theme: usize,
     next_theme: i32,

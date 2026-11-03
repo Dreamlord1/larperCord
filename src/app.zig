@@ -488,6 +488,13 @@ pub const App = struct {
                     for (app.store.channelsOf(id)) |ch| app.store.markRead(ch);
                 }
             },
+            .typing => |id| {
+                if (!st.settings.send_typing or app.store.demo) return;
+                const now_ms = now();
+                if (now_ms - st.typing_sent_ms < 8000) return;
+                st.typing_sent_ms = now_ms;
+                app.cmd(.{ .typing = id });
+            },
             .toggle_voice => |ch| {
                 st.voice = if (st.voice == ch) null else ch;
                 app.cmd(.{ .join_voice = st.voice });
@@ -557,6 +564,23 @@ pub const App = struct {
             app.store.apply(e, now()) catch {};
         }
         if (!was_ready and app.store.ready) app.onReady();
+        // GUILD_DELETE/CHANNEL_DELETE: não deixa a interface apontando para
+        // um servidor ou aba que o Discord acabou de tirar.
+        if (app.st.guild != 0 and app.store.guild(app.st.guild) == null) app.st.guild = 0;
+        var i: usize = 0;
+        while (i < app.st.tabs.items.len) {
+            if (app.store.channel(app.st.tabs.items[i]) != null) {
+                i += 1;
+                continue;
+            }
+            _ = app.st.tabs.orderedRemove(i);
+            if (i < app.st.tab) app.st.tab -= 1;
+        }
+        if (app.st.tabs.items.len == 0) {
+            app.st.tab = 0;
+        } else if (app.st.tab >= app.st.tabs.items.len) {
+            app.st.tab = app.st.tabs.items.len - 1;
+        }
         // Marca como lido o que chega no canal aberto.
         if (app.st.activeChannel()) |ch| app.store.markRead(ch);
     }

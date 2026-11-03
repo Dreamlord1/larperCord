@@ -46,9 +46,9 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 - **Segue o seu wallpaper.** Temas com `palette "wal"` usam as cores do pywal e acompanham a troca.
 - **Blur de verdade.** O tema `vidro` tem fundo transparente e o compositor (Hyprland, KDE…)
   aplica o blur, sem custo pro app.
-- **Conecta no Discord de verdade**: gateway por WebSocket (heartbeat, reconexão, ping real)
-  e REST pra histórico, envio, edição, exclusão e reações, uma requisição por vez e respeitando
-  o rate limit.
+- **Conecta no Discord de verdade**: gateway por WebSocket com heartbeat, **RESUME de sessão**,
+  **zlib-stream** e reconexão; IDENTIFY e cabeçalhos no formato do cliente web (a mesma
+  uma requisição por vez e respeitando o rate limit.
 - **Interações do Discord**: menu do botão direito em mensagens, usuários, canais e servidores;
   barra de ações ao passar o mouse; **responder** (com a "curvinha" e clique para pular até a
   original); **editar** (`↑` na caixa vazia edita a última); **excluir**; **reações**;
@@ -97,9 +97,9 @@ sair. O app procura nesta ordem:
 2. A variável `LARPER_TOKEN`
 3. O arquivo `~/.config/larpercord/token`, que precisa ter `chmod 600`
 
-`--demo` força o modo demonstração mesmo com token. Ainda não tem: voz, imagens (avatares,
-anexos e emojis personalizados aparecem como texto), threads/fóruns, permissões por canal
-(canais sem acesso só mostram um aviso) e notificações.
+larperCord ainda não tem backend de áudio/DAVE), imagens (avatares, anexos e emojis
+personalizados aparecem como texto), threads/fóruns, permissões por canal (canais sem acesso
+só mostram um aviso) e notificações.
 
 ## Como ele fica leve
 
@@ -168,13 +168,18 @@ gateway falso pelo real não toca na interface.
 ## Roadmap
 
 - [x] Gateway real (WebSocket, heartbeat, reconexão) e REST respeitando o rate limit
-- [ ] RESUME de sessão e zlib-stream
+- [x] RESUME de sessão e zlib-stream
+- [x] Presenças, membros e eventos de servidor/canal (GUILD_CREATE, CHANNEL_*)
 - [ ] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
 - [ ] Permissões por canal (esconder o que não dá pra ler), threads e fóruns
 - [ ] Notificações nativas via D-Bus
 - [ ] Voz (DAVE/MLS + Opus + RNNoise)
 - [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB
 - [ ] Componentes de tema escritos em Lua (sandbox)
+
+## Créditos
+
+A camada de conexão foi reescrita em Zig a partir do comportamento do
 
 ## Licença
 

@@ -813,6 +813,8 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         std.fmt.bufPrintSentinel(&hint_buf, "Conversar em #{s}", .{cs.info.name}, 0) catch "";
     const flags = c.ImGuiInputTextFlags_EnterReturnsTrue | c.ImGuiInputTextFlags_CallbackAlways | c.ImGuiInputTextFlags_CallbackHistory;
     if (c.ImGui_InputTextWithHintEx("##composer", hint.ptr, &st.input, st.input.len, flags, inputCallback, st)) submit(ctx);
+    // Avisa o Discord quando o texto muda (o app limita a um a cada 8 s).
+    if (c.ImGui_IsItemEdited() and st.input[0] != 0) ctx.act(.{ .typing = ch_id });
     const active = c.ImGui_IsItemActive();
     c.ImGui_PopFont();
     if (active and c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and (st.reply_to != 0 or st.editing != 0)) ctx.act(.cancel_compose);
