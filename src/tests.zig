@@ -16,6 +16,7 @@ test {
     _ = @import("ui/settings_state.zig");
     _ = @import("net/jsonx.zig");
     _ = @import("net/media_url.zig");
+    _ = @import("net/settings_proto.zig");
 }
 
 /// Componentes que a interface sabe desenhar (manter igual a ui/root.zig).
