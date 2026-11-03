@@ -183,6 +183,10 @@ pub const App = struct {
         // Fontes do tema (carregadas sob demanda e reaproveitadas).
         _ = app.fonts.family(th.font_ui) catch app.fonts.family("Inter") catch {};
         _ = app.fonts.family(th.font_mono) catch app.fonts.family("monospace") catch {};
+        // O fontconfig guarda o cache de todas as fontes do sistema (~MBs);
+        // ele se reinicia sozinho se outro tema pedir uma família nova.
+        c.FcFini();
+        _ = c.malloc_trim(0);
         app.st.theme_gen +%= 1;
     }
 
@@ -462,7 +466,7 @@ pub const App = struct {
             if (app.opts.shot) |path| {
                 const ready = app.store.ready and if (app.st.activeChannel()) |ch| (app.store.channel(ch).?.history == .loaded) else false;
                 settled_frames = if (ready) settled_frames + 1 else 0;
-                if (settled_frames == 12 or frames > 600) {
+                if (settled_frames == 12 or c.SDL_GetTicksNS() - app.started_ns > 6 * std.time.ns_per_s) {
                     if (!app.win.screenshot(path)) std.log.err("não consegui salvar {s}", .{path});
                     running = false;
                 }

@@ -110,7 +110,7 @@ pub const Gateway = struct {
         }
         if (now >= g.next_latency_ms) {
             g.emit(.{ .latency = 38 + g.rng.random().uintLessThan(u32, 24) });
-            g.next_latency_ms = now + 5000;
+            g.next_latency_ms = now + 20_000;
         }
         if (!g.live) {
             g.next_live_ms = std.math.maxInt(i64) / 2;

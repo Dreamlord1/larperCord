@@ -88,6 +88,7 @@ pub fn build(b: *std.Build) void {
         const shot = b.addRunArtifact(exe);
         shot.addArgs(&.{ "--theme", name, "--shot" });
         shot.addArg(b.fmt("docs/themes/{s}.png", .{name}));
+        shot.setEnvironmentVariable("SDL_VIDEO_DRIVER", "offscreen"); // não abre janela
         shot.has_side_effects = true;
         snaps.dependOn(&shot.step);
     }

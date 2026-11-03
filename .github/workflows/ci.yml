@@ -1,0 +1,13 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      # Os testes cobrem as partes puras (KDL, cores, layout, markdown, Store,
+      # temas embutidos) e não precisam de SDL nem de GPU.
+      - run: zig build test

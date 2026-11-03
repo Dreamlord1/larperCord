@@ -1,47 +1,138 @@
+<div align="center">
+
 # larperCord
 
-Cliente alternativo de Discord, nativo e leve. Feito em Zig com SDL3, Dear ImGui e FreeType.
+**Um cliente de Discord nativo de ~40 MB, cuja interface inteira é um arquivo de tema.**
 
-Por enquanto é só o **protótipo visual**: usa dados falsos e ainda não tem rede.
+Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 
-## Rodar
+![Quatro temas do larperCord](docs/themes.png)
+
+*Os mesmos dados e o mesmo binário, com quatro arquivos `.kdl` diferentes.*
+
+</div>
+
+> **English TL;DR**: a native Discord client prototype written in Zig. It idles at ~0% CPU,
+> uses ~40 MB of RAM (the official client uses 1.2+ GB on the same machine) and its whole
+> UI (layout, components, colors, fonts) is described by hot-reloadable [KDL](https://kdl.dev) theme
+> files. Network support is not there yet: it currently runs against a fake gateway.
+
+> [!WARNING]
+> **Protótipo.** Ainda não conecta no Discord de verdade: um *gateway falso* numa thread
+> imita o servidor (READY, histórico, mensagens, "digitando…", presença). Clientes de
+> terceiros violam os Termos de Uso do Discord. Use por sua conta e risco quando a rede chegar.
+> Este projeto não tem relação com a Discord Inc.
+
+## Por quê
+
+O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
+
+| | RAM (PSS) | CPU parado | Binário |
+|---|---|---|---|
+| Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
+| **larperCord** | **38–45 MB** | **0–0,2%** | **1,8 MB** |
+
+<sub>¹ média desde a abertura, medida pelo `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`. Medido com
+`tools/membench.sh`. Do total, só ~13 MB são do app; o resto é o driver da NVIDIA.</sub>
+
+## O que tem
+
+- **Temas que reorganizam tudo.** Layout em árvore (`row`/`column`/`flex`/`gap`), 11 componentes
+  com variantes, estilos, tokens de cor com expressões (`mix(wal:0, black, 0.4)`).
+  [Guia de temas →](themes/README.md)
+- **Recarrega ao salvar.** Edite o `.kdl` e a janela muda na hora (inotify, sem polling).
+  Erros aparecem com `arquivo:linha:coluna`.
+- **Segue o seu wallpaper.** Temas com `palette "wal"` usam as cores do pywal e acompanham a troca.
+- **Blur de verdade.** O tema `vidro` tem fundo transparente e o compositor (Hyprland, KDE…)
+  aplica o blur, sem custo pro app.
+- **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K`), atalhos de teclado.
+- **Configurações no estilo Discord** (`Ctrl+,`): 13 páginas, troca de tema com miniaturas,
+  escala de fonte, modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
+  `~/.config/larpercord/settings.kdl`.
+- **Markdown do Discord**: **negrito**, *itálico*, ~~riscado~~, `código`, ||spoiler||, menções
+  `<@id>`/`<#id>`, links e emoji colorido.
+- Mensagens agrupadas, separadores de dia, envio "pendente" confirmado pelo servidor,
+  indicador de digitação, rolagem suave com lista virtualizada.
+
+<div align="center">
+
+![Configurações](docs/settings.png)
+
+</div>
+
+## Como ele fica leve
+
+Nada de mágica, só muitas decisões pequenas:
+
+1. **Dorme quando nada acontece.** O laço fica em `SDL_WaitEvent`. Rede, inotify e o relógio
+   acordam o app por eventos. Sem animação, sem redesenho.
+2. **Nada de navegador.** Tudo é desenhado com o `ImDrawList` do Dear ImGui sobre o SDL_Renderer.
+3. **Fontes mapeadas, não copiadas.** Cada arquivo de fonte vira um `mmap` compartilhado por
+   todos os pesos e famílias. Só as páginas lidas ficam na RAM. (Carregar 4 pesos do Inter + emoji
+   do jeito ingênuo custava ~90 MB.)
+4. **Só o driver de vídeo necessário.** Em máquinas só com GPU NVIDIA, o glvnd também carregava o
+   Mesa + LLVM (~23 MB) à toa. O app detecta e evita.
+5. **Markdown interpretado uma vez**, quando a mensagem chega. A interface só faz layout dos
+   trechos, com **cache de altura por largura**.
+6. **Lista virtualizada**: busca binária pelo primeiro item visível, desenha só a tela.
+7. **Memória com teto**: no máximo 400 mensagens por canal, e as antigas são liberadas.
+8. **fontconfig liberado** depois de resolver as fontes (`FcFini` + `malloc_trim`).
+9. **Sem cursor piscando**: o cursor piscando sozinho manteria a CPU acordada.
+10. **Binário enxuto**: build release sem símbolos de debug, 1,8 MB.
+
+## Compilando
+
+Precisa de **Zig 0.17**, **SDL3**, **FreeType** e **fontconfig**. Fontes recomendadas: Inter,
+JetBrains Mono e Noto Color Emoji (o fontconfig escolhe substitutas se faltar alguma).
 
 ```bash
+# Arch
+sudo pacman -S zig sdl3 freetype2 fontconfig inter-font ttf-jetbrains-mono noto-fonts-emoji
+
 zig build -Doptimize=ReleaseFast
-./zig-out/bin/larpercord
+./zig-out/bin/larpercord --theme vidro
 ```
 
-Variáveis de ambiente:
-
-| Variável | O que faz |
+| Comando | |
 |---|---|
-| `LARPER_RENDERER=vulkan` | troca o backend do SDL (`opengl` é o padrão e o mais leve aqui) |
-| `LARPER_SHOT=print.png` | salva um print depois de alguns quadros e fecha |
-| `LARPER_EGL_ALL=1` | desliga o atalho que força o EGL da NVIDIA |
-
-## Medir a RAM
-
-```bash
-awk '/^Pss:/{printf "%.1f MB\n", $2/1024}' /proc/$(pgrep -x larpercord)/smaps_rollup
-```
-
-Na máquina de desenvolvimento (GTX 1050 Ti, Hyprland, 1280×800): **~40 MB** e CPU em 0% quando parado.
-
-## Estrutura
+| `zig build test` | testes (KDL, cores, layout, markdown, Store, temas embutidos, configurações) |
+| `tools/snapshots.sh` | gera os prints de `docs/` sem abrir janela |
+| `tools/membench.sh 50` | mede RAM e CPU de cada tema e falha se passar de 50 MB |
 
 ```
-src/main.zig    janela, laço de eventos (dorme quando nada acontece)
-src/ui.zig      barra de servidores, canais, chat, membros
-src/text.zig    fontes e texto rico (negrito, `código`, @menção, emoji)
-src/theme.zig   paleta lida do pywal (~/.cache/wal/colors)
-src/anim.zig    animações com easing por id
-src/icons.zig   ícones vetoriais
-src/fake.zig    dados falsos do protótipo
-third_party/    Dear ImGui 1.93.0 + dear_bindings 0.27
+larpercord [--theme NOME] [--settings] [--list-themes] [--no-live] [--shot ARQ.png] [--stats]
 ```
 
-## Modificações em third_party
+Atalhos: `Ctrl+K` paleta · `Ctrl+,` configurações · `F2` próximo tema · `Ctrl+Tab` abas ·
+`Alt+1…9` · `Ctrl+W` fecha aba · `Ctrl+Clique` abre canal em nova aba.
 
-O `third_party/imgui/misc/freetype/imgui_freetype.cpp` foi alterado para aceitar fontes só de
-bitmap (CBDT, como a Noto Color Emoji): ele escolhe o maior tamanho disponível da fonte e
-reduz cada glyph para o tamanho pedido. Os trechos alterados estão marcados com `[larperCord]`.
+## Arquitetura
+
+```
+src/
+  core/       dados puros, sem janela: tipos (snowflakes), Store, markdown, eventos
+  net/        gateway (hoje falso, numa thread) e filas entre threads
+  theme/      parser KDL, cores, carregador de tema, motor de layout, gerenciador + inotify
+  ui/         componentes, texto rico, paleta, configurações, animações
+  platform/   janela, renderizador, "acordar" o laço; o único lugar que conhece o SDL
+themes/       os temas embutidos (também compilados dentro do binário)
+third_party/  Dear ImGui 1.93 + dear_bindings (C), com um patch pequeno para emoji em bitmap
+```
+
+O fluxo é **interface → `Action` → app → `Command` → gateway → `Event` → Store → interface**.
+A interface nunca muda dados direto: ela só lê o Store e pede ações. Com isso, trocar o
+gateway falso pelo real não toca na interface.
+
+## Roadmap
+
+- [ ] Gateway real (WebSocket + zlib-stream, heartbeat, resume) e REST com rate limit
+- [ ] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
+- [ ] Notificações nativas via D-Bus
+- [ ] Voz (DAVE/MLS + Opus + RNNoise)
+- [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB
+- [ ] Componentes de tema escritos em Lua (sandbox)
+
+## Licença
+
+A definir. Dear ImGui e dear_bindings são MIT. O arquivo
+`third_party/imgui/misc/freetype/imgui_freetype.cpp` tem alterações marcadas com `[larperCord]`.
