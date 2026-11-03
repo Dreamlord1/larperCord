@@ -46,6 +46,23 @@ pub fn componentNames() []const []const u8 {
 
 fn spacer(_: *d.Ctx, _: *const kdl.Node, _: d.Rect) void {}
 
+/// --stats: tempo gasto em cada componente (µs somados desde a última leitura).
+pub var profile = false;
+pub var prof_names: [24][]const u8 = undefined;
+pub var prof_us: [24]u64 = @splat(0);
+pub var prof_n: usize = 0;
+
+fn profAdd(name: []const u8, us: u64) void {
+    for (prof_names[0..prof_n], 0..) |nm, i| if (std.mem.eql(u8, nm, name)) {
+        prof_us[i] += us;
+        return;
+    };
+    if (prof_n == prof_names.len) return;
+    prof_names[prof_n] = name;
+    prof_us[prof_n] = us;
+    prof_n += 1;
+}
+
 /// `label text="larperCord" size=14 weight=bold color=accent align=center`
 fn label(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const t = d.pstr(n, "text", "");
@@ -106,15 +123,19 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
             defer c.ImGui_PopID();
             const inner = p.rect.inset(d.pnum(p.node, "inset-x", 0), d.pnum(p.node, "inset-y", 0));
             if (registry.get(p.node.name)) |draw| {
+                const t0 = if (profile) c.SDL_GetTicksNS() else 0;
                 if (inner.w > 4 and inner.h > 4) draw(ctx, p.node, inner);
+                if (profile) profAdd(p.node.name, (c.SDL_GetTicksNS() - t0) / 1000);
             } else unknown(ctx, p);
             if (d.pflag(p.node, "autohide", false)) autohide(ctx, p, i);
         }
     }
     c.ImGui_End();
 
+    const t1 = if (profile) c.SDL_GetTicksNS() else 0;
     popup.draw(ctx);
     settings.draw(ctx, previews);
+    if (profile) profAdd("overlays", (c.SDL_GetTicksNS() - t1) / 1000);
     @import("attachments.zig").viewer(ctx);
     palette.draw(ctx);
     toast(ctx);

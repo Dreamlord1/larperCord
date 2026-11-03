@@ -15,7 +15,9 @@ pub const Window = struct {
         preferNvidiaEgl();
         _ = c.SDL_SetAppMetadata("larperCord", "0.2.0", "dev.larpercord");
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) return error.SdlInit;
-        const flags = c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | c.SDL_WINDOW_TRANSPARENT;
+        var flags = c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | c.SDL_WINDOW_TRANSPARENT;
+        // LARPER_HIDDEN=1: janela escondida (medir desempenho com a GPU de verdade).
+        if (c.SDL_getenv("LARPER_HIDDEN") != null) flags |= c.SDL_WINDOW_HIDDEN;
         const window = c.SDL_CreateWindow(title, w, h, flags) orelse return error.SdlWindow;
         // LARPER_RENDERER escolhe o backend do SDL (opengl, vulkan, gpu, software).
         const renderer = c.SDL_CreateRenderer(window, c.SDL_getenv("LARPER_RENDERER")) orelse return error.SdlRenderer;

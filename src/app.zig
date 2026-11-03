@@ -945,6 +945,17 @@ pub const App = struct {
     /// popups e posiciona o mouse, já que o print não tem ninguém clicando.
     fn scene(app: *App, settled: bool) void {
         const which = std.mem.span(c.SDL_getenv("LARPER_SCENE") orelse return);
+        // "firstdm": abre a primeira DM (mede a área de mensagens diretas).
+        if (std.mem.eql(u8, which, "firstdm")) {
+            const F = struct {
+                var done = false;
+            };
+            if (!F.done and app.store.channelsOf(0).len > 0) {
+                F.done = true;
+                app.openChannel(app.store.channelsOf(0)[0], false);
+            }
+            return;
+        }
         // "guild": abre o primeiro servidor (testa histórico e lista de membros).
         if (std.mem.eql(u8, which, "guild")) {
             const G = struct {
@@ -993,8 +1004,18 @@ pub const App = struct {
         }
     }
 
+    var prof_frame: u64 = 0;
+    var prof_render: u64 = 0;
+    var prof_gpu: u64 = 0;
+    var prof_cmds: u64 = 0;
+    var prof_texs: u64 = 0;
+    var prof_vtx: u64 = 0;
+
     pub fn run(app: *App) bool {
         var runner: @import("qa_runner.zig").Runner = .{};
+        @import("ui/root.zig").profile = app.opts.stats;
+        widgets.no_pics = c.SDL_getenv("LARPER_NO_PICS") != null;
+        widgets.square_pics = c.SDL_getenv("LARPER_SQUARE") != null;
         if (app.opts.qa) {
             @import("ui/qa.zig").enabled = true;
             _ = c.SDL_CreateDirectory("qa-out");
@@ -1007,6 +1028,8 @@ pub const App = struct {
         var first_frame_logged = false;
         var login_result: ?login_mod.Result = null;
         var lang_setting: i16 = -1;
+        // LARPER_BENCH=1: redesenha sem parar (medir o custo de um quadro parado).
+        const bench = c.SDL_getenv("LARPER_BENCH") != null;
         // O que chega da rede (presença, digitando, lista de membros) redesenha
         // no máximo a cada `bg_frame_ms`; mouse e teclado redesenham na hora.
         const bg_frame_ms: i64 = 50;
@@ -1020,7 +1043,7 @@ pub const App = struct {
 
         while (running) {
             var e: c.SDL_Event = undefined;
-            const busy = pending > 0 or anim.active or app.opts.shot != null or app.opts.qa or
+            const busy = pending > 0 or anim.active or app.opts.shot != null or app.opts.qa or bench or
                 (app.login.visible() and !app.st.settings.reduce_motion);
             // Dorme até o próximo quadro de um GIF, de uma animação lenta ou
             // do redesenho adiado da rede (o que vier primeiro).
@@ -1144,7 +1167,9 @@ pub const App = struct {
                     .images = &app.images,
                     .win = undefined,
                 };
+                const tf = c.SDL_GetTicksNS();
                 root.frame(&ctx, &app.placed, app.themes.previews.items);
+                if (app.opts.stats) prof_frame += (c.SDL_GetTicksNS() - tf) / 1000;
             }
             if (app.login.visible()) {
                 const th = app.themes.theme_();
@@ -1158,14 +1183,38 @@ pub const App = struct {
                 _ = th;
                 if (result) |r| login_result = r;
             }
+            const tr0 = c.SDL_GetTicksNS();
             c.ImGui_Render();
+            if (app.opts.stats) prof_render += (c.SDL_GetTicksNS() - tr0) / 1000;
 
             const r = app.win.renderer;
             _ = c.SDL_SetRenderScale(r, app.io.*.DisplayFramebufferScale.x, app.io.*.DisplayFramebufferScale.y);
             const bg = app.themes.theme_().c(.bg);
             _ = c.SDL_SetRenderDrawColorFloat(r, bg.r * bg.a, bg.g * bg.a, bg.b * bg.a, bg.a);
             _ = c.SDL_RenderClear(r);
+            if (app.opts.stats) {
+                const dd = c.ImGui_GetDrawData();
+                var cmds: u64 = 0;
+                var texs: u64 = 0;
+                var vtx: u64 = 0;
+                for (0..@intCast(dd.*.CmdLists.Size)) |li| {
+                    const cl = dd.*.CmdLists.Data[li];
+                    vtx += @intCast(cl.*.VtxBuffer.Size);
+                    var prev_tex: u64 = 0;
+                    for (0..@intCast(cl.*.CmdBuffer.Size)) |ci| {
+                        const id = cl.*.CmdBuffer.Data[ci].TexRef._TexID;
+                        cmds += 1;
+                        if (id != prev_tex) texs += 1;
+                        prev_tex = id;
+                    }
+                }
+                prof_cmds += cmds;
+                prof_texs += texs;
+                prof_vtx += vtx;
+            }
+            const tg0 = c.SDL_GetTicksNS();
             c.cImGui_ImplSDLRenderer3_RenderDrawData(c.ImGui_GetDrawData(), r);
+            if (app.opts.stats) prof_gpu += (c.SDL_GetTicksNS() - tg0) / 1000;
             app.stats.frame_us = @intCast((c.SDL_GetTicksNS() - t0) / 1000);
 
             if (login_result) |lr| {
@@ -1194,6 +1243,17 @@ pub const App = struct {
                 if (S.since == 0) S.since = t;
                 if (t - S.since >= 2_000_000_000) {
                     std.log.info("{d} quadros em 2 s, média {d} µs, pior {d} µs", .{ S.n, S.sum / S.n, S.max });
+                    std.log.info("   root.frame {d} µs, ImGui_Render {d} µs, RenderDrawData {d} µs (por quadro)", .{ prof_frame / S.n, prof_render / S.n, prof_gpu / S.n });
+                    std.log.info("   {d} comandos, {d} trocas de textura, {d} vértices (por quadro)", .{ prof_cmds / S.n, prof_texs / S.n, prof_vtx / S.n });
+                    prof_cmds = 0;
+                    prof_texs = 0;
+                    prof_vtx = 0;
+                    prof_frame = 0;
+                    prof_render = 0;
+                    prof_gpu = 0;
+                    const rt = @import("ui/root.zig");
+                    for (rt.prof_names[0..rt.prof_n], rt.prof_us[0..rt.prof_n]) |nm, us| if (us / S.n > 200) std.log.info("   {s}: {d} µs/quadro", .{ nm, us / S.n });
+                    @memset(&rt.prof_us, 0);
                     S.since = t;
                     S.n = 0;
                     S.sum = 0;

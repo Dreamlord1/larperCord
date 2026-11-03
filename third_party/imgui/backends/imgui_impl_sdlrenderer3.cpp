@@ -275,12 +275,31 @@ void ImGui_ImplSDLRenderer3_RenderDrawData(ImDrawData* draw_data, SDL_Renderer* 
                 const float* xy = (const float*)(const void*)((const char*)(vtx_buffer + pcmd->VtxOffset) + offsetof(ImDrawVert, pos));
                 const float* uv = (const float*)(const void*)((const char*)(vtx_buffer + pcmd->VtxOffset) + offsetof(ImDrawVert, uv));
                 const SDL_Color* color = (const SDL_Color*)(const void*)((const char*)(vtx_buffer + pcmd->VtxOffset) + offsetof(ImDrawVert, col));
+                // larperCord: só os vértices que este comando usa (a faixa entre
+                // o menor e o maior índice, com os índices refeitos a partir do
+                // menor). O original passava todos os vértices restantes da
+                // lista, e a conversão de cor e o SDL percorriam tudo a cada
+                // comando: O(comandos × vértices), ~18 ms por quadro numa lista
+                // de DMs com fotos (1,5 ms com isto).
+                const ImDrawIdx* idx = idx_buffer + pcmd->IdxOffset;
+                unsigned int min_idx = 0xffffffffu, max_idx = 0;
+                for (unsigned int k = 0; k < pcmd->ElemCount; k++)
+                {
+                    if (idx[k] > max_idx) max_idx = idx[k];
+                    if (idx[k] < min_idx) min_idx = idx[k];
+                }
+                if (pcmd->ElemCount == 0) continue;
+                static ImVector<ImDrawIdx> rebased;
+                rebased.resize((int)pcmd->ElemCount);
+                for (unsigned int k = 0; k < pcmd->ElemCount; k++)
+                    rebased[(int)k] = (ImDrawIdx)(idx[k] - min_idx);
+                const int vstride = (int)sizeof(ImDrawVert);
                 SDL_RenderGeometryRaw8BitColor(renderer, bd->ColorBuffer, tex,
-                    xy, (int)sizeof(ImDrawVert),
-                    color, (int)sizeof(ImDrawVert),
-                    uv, (int)sizeof(ImDrawVert),
-                    draw_list->VtxBuffer.Size - pcmd->VtxOffset,
-                    idx_buffer + pcmd->IdxOffset, pcmd->ElemCount, sizeof(ImDrawIdx));
+                    (const float*)(const void*)((const char*)xy + min_idx * vstride), vstride,
+                    (const SDL_Color*)(const void*)((const char*)color + min_idx * vstride), vstride,
+                    (const float*)(const void*)((const char*)uv + min_idx * vstride), vstride,
+                    (int)(max_idx - min_idx) + 1,
+                    rebased.Data, pcmd->ElemCount, sizeof(ImDrawIdx));
             }
         }
     }

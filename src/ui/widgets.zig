@@ -46,12 +46,16 @@ pub fn cdnUrl(buf: []u8, kind: Cdn, id: types.Id, hash: []const u8) []const u8 {
 
 /// Desenha uma imagem do cache recortada com cantos arredondados.
 /// Retorna false enquanto ela não chegou (quem chama desenha o substituto).
+pub var no_pics = false;
+pub var square_pics = false;
+
 pub fn picture(ctx: *d.Ctx, dl: *c.ImDrawList, url: []const u8, r: d.Rect, radius: f32, alpha: f32) bool {
     if (url.len == 0) return false;
+    if (no_pics) return false;
     const scale = ctx.io.*.DisplayFramebufferScale.x;
     switch (ctx.images.getStill(url, r.w * scale, r.h * scale)) {
         .ready => |t| {
-            c.ImDrawList_AddImageRounded(dl, t.ref, d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(alpha), radius, 0);
+            if (square_pics) c.ImDrawList_AddImageEx(dl, t.ref, d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(alpha)) else c.ImDrawList_AddImageRounded(dl, t.ref, d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(alpha), radius, 0);
             return true;
         },
         else => return false,
