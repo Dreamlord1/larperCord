@@ -156,6 +156,11 @@ pub fn page(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
 
     for (ids) |uid| {
         const u = ctx.store.user(uid) orelse continue;
+        // Fora da tela: só ocupa o espaço.
+        if (y + 62 < r.y or y > r.bottom()) {
+            y += 62;
+            continue;
+        }
         const kind = ctx.store.relationship(uid);
         const rr: d.Rect = .{ .x = x - 10, .y = y, .w = rw + 20, .h = 62 };
         d.line(dl, rr.x + 10, rr.y, rr.right() - 10, rr.y, ctx.col(.border), 1);

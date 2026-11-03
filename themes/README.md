@@ -153,6 +153,21 @@ Formas de usar as opções:
 
 As escolhas ficam salvas por tema em `~/.config/larpercord/settings.kdl`.
 
+## Cores personalizadas (sem editar o `.kdl`)
+
+Em **Configurações → Aparência → Cores do tema** você pode trocar qualquer token de cor
+(`bg`, `sidebar`, `text`, `accent`, `link`, `bubble-self`…) e as oito cores de cargo por um
+hex livre. Vale só para o **tema atual e o modo atual** (escuro ou claro), e tem prioridade
+sobre a “Cor de destaque” global.
+
+- `#RRGGBB` para cor opaca; `#RRGGBBAA` para cor com transparência.
+- Clique num item da grade, cole o hex e aperte Enter.
+- “Limpar esta cor” volta aquele item ao tema; “Restaurar tema” apaga as escolhas do tema.
+- As escolhas ficam em `settings.kdl` como `theme-colors "nome" mode=dark accent="#…"`,
+  então não alteram o arquivo do tema.
+- Trechos que usam `c-…` fixo no layout (alguns temas usam para manter contraste) continuam
+  com a cor do arquivo; para mudar esses, edite o `.kdl`.
+
 ### Em inglês
 
 A interface tem português e inglês. Para o seu tema aparecer bem nos dois, ponha a versão em
@@ -172,8 +187,8 @@ options {
 |---|---|---|
 | `channel-list banner=#true` | banner colorido com o nome do servidor | classico |
 | `style … sheen=#true` | reflexo de vidro no topo do cartão | vidro |
-| `crt` | linhas de varredura + vinheta, por cima de tudo (use num `stack`) | terminal |
-| `logo variant=ascii\|wordmark` | logo do app em ASCII ou em texto | terminal, escritorio |
+| `crt` | linhas de varredura + vinheta, por cima de tudo (use num `stack`) | terminal, subsolo |
+| `logo variant=ascii\|wordmark` | logo do app em ASCII ou em texto | terminal, subsolo, escritorio |
 | `messages ruled=#true margin-line=#true` | folha pautada e margem vermelha | papel |
 | `messages ticks=#true typing-bubble=#true` | "Entregue ✓✓" e balão de digitando | bolhas |
 | `autohide=#true` (qualquer nó) | o componente some até o mouse chegar perto | zen |
@@ -184,6 +199,7 @@ options {
 - [`classico.kdl`](classico.kdl): o layout familiar
 - [`vidro.kdl`](vidro.kdl): cartões translúcidos com blur do compositor
 - [`terminal.kdl`](terminal.kdl): tmux + IRC em fósforo âmbar
+- [`subsolo.kdl`](subsolo.kdl): terminal de hacking underground, verde ácido, ultravioleta e scanlines
 - [`bolhas.kdl`](bolhas.kdl): claro, com balões de conversa
 - [`zen.kdl`](zen.kdl): uma coluna central e mais nada
 - [`papel.kdl`](papel.kdl): serifado e espelhado

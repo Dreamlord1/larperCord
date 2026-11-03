@@ -1,0 +1,136 @@
+// subsolo — terminal de hacking underground: preto fóssil, fósforo ácido,
+// ultravioleta, scanlines e servidores como racks. Exclusivo: rack horizontal,
+// logo em ASCII, efeito CRT e opção ultravioleta.
+theme "subsolo" description="Terminal de subsolo: preto fóssil, fósforo ácido, ultravioleta e scanlines." description-en="Underground terminal: fossil black, acid phosphor, ultraviolet and scanlines." author="larperCord" preview=terminal
+
+options {
+    option "crt" label="Scanlines" description="Linhas de varredura e vinheta, como um monitor de tubo." label-en="Scanlines" description-en="Scanlines and vignette, like a CRT." default=#true
+    option "roxo" label="Ultravioleta" description="Troca o verde ácido pelo roxo neon (deep web)." label-en="Ultraviolet" description-en="Swaps acid green for neon purple (deep web)." default=#false
+    option "ascii" label="Logo em ASCII" description="O nome do app desenhado no topo da lista de canais." label-en="ASCII logo" description-en="The app name drawn above the channel list." default=#true
+    option "topo" label="Barra superior" description="Voltar/avançar, busca e ajuda no topo." label-en="Top bar" description-en="Back/forward, search and help at the top." default=#true
+    option "abas" label="Abas de canal" description="Mostra os canais abertos em abas no rodapé." label-en="Channel tabs" description-en="Shows open channels as tabs at the bottom." default=#true
+}
+
+colors mode=dark {
+    bg          "#050706"
+    rail        "#070b09"
+    sidebar     "#08100c"
+    surface     "#0a140f"
+    elevated    "#101d16"
+    overlay     "#0c1711"
+    text        "#c8ffd9"
+    muted       "#5d9b75"
+    faint       "#2c5540"
+    accent      "#3dff7a"
+    accent-text "#031009"
+    border      "#173a28"
+    hover       "alpha(#3dff7a, 0.07)"
+    selected    "alpha(#3dff7a, 0.16)"
+    online      "#3dff7a"
+    idle        "#d6ff3f"
+    dnd         "#ff2e5f"
+    danger      "#ff2e5f"
+    mention     "#00e5ff"
+    link        "#00e5ff"
+    code-bg     "#0d1c14"
+    bubble-self "alpha(#00e5ff, 0.16)"
+    bubble-self-text "#d8ffff"
+    bubble-other "#0d1a14"
+    shadow      "alpha(black, 0.72)"
+}
+roles mode=dark "#3dff7a" "#00e5ff" "#b26bff" "#d6ff3f" "#ff2e5f" "#ff9f1c" "#7dffd4" "#c8ffd9"
+
+colors mode=dark when=roxo {
+    accent      "#b26bff"
+    accent-text "#0b0512"
+    online      "#b26bff"
+    border      "#352052"
+    hover       "alpha(#b26bff, 0.08)"
+    selected    "alpha(#b26bff, 0.18)"
+    mention     "#ff2e5f"
+    link        "#00e5ff"
+    code-bg     "#160d24"
+    bubble-self "alpha(#b26bff, 0.16)"
+    bubble-self-text "#f0e4ff"
+    bubble-other "#140d1e"
+}
+roles mode=dark when=roxo "#b26bff" "#00e5ff" "#ff2e5f" "#d6ff3f" "#ff9f1c" "#3dff7a" "#7dffd4" "#eadcff"
+
+colors mode=light {
+    bg          "#eef4ef"
+    rail        "#e2ebe4"
+    sidebar     "#e7efe9"
+    surface     "#f7fbf8"
+    elevated    "#ffffff"
+    overlay     "#ffffff"
+    text        "#08170f"
+    muted       "#3f6b52"
+    faint       "#7fa58d"
+    accent      "#007a3d"
+    accent-text "#ffffff"
+    border      "#b9d4c3"
+    hover       "alpha(#007a3d, 0.07)"
+    selected    "alpha(#007a3d, 0.14)"
+    online      "#0a7a3e"
+    idle        "#7a6a00"
+    dnd         "#b3263e"
+    danger      "#b3263e"
+    mention     "#005fcc"
+    link        "#005fcc"
+    code-bg     "#dce9e0"
+    bubble-self "alpha(#005fcc, 0.12)"
+    bubble-self-text "#062a4a"
+    bubble-other "#e4efe8"
+    shadow      "alpha(black, 0.12)"
+}
+roles mode=light "#007a3d" "#005fcc" "#6b2fa0" "#5f5a00" "#b3263e" "#9c4a00" "#007a6b" "#244c36"
+
+colors mode=light when=roxo {
+    accent      "#6b2fa0"
+    accent-text "#ffffff"
+    border      "#cdb9dd"
+    hover       "alpha(#6b2fa0, 0.07)"
+    selected    "alpha(#6b2fa0, 0.14)"
+    mention     "#b3263e"
+    link        "#005fcc"
+    code-bg     "#e8def0"
+}
+roles mode=light when=roxo "#6b2fa0" "#005fcc" "#b3263e" "#5f5a00" "#9c4a00" "#007a3d" "#007a6b" "#3a2450"
+
+fonts ui="JetBrains Mono" mono="JetBrains Mono" size=14
+metrics radius=0
+
+styles {
+    style "panel" bg="@surface" border="@border" border-width=1 glow="@accent" shadow=14
+    style "rack" bg="@rail" border="@border" border-width=1 glow="@accent"
+    style "prompt" bg="@elevated" border="@border" border-width=1 glow="@accent"
+}
+
+layout {
+    stack {
+        column {
+            topbar height=32 bg=rail when=topo
+            row height=58 style=rack padding=6 gap=6 {
+                label width=180 hide-below=980 text=":: SUBSOLO // NODE 01" size=11 weight=semibold color=faint
+                guild-bar flex=1 orientation=horizontal variant=bar shape=square size=38 icon-style=outline labels=#false home=#true
+            }
+            row flex=1 padding=6 gap=6 {
+                column width=250 style=panel {
+                    logo height=62 variant=ascii size=9 when=ascii
+                    logo height=32 variant=wordmark size=15 unless=ascii
+                    channel-list flex=1 variant=tree
+                    user-panel height=44 variant=tty
+                }
+                column flex=1 style=panel {
+                    header height=30 variant=tty
+                    messages flex=1 variant=irc avatar=none
+                    composer height=36 variant=prompt style=prompt
+                }
+                member-list width=190 style=panel variant=tty hide-below=1120
+            }
+            tabs height=24 variant=tty bg=elevated when=abas
+            status-bar height=24 variant=tty items="conn theme ping ram frame voice spacer keys clock"
+        }
+        crt when=crt spacing=3 strength=0.06
+    }
+}

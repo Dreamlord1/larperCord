@@ -6,6 +6,7 @@ const md = @import("../core/markdown.zig");
 const Store = @import("../core/store.zig").Store;
 const d = @import("draw.zig");
 const i18n = @import("i18n.zig");
+const qa = @import("qa.zig");
 
 pub const Opts = struct {
     family: *d.Family,
@@ -220,6 +221,7 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
     if (sp.flags.link) {
         const lc = if (o.on_accent) o.color else th.c(.link);
         d.text(dl, font, size, x, ty, lc, s);
+        qa.mark(r, "link:{s}", .{s[0..@min(s.len, 48)]});
         const over = r.contains(mouse.x, mouse.y) and c.ImGui_IsWindowHovered(c.ImGuiHoveredFlags_RootAndChildWindows);
         if (o.underline_links or over) d.line(dl, x, ty + size * 1.12, x + w, ty + size * 1.12, lc.alpha(0.5), 1);
         // Clique abre no navegador (soltar sem arrastar, para não brigar com a seleção).

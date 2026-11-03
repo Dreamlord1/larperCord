@@ -140,22 +140,40 @@ fn verticalBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void 
 }
 
 fn horizontalBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
-    const size = @min(d.pnum(n, "size", 36), r.h - 8);
+    // Deixa espaço para a barra de rolagem horizontal: uma barra de servidores
+    // não pode simplesmente esconder o que passa da largura.
+    const size = @min(d.pnum(n, "size", 36), r.h - 12);
     const labels = d.pflag(n, "labels", false);
-    const dl = ctx.dl;
-    var x = r.x + 10;
-    const cy = r.y + r.h / 2;
     const font = ctx.ui.get(.semibold);
+    var fb: [256]*types.Guild = undefined;
+    const order = flatOrder(ctx, &fb);
+    var content_w: f32 = 10;
+    if (d.pflag(n, "home", true)) content_w += size + 12;
+    for (order) |g| {
+        if (!labels) {
+            content_w += size + 10;
+        } else {
+            content_w += size + 10 + d.width(font, 14, g.name) + 16 + 8;
+        }
+    }
+    content_w += 10;
+
+    c.ImGui_SetCursorScreenPos(d.v(r.x, r.y));
+    c.ImGui_SetNextWindowContentSize(d.v(content_w, 0));
+    _ = c.ImGui_BeginChild("##guilds-h", d.v(@max(r.w, 1), @max(r.h, 1)), 0, c.ImGuiWindowFlags_NoBackground | c.ImGuiWindowFlags_HorizontalScrollbar);
+    defer c.ImGui_EndChild();
+    const dl = c.ImGui_GetWindowDrawList();
+    const sx = c.ImGui_GetScrollX();
+    var x = r.x + 10 - sx;
+    const cy = r.y + (r.h - 6) / 2;
 
     if (d.pflag(n, "home", true)) {
         icon(ctx, dl, null, x + size / 2, cy - size / 2, size, shape, .bottom, r);
         x += size + 12;
     }
-    var fb: [256]*types.Guild = undefined;
-    for (flatOrder(ctx, &fb)) |g| {
+    for (order) |g| {
         const i = indexOf(ctx, g);
         if (!labels) {
-            if (x + size > r.right()) break;
             icon(ctx, dl, .{ .g = g, .i = i }, x + size / 2, cy - size / 2, size, shape, .bottom, r);
             x += size + 10;
             continue;
@@ -164,7 +182,6 @@ fn horizontalBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) voi
         const fs: f32 = 14;
         const tw = d.width(font, fs, g.name);
         const pw = size + 10 + tw + 16;
-        if (x + pw > r.right()) break;
         const pr: d.Rect = .{ .x = x, .y = cy - size / 2 - 3, .w = pw, .h = size + 6 };
         const hb = d.hit(ctx, 1000 + i, pr);
         qa.mark(pr, "guild:{d}", .{g.id});
@@ -180,6 +197,9 @@ fn horizontalBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) voi
         if (g.mentions > 0) badge(ctx, dl, pr.right() - 2, pr.y + 2, g.mentions);
         x += pw + 8;
     }
+    // Estabelece a largura do conteúdo para o ImGui criar a rolagem.
+    c.ImGui_SetCursorScreenPos(d.v(r.x + content_w - sx, r.y + 1));
+    c.ImGui_Dummy(d.v(1, @max(1, r.h - 8)));
 }
 
 const Indicator = enum { left, bottom };
@@ -323,7 +343,24 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const font = fam.get(.regular);
     const bold = fam.get(.bold);
     const fs = d.pnum(n, "font-size", ctx.th.font_size - 1);
-    var x = r.x + 8;
+    var fb: [256]*types.Guild = undefined;
+    const order = flatOrder(ctx, &fb);
+    var content_w: f32 = 8;
+    content_w += d.width(font, fs, " 0:DM ") + 2;
+    for (order, 0..) |g, i| {
+        var buf: [64]u8 = undefined;
+        const lbl = std.fmt.bufPrint(&buf, " {d}:{s} ", .{ i + 1, g.acronym }) catch continue;
+        content_w += d.width(font, fs, lbl) + 2;
+    }
+    content_w += 8;
+
+    c.ImGui_SetCursorScreenPos(d.v(r.x, r.y));
+    c.ImGui_SetNextWindowContentSize(d.v(content_w, 0));
+    _ = c.ImGui_BeginChild("##guilds-text", d.v(@max(r.w, 1), @max(r.h, 1)), 0, c.ImGuiWindowFlags_NoBackground | c.ImGuiWindowFlags_HorizontalScrollbar);
+    defer c.ImGui_EndChild();
+    const dl = c.ImGui_GetWindowDrawList();
+    const sx = c.ImGui_GetScrollX();
+    var x = r.x + 8 - sx;
     var buf: [64]u8 = undefined;
     // Primeiro as mensagens diretas, como a janela 0 do tmux.
     {
@@ -334,26 +371,26 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const hb = d.hit(ctx, 1999, tr);
         qa.mark(tr, "guild:0", .{});
         if (hb.clicked) ctx.act(.{ .select_guild = 0 });
-        if (sel) d.rect(ctx.dl, tr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(ctx.dl, tr, ctx.col(.hover), 0);
-        d.text(ctx.dl, if (sel) bold else font, fs, x, d.centerY(tr, fs), if (sel) ctx.col(.accent_text) else ctx.col(.text), lbl);
+        if (sel) d.rect(dl, tr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(dl, tr, ctx.col(.hover), 0);
+        d.text(dl, if (sel) bold else font, fs, x, d.centerY(tr, fs), if (sel) ctx.col(.accent_text) else ctx.col(.text), lbl);
         d.tip(ctx, tr, i18n.tr("Mensagens diretas", "Direct Messages"), hb.hovered);
         x += tw + 2;
     }
-    var fb: [256]*types.Guild = undefined;
-    for (flatOrder(ctx, &fb), 0..) |g, i| {
+    for (order, 0..) |g, i| {
         const sel = ctx.st.guild == g.id;
         const lbl = std.fmt.bufPrint(&buf, " {d}:{s} ", .{ i + 1, g.acronym }) catch continue;
         const tw = d.width(if (sel) bold else font, fs, lbl);
-        if (x + tw > r.right() - 4) break;
         const tr: d.Rect = .{ .x = x, .y = r.y + 2, .w = tw, .h = r.h - 4 };
         const hb = d.hit(ctx, 2000 + i, tr);
         qa.mark(tr, "guild:{d}", .{g.id});
         if (hb.clicked) ctx.act(.{ .select_guild = g.id });
-        if (sel) d.rect(ctx.dl, tr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(ctx.dl, tr, ctx.col(.hover), 0);
+        if (sel) d.rect(dl, tr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(dl, tr, ctx.col(.hover), 0);
         const tc = if (sel) ctx.col(.accent_text) else if (g.mentions > 0) ctx.col(.danger) else if (g.unread) ctx.col(.text) else ctx.col(.muted);
-        d.text(ctx.dl, if (sel) bold else font, fs, x, d.centerY(tr, fs), tc, lbl);
+        d.text(dl, if (sel) bold else font, fs, x, d.centerY(tr, fs), tc, lbl);
         x += tw + 2;
     }
+    c.ImGui_SetCursorScreenPos(d.v(r.x + content_w - sx, r.y + 1));
+    c.ImGui_Dummy(d.v(1, @max(1, r.h - 6)));
 }
 
 /// Dock no estilo do macOS: os ícones crescem perto do mouse.

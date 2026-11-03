@@ -9,6 +9,7 @@ const w = @import("widgets.zig");
 const icons = @import("icons.zig");
 const S = @import("settings_state.zig");
 const i18n = @import("i18n.zig");
+const custom = @import("../theme/custom.zig");
 const Preview = @import("../theme/manager.zig").Preview;
 
 const Section = struct { title: []const u8, title_en: []const u8, items: []const struct { page: S.Page, label: []const u8, label_en: []const u8 } };
@@ -333,6 +334,133 @@ pub fn draw(ctx: *d.Ctx, previews: []const Preview) void {
     if (hb.clicked or c.ImGui_IsKeyPressed(c.ImGuiKey_Escape)) ctx.act(.close_settings);
 }
 
+var color_slot: i32 = -1;
+var color_buf: [10]u8 = @splat(0);
+var color_sync = false;
+var color_bad = false;
+var color_theme: [64]u8 = @splat(0);
+var color_theme_len: u8 = 0;
+var color_mode: i8 = -1;
+
+fn slotColor(ctx: *d.Ctx, slot: usize) d.Rgba {
+    if (slot < custom.token_count) return ctx.th.c(@enumFromInt(slot));
+    return ctx.th.role(@intCast(slot - custom.token_count));
+}
+
+fn slotLabel(buf: []u8, slot: usize) []const u8 {
+    if (slot >= custom.token_count) {
+        return std.fmt.bufPrint(buf, "role {d}", .{slot - custom.token_count + 1}) catch "role";
+    }
+    const name = custom.slotName(slot);
+    if (name.len > buf.len) return name[0..buf.len];
+    for (name, 0..) |ch, i| buf[i] = if (ch == '_') '-' else ch;
+    return buf[0..name.len];
+}
+
+fn syncColorBuf(ctx: *d.Ctx, slot: usize) void {
+    @memset(&color_buf, 0);
+    _ = custom.formatColor(&color_buf, slotColor(ctx, slot));
+}
+
+fn applyColor(ctx: *d.Ctx) void {
+    if (color_slot < 0) return;
+    const s = std.mem.trim(u8, std.mem.sliceTo(&color_buf, 0), " \t\r\n");
+    if (custom.parseHex(s)) |rgba| {
+        color_bad = false;
+        ctx.act(.{ .set_theme_color = .{ .slot = @intCast(color_slot), .rgba = rgba } });
+    } else {
+        color_bad = true;
+    }
+}
+
+fn themeColors(p: *Page) void {
+    const ctx = p.ctx;
+    const mode_i: i8 = if (ctx.th.mode == .light) 1 else 0;
+    if (color_mode != mode_i or !std.mem.eql(u8, color_theme[0..color_theme_len], ctx.theme_name)) {
+        color_mode = mode_i;
+        color_slot = -1;
+        color_sync = false;
+        color_bad = false;
+        const n = @min(ctx.theme_name.len, color_theme.len);
+        @memcpy(color_theme[0..n], ctx.theme_name[0..n]);
+        @memset(color_theme[n..], 0);
+        color_theme_len = @intCast(n);
+    }
+    var hbuf: [96]u8 = undefined;
+    const mode = if (ctx.th.mode == .light) i18n.tr("claro", "light") else i18n.tr("escuro", "dark");
+    p.heading(i18n.fmt(&hbuf, "Cores do tema — {s} ({s})", "Theme colors — {s} ({s})", .{ ctx.theme_name, mode }));
+    p.note(i18n.tr("#RRGGBB ou #RRGGBBAA. Vale só para este tema e este modo.", "#RRGGBB or #RRGGBBAA. Applies only to this theme and mode."));
+    p.note(i18n.tr("Cores personalizadas têm prioridade sobre a cor de destaque.", "Custom colors take priority over the accent color."));
+
+    if (color_slot >= 0) {
+        const slot: usize = @intCast(color_slot);
+        if (color_sync) {
+            color_sync = false;
+            syncColorBuf(ctx, slot);
+        }
+        var lbuf: [24]u8 = undefined;
+        p.heading(slotLabel(&lbuf, slot));
+        const sw: d.Rect = .{ .x = p.x, .y = p.y + 6, .w = 28, .h = 28 };
+        const cur = slotColor(ctx, slot);
+        d.rect(p.dl, sw, cur, 6);
+        d.border(p.dl, sw, ctx.col(.text).alpha(0.35), 6, 1);
+        c.ImGui_SetCursorScreenPos(d.v(p.x + 38, p.y));
+        c.ImGui_SetNextItemWidth(@max(120, p.w - 38));
+        const enter = c.ImGui_InputText("##theme-color", &color_buf, color_buf.len, c.ImGuiInputTextFlags_CharsNoBlank | c.ImGuiInputTextFlags_EnterReturnsTrue);
+        qa.mark(.{ .x = p.x + 38, .y = p.y, .w = @max(120, p.w - 38), .h = 30 }, "theme-color-input", .{});
+        p.y += 38;
+        if (color_bad) {
+            p.note(i18n.tr("hex inválido — use #RRGGBB ou #RRGGBBAA", "invalid hex — use #RRGGBB or #RRGGBBAA"));
+        }
+        if (enter or p.button(i18n.tr("Aplicar", "Apply"), false)) applyColor(ctx);
+        p.y += 44;
+        if (p.button(i18n.tr("Limpar esta cor", "Clear this color"), false)) {
+            ctx.act(.{ .set_theme_color = .{ .slot = @intCast(color_slot), .rgba = null } });
+            color_sync = true;
+        }
+        p.y += 44;
+        if (p.button(i18n.tr("Restaurar tema", "Reset theme"), false)) {
+            ctx.act(.reset_theme_colors);
+            color_sync = true;
+        }
+        p.y += 44;
+    }
+
+    const cols: usize = 2;
+    const gap: f32 = 10;
+    const cell_w = (p.w - gap) / @as(f32, @floatFromInt(cols));
+    const rows = (custom.slot_count + cols - 1) / cols;
+    const top = p.y;
+    for (0..custom.slot_count) |i| {
+        const col = i % cols;
+        const row = i / cols;
+        const rr: d.Rect = .{
+            .x = p.x + @as(f32, @floatFromInt(col)) * (cell_w + gap),
+            .y = top + @as(f32, @floatFromInt(row)) * 30,
+            .w = cell_w,
+            .h = 26,
+        };
+        const hb = d.hit(ctx, 0x8c00 + i, rr);
+        qa.mark(rr, "theme-color:{d}", .{i});
+        if (hb.clicked) {
+            color_slot = @intCast(i);
+            color_sync = true;
+            color_bad = false;
+        }
+        if (color_slot == i) d.rect(p.dl, rr, ctx.col(.selected), 5) else if (hb.hovered) d.rect(p.dl, rr, ctx.col(.hover), 5);
+        const colr = slotColor(ctx, i);
+        const sw: d.Rect = .{ .x = rr.x + 5, .y = rr.y + 5, .w = 16, .h = 16 };
+        d.rect(p.dl, sw, colr, 3);
+        d.border(p.dl, sw, ctx.col(.text).alpha(0.25), 3, 1);
+        var lbuf: [24]u8 = undefined;
+        _ = d.textClipped(p.dl, p.font(.medium), 13, rr.x + 28, d.centerY(rr, 13), ctx.col(.text), slotLabel(&lbuf, i), cell_w - 100);
+        var hb2: [12]u8 = undefined;
+        const hex = custom.formatPacked(&hb2, custom.toPacked(colr));
+        _ = d.textClipped(p.dl, p.font(.regular), 11, rr.right() - d.width(p.font(.regular), 11, hex) - 6, d.centerY(rr, 11), ctx.col(.faint), hex, 70);
+    }
+    p.y = top + @as(f32, @floatFromInt(rows)) * 30 + 10;
+}
+
 fn page(p: *Page, previews: []const Preview) void {
     const ctx = p.ctx;
     const s = &ctx.st.settings;
@@ -369,6 +497,8 @@ fn page(p: *Page, previews: []const Preview) void {
             p.swatches(&@import("../app.zig").App.accents, &s.accent);
             p.heading(i18n.tr("Cantos", "Corners"));
             p.segmented(if (i18n.en()) &.{ "Theme", "Square", "Soft", "Round" } else &.{ "Do tema", "Retos", "Suaves", "Redondos" }, &s.corners);
+            p.divider();
+            themeColors(p);
             p.heading("Layout");
             p.toggle(i18n.tr("Lista de membros", "Member list"), i18n.tr("Mostra quem está no servidor (quando o tema tem uma).", "Shows who's in the server (when the theme has one)."), &s.show_member_list);
             p.toggle(i18n.tr("Barra de status", "Status bar"), i18n.tr("Conexão, ping, RAM e relógio (quando o tema tem uma).", "Connection, ping, RAM and clock (when the theme has one)."), &s.show_status_bar);

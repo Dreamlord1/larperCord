@@ -5,6 +5,8 @@ palette "wal"
 
 options {
     option "banner" label="Banner do servidor" description="Faixa colorida com o nome do servidor no topo dos canais." label-en="Server banner" description-en="A colored strip with the server name above the channels." default=#true
+    option "abas" label="Abas de canal" description="Mostra os canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Shows open channels as tabs above the conversation." default=#false
+    option "crt" label="Efeito CRT" description="Scanlines discretas por cima de tudo." label-en="CRT effect" description-en="Subtle scanlines over everything." default=#false
 }
 
 fonts ui="Inter" mono="JetBrains Mono" size=16
@@ -15,21 +17,25 @@ styles {
 }
 
 layout {
-    row {
-        guild-bar width=72 bg=rail
-        column width=240 bg=sidebar {
-            channel-list flex=1 banner="$banner"
-            user-panel height=52 style=panel
-        }
-        column flex=1 bg=bg {
-            header height=48
-            messages flex=1
-            column height=92 padding-x=16 {
-                spacer flex=1
-                composer height=46
-                spacer height=22
+    stack {
+        row {
+            guild-bar width=72 bg=rail
+            column width=240 bg=sidebar {
+                channel-list flex=1 banner="$banner"
+                user-panel height=52 style=panel
             }
+            column flex=1 bg=bg {
+                header height=48
+                tabs height=36 variant=pills when=abas
+                messages flex=1
+                column height=92 padding-x=16 {
+                    spacer flex=1
+                    composer height=46
+                    spacer height=22
+                }
+            }
+            member-list width=248 bg=sidebar hide-below=1040
         }
-        member-list width=248 bg=sidebar hide-below=1040
+        crt when=crt spacing=4 strength=0.04
     }
 }

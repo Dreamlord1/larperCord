@@ -50,6 +50,9 @@ pub const ChannelState = struct {
     history: History = .none,
     /// Mensagens mais antigas (rolando para cima).
     older: enum { idle, loading, done } = .idle,
+    /// Última vez que a conversa apareceu na tela (a interface marca). As
+    /// esquecidas há mais tempo são as primeiras a sair da memória.
+    seen_ms: i64 = 0,
     typing: std.ArrayList(Typing) = .empty,
     voice_members: std.ArrayList(Id) = .empty,
     /// Muda sempre que a lista de mensagens muda (invalida offsets na UI).
@@ -333,6 +336,17 @@ pub const Store = struct {
                 var ml = kv.value;
                 ml.items.deinit(s.gpa);
             }
+            // Cargos e membros daquele servidor também saem.
+            var gone: std.ArrayList(Id) = .empty;
+            defer gone.deinit(s.gpa);
+            var ri = s.roles.iterator();
+            while (ri.next()) |e| if (e.value_ptr.guild == id) gone.append(s.gpa, e.key_ptr.*) catch {};
+            for (gone.items) |rid| if (s.roles.fetchRemove(rid)) |kv| ev_alloc.free(kv.value.name);
+            var keys: std.ArrayList([2]Id) = .empty;
+            defer keys.deinit(s.gpa);
+            var mi = s.members.keyIterator();
+            while (mi.next()) |k| if (k.*[0] == id) keys.append(s.gpa, k.*) catch {};
+            for (keys.items) |k| _ = s.members.remove(k);
             return;
         }
     }
@@ -387,7 +401,11 @@ pub const Store = struct {
                 ev_alloc.free(r.voice);
                 s.ready = true;
             },
-            .message_create => |m| try s.addMessage(m, now_ms),
+            .message_create => |m| {
+                try s.addMessage(m, now_ms);
+                budget_tick +%= 1;
+                if (budget_tick % 100 == 0) s.enforceBudget(now_ms);
+            },
             .history => |h| {
                 defer ev_alloc.free(h.messages);
                 const cs = s.channel(h.channel) orelse {
@@ -402,6 +420,8 @@ pub const Store = struct {
                 cs.messages.deinit(s.gpa);
                 cs.messages = fresh;
                 cs.history = .loaded;
+                cs.seen_ms = now_ms;
+                defer s.enforceBudget(now_ms);
                 if (h.older) {
                     cs.older = if (h.more and h.messages.len > 0) .idle else .done;
                 } else {
@@ -615,6 +635,16 @@ pub const Store = struct {
                 s.folders = list;
             },
             .profile => |pr| {
+                // Teto de perfis guardados: passando, esquece todos (são
+                // buscados de novo ao abrir o cartão).
+                if (s.profiles.count() >= 256) {
+                    var pit = s.profiles.valueIterator();
+                    while (pit.next()) |old| freeProfile(old.*);
+                    s.profiles.clearRetainingCapacity();
+                    var bit = s.bios.valueIterator();
+                    while (bit.next()) |b| s.gpa.free(b.*);
+                    s.bios.clearRetainingCapacity();
+                }
                 const gop = try s.profiles.getOrPut(s.gpa, pr.user);
                 if (gop.found_existing) freeProfile(gop.value_ptr.*);
                 gop.value_ptr.* = pr.profile;
@@ -877,6 +907,33 @@ pub const Store = struct {
         });
         s.trim(cs);
         cs.version +%= 1;
+    }
+
+    /// Teto de mensagens na memória somando todos os canais. Passando dele,
+    /// descarrega a conversa esquecida há mais tempo (ela é buscada de novo
+    /// quando voltar para a tela).
+    pub const global_budget: usize = 3000;
+    var budget_tick: u32 = 0;
+
+    fn enforceBudget(s: *Store, now_ms: i64) void {
+        while (true) {
+            var total: usize = 0;
+            var victim: ?*ChannelState = null;
+            var it = s.channels.valueIterator();
+            while (it.next()) |cs| {
+                total += cs.*.messages.items.len;
+                // Só o que não aparece há pelo menos 30 s.
+                if (cs.*.messages.items.len == 0 or now_ms - cs.*.seen_ms < 30_000) continue;
+                if (victim == null or cs.*.seen_ms < victim.?.seen_ms) victim = cs.*;
+            }
+            if (total <= global_budget) return;
+            const v = victim orelse return;
+            for (v.messages.items) |*m| s.freeMessage(m);
+            v.messages.clearAndFree(s.gpa);
+            v.history = .none;
+            v.older = .idle;
+            v.version +%= 1;
+        }
     }
 
     fn trim(s: *Store, cs: *ChannelState) void {

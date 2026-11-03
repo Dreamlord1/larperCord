@@ -6,9 +6,9 @@
 
 Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 
-![Quatro temas do larperCord](docs/themes.png)
+![Oito temas do larperCord](docs/themes.png)
 
-*O mesmo binário e os mesmos dados, só trocando o arquivo `.kdl`. São 7 temas, cada um em claro e escuro.*
+*O mesmo binário e os mesmos dados, só trocando o arquivo `.kdl`. São 8 temas, cada um em claro e escuro.*
 
 </div>
 
@@ -56,7 +56,8 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   "Mensagem @fulano"; seletor de emoji; **mensagens diretas**; menções a você em destaque.
 - **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K`), atalhos de teclado.
 - **Configurações no estilo Discord** (`Ctrl+,`): 13 páginas, troca de tema com miniaturas,
-  escala de fonte, modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
+  cor de destaque/cantos, **cores personalizadas por tema e modo em hex**, escala de fonte,
+  modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
   `~/.config/larpercord/settings.kdl`.
 - **Markdown do Discord**: **negrito**, *itálico*, ~~riscado~~, `código`, ||spoiler||, menções
   `<@id>`/`<#id>`, links e emoji colorido.
@@ -80,6 +81,7 @@ Todos têm **modo claro e escuro** e **opções próprias** em Configurações �
 | `classico` | o layout que todo mundo conhece, nas cores do pywal | banner do servidor |
 | `vidro` | cartões translúcidos com o blur do compositor | reflexo de luz nos cartões |
 | `terminal` | tmux + IRC; no claro, papel de impressora matricial | efeito CRT, logo em ASCII, fósforo verde |
+| `subsolo` | terminal de hacking underground, verde ácido e scanlines | rack horizontal, ultravioleta, logo em ASCII |
 | `bolhas` | mensageiro com balões de conversa | "Entregue ✓✓" e balão de digitando |
 | `zen` | uma coluna central, letras maiores | a navegação se esconde sozinha |
 | `papel` | caderno com índice na margem e títulos em serifa | folha pautada com margem vermelha |

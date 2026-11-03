@@ -7,6 +7,7 @@ options {
     option "entregue" label="Confirmação de entrega" description="Mostra \"Entregue ✓✓\" embaixo da sua última mensagem." label-en="Delivery receipt" description-en="Shows \"Delivered ✓✓\" under your last message." default=#true
     option "digitando" label="Balão de digitando" description="Os três pontinhos aparecem como um balão na conversa." label-en="Typing bubble" description-en="The three dots show up as a bubble in the chat." default=#true
     option "nomes" label="Nomes dos servidores" description="Mostra o nome ao lado do ícone na barra de cima." label-en="Server names" description-en="Shows the name next to the icon in the top bar." default=#true
+    option "abas" label="Abas de canal" description="Mostra os canais abertos em abas dentro do cartão da conversa." label-en="Channel tabs" description-en="Shows open channels as tabs inside the chat card." default=#false
 }
 
 colors mode=light {
@@ -79,6 +80,7 @@ layout {
             }
             column flex=1 style=sheet {
                 header height=64 variant=minimal inset-x=22
+                tabs height=44 variant=pills style=bar when=abas
                 messages flex=1 variant=bubbles avatar=circle avatar-size=30 spacing=14 ticks="$entregue" typing-bubble="$digitando"
                 column height=94 padding-x=20 {
                     spacer flex=1
@@ -86,6 +88,7 @@ layout {
                     spacer height=20
                 }
             }
+            member-list width=236 style=sheet hide-below=1150
         }
     }
 }

@@ -8,6 +8,9 @@ window transparent=#true
 options {
     option "brilho" label="Reflexo nos cartões" description="Uma faixa de luz no topo de cada cartão, como vidro de verdade." label-en="Card sheen" description-en="A strip of light at the top of each card, like real glass." default=#true
     option "abas" label="Abas de canal" description="Mostra os canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Shows open channels as tabs above the conversation." default=#true
+    option "banner" label="Banner do servidor" description="Faixa com o nome do servidor no topo dos canais." label-en="Server banner" description-en="A strip with the server name above the channels." default=#false
+    option "opaco" label="Fundo opaco" description="Sem blur do compositor: os cartões ficam sólidos (mais leve)." label-en="Opaque background" description-en="No compositor blur: solid cards (lighter)." default=#false
+    option "crt" label="Efeito CRT" description="Scanlines discretas por cima do vidro." label-en="CRT effect" description-en="Subtle scanlines over the glass." default=#false
 }
 
 colors mode=dark {
@@ -37,6 +40,29 @@ colors mode=light {
     shadow    "alpha(black, 0.16)"
 }
 
+colors mode=dark when=opaco {
+    bg        "mix(wal:0, black, 0.20)"
+    surface   "mix(wal:0, black, 0.15)"
+    rail      "mix(wal:0, black, 0.30)"
+    sidebar   "mix(wal:0, black, 0.15)"
+    elevated  "mix(wal:0, wal:15, 0.12)"
+    overlay   "mix(wal:0, black, 0.35)"
+    border    "alpha(wal:15, 0.18)"
+    code-bg   "mix(wal:0, black, 0.32)"
+}
+colors mode=light when=opaco {
+    bg        "mix(white, wal:0, 0.06)"
+    surface   "mix(white, wal:0, 0.10)"
+    rail      "mix(white, wal:0, 0.12)"
+    sidebar   "mix(white, wal:0, 0.10)"
+    elevated  "mix(white, wal:0, 0.16)"
+    overlay   "mix(white, wal:0, 0.04)"
+    border    "mix(wal:0, white, 0.55)"
+    code-bg   "mix(white, wal:0, 0.18)"
+}
+roles mode=dark when=opaco "wal:4" "wal:1" "wal:3" "wal:2" "wal:5" "wal:6" "wal:7" "wal:15"
+roles mode=light when=opaco "wal:4" "wal:1" "wal:3" "wal:2" "wal:5" "wal:6" "wal:7" "wal:0"
+
 fonts ui="Inter" mono="JetBrains Mono" size=15
 metrics radius=10
 
@@ -45,27 +71,32 @@ styles {
 }
 
 layout {
-    column padding=12 gap=12 {
-        row flex=1 gap=12 {
-            guild-bar width=70 style=card shape=squircle size=44 inset-y=4 icon-style=soft
-            column width=252 gap=12 {
-                channel-list flex=1 style=card inset-y=4
-                user-panel height=62 style=card inset-x=4
-            }
-            column flex=1 gap=12 {
-                tabs height=48 style=card variant=pills when=abas
+    stack {
+        column padding=14 gap=10 {
+            row flex=1 gap=10 {
+                // Um único cartão para servidores + canais + painel do usuário.
+                column width=300 style=card {
+                    row flex=1 {
+                        guild-bar width=58 inset-y=6 icon-style=soft shape=squircle size=40
+                        channel-list flex=1 inset-y=4 banner="$banner"
+                    }
+                    user-panel height=58 inset-x=4
+                }
+                // A conversa inteira num cartão só, com as abas dentro dele.
                 column flex=1 style=card {
-                    header height=52 divider=#false
+                    header height=50 divider=#false
+                    tabs height=44 variant=pills when=abas
                     messages flex=1 avatar=squircle inset-x=4
-                    column height=98 padding-x=16 {
+                    column height=92 padding-x=16 {
                         spacer flex=1
-                        composer height=50 variant=pill
-                        spacer height=18
+                        composer height=48 variant=pill
+                        spacer height=16
                     }
                 }
+                member-list width=232 style=card hide-below=1180 inset-y=4
             }
-            member-list width=236 style=card hide-below=1180 inset-y=4
+            status-bar height=32 style=card variant=pills items="conn ping ram frame voice spacer theme keys clock"
         }
-        status-bar height=36 style=card variant=pills items="conn ping ram frame voice spacer theme keys clock"
+        crt when=crt spacing=4 strength=0.04
     }
 }

@@ -98,6 +98,8 @@ pub const Command = union(enum) {
     fetch_profile: struct { user: Id, guild: Id },
     /// Dá (add) ou tira um cargo de alguém.
     member_role: struct { guild: Id, user: Id, role: Id, add: bool },
+    /// Nosso status (offline = invisível), pelo gateway (op 3).
+    set_status: types.Status,
     shutdown,
 };
 
@@ -133,6 +135,10 @@ pub const Action = union(enum) {
     mark_read: Id,
     /// Liga/desliga uma opção do tema atual (índice em `Theme.options`).
     set_theme_option: struct { index: usize, value: bool },
+    /// Cor personalizada do tema atual/modo atual; rgba null limpa.
+    set_theme_color: struct { slot: u8, rgba: ?u32 },
+    /// Esquece todas as cores personalizadas do tema atual.
+    reset_theme_colors,
     /// "Sair": esquece o token e volta para a tela de login.
     logout,
     /// Abre o seletor de arquivos para anexar.
@@ -146,6 +152,8 @@ pub const Action = union(enum) {
     load_older: Id,
     /// O cartão de perfil abriu: busca o perfil completo (uma vez por pessoa).
     want_profile: Id,
+    /// Online, ausente, não perturbe ou invisível (offline).
+    set_status: types.Status,
     member_role: struct { guild: Id, user: Id, role: Id, add: bool },
     accept_friend: Id,
     /// Recusa um pedido, cancela o nosso ou desbloqueia.

@@ -123,7 +123,7 @@ fn editedW(g: Geo) f32 {
 
 fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     // O idioma entra na chave: "(editado)" e "(edited)" têm larguras diferentes.
-    const key: u32 = @as(u32, @intFromEnum(g.variant)) | (@as(u32, ctx.st.theme_gen) << 2) | (@as(u32, flags) << 10) | (@as(u32, @intFromEnum(i18n.lang)) << 18);
+    const key: u32 = @as(u32, @intFromEnum(g.variant)) | (@as(u32, ctx.st.theme_gen) << 2) | (@as(u32, flags) << 10) | (@as(u32, @intFromBool(i18n.en())) << 18);
     if (m.layout_w == g.wrap and m.layout_variant == key) return m.height;
     const self = m.msg.author == ctx.store.me;
     const t = rich.layout(null, ctx.store, ctx.th, m.spans, 0, 0, g.wrap, textOpts(ctx, g, self and g.variant == .bubbles), ctx.mouse);
@@ -196,6 +196,7 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const g = geometry(ctx, n, r);
     ctx.hot = false;
 
+    cs.seen_ms = ctx.now_ms;
     if (cs.history != .loaded) return skeleton(ctx, g, r);
 
     const msgs = cs.messages.items;
@@ -694,6 +695,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             }
             const t = rich.layout(dl, ctx.store, ctx.th, m.spans, tx, y, g.wrap, o, ctx.mouse);
             editedMark(ctx, dl, g, m, tx, y, t);
+            if (m.msg.content.len > 0) qa.mark(.{ .x = tx, .y = y, .w = @max(t.w, 4), .h = t.h }, "msgtext:{d}", .{m.msg.id});
             const th = textH(g, m, t);
             att.draw(ctx, dl, m, tx, y + th, g.wrap, alpha);
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
@@ -743,6 +745,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             d.text(dl, fam.get(.regular), g.size, x, ty, ctx.col(.border).mix(ctx.col(.faint), 0.6), " │ ");
             const t = rich.layout(dl, ctx.store, ctx.th, m.spans, r.x + g.content_x, y, g.wrap, o, ctx.mouse);
             editedMark(ctx, dl, g, m, r.x + g.content_x, y, t);
+            if (m.msg.content.len > 0) qa.mark(.{ .x = r.x + g.content_x, .y = y, .w = @max(t.w, 4), .h = t.h }, "msgtext:{d}", .{m.msg.id});
             const th = textH(g, m, t);
             att.draw(ctx, dl, m, r.x + g.content_x, y + th, g.wrap, alpha);
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
@@ -789,6 +792,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             }
             const t = rich.layout(dl, ctx.store, ctx.th, m.spans, br.x + 14, ty, g.wrap, o, ctx.mouse);
             editedMark(ctx, dl, g, m, br.x + 14, ty, t);
+            if (m.msg.content.len > 0) qa.mark(.{ .x = br.x + 14, .y = ty, .w = @max(t.w, 4), .h = t.h }, "msgtext:{d}", .{m.msg.id});
             att.draw(ctx, dl, m, br.x + 14, ty + textH(g, m, t), g.wrap, alpha);
             _ = emb.block(ctx, dl, m, br.x + 14, ty + textH(g, m, t) + att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0), g.wrap, alpha);
             if (m.n_reactions > 0) reactions(ctx, dl, m, br.x, br.bottom(), under, self, br.right());

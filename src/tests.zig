@@ -11,6 +11,7 @@ test {
     _ = @import("theme/kdl.zig");
     _ = @import("theme/color.zig");
     _ = @import("theme/theme.zig");
+    _ = @import("theme/custom.zig");
     _ = @import("theme/layout.zig");
     _ = @import("ui/fuzzy.zig");
     _ = @import("ui/settings_state.zig");

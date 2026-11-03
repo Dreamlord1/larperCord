@@ -25,6 +25,8 @@ const i18n = @import("ui/i18n.zig");
 const widgets = @import("ui/widgets.zig");
 const settings_state = @import("ui/settings_state.zig");
 const kdl = @import("theme/kdl.zig");
+const custom = @import("theme/custom.zig");
+const theme_mod = @import("theme/theme.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -81,6 +83,8 @@ pub const App = struct {
     asked_profiles: std.AutoHashMapUnmanaged(types.Id, void) = .empty,
     /// Cópia do tema com a cor de destaque e os cantos das configurações.
     th_custom: @import("theme/theme.zig").Theme = undefined,
+    /// Cores escolhidas por tema e por modo (persistidas em settings.kdl).
+    theme_colors: std.StringHashMapUnmanaged(custom.ThemeOverrides) = .empty,
     /// notify-send em andamento (recolhidos quando terminam).
     notifiers: std.ArrayList(*c.SDL_Process) = .empty,
     paste_n: u32 = 0,
@@ -127,7 +131,7 @@ pub const App = struct {
         if (opts.shot == null and !opts.qa) saved_theme = app.loadSettings(settings_arena.allocator());
         app.themes.mode = app.wantedMode();
         // Já aqui: os dados da demonstração saem no idioma da interface.
-        i18n.lang = if (opts.qa) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language);
+        i18n.set(if (opts.qa) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language));
         app.st.settings.open = opts.settings;
         const name = opts.theme orelse saved_theme orelse "classico";
         const want = app.themes.indexOf(name) orelse 0;
@@ -164,6 +168,9 @@ pub const App = struct {
     pub fn destroy(app: *App) void {
         _ = c.SDL_RemoveTimer(app.timer);
         app.asked_profiles.deinit(app.gpa);
+        var colors_it = app.theme_colors.iterator();
+        while (colors_it.next()) |e| app.gpa.free(e.key_ptr.*);
+        app.theme_colors.deinit(app.gpa);
         for (app.notifiers.items) |p| c.SDL_DestroyProcess(p);
         app.notifiers.deinit(app.gpa);
         app.stopNet();
@@ -397,18 +404,9 @@ pub const App = struct {
     }
 
     /// Ajustes do ImGui que dependem do tema.
-    fn applyThemeStyle(app: *App) void {
-        const th = app.themes.theme_();
+    fn applyImGuiColors(app: *App, th: *const theme_mod.Theme) void {
+        _ = app;
         const style = c.ImGui_GetStyle();
-        style.*.WindowPadding = .{ .x = 0, .y = 0 };
-        style.*.WindowBorderSize = 0;
-        style.*.ChildBorderSize = 0;
-        style.*.FrameBorderSize = 0;
-        style.*.FramePadding = .{ .x = 0, .y = 4 };
-        style.*.ItemSpacing = .{ .x = 0, .y = 0 };
-        style.*.ScrollbarSize = 6;
-        style.*.ScrollbarRounding = 3;
-        style.*.FontSizeBase = th.font_size;
         const col = &style.*.Colors;
         for (col) |*cc| cc.* = .{ .x = 0, .y = 0, .z = 0, .w = 0 };
         const v4 = struct {
@@ -423,6 +421,21 @@ pub const App = struct {
         col[c.ImGuiCol_ScrollbarGrab] = v4(th.c(.text).alpha(0.12));
         col[c.ImGuiCol_ScrollbarGrabHovered] = v4(th.c(.text).alpha(0.2));
         col[c.ImGuiCol_ScrollbarGrabActive] = v4(th.c(.text).alpha(0.3));
+    }
+
+    fn applyThemeStyle(app: *App) void {
+        const th = app.themes.theme_();
+        const style = c.ImGui_GetStyle();
+        style.*.WindowPadding = .{ .x = 0, .y = 0 };
+        style.*.WindowBorderSize = 0;
+        style.*.ChildBorderSize = 0;
+        style.*.FrameBorderSize = 0;
+        style.*.FramePadding = .{ .x = 0, .y = 4 };
+        style.*.ItemSpacing = .{ .x = 0, .y = 0 };
+        style.*.ScrollbarSize = 6;
+        style.*.ScrollbarRounding = 3;
+        style.*.FontSizeBase = th.font_size;
+        app.applyImGuiColors(th);
 
         // Fontes do tema (carregadas sob demanda e reaproveitadas).
         _ = app.fonts.family(th.font_ui) catch app.fonts.family("Inter") catch {};
@@ -471,9 +484,34 @@ pub const App = struct {
                 // `theme-options "terminal" crt=#false ascii=#true`
                 const name = (n.arg(0) orelse continue).asString() orelse continue;
                 for (n.props) |p| if (p.value.asBool()) |v| app.themes.choose(name, p.key, v);
+            } else if (std.mem.eql(u8, n.name, "theme-colors")) {
+                // `theme-colors "vidro" mode=dark bg="#101014" accent="#ff00aa"`
+                const name = (n.arg(0) orelse continue).asString() orelse continue;
+                const mode: theme_mod.Mode = if (n.str("mode")) |m|
+                    (if (std.mem.eql(u8, m, "light")) .light else .dark)
+                else
+                    .dark;
+                const ov = app.themeOverridesFor(name) orelse continue;
+                const dst = ov.at(mode);
+                for (n.props) |p| {
+                    if (std.mem.eql(u8, p.key, "mode")) continue;
+                    const slot = custom.slotFromName(p.key) orelse continue;
+                    const text = p.value.asString() orelse continue;
+                    if (custom.parseHex(text)) |rgba| dst.set(slot, rgba);
+                }
             }
         }
         return theme_name;
+    }
+
+    fn themeOverridesFor(app: *App, name: []const u8) ?*custom.ThemeOverrides {
+        if (app.theme_colors.getPtr(name)) |o| return o;
+        const key = app.gpa.dupe(u8, name) catch return null;
+        app.theme_colors.put(app.gpa, key, .{}) catch {
+            app.gpa.free(key);
+            return null;
+        };
+        return app.theme_colors.getPtr(key);
     }
 
     fn saveSettings(app: *App) void {
@@ -494,6 +532,21 @@ pub const App = struct {
             var oit = e.value_ptr.iterator();
             while (oit.next()) |o| out.print(app.gpa, " {s}={s}", .{ o.key_ptr.*, if (o.value_ptr.*) "#true" else "#false" }) catch return;
             out.append(app.gpa, '\n') catch return;
+        }
+        var cit = app.theme_colors.iterator();
+        while (cit.next()) |e| {
+            for ([_]theme_mod.Mode{ .dark, .light }) |mode| {
+                const ov = e.value_ptr.atConst(mode);
+                if (!ov.any()) continue;
+                out.print(app.gpa, "theme-colors \"{s}\" mode={s}", .{ e.key_ptr.*, @tagName(mode) }) catch return;
+                for (0..custom.slot_count) |slot| {
+                    if (ov.get(slot)) |v| {
+                        var hb: [16]u8 = undefined;
+                        out.print(app.gpa, " {s}=\"{s}\"", .{ custom.slotName(slot), custom.formatPacked(&hb, v) }) catch return;
+                    }
+                }
+                out.append(app.gpa, '\n') catch return;
+            }
         }
         _ = c.SDL_SaveFile(path.ptr, out.items.ptr, out.items.len);
     }
@@ -614,6 +667,12 @@ pub const App = struct {
                 const ch = st.last_channel.get(g) orelse app.firstTextChannel(g) orelse return app.handle(.open_friends);
                 if (g == 0 and st.last_channel.get(0) == null) return app.handle(.open_friends);
                 app.openChannel(ch, false);
+            },
+            .set_status => |status| {
+                st.settings.my_status = @intFromEnum(status);
+                if (app.store.users.getPtr(app.store.me)) |me| me.status = status;
+                app.cmd(.{ .set_status = status });
+                app.saveSettings();
             },
             .want_profile => |user| {
                 if (app.asked_profiles.contains(user)) return;
@@ -784,6 +843,8 @@ pub const App = struct {
                 if (app.themes.setOption(name, o.value)) app.applyThemeStyle();
                 app.saveSettings();
             },
+            .set_theme_color => |cc| app.setThemeColor(cc.slot, cc.rgba),
+            .reset_theme_colors => app.resetThemeColors(),
             .next_theme => |delta| {
                 const n: i32 = @intCast(app.themes.entries.items.len);
                 app.setTheme(@intCast(@mod(@as(i32, @intCast(app.themes.current)) + delta, n)));
@@ -955,10 +1016,12 @@ pub const App = struct {
 
     /// O tema do quadro: o atual, ou uma cópia com a cor de destaque e os
     /// cantos escolhidos nas configurações (vale para todos os temas).
-    fn customTheme(app: *App) *const @import("theme/theme.zig").Theme {
+    fn customTheme(app: *App) *const theme_mod.Theme {
         const base = app.themes.theme_();
         const set = &app.st.settings;
-        if (set.accent == 0 and set.corners == 0) return base;
+        const ovs = app.theme_colors.getPtr(app.themes.name());
+        const has_colors = if (ovs) |o| o.atConst(app.themes.mode).any() else false;
+        if (set.accent == 0 and set.corners == 0 and !has_colors) return base;
         app.th_custom = base.*;
         if (set.accent > 0 and set.accent <= accents.len) {
             const col = d.Rgba.hex(accents[set.accent - 1]);
@@ -973,10 +1036,35 @@ pub const App = struct {
             3 => app.th_custom.radius = 12,
             else => {},
         }
+        // Cores personalizadas do tema/modo têm a palavra final.
+        if (ovs) |o| custom.apply(&app.th_custom, o.atConst(app.themes.mode));
         return &app.th_custom;
     }
 
+    fn setThemeColor(app: *App, slot: u8, rgba: ?u32) void {
+        const name = app.themes.name();
+        if (rgba) |v| {
+            const ovs = app.themeOverridesFor(name) orelse return;
+            ovs.at(app.themes.mode).set(slot, v);
+        } else if (app.theme_colors.getPtr(name)) |ovs| {
+            ovs.at(app.themes.mode).set(slot, null);
+            if (!ovs.any()) {
+                if (app.theme_colors.fetchRemove(name)) |kv| app.gpa.free(kv.key);
+            }
+        }
+        app.saveSettings();
+        app.applyImGuiColors(app.customTheme());
+    }
+
+    fn resetThemeColors(app: *App) void {
+        if (app.theme_colors.fetchRemove(app.themes.name())) |kv| app.gpa.free(kv.key);
+        app.saveSettings();
+        app.applyImGuiColors(app.customTheme());
+    }
+
     fn onReady(app: *App) void {
+        // O status escolhido da última vez (o Discord começa em online).
+        if (app.st.settings.my_status != 0) app.handle(.{ .set_status = @enumFromInt(@min(app.st.settings.my_status, 3)) });
         if (!app.store.demo) {
             // Conta real: começa pelas DMs (ou pelo primeiro servidor).
             const g0: types.Id = if (app.store.channelsOf(0).len > 0) 0 else if (app.store.guilds.items.len > 0) app.store.guilds.items[0].id else 0;
@@ -1180,11 +1268,11 @@ pub const App = struct {
             // Idioma: o QA roda sempre em português (as marcações usam os rótulos).
             if (set.language != lang_setting) {
                 lang_setting = set.language;
-                i18n.lang = if (app.opts.qa) .pt else app.opts.lang orelse i18n.fromSetting(set.language);
+                i18n.set(if (app.opts.qa) .pt else app.opts.lang orelse i18n.fromSetting(set.language));
                 app.st.theme_gen +%= 1;
             }
             anim.instant = set.reduce_motion;
-            @import("net/media_url.zig").allow_gif_hosts = set.gif_hosts;
+            @import("net/media_url.zig").allow_gif_hosts.store(set.gif_hosts, .release);
             @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
             app.store.keep_log = set.message_log;
             widgets.hour12 = !set.clock_24h;

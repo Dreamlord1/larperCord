@@ -120,6 +120,7 @@ pub const Gateway = struct {
                     } } });
                 },
                 .member_role => {},
+                .set_status => |st| g.emit(.{ .presence_update = .{ .user = me_id, .status = st } }),
                 .create_dm => |u| {
                     const seed = for (users) |x| {
                         if (x.id == u) break x;
@@ -509,6 +510,12 @@ fn buildReady() !ev.Ready {
     return .{ .me = me_id, .users = us, .guilds = gs, .channels = chs, .voice = voice, .username = try alloc.dupe(u8, "rsha") };
 }
 
+/// Parte baixa do ID: o canal entra junto, senão a mensagem N de canais
+/// diferentes teria o mesmo ID (o horário de partida é o mesmo).
+fn demoSeq(channel: Id, i: usize) u64 {
+    return ((channel % 4096) << 10) | (i & 0x3ff);
+}
+
 /// 50 mensagens antes de `before` (rolou para cima na demonstração).
 fn buildOlder(channel: Id, before: Id) ![]types.Message {
     var prng = std.Random.DefaultPrng.init(channel ^ before);
@@ -521,7 +528,7 @@ fn buildOlder(channel: Id, before: Id) ![]types.Message {
         i -= 1;
         const author = if (dmRecipient(channel)) |u| (if (r.boolean()) u else me_id) else users[r.uintLessThan(usize, 8)].id;
         msgs[i] = .{
-            .id = types.makeSnowflake(t * 1000, i),
+            .id = types.makeSnowflake(t * 1000, demoSeq(channel, i)),
             .channel = channel,
             .author = author,
             .timestamp = t,
@@ -545,7 +552,7 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         i -= 1;
         if (i == n - 1 or r.uintLessThan(u8, 3) != 0) author = if (dmRecipient(channel)) |u| (if (r.boolean()) u else me_id) else if (channel == group_id) (if (r.uintLessThan(u8, 4) == 0) me_id else group_members[r.uintLessThan(usize, group_members.len)]) else users[r.uintLessThan(usize, 8)].id;
         msgs[i] = .{
-            .id = types.makeSnowflake(t * 1000, i),
+            .id = types.makeSnowflake(t * 1000, demoSeq(channel, i)),
             .channel = channel,
             .author = author,
             .timestamp = t,

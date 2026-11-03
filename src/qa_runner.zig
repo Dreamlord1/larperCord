@@ -39,6 +39,9 @@ const Op = union(enum) {
     shot: []const u8,
     resize: [2]c_int,
     run: *const fn (app: *App) void,
+    /// Clica em todo elemento da tela cujo nome começa com um dos prefixos
+    /// e confere que cada clique muda alguma coisa (botão morto = falha).
+    sweep: []const []const u8,
 };
 
 // --- Ajudantes para os cenários ---------------------------------------------
@@ -123,13 +126,30 @@ fn tUserOther(app: *App, b: []u8) []const u8 {
     saved_id = m.msg.author;
     return markFmt(b, "user:{d}", .{m.msg.author});
 }
+/// As duas últimas mensagens com texto (sem anexo/embed), contando do fim:
+/// (mais antiga, mais nova). O arraste vai em cima do texto desenhado
+/// (marcação msgtext:), então serve para qualquer tema.
+fn plainPair(app: *App) ?[2]usize {
+    var found: [2]usize = undefined;
+    var n: usize = 0;
+    var back: usize = 0;
+    while (back < 8 and n < 2) : (back += 1) {
+        const m = lastMsg(app, back) orelse return null;
+        if (m.msg.attachments.len > 0 or m.msg.embeds.len > 0 or m.msg.system != .none or m.msg.content.len < 6) continue;
+        if (qa.find(std.fmt.bufPrint(&pair_buf, "msgtext:{d}", .{m.msg.id}) catch continue) == null) continue;
+        found[n] = back;
+        n += 1;
+    }
+    return if (n == 2) .{ found[1], found[0] } else null;
+}
+var pair_buf: [64]u8 = undefined;
 fn tSelFrom(app: *App, b: []u8) []const u8 {
-    const m = lastMsg(app, 2) orelse return "";
-    return markFmt(b, "msg:{d}", .{m.msg.id});
+    const m = lastMsg(app, (plainPair(app) orelse return "")[0]) orelse return "";
+    return markFmt(b, "msgtext:{d}", .{m.msg.id});
 }
 fn tSelTo(app: *App, b: []u8) []const u8 {
-    const m = lastMsg(app, 1) orelse return "";
-    return markFmt(b, "msg:{d}", .{m.msg.id});
+    const m = lastMsg(app, (plainPair(app) orelse return "")[1]) orelse return "";
+    return markFmt(b, "msgtext:{d}", .{m.msg.id});
 }
 
 // Verificações.
@@ -224,6 +244,46 @@ fn gifAnimated(app: *App) bool {
 }
 fn openFirstDm(app: *App) void {
     app.actions.append(app.gpa, .{ .select_channel = gw.dmId(0) }) catch {};
+}
+fn statusMenu(app: *App) bool {
+    return app.st.popup == .menu and app.st.popup.menu.kind == .status;
+}
+fn meDnd(app: *App) bool {
+    return app.store.user(app.store.me).?.status == .dnd and app.st.settings.my_status == 2;
+}
+fn meOnline(app: *App) bool {
+    return app.store.user(app.store.me).?.status == .online and app.st.settings.my_status == 0;
+}
+fn panelOnScreen(app: *App) bool {
+    const r = qa.find("me") orelse return false;
+    return r.bottom() <= app.io.*.DisplaySize.y and qa.find("hangup") != null;
+}
+fn jumpToZigLink(app: *App) void {
+    const cs = active(app) orelse return;
+    for (cs.messages.items) |m| if (std.mem.eql(u8, m.msg.content, "https://ziglang.org")) {
+        app.st.jump = m.msg.id;
+    };
+}
+fn linkOpened(_: *App) bool {
+    const att = @import("ui/attachments.zig");
+    return std.mem.eql(u8, att.last_opened[0..att.last_opened_len], "https://ziglang.org");
+}
+fn jumpBottomShown(_: *App) bool {
+    return qa.find("jump-bottom") != null;
+}
+fn atBottom(app: *App) bool {
+    const cs = active(app) orelse return false;
+    _ = cs;
+    return app.st.scrollOf(app.st.activeChannel().?).stick_bottom and qa.find("jump-bottom") == null;
+}
+fn skipExtraThemes(app: *App) void {
+    const n = app.themes.entries.items.len;
+    if (n > 7) for (0..n - 7) |_| app.actions.append(app.gpa, .{ .next_theme = 1 }) catch {};
+}
+fn toClassico(app: *App) void {
+    for (app.themes.names.items, 0..) |nm, i| if (std.mem.eql(u8, nm, "classico")) {
+        app.actions.append(app.gpa, .{ .set_theme = i }) catch {};
+    };
 }
 fn scrollBottom(app: *App) void {
     if (app.st.activeChannel()) |id| app.st.scrollOf(id).stick_bottom = true;
@@ -605,8 +665,19 @@ const ops = [_]Op{
     s("voz e botões"),
     click("channel:500014"),
     expect("clicar num canal de voz entra na call", inVoice),
+    expect("em call, o painel do usuário continua na tela", panelOnScreen),
+    click("voice-member:500014:1001"),
+    expect("clicar em quem está na call abre o perfil", profileOpen),
+    key(c.ImGuiKey_Escape),
     click("hangup"),
     expect("desligar sai da call", notInVoice),
+    click("me"),
+    expect("clicar no próprio nome abre o menu de status", statusMenu),
+    click("menu:⊘  Não perturbe"),
+    expect("escolher Não perturbe", meDnd),
+    click("me"),
+    click("menu:●  Online"),
+    expect("voltar para Online", meOnline),
     click("user-btn:0"),
     expect("botão de mutar", muted),
     click("user-btn:0"),
@@ -669,6 +740,10 @@ const ops = [_]Op{
     key(c.ImGuiKey_F2),
     .{ .shot = "25-tema-7" },
     expect("tema 7 mostra conversa e caixa de texto", composerVisible),
+    // Os temas além dos 7 de sempre (quem cria um tema novo não precisa
+    // mexer aqui): pula até o último e confere a volta ao primeiro.
+    .{ .run = skipExtraThemes },
+    .{ .wait = 200 },
     key(c.ImGuiKey_F2),
     expect("depois do último volta ao primeiro", onClassico),
 
@@ -748,6 +823,53 @@ const ops = [_]Op{
     .{ .expect = .{ .name = "amigo sem DM: cria a conversa e abre", .check = newDm, .timeout_ms = 3000 } },
     click("guild:500000"),
 
+    s("links e rolagem"),
+    click("guild:500000"),
+    click("channel:500005"),
+    .{ .run = jumpToZigLink },
+    .{ .wait = 400 },
+    click("link:https://ziglang.org"),
+    expect("clicar num link abre o navegador", linkOpened),
+    expect("ver mensagens antigas mostra o botão de ir ao fim", jumpBottomShown),
+    click("jump-bottom"),
+    expect("o botão de ir ao fim volta para a última mensagem", atBottom),
+
+    s("clicar em tudo: servidor"),
+    .{ .run = toClassico },
+    .{ .wait = 200 },
+    click("guild:500000"),
+    .{ .wait = 300 },
+    .{ .sweep = &.{ "guild:", "folder:", "category:", "channel:", "member:", "voice-member:", "user-btn:", "header-search", "header-members", "tab:", "tab-plus", "status-theme", "chip:", "chip-add:", "att:", "me", "composer-emoji", "guild-header" } },
+    s("clicar em tudo: mensagens diretas"),
+    click("guild:0"),
+    click("friends"),
+    .{ .wait = 300 },
+    .{ .sweep = &.{ "friends", "friends-tab:", "friend-", "channel:", "dm-search", "active:" } },
+    s("clicar em tudo: perfil"),
+    click("guild:500000"),
+    click("member:1001"),
+    .{ .wait = 300 },
+    .{ .sweep = &.{ "role:", "role-add", "profile-avatar", "profile-banner" } },
+    key(c.ImGuiKey_Escape),
+    s("clicar em tudo: configurações"),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Aparência"),
+    .{ .sweep = &.{ "toggle:", "seg:", "accent:", "theme-card:" } },
+    click("settings:Acessibilidade"),
+    .{ .sweep = &.{"toggle:"} },
+    click("settings:Chat"),
+    .{ .sweep = &.{"toggle:"} },
+    click("settings:Notificações"),
+    .{ .sweep = &.{"toggle:"} },
+    click("settings:Privacidade"),
+    .{ .sweep = &.{"toggle:"} },
+    click("settings:Avançado"),
+    .{ .sweep = &.{"toggle:"} },
+    click("settings:Idioma"),
+    .{ .sweep = &.{"radio:"} },
+    .{ .sweep = &.{"settings:"} },
+    .{ .sweep = &.{"settings-close"} },
+
     s("janela pequena"),
     .{ .resize = .{ 820, 560 } },
     .{ .wait = 150 },
@@ -812,7 +934,9 @@ fn optNext(app: *App) void {
 fn tOpt(app: *App, b: []u8) []const u8 {
     const th = app.themes.theme_();
     if (opt_i == 0 or opt_i > th.options.len) return "";
-    return markFmt(b, "toggle:{s}", .{th.options[opt_i - 1].label});
+    // As opções do tema vêm antes dos interruptores do app na página (e um
+    // tema pode ter uma opção com o mesmo nome de um deles).
+    return markFmt(b, "first:toggle:{s}", .{th.options[opt_i - 1].label});
 }
 fn optFlipped(app: *App) bool {
     const th = app.themes.theme_();
@@ -877,7 +1001,7 @@ const ops_theme = [_]Op{
     click("menu:Excluir mensagem"),
     expect("excluir pelo menu", deleted),
     .{ .run = clearToast },
-    .{ .drag = .{ .from = .{ .dyn_at = .{ .f = tSelFrom, .fx = 0.5, .fy = 0.8 } }, .to = .{ .dyn_at = .{ .f = tSelTo, .fx = 0.6, .fy = 0.8 } } } },
+    .{ .drag = .{ .from = .{ .dyn_at = .{ .f = tSelFrom, .fx = 0.2, .fy = 0.5 } }, .to = .{ .dyn_at = .{ .f = tSelTo, .fx = 0.7, .fy = 0.5 } } } },
     expect("selecionar texto", hasSelection),
     ctrl(c.ImGuiKey_C),
     expect("copiar a seleção", toastCopied),
@@ -1032,6 +1156,7 @@ pub const Runner = struct {
     section: []const u8 = "",
     failures: std.ArrayList([]const u8) = .empty,
     mouse: [2]f32 = .{ 640, 400 },
+    sweep: Sweep = .{},
     target_pos: [2]f32 = .{ 0, 0 },
     settle: u32 = 0,
 
@@ -1046,7 +1171,8 @@ pub const Runner = struct {
             .at => |a| .{ .k = a.key, .fx = a.fx, .fy = a.fy },
             .dyn_at => |a| .{ .k = a.f(app, buf), .fx = a.fx, .fy = a.fy },
         };
-        const r = qa.find(k_fx.k) orelse return null;
+        // "first:nome": a primeira com esse nome (dois elementos iguais na página).
+        const r = (if (std.mem.startsWith(u8, k_fx.k, "first:")) qa.findFirst(k_fx.k[6..]) else qa.find(k_fx.k)) orelse return null;
         return .{ r.x + r.w * k_fx.fx, r.y + r.h * k_fx.fy };
     }
 
@@ -1083,6 +1209,209 @@ pub const Runner = struct {
             const full = std.fmt.allocPrint(std.heap.c_allocator, "[{s}] {s}", .{ r.section, msg }) catch return;
             std.heap.c_allocator.free(msg);
             r.failures.append(std.heap.c_allocator, full) catch {};
+        }
+    }
+
+    /// Estado da varredura "clicar em tudo".
+    const Sweep = struct {
+        keys: [160][56]u8 = undefined,
+        lens: [160]u8 = undefined,
+        n: usize = 0,
+        i: usize = 0,
+        phase: u8 = 0,
+        frames: u32 = 0,
+        fp: u64 = 0,
+        started: bool = false,
+        clicked: usize = 0,
+        base: Base = undefined,
+    };
+
+    /// O que a varredura restaura entre um clique e outro.
+    const Base = struct {
+        settings: @import("ui/state.zig").Settings,
+        popup: @import("ui/state.zig").Popup,
+        guild: Id,
+        tab: usize,
+        tabs_len: usize,
+        tab0: Id,
+        friends: bool,
+        friends_tab: u8,
+        theme: usize,
+        voice: ?Id,
+        muted: bool,
+        deafened: bool,
+    };
+
+    fn capture(app: *App) Base {
+        const st = &app.st;
+        return .{
+            .settings = st.settings,
+            .popup = st.popup,
+            .guild = st.guild,
+            .tab = st.tab,
+            .tabs_len = st.tabs.items.len,
+            .tab0 = if (st.tabs.items.len > st.tab) st.tabs.items[st.tab] else 0,
+            .friends = st.friends,
+            .friends_tab = st.friends_tab,
+            .theme = app.themes.current,
+            .voice = st.voice,
+            .muted = st.muted,
+            .deafened = st.deafened,
+        };
+    }
+
+    fn restore(app: *App, b: Base) void {
+        const st = &app.st;
+        st.settings = b.settings;
+        st.popup = b.popup;
+        st.viewer = null;
+        st.palette.open = false;
+        st.role_picker = false;
+        st.selection = .{};
+        st.reply_to = 0;
+        st.editing = 0;
+        st.guild = b.guild;
+        if (st.tabs.items.len > b.tabs_len) st.tabs.shrinkRetainingCapacity(b.tabs_len);
+        if (b.tab < st.tabs.items.len) {
+            st.tabs.items[b.tab] = b.tab0;
+            st.tab = b.tab;
+        }
+        st.friends = b.friends;
+        st.friends_tab = b.friends_tab;
+        st.voice = b.voice;
+        st.muted = b.muted;
+        st.deafened = b.deafened;
+        st.open_folders.clearRetainingCapacity();
+        st.collapsed.clearRetainingCapacity();
+        if (app.themes.current != b.theme) app.actions.append(app.gpa, .{ .set_theme = b.theme }) catch {};
+        if (st.activeChannel()) |cid| st.scrollOf(cid).stick_bottom = true;
+    }
+
+    /// Impressão digital do que um clique pode mudar.
+    fn fingerprint(app: *App) u64 {
+        const st = &app.st;
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&st.settings));
+        h.update(std.mem.asBytes(&st.popup));
+        h.update(std.mem.asBytes(&st.guild));
+        h.update(std.mem.asBytes(&st.tab));
+        h.update(std.mem.sliceAsBytes(st.tabs.items));
+        h.update(std.mem.asBytes(&st.friends));
+        h.update(std.mem.asBytes(&st.friends_tab));
+        h.update(&.{ @intFromBool(st.viewer != null), @intFromBool(st.palette.open), @intFromBool(st.role_picker), @intFromBool(st.muted), @intFromBool(st.deafened) });
+        h.update(std.mem.asBytes(&st.voice));
+        h.update(std.mem.asBytes(&st.reply_to));
+        h.update(std.mem.asBytes(&st.editing));
+        h.update(std.mem.asBytes(&st.toast.until_ms));
+        h.update(std.mem.asBytes(&st.jump));
+        h.update(std.mem.asBytes(&app.themes.current));
+        h.update(std.mem.asBytes(&@as(u32, st.open_folders.count())));
+        h.update(std.mem.asBytes(&@as(u32, st.collapsed.count())));
+        h.update(std.mem.asBytes(&@as(u32, st.muted_channels.count())));
+        h.update(std.mem.asBytes(&@as(u32, app.store.relationships.count())));
+        // Opções do tema e cargos de quem está com o cartão aberto.
+        const th = app.themes.theme_();
+        for (th.options) |o| h.update(&.{@intFromBool(th.option(o.name) orelse o.default)});
+        if (st.popup == .profile) if (app.store.memberInfo(st.guild, st.popup.profile.user)) |mi| h.update(std.mem.sliceAsBytes(mi.roleSlice()));
+        h.update(std.mem.asBytes(&@import("ui/attachments.zig").last_opened_len));
+        h.update(std.mem.asBytes(&@as(u32, @intCast(app.actions.items.len))));
+        if (st.activeChannel()) |cid| {
+            const sc = st.scrollOf(cid);
+            h.update(std.mem.asBytes(&sc.stick_bottom));
+            if (app.store.channel(cid)) |cs| {
+                h.update(std.mem.asBytes(&cs.version));
+                h.update(std.mem.asBytes(&cs.info.unread));
+                const items = cs.messages.items;
+                for (items) |*m| h.update(std.mem.sliceAsBytes(m.reactionSlice()));
+            }
+        }
+        const top = std.mem.sliceTo(&st.input, 0);
+        h.update(top);
+        return h.final();
+    }
+
+    /// Clicar no que já está selecionado (a aba atual, o canal aberto)
+    /// não muda nada e está certo.
+    fn alreadySelected(app: *App, name: []const u8) bool {
+        const st = &app.st;
+        const num = struct {
+            fn f(k: []const u8, p: []const u8) ?u64 {
+                if (!std.mem.startsWith(u8, k, p)) return null;
+                return std.fmt.parseInt(u64, k[p.len..], 10) catch null;
+            }
+        }.f;
+        if (num(name, "tab:")) |t| return t == st.tab;
+        if (num(name, "channel:")) |cid| return !st.friends and st.activeChannel() == cid;
+        if (num(name, "guild:")) |g| return st.guild == g and !st.friends;
+        if (std.mem.startsWith(u8, name, "friends-tab:")) return std.mem.eql(u8, name["friends-tab:".len..], @tagName(@as(enum { online, all, pending, blocked }, @enumFromInt(st.friends_tab))));
+        if (std.mem.eql(u8, name, "friends")) return st.friends;
+        // Opções de escolha única: clicar na já escolhida não muda nada.
+        for ([_][]const u8{ "seg:", "radio:", "accent:", "theme-card:", "settings:" }) |p| if (std.mem.startsWith(u8, name, p)) return true;
+        return false;
+    }
+
+    fn sweepOp(r: *Runner, app: *App, prefixes: []const []const u8) void {
+        var sw = &r.sweep;
+        if (!sw.started) {
+            sw.* = .{ .started = true, .base = capture(app) };
+            sw.n = qa.keysWith(prefixes, &sw.keys, &sw.lens);
+            sw.frames = 0;
+            return;
+        }
+        if (sw.i >= sw.n) {
+            restore(app, sw.base);
+            r.record(sw.clicked > 0, "varredura: {d} elementos clicados", .{sw.clicked});
+            sw.started = false;
+            return r.next();
+        }
+        const kname = sw.keys[sw.i][0..sw.lens[sw.i]];
+        sw.frames += 1;
+        switch (sw.phase) {
+            // Volta ao começo e espera as marcações se refazerem.
+            0 => {
+                restore(app, sw.base);
+                sw.phase = 1;
+                sw.frames = 0;
+            },
+            1 => if (sw.frames >= 4) {
+                const rect = qa.find(kname) orelse {
+                    // Some depois de restaurar (estava em outra tela): pula.
+                    sw.i += 1;
+                    sw.phase = 0;
+                    return;
+                };
+                const p: [2]f32 = .{ rect.x + rect.w / 2, rect.y + rect.h / 2 };
+                if (p[1] < 2 or p[1] > app.io.*.DisplaySize.y - 2 or p[0] < 2 or p[0] > app.io.*.DisplaySize.x - 2) {
+                    sw.i += 1;
+                    sw.phase = 0;
+                    return;
+                }
+                sw.fp = fingerprint(app);
+                if (c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[varredura] {s} em {d:.0},{d:.0}\n", .{ kname, p[0], p[1] });
+                r.target_pos = p;
+                r.pos(app, p);
+                sw.phase = 2;
+            },
+            2 => {
+                c.ImGuiIO_AddMouseButtonEvent(app.io, 0, true);
+                sw.phase = 3;
+            },
+            3 => {
+                c.ImGuiIO_AddMouseButtonEvent(app.io, 0, false);
+                sw.phase = 4;
+                sw.frames = 0;
+            },
+            4 => if (sw.frames >= 6) {
+                const changed = fingerprint(app) != sw.fp;
+                sw.clicked += 1;
+                if (!changed and !alreadySelected(app, kname)) {
+                    r.record(false, "botão sem efeito: {s}", .{kname});
+                }
+                if (!app.store.ready) r.record(false, "o app saiu da conta ao clicar em {s}", .{kname});
+                sw.i += 1;
+                sw.phase = 0;
+            },
+            else => {},
         }
     }
 
@@ -1256,6 +1585,7 @@ pub const Runner = struct {
                 f(app);
                 r.next();
             },
+            .sweep => |prefixes| r.sweepOp(app, prefixes),
         }
         return true;
     }

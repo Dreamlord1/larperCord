@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 zig build -Doptimize=ReleaseFast
 mkdir -p docs/themes
 export SDL_VIDEO_DRIVER=offscreen
-for t in classico vidro terminal bolhas zen papel escritorio; do
+for t in classico vidro terminal subsolo bolhas zen papel escritorio; do
     ./zig-out/bin/larpercord --theme "$t" --mode escuro --shot "docs/themes/$t.png"
     ./zig-out/bin/larpercord --theme "$t" --mode claro --shot "docs/themes/$t-claro.png"
 done
@@ -21,7 +21,7 @@ if command -v magick >/dev/null; then
     for f in vidro vidro-claro; do magick docs/themes/vidro-bg.png -blur 0x18 docs/themes/$f.png -composite docs/themes/$f.png; done
     rm docs/themes/vidro-bg.png
     # Grade com todos os temas para o topo do README.
-    magick montage docs/themes/{vidro,terminal,bolhas-claro,classico,papel-claro,escritorio-claro}.png -tile 3x2 -geometry 640x400+6+6 -background none docs/themes.png
+    magick montage docs/themes/{classico,vidro,terminal,subsolo,bolhas,zen,papel,escritorio}.png -tile 4x2 -geometry 480x300+6+6 -background none docs/themes.png
     magick montage docs/themes/{terminal,terminal-claro,papel,papel-claro}.png -tile 2x2 -geometry 640x400+6+6 -background none docs/modes.png
 fi
 echo "prints em docs/"

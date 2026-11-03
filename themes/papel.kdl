@@ -5,6 +5,8 @@ theme "papel" description="Caderno: folha pautada com margem vermelha, títulos 
 options {
     option "pautado" label="Folha pautada" description="Linhas de caderno atrás da conversa." label-en="Ruled paper" description-en="Notebook lines behind the conversation." default=#true
     option "margem" label="Margem vermelha" description="A linha dupla da margem, como num caderno escolar." label-en="Red margin" description-en="The double margin line, like a school notebook." default=#true
+    option "indice" label="Índice" description="O título \"Índice\" no topo da margem direita." label-en="Index" description-en="The \"Index\" title at the top of the right margin." default=#true
+    option "abas" label="Abas de canal" description="Mostra os canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Shows open channels as tabs above the conversation." default=#false
 }
 
 colors mode=light {
@@ -64,6 +66,7 @@ layout {
     row {
         column flex=1 bg=surface {
             header height=86 variant=minimal inset-x=44 font="Liberation Serif"
+            tabs height=36 variant=underline when=abas
             messages flex=1 avatar=none spacing=22 inset-x=28 ruled="$pautado" margin-line="$margem"
             column height=96 padding-x=44 {
                 spacer flex=1
@@ -72,7 +75,7 @@ layout {
             }
         }
         column width=272 bg=sidebar {
-            label height=68 text="Índice" font="Liberation Serif" size=24 weight=bold color=text
+            label height=68 text="Índice" font="Liberation Serif" size=24 weight=bold color=text when=indice
             guild-bar height=206 variant=list shape=circle size=22 icon-style=soft
             channel-list flex=1 header=#false
             user-panel height=56

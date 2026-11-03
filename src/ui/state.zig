@@ -5,7 +5,7 @@ const Id = @import("../core/types.zig").Id;
 const i18n = @import("i18n.zig");
 pub const Settings = @import("settings_state.zig").Settings;
 
-pub const MenuKind = enum { message, user, channel, guild };
+pub const MenuKind = enum { message, user, channel, guild, status };
 
 pub const Popup = union(enum) {
     none,

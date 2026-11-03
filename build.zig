@@ -1,7 +1,7 @@
 const std = @import("std");
 
 /// Temas embutidos (usados também pelo passo `snapshots`).
-const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "bolhas", "zen", "papel", "escritorio" };
+const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "subsolo", "bolhas", "zen", "papel", "escritorio" };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});

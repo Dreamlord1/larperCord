@@ -54,6 +54,10 @@ pub const Settings = struct {
     /// Esconde o e-mail e o @usuário na conta.
     streamer_mode: bool = false,
 
+    /// Nosso status: 0 online, 1 ausente, 2 não perturbe, 3 invisível.
+    /// Reaplicado ao conectar.
+    my_status: u8 = 0,
+
     // Notificações (DMs e menções)
     desktop_notifs: bool = true,
     taskbar_flash: bool = true,
@@ -87,6 +91,9 @@ pub fn fields() []const Field {
             var n: usize = 0;
             for (info.field_names, info.field_types) |fname, ftype| {
                 if (std.mem.eql(u8, fname, "open") or std.mem.eql(u8, fname, "page")) continue;
+                // Só estes três tipos são salvos byte a byte; outro tipo aqui
+                // corromperia o arquivo (ou a memória) ao ler.
+                if (ftype != bool and ftype != f32 and ftype != u8) @compileError("configuração com tipo não suportado: " ++ fname);
                 out[n] = .{
                     .name = fname,
                     .kind = if (ftype == bool) .boolean else if (ftype == f32) .float else .byte,

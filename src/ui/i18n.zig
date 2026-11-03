@@ -6,36 +6,41 @@
 //!     tr("Entrar", "Sign in")
 //!     fmt(&buf, "Respondendo a {s}", "Replying to {s}", .{nome})
 //!
-//! `lang` é global (lida também pela thread de rede, só para os avisos).
+//! O idioma é global e a thread de rede também lê (avisos, dados da
+//! demonstração): por isso fica num valor atômico.
 const std = @import("std");
 const c = @import("c");
 
 pub const Lang = enum(u8) { pt, en };
 
-pub var lang: Lang = .pt;
+var lang: std.atomic.Value(Lang) = .init(.pt);
+
+pub fn set(l: Lang) void {
+    lang.store(l, .release);
+}
 
 pub fn en() bool {
-    return lang == .en;
+    return lang.load(.acquire) == .en;
 }
 
 pub fn tr(pt: []const u8, english: []const u8) []const u8 {
-    return if (lang == .en) english else pt;
+    return if (en()) english else pt;
 }
 
 pub fn trZ(pt: [:0]const u8, english: [:0]const u8) [:0]const u8 {
-    return if (lang == .en) english else pt;
+    return if (en()) english else pt;
 }
 
 pub fn fmt(buf: []u8, comptime pt: []const u8, comptime english: []const u8, args: anytype) []const u8 {
-    return (if (lang == .en) std.fmt.bufPrint(buf, english, args) else std.fmt.bufPrint(buf, pt, args)) catch buf[0..0];
+    return (if (en()) std.fmt.bufPrint(buf, english, args) else std.fmt.bufPrint(buf, pt, args)) catch buf[0..0];
 }
 
 pub fn fmtZ(buf: []u8, comptime pt: []const u8, comptime english: []const u8, args: anytype) [:0]const u8 {
-    return (if (lang == .en) std.fmt.bufPrintSentinel(buf, english, args, 0) else std.fmt.bufPrintSentinel(buf, pt, args, 0)) catch "";
+    return (if (en()) std.fmt.bufPrintSentinel(buf, english, args, 0) else std.fmt.bufPrintSentinel(buf, pt, args, 0)) catch "";
 }
 
 pub fn allocPrint(gpa: std.mem.Allocator, comptime pt: []const u8, comptime english: []const u8, args: anytype) ![]u8 {
-    return if (lang == .en) std.fmt.allocPrint(gpa, english, args) else std.fmt.allocPrint(gpa, pt, args);
+    return if (en()) std.fmt.allocPrint(gpa, english, args) else std.fmt.allocPrint(gpa, pt, args);
 }
 
 /// Idioma do sistema: português se a primeira preferência for "pt",

@@ -7,6 +7,9 @@
 #define STBI_NO_STDIO
 #define STBI_NO_LINEAR
 #define STBI_NO_HDR
+// Nada maior que 8192×8192: uma imagem pequena comprimida não pode pedir
+// gigabytes ao decodificar (o padrão do stb é 2^24 por lado).
+#define STBI_MAX_DIMENSIONS 8192
 #include "stb_image.h"
 
 // --- larperCord: GIF quadro a quadro -------------------------------------

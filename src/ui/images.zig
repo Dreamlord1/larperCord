@@ -18,15 +18,18 @@ const apng = @import("apng.zig");
 const alloc = std.heap.c_allocator;
 
 /// Limite de memória das texturas e tempo até soltar uma imagem fora da tela.
-const budget_bytes: usize = 96 * 1024 * 1024;
-const idle_ms: i64 = 120_000;
+const budget_bytes: usize = 64 * 1024 * 1024;
+const idle_ms: i64 = 60_000;
 /// Maior arquivo que a gente baixa (o Discord aceita até 10 MB sem Nitro).
 const max_download: usize = 32 * 1024 * 1024;
 /// Limite de uma animação (GIF, WebP, APNG) já reduzida: passando disso,
 /// pula quadros (o tempo total continua o mesmo, só fica menos fluido).
-const max_gif_bytes: usize = 48 * 1024 * 1024;
-const max_gif_frames: usize = 500;
+const max_gif_bytes: usize = 32 * 1024 * 1024;
+const max_gif_frames: usize = 300;
+/// 4 baixando, mas só 2 decodificando ao mesmo tempo (é o pico de memória e
+/// de CPU: cada animação passa por quadros em tamanho cheio).
 const workers = 4;
+var decode_slots: ?*c.SDL_Semaphore = null;
 
 pub const Tex = struct {
     ref: c.ImTextureRef,
@@ -116,6 +119,7 @@ pub const Cache = struct {
     /// Quando o próximo quadro de um GIF na tela vence (o laço do app acorda
     /// nessa hora em vez de redesenhar sem parar). Zerado a cada quadro.
     next_frame_ms: i64 = std.math.maxInt(i64),
+    evicted_ms: i64 = 0,
 
     pub fn init(renderer: *c.SDL_Renderer, wake_type: u32) !Cache {
         return .{
@@ -129,6 +133,7 @@ pub const Cache = struct {
     /// Começa a thread (depois de o Cache estar no lugar definitivo).
     pub fn start(cache: *Cache) !void {
         if (curl_mutex == null) curl_mutex = c.SDL_CreateMutex() orelse return error.SdlMutex;
+        if (decode_slots == null) decode_slots = c.SDL_CreateSemaphore(2) orelse return error.SdlSemaphore;
         for (&cache.threads) |*t| t.* = c.SDL_CreateThread(worker, "media", cache) orelse return error.SdlThread;
     }
 
@@ -251,7 +256,11 @@ pub const Cache = struct {
             e.* = .{ .state = .ready, .frames = alloc.realloc(frames, n) catch frames[0..n], .w = r.px.w, .h = r.px.h, .bytes = bytes, .used_ms = cache.now_ms };
             cache.bytes += bytes;
         }
-        cache.evict();
+        // A varredura do cache não precisa ser a cada quadro.
+        if (batch.items.len > 0 or cache.now_ms - cache.evicted_ms > 500) {
+            cache.evicted_ms = cache.now_ms;
+            cache.evict();
+        }
         return batch.items.len > 0;
     }
 
@@ -289,6 +298,8 @@ pub const Cache = struct {
 
     fn worker(data: ?*anyopaque) callconv(.c) c_int {
         const cache: *Cache = @ptrCast(@alignCast(data.?));
+        // Mídia nunca disputa a CPU com a interface.
+        _ = c.SDL_SetCurrentThreadPriority(c.SDL_THREAD_PRIORITY_LOW);
         var curl: ?*c.CURL = null;
         defer if (curl) |h| c.curl_easy_cleanup(h);
         while (!cache.stopping.load(.acquire)) {
@@ -349,7 +360,10 @@ fn load(curl: *?*c.CURL, jb: Job, stop: *std.atomic.Value(bool)) Pixels {
     } else {
         if (!download(curl, jb, &bytes, stop)) return .{};
     }
+    // Vaga de decodificação (no máximo 2 ao mesmo tempo).
+    c.SDL_WaitSemaphore(decode_slots);
     const px = decode(bytes.items, jb.max_w, jb.max_h);
+    c.SDL_SignalSemaphore(decode_slots);
     if (px.frames.len == 0) logFail(jb.url, "não decodificou ({d} bytes, começa com {x})", .{ bytes.items.len, bytes.items[0..@min(4, bytes.items.len)] });
     return px;
 }
@@ -404,34 +418,56 @@ fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8), stop: *std.atomic
     const h = curl.* orelse return false;
     var ubuf: [2048]u8 = undefined;
     const url = proxiedUrl(&ubuf, jb.url, jb.max_w, jb.max_h) orelse return false;
-    var sink: Sink = .{ .list = out };
-    c.curl_easy_reset(h);
-    _ = c.curl_easy_setopt(h, c.CURLOPT_URL, url.ptr);
-    _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, "Mozilla/5.0 (X11; Linux x86_64) larperCord/0.1");
-    _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEFUNCTION, writeCb);
-    _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEDATA, &sink);
-    _ = c.curl_easy_setopt(h, c.CURLOPT_TIMEOUT, @as(c_long, 25));
-    _ = c.curl_easy_setopt(h, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
-    _ = c.curl_easy_setopt(h, c.CURLOPT_MAXREDIRS, @as(c_long, 3));
-    _ = c.curl_easy_setopt(h, c.CURLOPT_PROTOCOLS_STR, "https");
-    _ = c.curl_easy_setopt(h, c.CURLOPT_REDIR_PROTOCOLS_STR, "https");
-    _ = c.curl_easy_setopt(h, c.CURLOPT_ACCEPT_ENCODING, "");
-    // Fechar o app interrompe o download na hora.
-    _ = c.curl_easy_setopt(h, c.CURLOPT_NOPROGRESS, @as(c_long, 0));
-    _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFOFUNCTION, abortCb);
-    _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFODATA, stop);
-    const rc = c.curl_easy_perform(h);
-    if (rc != c.CURLE_OK) {
-        if (sink.too_big) {
-            logFail(jb.url, "grande demais (mais de {d} MB)", .{max_download / (1024 * 1024)});
-        } else if (!stop.load(.acquire)) logFail(jb.url, "erro do curl: {s}", .{std.mem.span(c.curl_easy_strerror(rc))});
-        return false;
-    }
-    var status: c_long = 0;
-    _ = c.curl_easy_getinfo(h, c.CURLINFO_RESPONSE_CODE, &status);
-    if (status != 200) {
-        logFail(jb.url, "HTTP {d}", .{status});
-        return false;
+    // Redirecionamentos seguidos à mão: cada destino passa pelo allowedHost
+    // (o curl seguiria qualquer um e o app se conectaria a outro servidor).
+    var cur: [2048]u8 = undefined;
+    var cur_url: [:0]const u8 = url;
+    var hops: u8 = 0;
+    while (true) : (hops += 1) {
+        var sink: Sink = .{ .list = out };
+        c.curl_easy_reset(h);
+        _ = c.curl_easy_setopt(h, c.CURLOPT_URL, cur_url.ptr);
+        _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, "Mozilla/5.0 (X11; Linux x86_64) larperCord/0.1");
+        _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEFUNCTION, writeCb);
+        _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEDATA, &sink);
+        _ = c.curl_easy_setopt(h, c.CURLOPT_TIMEOUT, @as(c_long, 25));
+        _ = c.curl_easy_setopt(h, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 0));
+        _ = c.curl_easy_setopt(h, c.CURLOPT_PROTOCOLS_STR, "https");
+        _ = c.curl_easy_setopt(h, c.CURLOPT_ACCEPT_ENCODING, "");
+        // Fechar o app interrompe o download na hora.
+        _ = c.curl_easy_setopt(h, c.CURLOPT_NOPROGRESS, @as(c_long, 0));
+        _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFOFUNCTION, abortCb);
+        _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFODATA, stop);
+        const rc = c.curl_easy_perform(h);
+        if (rc != c.CURLE_OK) {
+            if (sink.too_big) {
+                logFail(jb.url, "grande demais (mais de {d} MB)", .{max_download / (1024 * 1024)});
+            } else if (!stop.load(.acquire)) logFail(jb.url, "erro do curl: {s}", .{std.mem.span(c.curl_easy_strerror(rc))});
+            return false;
+        }
+        var status: c_long = 0;
+        _ = c.curl_easy_getinfo(h, c.CURLINFO_RESPONSE_CODE, &status);
+        if (status >= 300 and status < 400) {
+            var loc: [*c]u8 = null;
+            _ = c.curl_easy_getinfo(h, c.CURLINFO_REDIRECT_URL, &loc);
+            if (loc == null or hops >= 3) {
+                logFail(jb.url, "redirecionamento sem destino ou demais", .{});
+                return false;
+            }
+            const next = std.mem.span(loc);
+            if (!allowedHost(next)) {
+                logFail(jb.url, "redirecionou para um domínio não permitido", .{});
+                return false;
+            }
+            cur_url = std.fmt.bufPrintSentinel(&cur, "{s}", .{next}, 0) catch return false;
+            out.clearRetainingCapacity();
+            continue;
+        }
+        if (status != 200) {
+            logFail(jb.url, "HTTP {d}", .{status});
+            return false;
+        }
+        break;
     }
     if (out.items.len == 0) {
         logFail(jb.url, "resposta vazia", .{});
@@ -579,6 +615,8 @@ fn isWebp(data: []const u8) bool {
 fn decodeWebp(data: []const u8, max_w: u16, max_h: u16) Pixels {
     var feat: c.WebPBitstreamFeatures = undefined;
     if (c.WebPGetFeatures(data.ptr, data.len, &feat) != c.VP8_STATUS_OK) return .{};
+    // O tamanho vem no cabeçalho: recusa antes de alocar (mesmo limite do stb).
+    if (feat.width <= 0 or feat.height <= 0 or feat.width > 8192 or feat.height > 8192) return .{};
     if (feat.has_animation == 0) {
         var w: c_int = 0;
         var h: c_int = 0;

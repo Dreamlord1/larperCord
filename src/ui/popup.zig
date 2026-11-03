@@ -142,6 +142,13 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "Copiar link", .en = "Copy Link", .id = 43, .sep = true });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do canal", .en = "Copy Channel ID", .id = 44 });
         },
+        .status => {
+            add(&items, &n, .{ .label = "●  Online", .en = "●  Online", .id = 80 });
+            add(&items, &n, .{ .label = "◐  Ausente", .en = "◐  Idle", .id = 81 });
+            add(&items, &n, .{ .label = "⊘  Não perturbe", .en = "⊘  Do Not Disturb", .id = 82 });
+            add(&items, &n, .{ .label = "○  Invisível", .en = "○  Invisible", .id = 83 });
+            add(&items, &n, .{ .label = "Ver perfil", .en = "View Profile", .id = 84, .sep = true });
+        },
         .guild => {
             add(&items, &n, .{ .label = "Marcar como lido", .en = "Mark As Read", .id = 60 });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do servidor", .en = "Copy Server ID", .id = 63 });
@@ -230,6 +237,8 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             f.cs.info.unread = true;
         },
         8, 25, 44, 63 => copyFmt(ctx, "{d}", .{id}),
+        80, 81, 82, 83 => ctx.act(.{ .set_status = @enumFromInt(item - 80) }),
+        84 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y - 200 } },
         9 => ctx.act(.{ .delete_message = id }),
         20 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y } },
         21 => if (ctx.store.user(id)) |u| {

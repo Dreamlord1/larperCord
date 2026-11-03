@@ -9,5 +9,27 @@ jobs:
         with:
           version: 0.17.0
       # Os testes cobrem as partes puras (KDL, cores, layout, markdown, Store,
-      # temas embutidos) e não precisam de SDL nem de GPU.
+      # temas embutidos, protobuf, APNG, URLs de mídia) e não precisam de SDL.
       - run: zig build test
+
+  # O app inteiro (UI, rede, imagens) só compila com as bibliotecas do
+  # sistema: roda num Arch, que tem SDL3, libwebp e companhia nos pacotes.
+  # Depois, o QA completo fora da tela, com os dados de demonstração.
+  build-and-qa:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - run: pacman -Syu --noconfirm --needed git sdl3 curl zlib freetype2 fontconfig libwebp noto-fonts noto-fonts-emoji
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - run: zig build
+      - run: ./tools/qa.sh
+        env:
+          SDL_VIDEO_DRIVER: offscreen
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-out
+          path: qa-out/

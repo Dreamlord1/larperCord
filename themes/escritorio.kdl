@@ -6,6 +6,8 @@ theme "escritorio" description="Ferramenta de trabalho: barra superior com busca
 options {
     option "topo" label="Barra superior" description="Voltar/avançar entre abas, busca no servidor e ajuda." label-en="Top bar" description-en="Back/forward between tabs, server search and help." default=#true
     option "servidores" label="Lista de servidores" description="Os servidores no topo da barra lateral." label-en="Server list" description-en="The servers at the top of the sidebar." default=#true
+    option "abas" label="Abas de canal" description="Mostra os canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Shows open channels as tabs above the conversation." default=#false
+    option "status" label="Barra de status" description="Conexão, ping, RAM e relógio no rodapé." label-en="Status bar" description-en="Connection, ping, RAM and clock at the bottom." default=#false
 }
 
 colors mode=light {
@@ -73,6 +75,7 @@ layout {
             }
             column flex=1 bg=surface {
                 header height=52 c-rail="#ffffff" c-sidebar="#f1f1f3" cd-rail="#222529" cd-sidebar="#2a2d31"
+                tabs height=36 variant=underline when=abas
                 messages flex=1 avatar=square avatar-size=36
                 column height=90 padding-x=18 {
                     spacer flex=1
@@ -82,5 +85,6 @@ layout {
             }
             member-list width=232 bg=elevated hide-below=1150
         }
+        status-bar height=26 variant=plain bg=elevated when=status items="conn ping ram clock"
     }
 }

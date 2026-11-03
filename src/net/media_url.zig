@@ -7,7 +7,8 @@ const std = @import("std");
 /// Desligado por padrão: o Discord não tem versão animada dos GIFs do Tenor
 /// pelo proxy dele (só a prévia parada), e o app oficial também vai direto
 /// no Tenor para animar.
-pub var allow_gif_hosts: bool = false;
+/// Atômico: a interface escreve, as threads de mídia leem.
+pub var allow_gif_hosts: std.atomic.Value(bool) = .init(false);
 
 /// GIF antigo do Tenor (media.tenor.co/videos/…, só existe em MP4): a URL é
 /// "tenor-page:<página tenor.com/view/…>"; a página traz o vídeo no formato
@@ -26,7 +27,7 @@ pub fn allowedHost(url: []const u8) bool {
     const host = hostOf(url);
     if (std.mem.eql(u8, host, "cdn.discordapp.com") or std.mem.eql(u8, host, "media.discordapp.net") or
         std.mem.endsWith(u8, host, ".discordapp.net") or std.mem.endsWith(u8, host, ".discordapp.com")) return true;
-    return allow_gif_hosts and isGifHost(host);
+    return allow_gif_hosts.load(.acquire) and isGifHost(host);
 }
 
 fn isGifHost(host: []const u8) bool {
@@ -80,9 +81,9 @@ test "gif do tenor e do giphy a partir do vídeo" {
     try std.testing.expectEqualStrings("https://media.tenor.com/H5y5Fk9VdKcAAAAx/cat-dance.webp", gifFromVideo(&b, "https://media.tenor.com/H5y5Fk9VdKcAAAPo/cat-dance.mp4").?);
     try std.testing.expectEqualStrings("https://media.giphy.com/media/abc/giphy.gif", gifFromVideo(&b, "https://media.giphy.com/media/abc/giphy.mp4").?);
     try std.testing.expect(gifFromVideo(&b, "https://evil.com/x.mp4") == null);
-    allow_gif_hosts = false;
+    allow_gif_hosts.store(false, .release);
     try std.testing.expect(!allowedHost("https://media.tenor.com/x.gif"));
-    allow_gif_hosts = true;
+    allow_gif_hosts.store(true, .release);
     try std.testing.expect(allowedHost("https://media.tenor.com/x.gif"));
     try std.testing.expect(!allowedHost("https://tenor.com.evil.com/x.gif"));
 }
@@ -106,9 +107,9 @@ pub fn proxiedUrl(buf: []u8, url: []const u8, w: u16, h: u16) ?[:0]const u8 {
 test "url do proxy pede o tamanho e mantém o WebP" {
     var b: [512]u8 = undefined;
     try std.testing.expectEqualStrings("https://media.discordapp.net/attachments/1/2/a.png?ex=1&width=256&height=128", proxiedUrl(&b, "https://media.discordapp.net/attachments/1/2/a.png?ex=1", 256, 128).?);
-    try std.testing.expectEqualStrings("https://media.discordapp.net/a.webp?width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/a.webp", 128, 128).?);
+    try std.testing.expectEqualStrings("https://media.discordapp.net/a.webp?animated=true&width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/a.webp", 128, 128).?);
     try std.testing.expectEqualStrings("https://images-ext-1.discordapp.net/external/x/https/static.klipy.com/a.webp?animated=true&width=232&height=240", proxiedUrl(&b, "https://images-ext-1.discordapp.net/external/x/https/static.klipy.com/a.webp", 232, 240).?);
-    try std.testing.expectEqualStrings("https://media.discordapp.net/stickers/1.webp?size=160&width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/stickers/1.webp?size=160", 128, 128).?);
+    try std.testing.expectEqualStrings("https://media.discordapp.net/stickers/1.webp?size=160&animated=true&width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/stickers/1.webp?size=160", 128, 128).?);
     try std.testing.expectEqualStrings("https://cdn.discordapp.com/avatar-decoration-presets/a.png?size=160&passthrough=true", proxiedUrl(&b, "https://cdn.discordapp.com/avatar-decoration-presets/a.png?size=160&passthrough=true", 128, 128).?);
     try std.testing.expectEqualStrings("https://media.discordapp.net/attachments/1/2/v.mp4?ex=1&format=webp&width=320&height=180", proxiedUrl(&b, "https://media.discordapp.net/attachments/1/2/v.mp4?ex=1", 320, 180).?);
     try std.testing.expect(allowedHost("https://cdn.discordapp.com/x"));

@@ -30,8 +30,16 @@ pub fn id(comptime tag: []const u8, n: usize) u32 {
     return @truncate(std.hash.Wyhash.hash(n, tag));
 }
 
+/// Esquece as animações quando o mapa cresce demais (uma chave por membro,
+/// mensagem, canal… acumula numa sessão longa). Só com tudo parado: quem
+/// voltar começa já no alvo, sem pulo visível.
+pub fn trim() void {
+    if (values.count() > 4096 and !active) values.clearRetainingCapacity();
+}
+
 /// Aproxima o valor `key` de `target`. `speed` maior = mais rápido.
 pub fn to(key: u32, target: f32, speed: f32) f32 {
+    trim();
     const gop = values.getOrPut(std.heap.c_allocator, key) catch return target;
     if (!gop.found_existing) {
         gop.value_ptr.* = target;

@@ -41,6 +41,38 @@ pub fn find(key: []const u8) ?layout.Rect {
     return null;
 }
 
+/// A primeira marcação com o nome (quando dois elementos têm o mesmo
+/// nome e se quer o de cima da página).
+pub fn findFirst(key: []const u8) ?layout.Rect {
+    for (prev[0..prev_count]) |m| {
+        if (std.mem.eql(u8, m.key[0..m.len], key)) return m.rect;
+    }
+    return null;
+}
+
+/// Nomes das marcações do quadro anterior que começam com algum dos
+/// prefixos (para a varredura "clicar em tudo").
+pub fn keysWith(prefixes: []const []const u8, out: [][56]u8, lens: []u8) usize {
+    var n: usize = 0;
+    for (prev[0..prev_count]) |m| {
+        const k = m.key[0..m.len];
+        const want = for (prefixes) |p| {
+            if (std.mem.startsWith(u8, k, p)) break true;
+        } else false;
+        // Nunca clica em "Sair" (encerraria a sessão no meio do roteiro).
+        const exit = std.mem.indexOf(u8, k, "Sair") != null or std.mem.indexOf(u8, k, "Log Out") != null;
+        if (!want or exit or n == out.len) continue;
+        const dup = for (out[0..n], lens[0..n]) |o, l| {
+            if (std.mem.eql(u8, o[0..l], k)) break true;
+        } else false;
+        if (dup) continue;
+        out[n] = m.key;
+        lens[n] = m.len;
+        n += 1;
+    }
+    return n;
+}
+
 /// Lista as marcações que começam com `prefix` (para depurar um teste).
 pub fn dump(prefix: []const u8) void {
     for (prev[0..prev_count]) |m| {

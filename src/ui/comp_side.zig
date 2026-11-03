@@ -100,6 +100,12 @@ const Rows = struct {
         const fam = rw.fam;
         const r = rw.r;
         const u = ctx.store.user(uid) orelse return;
+        // Fora da tela: só ocupa o espaço (a lista pode ter 100+ pessoas).
+        const row_h: f32 = if (rw.tty) 20 else 44;
+        if (rw.y + row_h < r.y or rw.y > r.bottom()) {
+            rw.y += row_h;
+            return;
+        }
         const online = !offline_group and u.status != .offline;
         const name_col = w.nameColor(ctx, rw.guild, uid);
         if (rw.tty) {

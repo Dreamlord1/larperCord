@@ -58,6 +58,8 @@ pub const Gateway = struct {
     /// libcurl (que pode levar até 180 s): o app fecha sem esperar.
     abort: std.atomic.Value(bool) = .init(false),
     voice_warned: bool = false,
+    /// Status escolhido (também vai no IDENTIFY de uma sessão nova).
+    status: types.Status = .online,
     /// Cargo -> cor e posição, para a cor do nome de cada membro.
     role_info: std.AutoHashMapUnmanaged(Id, RoleInfo) = .empty,
     /// Última lista de membros pedida (op 14): repetida depois de um READY.
@@ -267,6 +269,7 @@ pub const Gateway = struct {
         g.hb_sent_at = 0;
         g.frame.clearRetainingCapacity();
         g.zout.clearRetainingCapacity();
+        g.shrinkBuffers();
 
         var cmds: std.ArrayList(ev.Command) = .empty;
         defer cmds.deinit(alloc);
@@ -321,6 +324,14 @@ pub const Gateway = struct {
         }
     }
 
+    /// Depois de um READY grande os buffers ficam com vários MB reservados:
+    /// devolve o que passar de 1 MB.
+    fn shrinkBuffers(g: *Gateway) void {
+        const limit = 1024 * 1024;
+        if (g.frame.capacity > limit and g.frame.items.len == 0) g.frame.clearAndFree(alloc);
+        if (g.zout.capacity > limit and g.zout.items.len == 0) g.zout.clearAndFree(alloc);
+    }
+
     /// Descomprime uma mensagem inteira do zlib-stream e entrega ao gateway.
     /// usa exatamente esse sufixo para saber quando o pacote está completo.
     fn inflateFrame(g: *Gateway) ?End {
@@ -350,7 +361,10 @@ pub const Gateway = struct {
         }
         g.frame.clearRetainingCapacity();
         if (g.zout.items.len == 0) return null;
-        return g.onPayload(g.zout.items);
+        const end = g.onPayload(g.zout.items);
+        g.zout.clearRetainingCapacity();
+        g.shrinkBuffers();
+        return end;
     }
 
     fn onClose(g: *Gateway, code: u16) End {
@@ -404,7 +418,7 @@ pub const Gateway = struct {
         j.writeString(&out, alloc, g.token) catch return;
         out.print(alloc, ",\"capabilities\":4605,\"properties\":", .{}) catch return;
         out.appendSlice(alloc, identity_props) catch return;
-        out.appendSlice(alloc, ",\"presence\":{\"activities\":[],\"status\":\"online\",\"afk\":false,\"since\":0},\"compress\":false,\"client_state\":") catch return;
+        out.print(alloc, ",\"presence\":{{\"activities\":[],\"status\":\"{s}\",\"afk\":false,\"since\":0}},\"compress\":false,\"client_state\":", .{statusName(g.status)}) catch return;
         out.appendSlice(alloc, client_state_json) catch return;
         out.appendSlice(alloc, "}}") catch return;
         g.send(out.items);
@@ -666,6 +680,16 @@ pub const Gateway = struct {
         var buf: [320]u8 = undefined;
         const payload = std.fmt.bufPrint(&buf, "{{\"op\":14,\"d\":{{\"guild_id\":\"{d}\",\"typing\":true,\"threads\":true,\"activities\":true,\"members\":[],\"channels\":{{\"{d}\":[[0,99]]}},\"thread_member_lists\":[]}}}}", .{ guild, channel }) catch return;
         g.send(payload);
+    }
+
+    /// Nome do status no gateway (offline = invisível para os outros).
+    fn statusName(s: types.Status) []const u8 {
+        return switch (s) {
+            .online => "online",
+            .idle => "idle",
+            .dnd => "dnd",
+            .offline => "invisible",
+        };
     }
 
     fn relationshipKind(v: ?Value) types.Relationship {
@@ -1786,6 +1810,12 @@ pub const Gateway = struct {
                     .bio = dupeOpt(bio) catch "",
                     .pronouns = dupeOpt((if (up) |p| j.str(j.get(p, "pronouns")) else null) orelse "") catch "",
                 } } });
+            },
+            .set_status => |st| {
+                g.status = st;
+                var buf: [128]u8 = undefined;
+                const payload = std.fmt.bufPrint(&buf, "{{\"op\":3,\"d\":{{\"status\":\"{s}\",\"since\":0,\"activities\":[],\"afk\":false}}}}", .{statusName(st)}) catch return;
+                g.send(payload);
             },
             .member_role => |mr| {
                 const path = std.fmt.bufPrint(&path_buf, "/guilds/{d}/members/{d}/roles/{d}", .{ mr.guild, mr.user, mr.role }) catch return;

@@ -32,7 +32,9 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         const hr: d.Rect = .{ .x = r.x, .y = r.y, .w = r.w, .h = hh };
         const hb = d.hit(ctx, 1, hr);
         qa.mark(hr, "guild-header", .{});
+        // Como no Discord: clicar no nome do servidor abre o menu dele.
         if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+        if (hb.clicked) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = hr.x + 8, .y = hr.bottom() + 4 } });
         const k = anim.to(anim.id("ghead", @intFromPtr(n)), if (hb.hovered) 1 else 0, 20);
         if (banner) {
             // Banner do servidor: degradê com a cor dele, nome embaixo.
@@ -239,12 +241,18 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     if (tty) {
         var buf: [96]u8 = undefined;
         const t = std.fmt.bufPrint(&buf, "{s} {s}", .{ w.statusGlyph(me.status), me.name }) catch "";
+        const tr: d.Rect = .{ .x = pr.x + 4, .y = pr.y + 2, .w = pr.w - 80, .h = pr.h - 4 };
+        const hb = d.hit(ctx, 1, tr);
+        qa.mark(tr, "me", .{});
+        if (hb.hovered) d.rect(ctx.dl, tr, ctx.col(.hover), 0);
+        if (hb.clicked) ctx.popup(.{ .menu = .{ .kind = .status, .id = me.id, .x = tr.x, .y = tr.y - 190 } });
         d.text(ctx.dl, fam.get(.bold), ctx.th.font_size - 1, pr.x + 10, d.centerY(pr, ctx.th.font_size - 1), w.statusColor(ctx, me.status), t);
     } else {
         const card: d.Rect = .{ .x = pr.x + 6, .y = pr.y + pr.h / 2 - 18, .w = pr.w - 108, .h = 36 };
         const hb = d.hit(ctx, 1, card);
         qa.mark(card, "me", .{});
-        if (hb.clicked) ctx.popup(.{ .profile = .{ .user = me.id, .x = card.x, .y = card.y - 380 } });
+        // Clicar no próprio nome: escolher o status (ou ver o perfil).
+        if (hb.clicked) ctx.popup(.{ .menu = .{ .kind = .status, .id = me.id, .x = card.x, .y = card.y - 190 } });
         d.rect(ctx.dl, card, ctx.col(.hover).alpha(anim.to(anim.id("me", 0), if (hb.hovered) 1 else 0, 24)), ctx.th.radius);
         w.avatar(ctx, ctx.dl, card.x + 20, card.y + 18, 32, me.id, .circle, ctx.col(.rail), 1);
         _ = d.textClipped(ctx.dl, fam.get(.semibold), 14, card.x + 44, card.y + 2, ctx.col(.text), me.name, card.w - 48);
