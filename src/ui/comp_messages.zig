@@ -11,6 +11,7 @@ const std = @import("std");
 const c = @import("c");
 const kdl = @import("../theme/kdl.zig");
 const d = @import("draw.zig");
+const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const rich = @import("rich.zig");
@@ -285,6 +286,8 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             to = if (i == sr.last) sr.o1 else @intCast(msgs[i].msg.content.len);
         };
         drawMessage(ctx, dl, g, &msgs[i], st.groups.items[i], r, y, under, from, to, if (under) &probe else null);
+        qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = msgs[i].height }, "msg:{d}", .{msgs[i].msg.id});
+        qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = msgs[i].height }, "msg-index:{d}", .{msgs.len - 1 - i});
     }
 
     if (typing_bubble) {
@@ -325,6 +328,7 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     if (!sc.stick_bottom) {
         const br: d.Rect = .{ .x = r.right() - 52, .y = r.bottom() - 52, .w = 36, .h = 36 };
         const hb = d.hit(ctx, 77, br);
+        qa.mark(br, "jump-bottom", .{});
         d.shadow(ctx.fg, br, 18, 8, ctx.col(.shadow));
         d.circle(ctx.fg, br.x + 18, br.y + 18, 18, if (hb.hovered) ctx.col(.accent) else ctx.col(.elevated));
         icons.chevron(ctx.fg, br.x + 18, br.y + 19, (if (hb.hovered) ctx.col(.accent_text) else ctx.col(.text)).u(), 1);
@@ -382,8 +386,11 @@ fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x:
     const fam = g.fam;
     const found = ctx.store.findAny(m.msg.reply_to);
     const rr: d.Rect = .{ .x = x, .y = y, .w = max_w, .h = reply_h };
-    const hb = d.hit(ctx, @truncate(m.msg.id ^ 0x5151), rr);
+    const hb = d.hitUnder(ctx, @truncate(m.msg.id ^ 0x5151), rr);
+    qa.mark(rr, "reply-line:{d}", .{m.msg.id});
     if (hb.clicked) if (found != null) ctx.act(.{ .jump_to = m.msg.reply_to });
+    // Botão direito em qualquer parte da mensagem abre o menu dela.
+    if (hb.right) ctx.popup(.{ .menu = .{ .kind = .message, .id = m.msg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
     if (spine_x) |sx| {
         // A "curvinha" ligando o avatar à mensagem respondida.
         c.ImDrawList_PathClear(dl);
@@ -428,7 +435,9 @@ fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, 
         const cnt = std.fmt.bufPrint(&buf, "{d}", .{rc.count}) catch "";
         const cr: d.Rect = .{ .x = xx, .y = y + 3, .w = widths[i], .h = 24 };
         const hb = d.hit(ctx, @truncate((m.msg.id *% 31) +% i), cr);
+        qa.mark(cr, "chip:{d}:{d}", .{m.msg.id, i});
         if (hb.clicked) ctx.act(.{ .react = .{ .id = m.msg.id, .emoji = rc.* } });
+        if (hb.right) ctx.popup(.{ .menu = .{ .kind = .message, .id = m.msg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         const bg = if (rc.me) ctx.col(.accent).alpha(0.2) else ctx.col(.elevated);
         const cr_r = @min(8, ctx.th.radius + 2);
         d.rect(dl, cr, if (hb.hovered) bg.mix(ctx.col(.text), 0.06) else bg, cr_r);
@@ -440,6 +449,7 @@ fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, 
     if (show_add) {
         const ar: d.Rect = .{ .x = xx, .y = y + 3, .w = 32, .h = 24 };
         const hb = d.hit(ctx, @truncate(m.msg.id ^ 0xadd), ar);
+        qa.mark(ar, "chip-add:{d}", .{m.msg.id});
         d.rect(dl, ar, ctx.col(.elevated).alpha(if (hb.hovered) 1 else 0.6), @min(8, ctx.th.radius + 2));
         icons.plus(dl, ar.x + 16, ar.y + 12, 4.5, ctx.col(.muted).u());
         if (hb.clicked) ctx.popup(.{ .emoji = .{ .target = m.msg.id, .x = ar.x + 200, .y = ar.y } });
@@ -471,6 +481,7 @@ fn toolbar(ctx: *d.Ctx, dl: *c.ImDrawList, m: *const StoredMessage, right: f32, 
         if (!it.show) continue;
         const br: d.Rect = .{ .x = x, .y = tr.y + 2, .w = bw, .h = 32 };
         const hb = d.hit(ctx, @truncate((m.msg.id *% 7) +% i + 900), br);
+        qa.mark(br, "tb:{d}:{d}", .{m.msg.id, i});
         if (hb.hovered) d.rect(dl, br, ctx.col(.hover).mix(ctx.col(.text), 0.05), 5);
         const fs: f32 = if (it.emoji) 18 else 17;
         const font = ctx.ui.get(if (it.emoji) .regular else .bold);
@@ -486,8 +497,11 @@ fn toolbar(ctx: *d.Ctx, dl: *c.ImDrawList, m: *const StoredMessage, right: f32, 
     }
 }
 
-fn nameHit(ctx: *d.Ctx, uid: Id, r: d.Rect, salt: u64) void {
-    const hb = d.hit(ctx, @truncate(uid *% 131 +% salt), r);
+/// Nome/avatar clicável. O ID inclui a mensagem: a mesma pessoa aparece em
+/// várias mensagens visíveis e IDs repetidos impedem o ImGui de clicar.
+fn nameHit(ctx: *d.Ctx, uid: Id, msg_id: Id, r: d.Rect, salt: u64) void {
+    const hb = d.hit(ctx, @truncate(msg_id *% 1_000_003 +% uid *% 131 +% salt), r);
+    qa.mark(r, "user:{d}", .{uid});
     if (hb.clicked) ctx.popup(.{ .profile = .{ .user = uid, .x = r.right() + 4, .y = r.y } });
     if (hb.right) ctx.popup(.{ .menu = .{ .kind = .user, .id = uid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
 }
@@ -546,11 +560,11 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 if (g.avatar > 0) {
                     const ar: d.Rect = .{ .x = r.x + 16, .y = y, .w = g.avatar, .h = g.avatar };
                     w.avatar(ctx, dl, ar.x + g.avatar / 2, ar.y + g.avatar / 2, g.avatar, m.msg.author, g.shape, null, alpha);
-                    nameHit(ctx, m.msg.author, ar, 1);
+                    nameHit(ctx, m.msg.author, m.msg.id, ar, 1);
                 }
                 const nw = d.width(fam.get(.semibold), g.size, name);
                 const nr: d.Rect = .{ .x = tx, .y = y, .w = nw, .h = g.line_h };
-                nameHit(ctx, m.msg.author, nr, 2);
+                nameHit(ctx, m.msg.author, m.msg.id, nr, 2);
                 d.text(dl, fam.get(.semibold), g.size, tx, y + (g.line_h - g.size * 1.2) / 2, role_col.alpha(alpha), name);
                 if (ctx.hovering(nr)) d.line(dl, tx, nr.bottom() - 2, tx + nw, nr.bottom() - 2, role_col, 1);
                 const stp = w.stamp(&buf, m.msg.timestamp, @divTrunc(ctx.now_ms, 1000));
@@ -590,8 +604,10 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 var rb: [160]u8 = undefined;
                 const line = std.fmt.bufPrint(&rb, "↳ {s}: {s}", .{ if (ru) |x| x.name else "?", if (found) |f| snippet(rb[100..], f.m.msg.content) else "…" }) catch "";
                 const lr: d.Rect = .{ .x = r.x + g.content_x, .y = y, .w = g.wrap, .h = g.line_h };
-                const hb = d.hit(ctx, @truncate(m.msg.id ^ 0x5151), lr);
+                const hb = d.hitUnder(ctx, @truncate(m.msg.id ^ 0x5151), lr);
+                qa.mark(lr, "reply-line:{d}", .{m.msg.id});
                 if (hb.clicked) ctx.act(.{ .jump_to = m.msg.reply_to });
+                if (hb.right) ctx.popup(.{ .menu = .{ .kind = .message, .id = m.msg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
                 _ = d.textClipped(dl, fam.get(.regular), g.size - 1, lr.x, d.centerY(lr, g.size - 1), if (hb.hovered) ctx.col(.text) else ctx.col(.faint), line, lr.w);
                 y += g.line_h;
             }
@@ -603,7 +619,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             const col_w = g.prefix_w - d.width(fam.get(.regular), g.size, "[00:00] ") - d.width(fam.get(.regular), g.size, " │ ");
             const nw = @min(d.width(fam.get(.bold), g.size, name), col_w);
             const nick_col = if (group) role_col else role_col.alpha(0.35);
-            nameHit(ctx, m.msg.author, .{ .x = x + col_w - nw, .y = y, .w = nw, .h = g.line_h }, 3);
+            nameHit(ctx, m.msg.author, m.msg.id, .{ .x = x + col_w - nw, .y = y, .w = nw, .h = g.line_h }, 3);
             _ = d.textClipped(dl, fam.get(.bold), g.size, x + col_w - nw, ty, nick_col.alpha(alpha), name, col_w);
             x += col_w;
             d.text(dl, fam.get(.regular), g.size, x, ty, ctx.col(.border).mix(ctx.col(.faint), 0.6), " │ ");
@@ -622,7 +638,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 y += g.spacing;
                 if (!self) {
                     const nw = d.width(fam.get(.semibold), 13, name);
-                    nameHit(ctx, m.msg.author, .{ .x = r.x + left_pad + 6, .y = y, .w = nw, .h = 16 }, 4);
+                    nameHit(ctx, m.msg.author, m.msg.id, .{ .x = r.x + left_pad + 6, .y = y, .w = nw, .h = 16 }, 4);
                     d.text(dl, fam.get(.semibold), 13, r.x + left_pad + 6, y, role_col, name);
                     y += 18;
                 }
@@ -639,7 +655,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             if (!self and g.avatar > 0 and group) {
                 const ar: d.Rect = .{ .x = r.x + 20, .y = br.y, .w = g.avatar, .h = g.avatar };
                 w.avatar(ctx, dl, ar.x + g.avatar / 2, ar.y + g.avatar / 2, g.avatar, m.msg.author, g.shape, null, alpha);
-                nameHit(ctx, m.msg.author, ar, 5);
+                nameHit(ctx, m.msg.author, m.msg.id, ar, 5);
             }
             var ty = br.y + 7;
             if (reply) {
@@ -732,6 +748,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         d.text(dl, fam.get(.medium), 13, bar.x + 14, bar.y + 8, ctx.col(.muted), t);
         const xr: d.Rect = .{ .x = bar.right() - 30, .y = bar.y + 5, .w = 22, .h = 22 };
         const hb = d.hit(ctx, 9, xr);
+        qa.mark(xr, "compose-cancel", .{});
         const xc = if (hb.hovered) ctx.col(.text) else ctx.col(.faint);
         d.circle(dl, xr.x + 11, xr.y + 11, 9, if (hb.hovered) ctx.col(.hover) else ctx.col(.faint).alpha(0.25));
         d.line(dl, xr.x + 7, xr.y + 7, xr.x + 15, xr.y + 15, xc, 1.6);
@@ -763,6 +780,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         input_r = r.right() - 44;
         const er: d.Rect = .{ .x = r.right() - 36, .y = r.y + r.h / 2 - 13, .w = 26, .h = 26 };
         const eh = d.hit(ctx, 2, er);
+        qa.mark(er, "composer-emoji", .{});
         d.text(dl, fam.get(.regular), 18, er.x + 4, er.y + 2, d.Rgba.white.alpha(if (eh.hovered) 1 else 0.6), "😊");
         if (eh.clicked) ctx.popup(.{ .emoji = .{ .target = 0, .x = er.right(), .y = r.y } });
     } else {
@@ -771,6 +789,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         d.rectFlags(dl, r, ctx.col(.elevated), radius, flags);
         const ar: d.Rect = .{ .x = r.x + 10, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
         const ah = d.hit(ctx, 1, ar);
+        qa.mark(ar, "composer-attach", .{});
         const ak = anim.to(anim.id("attach", @intFromPtr(n)), if (ah.hovered) 1 else 0, 24);
         d.circle(dl, ar.x + 14, ar.y + 14, 11.5, ctx.col(.muted).mix(ctx.col(.text), ak));
         icons.plus(dl, ar.x + 14, ar.y + 14, 5.5, ctx.col(.elevated).u());
@@ -779,6 +798,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const ex = r.right() - (if (pill) @as(f32, 84) else 40);
         const er: d.Rect = .{ .x = ex, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
         const eh = d.hit(ctx, 2, er);
+        qa.mark(er, "composer-emoji", .{});
         const ek = anim.to(anim.id("emoji", @intFromPtr(n)), if (eh.hovered) 1 else 0, 20);
         const es: f32 = 20 + 2 * ek;
         d.text(dl, fam.get(.regular), es, ex + 14 - es / 2, r.y + r.h / 2 - es * 0.6, d.Rgba.white.alpha(0.55 + 0.45 * ek), "😊");
@@ -787,6 +807,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         if (pill) {
             const sr: d.Rect = .{ .x = r.right() - 44, .y = r.y + r.h / 2 - 17, .w = 34, .h = 34 };
             const sh = d.hit(ctx, 3, sr);
+            qa.mark(sr, "composer-send", .{});
             const sk = anim.to(anim.id("send", @intFromPtr(n)), if (sh.hovered) 1 else 0, 20);
             d.circle(dl, sr.x + 17, sr.y + 17, 17, ctx.col(.accent).mix(d.Rgba.white, sk * 0.12));
             const ink = ctx.col(.accent_text).u();
@@ -801,6 +822,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const frame_h = fs * d.text_scale + 8;
     c.ImGui_PushFontFloat(fam.get(.regular), fs * d.text_scale);
     c.ImGui_SetCursorScreenPos(d.v(input_x, r.y + (r.h - frame_h) / 2));
+    qa.mark(.{ .x = input_x, .y = r.y, .w = @max(40, input_r - input_x), .h = r.h }, "composer", .{});
     c.ImGui_SetNextItemWidth(@max(40, input_r - input_x));
     if (st.focus_input and !st.palette.open and !st.settings.open and st.popup == .none) {
         c.ImGui_SetKeyboardFocusHere();

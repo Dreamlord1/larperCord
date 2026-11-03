@@ -32,6 +32,8 @@ pub const Options = struct {
     demo: bool = false,
     stats: bool = false,
     settings: bool = false,
+    /// Roda o robô de QA (ver qa_runner.zig).
+    qa: bool = false,
 };
 
 var wake_type_global: u32 = 0;
@@ -93,7 +95,7 @@ pub const App = struct {
         var saved_theme: ?[]const u8 = null;
         var settings_arena = std.heap.ArenaAllocator.init(gpa);
         defer settings_arena.deinit();
-        if (opts.shot == null) saved_theme = app.loadSettings(settings_arena.allocator());
+        if (opts.shot == null and !opts.qa) saved_theme = app.loadSettings(settings_arena.allocator());
         app.themes.mode = app.wantedMode();
         app.st.settings.open = opts.settings;
         const name = opts.theme orelse saved_theme orelse "classico";
@@ -106,7 +108,7 @@ pub const App = struct {
         app.themes.watch(wakeTheme);
 
         // Conta de verdade se houver token; senão, os dados de demonstração.
-        const token = if (opts.demo or opts.shot != null) null else discord.loadToken();
+        const token = if (opts.demo or opts.shot != null or opts.qa) null else discord.loadToken();
         if (token) |t| {
             // Só inicia o libcurl/OpenSSL quando vai usar (~5 MB a menos no modo demonstração).
             _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
@@ -271,7 +273,7 @@ pub const App = struct {
     }
 
     fn saveSettings(app: *App) void {
-        if (app.opts.shot != null) return;
+        if (app.opts.shot != null or app.opts.qa) return;
         var buf: [512]u8 = undefined;
         const path = settingsPath(&buf) orelse return;
         if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
@@ -376,13 +378,17 @@ pub const App = struct {
 
     fn handle(app: *App, a: ev.Action) void {
         const st = &app.st;
+        if (app.opts.qa and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[ação] {t}\n", .{a});
         switch (a) {
             .select_guild => |g| {
                 st.guild = g;
                 const ch = st.last_channel.get(g) orelse app.firstTextChannel(g) orelse return;
                 app.openChannel(ch, false);
             },
-            .select_channel => |ch| app.openChannel(ch, app.io.*.KeyCtrl),
+            .select_channel => |ch| {
+                if (app.opts.qa and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[ação] select_channel ctrl={}\n", .{app.io.*.KeyCtrl});
+                app.openChannel(ch, app.io.*.KeyCtrl);
+            },
             .focus_tab => |i| if (i < st.tabs.items.len) {
                 st.tab = i;
                 if (app.store.channel(st.tabs.items[i])) |cs| {
@@ -640,7 +646,12 @@ pub const App = struct {
         }
     }
 
-    pub fn run(app: *App) void {
+    pub fn run(app: *App) bool {
+        var runner: @import("qa_runner.zig").Runner = .{};
+        if (app.opts.qa) {
+            @import("ui/qa.zig").enabled = true;
+            _ = c.SDL_CreateDirectory("qa-out");
+        }
         var pending: u32 = 3;
         var running = true;
         var last = c.SDL_GetTicksNS();
@@ -650,7 +661,7 @@ pub const App = struct {
 
         while (running) {
             var e: c.SDL_Event = undefined;
-            const busy = pending > 0 or anim.active or app.opts.shot != null;
+            const busy = pending > 0 or anim.active or app.opts.shot != null or app.opts.qa;
             var got = if (busy) c.SDL_PollEvent(&e) else c.SDL_WaitEvent(&e);
             while (got) {
                 if (e.type == app.win.wake_type) {
@@ -747,8 +758,10 @@ pub const App = struct {
                     running = false;
                 }
             }
+            if (app.opts.qa and app.store.ready and !runner.tick(app)) running = false;
             _ = c.SDL_RenderPresent(r);
             if (pending > 0) pending -= 1;
         }
+        return runner.fail == 0;
     }
 };

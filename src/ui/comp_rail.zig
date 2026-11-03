@@ -9,6 +9,7 @@ const std = @import("std");
 const c = @import("c");
 const kdl = @import("../theme/kdl.zig");
 const d = @import("draw.zig");
+const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const types = @import("../core/types.zig");
@@ -71,6 +72,7 @@ fn horizontalBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) voi
         if (x + pw > r.right()) break;
         const pr: d.Rect = .{ .x = x, .y = cy - size / 2 - 3, .w = pw, .h = size + 6 };
         const hb = d.hit(ctx, 1000 + i, pr);
+        qa.mark(pr, "guild:{d}", .{g.id});
         if (hb.clicked) ctx.act(.{ .select_guild = g.id });
         if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         const sel = ctx.st.guild == g.id;
@@ -122,6 +124,7 @@ fn icon(ctx: *d.Ctx, dl: *c.ImDrawList, ref: ?GuildRef, cx: f32, y: f32, size: f
     const n: usize = if (ref) |gr| gr.i + 1 else 0;
     const ir: d.Rect = .{ .x = cx - size / 2, .y = y, .w = size, .h = size };
     const hb = d.hit(ctx, n, ir);
+    qa.mark(ir, "guild:{d}", .{if (ref) |gr| gr.g.id else 0});
     const selected = if (ref) |gr| ctx.st.guild == gr.g.id else ctx.st.guild == 0;
     const active = selected or hb.hovered;
     if (hb.clicked) ctx.act(.{ .select_guild = if (ref) |gr| gr.g.id else 0 });
@@ -220,6 +223,7 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const tw = d.width(if (sel) bold else font, fs, lbl);
         const tr: d.Rect = .{ .x = x, .y = r.y + 2, .w = tw, .h = r.h - 4 };
         const hb = d.hit(ctx, 1999, tr);
+        qa.mark(tr, "guild:0", .{});
         if (hb.clicked) ctx.act(.{ .select_guild = 0 });
         if (sel) d.rect(ctx.dl, tr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(ctx.dl, tr, ctx.col(.hover), 0);
         d.text(ctx.dl, if (sel) bold else font, fs, x, d.centerY(tr, fs), if (sel) ctx.col(.accent_text) else ctx.col(.text), lbl);
@@ -233,6 +237,7 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         if (x + tw > r.right() - 4) break;
         const tr: d.Rect = .{ .x = x, .y = r.y + 2, .w = tw, .h = r.h - 4 };
         const hb = d.hit(ctx, 2000 + i, tr);
+        qa.mark(tr, "guild:{d}", .{g.id});
         if (hb.clicked) ctx.act(.{ .select_guild = g.id });
         if (sel) d.rect(ctx.dl, tr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(ctx.dl, tr, ctx.col(.hover), 0);
         const tc = if (sel) ctx.col(.accent_text) else if (g.mentions > 0) ctx.col(.danger) else if (g.unread) ctx.col(.text) else ctx.col(.muted);
@@ -266,6 +271,7 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
         const by = bg.bottom() - 7;
         const ir: d.Rect = .{ .x = cx - size / 2, .y = by - size, .w = size, .h = size };
         const hb = d.hit(ctx, 3000 + i, ir);
+        qa.mark(ir, "guild:{d}", .{if (i == 0) @as(types.Id, 0) else ctx.store.guilds.items[i - 1].id});
         const g: ?*types.Guild = if (i == 0) null else &ctx.store.guilds.items[i - 1];
         const gid: types.Id = if (g) |x_| x_.id else 0;
         if (hb.clicked) ctx.act(.{ .select_guild = gid });
@@ -307,6 +313,7 @@ fn list(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
         const gid: types.Id = if (g) |x| x.id else 0;
         const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
         const hb = d.hit(ctx, 4000 + i, rr);
+        qa.mark(rr, "guild:{d}", .{gid});
         if (hb.clicked) ctx.act(.{ .select_guild = gid });
         if (hb.right) if (g) |gg| ctx.popup(.{ .menu = .{ .kind = .guild, .id = gg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         const sel = ctx.st.guild == gid;

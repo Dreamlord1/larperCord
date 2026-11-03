@@ -9,6 +9,7 @@ const std = @import("std");
 const c = @import("c");
 const kdl = @import("../theme/kdl.zig");
 const d = @import("draw.zig");
+const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const icons = @import("icons.zig");
@@ -29,6 +30,7 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         const hh: f32 = if (variant == .tree) 30 else if (banner) 128 else 48;
         const hr: d.Rect = .{ .x = r.x, .y = r.y, .w = r.w, .h = hh };
         const hb = d.hit(ctx, 1, hr);
+        qa.mark(hr, "guild-header", .{});
         if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         const k = anim.to(anim.id("ghead", @intFromPtr(n)), if (hb.hovered) 1 else 0, 20);
         if (banner) {
@@ -92,6 +94,7 @@ fn category(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, ch
     var y = y_in + (if (variant == .tree) @as(f32, 6) else 14);
     const hr: d.Rect = .{ .x = r.x + 4, .y = y, .w = r.w - 8, .h = if (variant == .tree) 22 else 24 };
     const hb = d.hit(ctx, 100 + idx, hr);
+    qa.mark(hr, "category:{d}", .{ch.id});
     if (hb.clicked) ctx.act(.{ .toggle_category = ch.id });
     const open = anim.to(anim.id("cat", ch.id), if (collapsed) 0 else 1, 22);
     const col = if (hb.hovered) ctx.col(.text).mix(ctx.col(.muted), 0.2) else ctx.col(.faint).mix(ctx.col(.muted), 0.4);
@@ -124,6 +127,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
     const inset: f32 = if (variant == .pills) 10 else 8;
     const rr: d.Rect = .{ .x = r.x + inset, .y = y, .w = r.w - inset * 2, .h = row_h - 2 };
     const hb = d.hit(ctx, 200 + idx, rr);
+    qa.mark(rr, "channel:{d}", .{ch.id});
     if (hb.right) ctx.popup(.{ .menu = .{ .kind = .channel, .id = ch.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
     if (hb.clicked or hb.middle) switch (ch.kind) {
         .text => ctx.act(.{ .select_channel = ch.id }),
@@ -227,6 +231,7 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     } else {
         const card: d.Rect = .{ .x = pr.x + 6, .y = pr.y + pr.h / 2 - 18, .w = pr.w - 108, .h = 36 };
         const hb = d.hit(ctx, 1, card);
+        qa.mark(card, "me", .{});
         if (hb.clicked) ctx.popup(.{ .profile = .{ .user = me.id, .x = card.x, .y = card.y - 380 } });
         d.rect(ctx.dl, card, ctx.col(.hover).alpha(anim.to(anim.id("me", 0), if (hb.hovered) 1 else 0, 24)), ctx.th.radius);
         w.avatar(ctx, ctx.dl, card.x + 20, card.y + 18, 32, me.id, .circle, ctx.col(.rail), 1);
@@ -240,6 +245,7 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const bx = pr.right() - 8 - @as(f32, @floatFromInt(3 - i)) * bs;
         const br: d.Rect = .{ .x = bx, .y = pr.y + pr.h / 2 - bs / 2, .w = bs, .h = bs };
         const hb = d.hit(ctx, 10 + i, br);
+        qa.mark(br, "user-btn:{d}", .{i});
         d.tip(ctx, br, switch (i) {
             0 => if (ctx.st.muted) "Desmutar" else "Mutar microfone",
             1 => if (ctx.st.deafened) "Voltar a ouvir" else "Ensurdecer",
@@ -284,6 +290,7 @@ fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
         const t = std.fmt.bufPrint(&buf, "♪ {s}  [sair]", .{cs.info.name}) catch "";
         d.text(ctx.dl, fam.get(.bold), ctx.th.font_size - 2, r.x + 10, d.centerY(r, ctx.th.font_size - 2), ctx.col(.online), t);
         const hb = d.hit(ctx, 50, r);
+        qa.mark(r, "hangup", .{});
         if (hb.clicked) ctx.act(.leave_voice);
         return;
     }
@@ -293,6 +300,7 @@ fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     _ = d.textClipped(ctx.dl, fam.get(.regular), 13, r.x + 14, r.y + 29, ctx.col(.muted), sub, r.w - 70);
     const br: d.Rect = .{ .x = r.right() - 44, .y = r.y + 11, .w = 32, .h = 32 };
     const hb = d.hit(ctx, 51, br);
+    qa.mark(br, "hangup", .{});
     const k = anim.to(anim.id("hangup", 0), if (hb.hovered) 1 else 0, 24);
     d.rect(ctx.dl, br, ctx.col(.hover).alpha(k * 1.5), ctx.th.radius);
     const cx = br.x + 16;
@@ -318,6 +326,7 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
             // Caixa "Encontre ou comece uma conversa" (abre a paleta).
             const sr = hr.inset(10, 10);
             const hb = d.hit(ctx, 1, sr);
+            qa.mark(sr, "dm-search", .{});
             if (hb.clicked) ctx.act(.open_palette);
             d.rect(ctx.dl, sr, ctx.col(.rail).mix(ctx.col(.sidebar), if (hb.hovered) 0.1 else 0.4), @max(ctx.th.radius - 2, 2));
             d.text(ctx.dl, fam.get(.medium), 13, sr.x + 8, d.centerY(sr, 13), ctx.col(.faint), "Encontre ou comece uma conversa");
@@ -340,6 +349,7 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
         const row_h: f32 = if (tree) 24 else 44;
         const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
         const hb = d.hit(ctx, 300 + idx, rr);
+        qa.mark(rr, "channel:{d}", .{id});
         if (hb.clicked or hb.middle) ctx.act(.{ .select_channel = id });
         if (hb.right) ctx.popup(.{ .menu = .{ .kind = .user, .id = u.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         const k = anim.to(anim.id("dm", id), if (selected) 1 else if (hb.hovered) 0.5 else 0, 24);

@@ -131,6 +131,7 @@ pub fn draw(ctx: *d.Ctx) void {
     const bold = ctx.ui.get(.medium);
     for (p.items.items[first..@min(n, first + visible)], first..) |item, i| {
         const rr: d.Rect = .{ .x = box.x + 8, .y = y, .w = box.w - 16, .h = row_h - 2 };
+        @import("qa.zig").mark(rr, "palette-item:{d}", .{i});
         const sel = i == p.selected;
         if (ctx.hovering(rr)) {
             if (c.ImGui_IsMouseClicked(0)) choose(ctx, item);

@@ -8,7 +8,6 @@ window transparent=#true
 options {
     option "brilho" label="Reflexo nos cartões" description="Uma faixa de luz no topo de cada cartão, como vidro de verdade." default=#true
     option "abas" label="Abas de canal" description="Mostra os canais abertos em abas acima da conversa." default=#true
-    option "status" label="Barra de status" description="Conexão, ping, RAM e relógio na parte de baixo." default=#true
 }
 
 colors mode=dark {
@@ -67,6 +66,6 @@ layout {
             }
             member-list width=236 style=card hide-below=1180 inset-y=4
         }
-        status-bar height=36 style=card variant=pills when=status items="conn ping ram frame voice spacer theme keys clock"
+        status-bar height=36 style=card variant=pills items="conn ping ram frame voice spacer theme keys clock"
     }
 }

@@ -12,6 +12,7 @@ const usage =
     \\  --settings        abre já nas configurações
     \\  --shot ARQ.png    salva um print quando a tela estabilizar e sai
     \\  --mode MODO       claro ou escuro (ignora as configurações)
+    \\  --qa              roda o teste automático da interface (prints em qa-out/)
     \\  --demo            usa os dados de demonstração mesmo com token
     \\  --no-live         desliga as mensagens automáticas do modo demonstração
     \\  --stats           mostra tempo até o primeiro quadro
@@ -36,6 +37,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
         } else if (std.mem.eql(u8, arg, "--mode")) {
             const m = it.next() orelse return fail("--mode precisa de claro ou escuro");
             opts.mode = if (std.mem.eql(u8, m, "claro") or std.mem.eql(u8, m, "light")) .light else .dark;
+        } else if (std.mem.eql(u8, arg, "--qa")) {
+            opts.qa = true;
+            opts.live = false;
+            if (@import("c").SDL_getenv("SDL_VIDEO_DRIVER") == null) _ = @import("c").SDL_setenv_unsafe("SDL_VIDEO_DRIVER", "offscreen", 1);
         } else if (std.mem.eql(u8, arg, "--demo")) {
             opts.demo = true;
         } else if (std.mem.eql(u8, arg, "--settings")) {
@@ -53,7 +58,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     const app = try App.create(std.heap.c_allocator, opts);
     defer app.destroy();
-    app.run();
+    const ok = app.run();
+    if (!ok) std.process.exit(1);
 }
 
 fn fail(msg: []const u8) error{InvalidArgs} {

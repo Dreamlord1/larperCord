@@ -7,6 +7,7 @@ const std = @import("std");
 const c = @import("c");
 const kdl = @import("../theme/kdl.zig");
 const d = @import("draw.zig");
+const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const types = @import("../core/types.zig");
@@ -49,6 +50,7 @@ pub fn memberList(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             if (tty) {
                 const rr: d.Rect = .{ .x = r.x + 4, .y = y, .w = r.w - 8, .h = 20 };
                 const hb = d.hit(ctx, @intCast(uid), rr);
+                qa.mark(rr, "member:{d}", .{uid});
                 memberClick(ctx, hb, uid, rr);
                 if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
                 d.text(dl, fam.get(.regular), fs - 1, rr.x + 6, d.centerY(rr, fs - 1), w.statusColor(ctx, u.status), w.statusGlyph(u.status));
@@ -58,6 +60,7 @@ pub fn memberList(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             }
             const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = 42 };
             const hb = d.hit(ctx, @intCast(uid), rr);
+            qa.mark(rr, "member:{d}", .{uid});
             memberClick(ctx, hb, uid, rr);
             const k = anim.to(anim.id("member", uid), if (hb.hovered) 1 else 0, 24);
             d.rect(dl, rr, ctx.col(.hover).alpha(k * 1.4), ctx.th.radius);
@@ -162,6 +165,7 @@ pub fn statusBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const sr: d.Rect = .{ .x = x, .y = r.y + (if (pills) @as(f32, 4) else 0), .w = s.w + pad * 2, .h = r.h - (if (pills) @as(f32, 8) else 0) };
         if (s.item == .theme) {
             const hb = d.hit(ctx, i, sr);
+            qa.mark(sr, "status-theme", .{});
             if (hb.clicked) ctx.act(.{ .next_theme = 1 });
             if (hb.hovered) d.rect(dl, sr, ctx.col(.hover), if (pills) sr.h / 2 else 0);
         }

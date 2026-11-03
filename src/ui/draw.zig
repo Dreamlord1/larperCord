@@ -255,8 +255,20 @@ pub const Hit = struct { hovered: bool, clicked: bool, held: bool, middle: bool,
 
 /// Área clicável invisível. `id` precisa ser único dentro do componente.
 pub fn hit(ctx: *Ctx, id: usize, r: Rect) Hit {
+    return hitEx(ctx, id, r, false);
+}
+
+/// Como `hit`, para algo que fica *embaixo* de outro elemento clicável (a
+/// linha de citação, sob a barra de ações): o de cima ganha o clique.
+/// (Não usamos isso em todo botão porque quebra o Ctrl+clique do ImGui.)
+pub fn hitUnder(ctx: *Ctx, id: usize, r: Rect) Hit {
+    return hitEx(ctx, id, r, true);
+}
+
+fn hitEx(ctx: *Ctx, id: usize, r: Rect, under: bool) Hit {
     c.ImGui_SetCursorScreenPos(v(r.x, r.y));
     c.ImGui_PushIDInt(@truncate(@as(i64, @bitCast(id))));
+    if (under) c.ImGui_SetNextItemAllowOverlap();
     const clicked = c.ImGui_InvisibleButton("##h", v(@max(r.w, 1), @max(r.h, 1)), c.ImGuiButtonFlags_MouseButtonLeft | c.ImGuiButtonFlags_MouseButtonMiddle | c.ImGuiButtonFlags_MouseButtonRight);
     const hovered = c.ImGui_IsItemHovered(0);
     const held = c.ImGui_IsItemActive() and c.ImGui_IsMouseDown(0);

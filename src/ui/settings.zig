@@ -3,6 +3,7 @@
 const std = @import("std");
 const c = @import("c");
 const d = @import("draw.zig");
+const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const icons = @import("icons.zig");
@@ -81,6 +82,7 @@ const Page = struct {
         const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = row_h };
         const k_id = p.id();
         const hb = d.hit(ctx, k_id, r);
+        qa.mark(r, "toggle:{s}", .{label});
         if (hb.clicked) value.* = !value.*;
         d.text(p.dl, p.font(.medium), 16, r.x, r.y + 4, ctx.col(.text), label);
         if (desc.len > 0) _ = d.textClipped(p.dl, p.font(.regular), 13.5, r.x, r.y + 28, ctx.col(.muted), desc, r.w - 80);
@@ -112,6 +114,7 @@ const Page = struct {
         const k = (value.* - min) / (max - min);
         const hr: d.Rect = .{ .x = tr.x - 8, .y = tr.y - 10, .w = tr.w + 16, .h = 28 };
         const hb = d.hit(ctx, p.id(), hr);
+        qa.mark(hr, "slider:{s}", .{label});
         if (hb.held) {
             const t = std.math.clamp((ctx.mouse.x - tr.x) / tr.w, 0, 1);
             value.* = min + t * (max - min);
@@ -134,6 +137,7 @@ const Page = struct {
         p.y += 22;
         const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = 42 };
         const hb = d.hit(ctx, p.id(), r);
+        qa.mark(r, "select:{s}", .{label});
         if (hb.clicked) value.* = @intCast((@as(usize, value.*) + 1) % options.len);
         d.rect(p.dl, r, ctx.col(.rail).mix(ctx.col(.elevated), if (hb.hovered) 0.4 else 0.2), ctx.th.radius);
         d.border(p.dl, r, if (hb.hovered) ctx.col(.accent).alpha(0.6) else ctx.col(.border), ctx.th.radius, 1);
@@ -147,6 +151,7 @@ const Page = struct {
         for (options, 0..) |o, i| {
             const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = if (descs.len > i) @as(f32, 60) else 44 };
             const hb = d.hit(ctx, p.id(), r);
+            qa.mark(r, "radio:{s}", .{o});
             if (hb.clicked) value.* = @intCast(i);
             const sel = value.* == i;
             d.rect(p.dl, r, if (sel) ctx.col(.selected) else if (hb.hovered) ctx.col(.hover) else ctx.col(.rail).alpha(0.5), ctx.th.radius);
@@ -169,6 +174,7 @@ const Page = struct {
         for (options, 0..) |o, i| {
             const r: d.Rect = .{ .x = p.x + @as(f32, @floatFromInt(i)) * (bw + gap), .y = p.y, .w = bw, .h = 44 };
             const hb = d.hit(ctx, p.id(), r);
+            qa.mark(r, "seg:{s}", .{o});
             if (hb.clicked) value.* = @intCast(i);
             const sel = value.* == i;
             const k = anim.to(anim.id("seg", i + @as(usize, @intFromPtr(value))), if (sel) 1 else if (hb.hovered) 0.4 else 0, 20);
@@ -186,6 +192,7 @@ const Page = struct {
         const tw = d.width(f, 14, label);
         const r: d.Rect = .{ .x = p.x, .y = p.y, .w = tw + 32, .h = 36 };
         const hb = d.hit(ctx, p.id(), r);
+        qa.mark(r, "button:{s}", .{label});
         const base = if (danger) ctx.col(.danger) else ctx.col(.accent);
         d.rect(p.dl, r, if (hb.hovered) base.mix(d.Rgba.black, 0.12) else base, ctx.th.radius);
         d.text(p.dl, f, 14, r.x + 16, d.centerY(r, 14), if (danger) d.Rgba.white else ctx.col(.accent_text), label);
@@ -252,6 +259,7 @@ pub fn draw(ctx: *d.Ctx, previews: []const Preview) void {
         for (sec.items, 0..) |it, ii| {
             const r: d.Rect = .{ .x = mx, .y = y, .w = 192, .h = 32 };
             const hb = d.hit(ctx, 100 + si * 20 + ii, r);
+            qa.mark(r, "settings:{s}", .{it.label});
             if (hb.clicked) s.page = it.page;
             const sel = s.page == it.page;
             if (sel) d.rect(dl, r, ctx.col(.selected).mix(ctx.col(.text), 0.04), ctx.th.radius) else if (hb.hovered) d.rect(dl, r, ctx.col(.hover), ctx.th.radius);
@@ -265,6 +273,7 @@ pub fn draw(ctx: *d.Ctx, previews: []const Preview) void {
     {
         const r: d.Rect = .{ .x = mx, .y = y, .w = 192, .h = 32 };
         const hb = d.hit(ctx, 99, r);
+        qa.mark(r, "settings:Sair", .{});
         if (hb.hovered) d.rect(dl, r, ctx.col(.hover), ctx.th.radius);
         d.text(dl, fam.get(.medium), 15, r.x + 10, d.centerY(r, 15), ctx.col(.danger), "Sair");
         if (hb.clicked) ctx.st.showToast(ctx.now_ms, false, "isso aqui é só um protótipo, você não sai daqui não 😄", .{});
@@ -289,6 +298,7 @@ pub fn draw(ctx: *d.Ctx, previews: []const Preview) void {
     const cx = @min(content.x + 40 + cw + 60, win.right() - 40);
     const cr: d.Rect = .{ .x = cx - 18, .y = win.y + 60, .w = 36, .h = 36 };
     const hb = d.hit(ctx, 98, cr);
+    qa.mark(cr, "settings-close", .{});
     c.ImDrawList_AddCircleEx(dl, d.v(cx, cr.y + 18), 17, (if (hb.hovered) ctx.col(.text) else ctx.col(.muted)).u(), 0, 2, 0);
     const xc = if (hb.hovered) ctx.col(.text) else ctx.col(.muted);
     d.line(dl, cx - 6, cr.y + 12, cx + 6, cr.y + 24, xc, 2);
@@ -428,6 +438,7 @@ fn themeGrid(p: *Page, previews: []const Preview) void {
         const row = i / cols;
         const r: d.Rect = .{ .x = p.x + @as(f32, @floatFromInt(col)) * (cw + gap), .y = p.y + @as(f32, @floatFromInt(row)) * (ch + gap), .w = cw, .h = ch };
         const hb = d.hit(ctx, 500 + i, r);
+        qa.mark(r, "theme-card:{s}", .{pv.name});
         if (hb.clicked) ctx.act(.{ .set_theme = i });
         const sel = i == ctx.theme_index;
         const k = anim.to(anim.id("tcard", i), if (sel) 1 else if (hb.hovered) 0.5 else 0, 18);

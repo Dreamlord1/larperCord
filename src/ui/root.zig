@@ -66,6 +66,7 @@ fn hidden(ctx: *d.Ctx, name: []const u8) bool {
 }
 
 pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []const Preview) void {
+    @import("qa.zig").beginFrame();
     const vp = c.ImGui_GetMainViewport();
     c.ImGui_SetNextWindowPos(vp.*.Pos, 0);
     c.ImGui_SetNextWindowSize(vp.*.Size, 0);

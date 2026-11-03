@@ -7,6 +7,7 @@ const std = @import("std");
 const c = @import("c");
 const kdl = @import("../theme/kdl.zig");
 const d = @import("draw.zig");
+const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const icons = @import("icons.zig");
@@ -54,6 +55,7 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     }
     const sr: d.Rect = .{ .x = sx, .y = r.y + r.h / 2 - 13, .w = search_w, .h = 26 };
     const sh = d.hit(ctx, 1, sr);
+    qa.mark(sr, "header-search", .{});
     if (sh.clicked) ctx.act(.open_palette);
     d.tip(ctx, sr, "Buscar canais, servidores e ações", sh.hovered);
     const sk = anim.to(anim.id("search", @intFromPtr(n)), if (sh.hovered) 1 else 0, 20);
@@ -62,6 +64,7 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     icons.search(dl, sr.right() - 15, sr.y + 13, ctx.col(.faint).mix(ctx.col(.muted), sk).u());
     const mr: d.Rect = .{ .x = sx - 40, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
     const mh = d.hit(ctx, 2, mr);
+    qa.mark(mr, "header-members", .{});
     if (mh.clicked) ctx.st.settings.show_member_list = !ctx.st.settings.show_member_list;
     icons.members(dl, mr.x + 14, mr.y + 14, (if (ctx.st.settings.show_member_list or mh.hovered) ctx.col(.text) else ctx.col(.muted)).u());
     d.tip(ctx, mr, if (ctx.st.settings.show_member_list) "Esconder membros" else "Mostrar membros", mh.hovered);
@@ -97,6 +100,7 @@ pub fn tabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const h: f32 = if (tty) r.h else r.h - 10;
         const tr: d.Rect = .{ .x = x, .y = r.y + (r.h - h) / 2, .w = tab_w, .h = h };
         const hb = d.hit(ctx, i, tr);
+        qa.mark(tr, "tab:{d}", .{i});
         if (hb.clicked) ctx.act(.{ .focus_tab = i });
         if (hb.middle) ctx.act(.{ .close_tab = i });
         const k = anim.to(anim.id("tab", id), if (active) 1 else if (hb.hovered) 0.4 else 0, 20);
@@ -137,6 +141,7 @@ pub fn tabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     // Nova aba (abre a paleta).
     const pr: d.Rect = .{ .x = x, .y = r.y + r.h / 2 - 12, .w = 24, .h = 24 };
     const ph = d.hit(ctx, 999, pr);
+    qa.mark(pr, "tab-plus", .{});
     if (ph.clicked) ctx.act(.open_palette);
     d.tip(ctx, pr, "Abrir canal em nova aba", ph.hovered);
     const pk = anim.to(anim.id("tab-plus", @intFromPtr(n)), if (ph.hovered) 1 else 0, 20);

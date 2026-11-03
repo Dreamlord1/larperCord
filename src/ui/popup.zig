@@ -4,6 +4,7 @@
 const std = @import("std");
 const c = @import("c");
 const d = @import("draw.zig");
+const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const state = @import("state.zig");
@@ -22,15 +23,31 @@ const quick = [_][]const u8{ "👍", "😂", "😭", "🔥" };
 const role_names = [_][]const u8{ "Admin", "Moderação", "Zig", "Rice", "Gamer", "Arte", "Música", "Membro" };
 
 fn close(ctx: *d.Ctx) void {
+    if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[popup] fechou\n", .{});
     ctx.st.popup = .none;
     ctx.st.focus_input = true;
+}
+
+/// Popup que estava aberto no quadro anterior. Só damos foco quando ele
+/// aparece: focar outra janela a cada quadro cancelaria o clique em andamento
+/// (o botão ficava "apertado" mas o clique nunca completava).
+var shown_key: u64 = 0;
+var appearing = false;
+
+fn popupKey(p: state.Popup) u64 {
+    return switch (p) {
+        .none => 0,
+        .menu => |m| 1 +% m.id *% 31 +% @intFromEnum(m.kind),
+        .profile => |pr| 2 +% pr.user *% 31,
+        .emoji => |e| 3 +% e.target *% 31,
+    };
 }
 
 /// Janela do ImGui para o popup (recebe o mouse antes do resto).
 fn beginWindow(id: [*:0]const u8, r: d.Rect) *c.ImDrawList {
     c.ImGui_SetNextWindowPos(d.v(r.x, r.y), 0);
     c.ImGui_SetNextWindowSize(d.v(r.w, r.h), 0);
-    c.ImGui_SetNextWindowFocus();
+    if (appearing) c.ImGui_SetNextWindowFocus();
     _ = c.ImGui_Begin(id, null, c.ImGuiWindowFlags_NoDecoration | c.ImGuiWindowFlags_NoBackground |
         c.ImGuiWindowFlags_NoSavedSettings | c.ImGuiWindowFlags_NoMove | c.ImGuiWindowFlags_NoScrollWithMouse);
     return c.ImGui_GetWindowDrawList();
@@ -47,17 +64,21 @@ fn fit(ctx: *const d.Ctx, x: f32, y: f32, wd: f32, h: f32) d.Rect {
 }
 
 pub fn draw(ctx: *d.Ctx) void {
+    const k = popupKey(ctx.st.popup);
+    appearing = k != shown_key;
+    shown_key = k;
     if (ctx.st.popup == .none) return;
     // Fundo que captura cliques fora.
     c.ImGui_SetNextWindowPos(d.v(ctx.win.x, ctx.win.y), 0);
     c.ImGui_SetNextWindowSize(d.v(ctx.win.w, ctx.win.h), 0);
-    c.ImGui_SetNextWindowFocus();
+    if (appearing) c.ImGui_SetNextWindowFocus();
     _ = c.ImGui_Begin("##popup-backdrop", null, c.ImGuiWindowFlags_NoDecoration | c.ImGuiWindowFlags_NoBackground |
         c.ImGuiWindowFlags_NoSavedSettings | c.ImGuiWindowFlags_NoMove);
     c.ImGui_SetCursorScreenPos(d.v(ctx.win.x, ctx.win.y));
     _ = c.ImGui_InvisibleButton("##bd", d.v(ctx.win.w, ctx.win.h), c.ImGuiButtonFlags_MouseButtonLeft | c.ImGuiButtonFlags_MouseButtonRight);
     const outside = c.ImGui_IsItemClickedEx(0) or c.ImGui_IsItemClickedEx(1);
     c.ImGui_End();
+    if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null and (outside or appearing)) std.debug.print("[popup] appearing={} outside={} mouse={d:.0},{d:.0}\n", .{ appearing, outside, ctx.mouse.x, ctx.mouse.y });
     if (outside or c.ImGui_IsKeyPressed(c.ImGuiKey_Escape)) return close(ctx);
 
     const saved = ctx.dl;
@@ -150,6 +171,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         for (quick, 0..) |e, i| {
             const er: d.Rect = .{ .x = r.x + 8 + @as(f32, @floatFromInt(i)) * 42, .y = yy, .w = 38, .h = 36 };
             const hb = d.hit(ctx, 200 + i, er);
+            qa.mark(er, "menu-react:{d}", .{i});
             if (hb.hovered) d.circle(dl, er.x + 19, er.y + 18, 18, ctx.col(.hover).mix(ctx.col(.text), 0.06));
             const es: f32 = if (hb.hovered) 23 else 20;
             d.text(dl, fam.get(.regular), es, er.x + 19 - es / 2, er.y + 18 - es * 0.6, d.Rgba.white, e);
@@ -167,6 +189,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         }
         const ir: d.Rect = .{ .x = r.x + 6, .y = yy, .w = r.w - 12, .h = row_h - 2 };
         const hb = d.hit(ctx, i, ir);
+        qa.mark(ir, "menu:{s}", .{it.label});
         const base = if (it.danger) ctx.col(.danger) else ctx.col(.accent);
         if (hb.hovered) d.rect(dl, ir, base, @max(ctx.th.radius - 2, 2));
         const tc = if (hb.hovered) (if (it.danger) d.Rgba.white else ctx.col(.accent_text)) else if (it.danger) ctx.col(.danger) else ctx.col(.text).mix(ctx.col(.muted), 0.15);
@@ -341,7 +364,7 @@ fn profile(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
         c.ImGui_SetNextItemWidth(ir.w - 20);
         var hint: [80]u8 = undefined;
         const h = std.fmt.bufPrintSentinel(&hint, "Mensagem @{s}", .{u.name}, 0) catch "";
-        if (c.ImGui_IsWindowAppearing()) c.ImGui_SetKeyboardFocusHere();
+        if (appearing) c.ImGui_SetKeyboardFocusHere();
         if (c.ImGui_InputTextWithHint("##pmsg", h.ptr, &ctx.st.popup_input, ctx.st.popup_input.len, c.ImGuiInputTextFlags_EnterReturnsTrue)) {
             const t = std.mem.sliceTo(&ctx.st.popup_input, 0);
             if (t.len > 0) {
@@ -376,6 +399,7 @@ fn emojiPicker(ctx: *d.Ctx, target: Id, x: f32, y: f32) void {
         const cy = r.y + 38 + @as(f32, @floatFromInt(i / cols)) * cell;
         const er: d.Rect = .{ .x = cx, .y = cy, .w = cell, .h = cell };
         const hb = d.hit(ctx, i, er);
+        qa.mark(er, "emoji:{d}", .{i});
         const k = anim.to(anim.id("emo", i), if (hb.hovered) 1 else 0, 30);
         if (k > 0.01) d.rect(dl, er.inset(2, 2), ctx.col(.hover).mix(ctx.col(.text), 0.05).alpha(k), 6);
         const es = 24 + 4 * k;
