@@ -59,24 +59,36 @@ test "gif do tenor e do giphy a partir do vídeo" {
     try std.testing.expect(!allowedHost("https://tenor.com.evil.com/x.gif"));
 }
 
-/// Pede ao proxy de mídia a imagem já reduzida (`width`/`height`) e em PNG
-/// quando o original é WebP (que o stb_image não lê).
+/// Pede ao proxy de mídia a imagem já reduzida (`width`/`height`). WebP
+/// vem como WebP mesmo: o cache de imagens decodifica (inclusive animado).
 pub fn proxiedUrl(buf: []u8, url: []const u8, w: u16, h: u16) ?[:0]const u8 {
     const is_media = std.mem.indexOf(u8, url, "media.discordapp.net/") != null or std.mem.indexOf(u8, url, ".discordapp.net/external/") != null;
-    const q = std.mem.indexOfScalar(u8, url, '?');
-    const path = url[0 .. q orelse url.len];
-    const webp = std.ascii.endsWithIgnoreCase(path, ".webp");
     if (!is_media) return std.fmt.bufPrintSentinel(buf, "{s}", .{url}, 0) catch null;
-    const sep: []const u8 = if (q != null) "&" else "?";
-    return std.fmt.bufPrintSentinel(buf, "{s}{s}width={d}&height={d}{s}", .{ url, sep, w, h, if (webp) "&format=png" else "" }, 0) catch null;
+    const sep: []const u8 = if (std.mem.indexOfScalar(u8, url, '?') != null) "&" else "?";
+    return std.fmt.bufPrintSentinel(buf, "{s}{s}width={d}&height={d}", .{ url, sep, w, h }, 0) catch null;
 }
 
-test "url do proxy pede o tamanho e PNG para WebP" {
+test "url do proxy pede o tamanho e mantém o WebP" {
     var b: [512]u8 = undefined;
     try std.testing.expectEqualStrings("https://media.discordapp.net/attachments/1/2/a.png?ex=1&width=256&height=128", proxiedUrl(&b, "https://media.discordapp.net/attachments/1/2/a.png?ex=1", 256, 128).?);
-    try std.testing.expectEqualStrings("https://media.discordapp.net/a.webp?width=128&height=128&format=png", proxiedUrl(&b, "https://media.discordapp.net/a.webp", 128, 128).?);
+    try std.testing.expectEqualStrings("https://media.discordapp.net/a.webp?width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/a.webp", 128, 128).?);
+    try std.testing.expectEqualStrings("https://media.discordapp.net/stickers/1.webp?size=160&width=128&height=128", proxiedUrl(&b, "https://media.discordapp.net/stickers/1.webp?size=160", 128, 128).?);
+    try std.testing.expectEqualStrings("https://cdn.discordapp.com/avatar-decoration-presets/a.png?size=160&passthrough=true", proxiedUrl(&b, "https://cdn.discordapp.com/avatar-decoration-presets/a.png?size=160&passthrough=true", 128, 128).?);
     try std.testing.expect(allowedHost("https://cdn.discordapp.com/x"));
     try std.testing.expect(!allowedHost("https://evil.com/cdn.discordapp.com/x"));
     try std.testing.expect(!allowedHost("http://cdn.discordapp.com/x"));
     try std.testing.expect(!allowedHost("https://cdn.discordapp.com.evil.com/x"));
+}
+
+/// Só host + caminho, sem a query (que leva assinaturas) — para logs.
+pub fn logPart(url: []const u8) []const u8 {
+    const start = if (std.mem.indexOf(u8, url, "://")) |i| i + 3 else 0;
+    const end = std.mem.indexOfAny(u8, url[start..], "?#") orelse url.len - start;
+    return url[start .. start + end];
+}
+
+test "url no log fica sem a query" {
+    try std.testing.expectEqualStrings("cdn.discordapp.com/attachments/1/2/a.png", logPart("https://cdn.discordapp.com/attachments/1/2/a.png?ex=1&hm=abc"));
+    try std.testing.expectEqualStrings("media.discordapp.net/a.webp", logPart("https://media.discordapp.net/a.webp#x"));
+    try std.testing.expectEqualStrings("/tmp/a.png", logPart("file:///tmp/a.png"));
 }

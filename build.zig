@@ -30,6 +30,8 @@ pub fn build(b: *std.Build) void {
     translate.linkSystemLibrary("fontconfig", .{});
     translate.linkSystemLibrary("libcurl", .{});
     translate.linkSystemLibrary("zlib", .{});
+    translate.linkSystemLibrary("libwebp", .{});
+    translate.linkSystemLibrary("libwebpdemux", .{});
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -65,7 +67,7 @@ pub fn build(b: *std.Build) void {
         },
         .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti" },
     });
-    // Decodificador de imagens (PNG/JPEG/GIF) dos anexos.
+    // Decodificador de imagens (PNG/JPEG/GIF) dos anexos; WebP vem da libwebp.
     mod.addIncludePath(b.path("third_party/stb"));
     mod.addCSourceFile(.{ .file = b.path("third_party/stb/stb_image.c"), .flags = &.{"-O2"} });
     mod.linkSystemLibrary("sdl3", .{});
@@ -73,6 +75,8 @@ pub fn build(b: *std.Build) void {
     mod.linkSystemLibrary("fontconfig", .{});
     mod.linkSystemLibrary("libcurl", .{});
     mod.linkSystemLibrary("zlib", .{});
+    mod.linkSystemLibrary("libwebp", .{});
+    mod.linkSystemLibrary("libwebpdemux", .{});
 
     const exe = b.addExecutable(.{ .name = "larpercord", .root_module = mod });
     b.installArtifact(exe);
