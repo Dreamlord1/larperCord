@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# QA completo: a bateria geral no tema classico e a bateria por tema em
-# todos os temas, no escuro e no claro. Não abre janela. Prints em qa-out/.
+# QA completo: a bateria geral no tema classico, a tela de login e a bateria
+# por tema em todos os temas, no escuro e no claro. Não abre janela. Prints em qa-out/.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 zig build || exit 1
@@ -18,6 +18,9 @@ run() {
     fi
 }
 run "geral (classico)" $bin --qa --theme classico
+for m in escuro claro; do
+    QA_SUITE=login QA_PREFIX="$m-" run "login ($m)" $bin --qa --mode "$m"
+done
 for t in classico vidro terminal bolhas zen papel escritorio; do
     for m in escuro claro; do
         QA_SUITE=tema QA_PREFIX="$t-$m-" run "$t ($m)" $bin --qa --theme "$t" --mode "$m"

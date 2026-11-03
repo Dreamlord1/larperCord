@@ -572,6 +572,10 @@ fn account(p: *Page) void {
     p.heading("Senha e autenticação");
     _ = p.button("Alterar senha", false);
     p.y += 52;
+    p.heading("Sessão");
+    p.note(if (ctx.store.demo) "Você está no modo demonstração." else "Sair apaga o token guardado neste computador.");
+    if (p.button("Sair", true)) ctx.act(.logout);
+    p.y += 52;
     p.heading("Remoção de conta");
     if (p.button("Excluir conta", true)) ctx.st.showToast(ctx.now_ms, false, "calma, ninguém vai excluir nada 😅", .{});
     p.y += 44;

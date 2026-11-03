@@ -96,4 +96,6 @@ pub const Action = union(enum) {
     mark_read: Id,
     /// Liga/desliga uma opção do tema atual (índice em `Theme.options`).
     set_theme_option: struct { index: usize, value: bool },
+    /// "Sair": esquece o token e volta para a tela de login.
+    logout,
 };

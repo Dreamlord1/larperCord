@@ -1301,3 +1301,44 @@ pub fn loadToken() ?[:0]u8 {
     if (s.len <= 20) return null;
     return alloc.dupeSentinel(u8, s, 0) catch null;
 }
+
+fn tokenFilePath(buf: []u8) ?[:0]const u8 {
+    const home = c.SDL_getenv("HOME") orelse return null;
+    return std.fmt.bufPrintSentinel(buf, "{s}/.config/larpercord/token", .{std.mem.span(home)}, 0) catch null;
+}
+
+/// Guarda o token para os próximos inícios: no chaveiro do sistema
+/// (`secret-tool`, pela entrada padrão, então ele não aparece no `ps`) ou,
+/// sem chaveiro, em ~/.config/larpercord/token com permissão 600.
+/// Retorna onde guardou.
+pub fn saveToken(token: []const u8) enum { keyring, file, failed } {
+    if (c.popen("secret-tool store --label=larperCord service larpercord 2>/dev/null", "w")) |f| {
+        const wrote = c.fwrite(token.ptr, 1, token.len, f);
+        if (c.pclose(f) == 0 and wrote == token.len) {
+            // Não deixa uma cópia velha no arquivo.
+            var pbuf: [512]u8 = undefined;
+            if (tokenFilePath(&pbuf)) |p| _ = c.unlink(p.ptr);
+            return .keyring;
+        }
+    }
+    var pbuf: [512]u8 = undefined;
+    const path = tokenFilePath(&pbuf) orelse return .failed;
+    if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
+        var dbuf: [512]u8 = undefined;
+        const dir = std.fmt.bufPrintSentinel(&dbuf, "{s}", .{path[0..slash]}, 0) catch return .failed;
+        _ = c.SDL_CreateDirectory(dir.ptr);
+    }
+    const fd = c.open(path.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_CLOEXEC, @as(c_uint, 0o600));
+    if (fd < 0) return .failed;
+    defer _ = c.close(fd);
+    _ = c.fchmod(fd, 0o600);
+    if (c.write(fd, token.ptr, token.len) != @as(isize, @intCast(token.len))) return .failed;
+    return .file;
+}
+
+/// "Sair": apaga o token do chaveiro e do arquivo.
+pub fn forgetToken() void {
+    if (c.popen("secret-tool clear service larpercord 2>/dev/null", "r")) |f| _ = c.pclose(f);
+    var pbuf: [512]u8 = undefined;
+    if (tokenFilePath(&pbuf)) |p| _ = c.unlink(p.ptr);
+}

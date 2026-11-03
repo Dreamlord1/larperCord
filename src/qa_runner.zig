@@ -694,8 +694,96 @@ const ops_theme = [_]Op{
     .{ .wait = 200 },
 };
 
+// --- Tela de login -------------------------------------------------------------
+
+fn loginForm(app: *App) bool {
+    return app.login.phase == .form and qa.find("login:token") != null;
+}
+fn loginErr(app: *App) bool {
+    return app.login.phase == .form and app.login.err_len > 0;
+}
+fn loginRefused(app: *App) bool {
+    const e = app.login.err_buf[0..app.login.err_len];
+    return std.mem.indexOf(u8, e, "recusou") != null and app.login.tokenText().len == 0;
+}
+fn loginShown(app: *App) bool {
+    return app.login.show;
+}
+fn loginHidden(app: *App) bool {
+    return !app.login.show;
+}
+fn loginNoRemember(app: *App) bool {
+    return !app.login.remember;
+}
+fn loginRemember(app: *App) bool {
+    return app.login.remember;
+}
+fn loginHelp(app: *App) bool {
+    return app.login.help and app.login.help_k > 0.98;
+}
+fn loginNoHelp(app: *App) bool {
+    return !app.login.help;
+}
+fn loginGone(app: *App) bool {
+    return app.store.ready and !app.login.visible() and app.store.demo;
+}
+fn loginBack(app: *App) bool {
+    return loginForm(app) and !app.store.ready and app.net == .none;
+}
+
+const ops_login = [_]Op{
+    s("login"),
+    .{ .wait = 2200 },
+    expect("a tela de login aparece depois da abertura", loginForm),
+    .{ .shot = "login" },
+    click("login:token"),
+    .{ .text = "curto" },
+    key(c.ImGuiKey_Enter),
+    expect("token curto mostra erro", loginErr),
+    .{ .wait = 120 },
+    .{ .shot = "login-erro" },
+    click("login:mostrar"),
+    expect("mostrar o token", loginShown),
+    click("login:mostrar"),
+    expect("ocultar o token", loginHidden),
+    click("login:token"),
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    .{ .text = "XTIzNDU2Nzg5MDEyMzQ1Njc4.Gqa000.token-de-teste-que-nao-existe-aaaaaaaaaaaa" },
+    click("login:entrar"),
+    expect("token recusado: erro e campo limpo", loginRefused),
+    click("login:lembrar"),
+    expect("desligar o lembrar", loginNoRemember),
+    click("login:lembrar"),
+    expect("religar o lembrar", loginRemember),
+    click("login:ajuda"),
+    expect("abrir a ajuda do token", loginHelp),
+    .{ .shot = "login-ajuda" },
+    click("login:ajuda"),
+    expect("fechar a ajuda", loginNoHelp),
+    .{ .resize = .{ 760, 640 } },
+    .{ .wait = 300 },
+    expect("janela estreita: o campo continua lá", loginForm),
+    .{ .shot = "login-estreita" },
+    .{ .resize = .{ 1280, 800 } },
+    .{ .wait = 200 },
+    click("login:demo"),
+    .{ .expect = .{ .name = "modo demonstração entra no app", .check = loginGone, .timeout_ms = 5000 } },
+    .{ .shot = "login-entrou" },
+    ctrl(c.ImGuiKey_Comma),
+    expect("abrir as configurações", settingsOpen),
+    click("settings:Minha conta"),
+    click("button:Sair"),
+    expect("sair volta para o login", loginBack),
+    .{ .wait = 300 },
+    .{ .shot = "login-saiu" },
+    click("login:demo"),
+    .{ .expect = .{ .name = "entrar de novo depois de sair", .check = loginGone, .timeout_ms = 5000 } },
+};
+
 fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "tema")) return &ops_theme;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "login")) return &ops_login;
     const scene = std.mem.span(c.SDL_getenv("QA_SCENE") orelse return &ops);
     if (std.mem.eql(u8, scene, "ctrl")) return &ops_ctrl;
     if (std.mem.eql(u8, scene, "nome")) return &ops_nome;

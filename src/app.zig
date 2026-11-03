@@ -18,6 +18,8 @@ const State = @import("ui/state.zig").State;
 const d = @import("ui/draw.zig");
 const anim = @import("ui/anim.zig");
 const root = @import("ui/root.zig");
+const login_mod = @import("ui/login.zig");
+const qa_mod = @import("ui/qa.zig");
 const widgets = @import("ui/widgets.zig");
 const settings_state = @import("ui/settings_state.zig");
 const kdl = @import("theme/kdl.zig");
@@ -34,6 +36,8 @@ pub const Options = struct {
     settings: bool = false,
     /// Roda o robô de QA (ver qa_runner.zig).
     qa: bool = false,
+    /// Mostra a tela de login sem usar o token salvo.
+    login: bool = false,
 };
 
 var wake_type_global: u32 = 0;
@@ -42,7 +46,8 @@ fn wakeTheme() void {
     platform.Window.wake(wake_type_global, .theme);
 }
 
-const Net = union(enum) { fake: Gateway, real: discord.Gateway };
+/// `none`: ainda na tela de login, sem conexão nenhuma.
+const Net = union(enum) { none, fake: Gateway, real: discord.Gateway };
 
 pub const App = struct {
     gpa: std.mem.Allocator,
@@ -61,6 +66,13 @@ pub const App = struct {
     timer: c.SDL_TimerID = 0,
     started_ns: u64,
     layout_key: u32 = 0,
+    login: login_mod.Login = .{},
+    curl_on: bool = false,
+    /// Guardar o token quando o Discord aceitar (o "Lembrar" do login).
+    save_token: bool = false,
+    /// Último aviso da rede (vira a mensagem de erro do login).
+    last_notice: [200]u8 = undefined,
+    last_notice_len: usize = 0,
 
     pub fn create(gpa: std.mem.Allocator, opts: Options) !*App {
         const started = c.SDL_GetTicksNS();
@@ -107,27 +119,18 @@ pub const App = struct {
         app.applyThemeStyle();
         app.themes.watch(wakeTheme);
 
-        // Conta de verdade se houver token; senão, os dados de demonstração.
-        const token = if (opts.demo or opts.shot != null or opts.qa) null else discord.loadToken();
-        if (token) |t| {
-            // Só inicia o libcurl/OpenSSL quando vai usar (~5 MB a menos no modo demonstração).
-            _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
-            app.net = .{ .real = .{
-                .commands = try Queue(ev.Command).init(gpa),
-                .sink = .{ .ctx = app, .push = pushEvent },
-                .token = t,
-            } };
-            try app.net.real.start();
-        } else {
-            app.store.demo = true;
-            app.net = .{ .fake = .{
-                .commands = try Queue(ev.Command).init(gpa),
-                .sink = .{ .ctx = app, .push = pushEvent },
-                .live = opts.live,
-                .rng = std.Random.DefaultPrng.init(@truncate(started)),
-            } };
-            try app.net.fake.start();
-        }
+        // Com token salvo: conecta direto (a tela de abertura aparece enquanto
+        // isso). Sem token: a tela de login. Prints e QA usam a demonstração.
+        app.net = .none;
+        const qa_login = opts.qa and if (c.SDL_getenv("QA_SUITE")) |q| std.mem.eql(u8, std.mem.span(q), "login") else false;
+        if (opts.login or qa_login) {
+            app.login.begin(.form);
+        } else if (opts.demo or opts.shot != null or opts.qa) {
+            try app.startDemo();
+        } else if (discord.loadToken()) |t| {
+            try app.startReal(t);
+            app.login.begin(.connecting);
+        } else app.login.begin(.form);
 
         // Relógio e RAM da barra de status: um tique a cada 2 s.
         app.timer = c.SDL_AddTimer(2000, tick, app);
@@ -137,17 +140,9 @@ pub const App = struct {
 
     pub fn destroy(app: *App) void {
         _ = c.SDL_RemoveTimer(app.timer);
-        switch (app.net) {
-            .fake => |*g| {
-                g.stop();
-                g.commands.deinit();
-            },
-            .real => |*g| {
-                g.stop();
-                g.commands.deinit();
-                c.curl_global_cleanup();
-            },
-        }
+        app.stopNet();
+        if (app.curl_on) c.curl_global_cleanup();
+        app.login.clearToken();
         app.events.deinit();
         app.store.deinit();
         app.themes.deinit();
@@ -160,8 +155,113 @@ pub const App = struct {
 
     fn cmd(app: *App, command: ev.Command) void {
         switch (app.net) {
+            .none => {},
             .fake => |*g| g.commands.push(command),
             .real => |*g| g.commands.push(command),
+        }
+    }
+
+    /// Conecta na conta de verdade. O gateway passa a ser dono do token.
+    fn startReal(app: *App, token: [:0]u8) !void {
+        // Só inicia o libcurl/OpenSSL quando vai usar (~5 MB a menos no modo demonstração).
+        if (!app.curl_on) _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
+        app.curl_on = true;
+        app.store.demo = false;
+        app.net = .{ .real = .{
+            .commands = try Queue(ev.Command).init(app.gpa),
+            .sink = .{ .ctx = app, .push = pushEvent },
+            .token = token,
+        } };
+        try app.net.real.start();
+    }
+
+    fn startDemo(app: *App) !void {
+        app.store.demo = true;
+        app.net = .{ .fake = .{
+            .commands = try Queue(ev.Command).init(app.gpa),
+            .sink = .{ .ctx = app, .push = pushEvent },
+            .live = app.opts.live,
+            .rng = std.Random.DefaultPrng.init(@truncate(app.started_ns)),
+        } };
+        try app.net.fake.start();
+    }
+
+    fn stopNet(app: *App) void {
+        switch (app.net) {
+            .none => {},
+            .fake => |*g| {
+                g.stop();
+                g.commands.deinit();
+            },
+            .real => |*g| {
+                g.stop();
+                g.commands.deinit();
+            },
+        }
+        app.net = .none;
+        // Eventos que ainda estavam na fila são da conexão que acabou.
+        var stale: std.ArrayList(ev.Event) = .empty;
+        defer stale.deinit(app.gpa);
+        app.events.drain(&stale);
+        for (stale.items) |e| app.store.apply(e, now()) catch {};
+    }
+
+    /// Volta ao estado de antes do login: sem conta, sem abas, sem nada.
+    fn resetSession(app: *App) void {
+        app.store.deinit();
+        app.store = Store.init(app.gpa);
+        const st = &app.st;
+        st.tabs.clearRetainingCapacity();
+        st.tab = 0;
+        st.guild = 0;
+        st.last_channel.clearRetainingCapacity();
+        st.collapsed.clearRetainingCapacity();
+        st.scroll.clearRetainingCapacity();
+        st.voice = null;
+        st.popup = .none;
+        st.palette.open = false;
+        st.settings.open = false;
+        st.reply_to = 0;
+        st.editing = 0;
+        st.selection = .{};
+        @memset(&st.input, 0);
+        st.input_sync = true;
+    }
+
+    /// O que a tela de login pediu.
+    fn loginResult(app: *App, r: login_mod.Result) void {
+        const lg = &app.login;
+        switch (r) {
+            .submit => {
+                const t = lg.tokenText();
+                if (t.len == 0) return lg.fail("Cole o token no campo acima.");
+                if (t.len < 50 or std.mem.indexOfAny(u8, t, " \t") != null)
+                    return lg.fail("Isso não parece um token do Discord.");
+                if (app.opts.qa) {
+                    // O QA nunca fala com o Discord: simula a recusa.
+                    lg.clearToken();
+                    return lg.fail("O Discord recusou esse token (teste).");
+                }
+                const owned = std.heap.c_allocator.dupeSentinel(u8, t, 0) catch return lg.fail("Sem memória.");
+                lg.clearToken();
+                app.resetSession();
+                app.save_token = lg.remember;
+                app.last_notice_len = 0;
+                app.startReal(owned) catch return lg.fail("Não consegui iniciar a conexão.");
+                lg.setPhase(.connecting);
+            },
+            .demo => {
+                lg.clearToken();
+                app.stopNet();
+                app.resetSession();
+                app.startDemo() catch return;
+                lg.setPhase(.connecting);
+            },
+            .cancel => {
+                app.stopNet();
+                app.resetSession();
+                lg.setPhase(.form);
+            },
         }
     }
 
@@ -548,6 +648,14 @@ pub const App = struct {
                 st.focus_input = true;
                 app.saveSettings();
             },
+            .logout => {
+                app.saveSettings();
+                if (!app.opts.qa) discord.forgetToken();
+                app.stopNet();
+                app.resetSession();
+                app.login.begin(.form);
+                app.login.t = 10; // sem a abertura de novo
+            },
         }
     }
 
@@ -558,8 +666,15 @@ pub const App = struct {
         defer batch.deinit(app.gpa);
         app.events.drain(&batch);
         const was_ready = app.store.ready;
+        var failed = false;
         for (batch.items) |e| {
-            if (e == .notice) app.st.showToast(now(), true, "{s}", .{e.notice});
+            if (e == .notice) {
+                app.st.showToast(now(), true, "{s}", .{e.notice});
+                const n = @min(e.notice.len, app.last_notice.len);
+                @memcpy(app.last_notice[0..n], e.notice[0..n]);
+                app.last_notice_len = n;
+            }
+            if (e == .status and e.status == .failed) failed = true;
             if (app.opts.stats) switch (e) {
                 .status => |st| std.log.info("conexão: {t}", .{st}),
                 .notice => |n| std.log.info("aviso: {s}", .{n}),
@@ -569,7 +684,26 @@ pub const App = struct {
             };
             app.store.apply(e, now()) catch {};
         }
-        if (!was_ready and app.store.ready) app.onReady();
+        if (!was_ready and app.store.ready) {
+            app.onReady();
+            if (app.login.phase == .connecting) app.login.setPhase(.leaving);
+            // O Discord aceitou: agora sim guarda o token, se pediram.
+            if (app.save_token and app.net == .real) {
+                app.save_token = false;
+                switch (discord.saveToken(app.net.real.token)) {
+                    .keyring => app.st.showToast(now(), false, "token guardado no chaveiro do sistema", .{}),
+                    .file => app.st.showToast(now(), false, "token guardado em ~/.config/larpercord/token", .{}),
+                    .failed => app.st.showToast(now(), true, "não consegui guardar o token", .{}),
+                }
+            }
+        }
+        if (failed and app.net == .real and !app.store.ready) {
+            // Token recusado (ou erro fatal) antes de entrar: volta ao login.
+            app.stopNet();
+            app.resetSession();
+            app.login.fail(if (app.last_notice_len > 0) app.last_notice[0..app.last_notice_len] else "Não deu pra entrar com esse token.");
+            return;
+        }
         // GUILD_DELETE/CHANNEL_DELETE: não deixa a interface apontando para
         // um servidor ou aba que o Discord acabou de tirar.
         if (app.st.guild != 0 and app.store.guild(app.st.guild) == null) app.st.guild = 0;
@@ -658,10 +792,16 @@ pub const App = struct {
         var frames: u32 = 0;
         var settled_frames: u32 = 0;
         var first_frame_logged = false;
+        var login_result: ?login_mod.Result = null;
+        // LARPER_RECORD=pasta: salva cada quadro da tela de login (a 30 qps fixos)
+        // para montar o vídeo/GIF da documentação.
+        const record_dir: ?[*:0]const u8 = c.SDL_getenv("LARPER_RECORD");
+        var record_n: u32 = 0;
 
         while (running) {
             var e: c.SDL_Event = undefined;
-            const busy = pending > 0 or anim.active or app.opts.shot != null or app.opts.qa;
+            const busy = pending > 0 or anim.active or app.opts.shot != null or app.opts.qa or
+                (app.login.visible() and !app.st.settings.reduce_motion);
             var got = if (busy) c.SDL_PollEvent(&e) else c.SDL_WaitEvent(&e);
             while (got) {
                 if (e.type == app.win.wake_type) {
@@ -707,6 +847,7 @@ pub const App = struct {
 
             if (app.opts.shot != null and settled_frames >= 3) app.scene();
             c.ImGui_NewFrame();
+            qa_mod.beginFrame();
             if (app.store.ready) {
                 const th = app.themes.theme_();
                 var ctx: d.Ctx = .{
@@ -730,6 +871,18 @@ pub const App = struct {
                 };
                 root.frame(&ctx, &app.placed, app.themes.previews.items);
             }
+            if (app.login.visible()) {
+                const th = app.themes.theme_();
+                const result = login_mod.draw(&app.login, .{
+                    .ui = app.uiFamily("Inter"),
+                    .io = app.io,
+                    .light = app.themes.mode == .light,
+                    .reduce = set.reduce_motion,
+                    .dt = if (record_dir != null) 1.0 / 30.0 else anim.dt,
+                });
+                _ = th;
+                if (result) |r| login_result = r;
+            }
             c.ImGui_Render();
 
             const r = app.win.renderer;
@@ -740,6 +893,11 @@ pub const App = struct {
             c.cImGui_ImplSDLRenderer3_RenderDrawData(c.ImGui_GetDrawData(), r);
             app.stats.frame_us = @intCast((c.SDL_GetTicksNS() - t0) / 1000);
 
+            if (login_result) |lr| {
+                login_result = null;
+                app.loginResult(lr);
+                pending = 3;
+            }
             // Ações acumuladas no quadro.
             for (app.actions.items) |a| app.handle(a);
             if (app.actions.items.len > 0) pending = 3;
@@ -750,15 +908,29 @@ pub const App = struct {
                 first_frame_logged = true;
                 std.log.info("primeiro quadro em {d} ms", .{(c.SDL_GetTicksNS() - app.started_ns) / 1_000_000});
             }
-            if (app.opts.shot) |path| {
+            if (record_dir) |dir| if (app.login.visible()) {
+                var pbuf: [512]u8 = undefined;
+                const p = std.fmt.bufPrintSentinel(&pbuf, "{s}/{d:0>4}.png", .{ std.mem.span(dir), record_n }, 0) catch unreachable;
+                _ = app.win.screenshot(p.ptr);
+                record_n += 1;
+                const max: u32 = if (c.SDL_getenv("LARPER_RECORD_FRAMES")) |n| std.fmt.parseInt(u32, std.mem.span(n), 10) catch 150 else 150;
+                if (record_n >= max) running = false;
+            };
+            if (app.opts.shot) |path| if (app.login.visible() and !app.store.ready) {
+                // Print da tela de login: espera a animação de entrada.
+                if (app.login.t > 2.6) {
+                    if (!app.win.screenshot(path)) std.log.err("não consegui salvar {s}", .{path});
+                    running = false;
+                }
+            } else {
                 const ready = app.store.ready and if (app.st.activeChannel()) |ch| (app.store.channel(ch).?.history == .loaded) else false;
                 settled_frames = if (ready) settled_frames + 1 else 0;
                 if (settled_frames == 12 or c.SDL_GetTicksNS() - app.started_ns > 6 * std.time.ns_per_s) {
                     if (!app.win.screenshot(path)) std.log.err("não consegui salvar {s}", .{path});
                     running = false;
                 }
-            }
-            if (app.opts.qa and app.store.ready and !runner.tick(app)) running = false;
+            };
+            if (app.opts.qa and (app.store.ready or app.login.visible()) and !runner.tick(app)) running = false;
             _ = c.SDL_RenderPresent(r);
             if (pending > 0) pending -= 1;
         }

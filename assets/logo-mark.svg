@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="100 110 1200 900" width="1200" height="900">
+  <title>larperCord</title>
+  <!-- O mascote com cara de deboche. As mesmas medidas estão em
+       src/ui/logo.zig, que anima o desenho. -->
+  <defs>
+    <path id="lc-body" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/>
+    <clipPath id="lc-clip"><use xlink:href="#lc-body"/></clipPath>
+  </defs>
+  <!-- corpo: luz rosa na borda, roxo por dentro, sombra embaixo à esquerda -->
+  <g clip-path="url(#lc-clip)">
+    <use xlink:href="#lc-body" fill="#F03CFF"/>
+    <use xlink:href="#lc-body" fill="#7A0BD0" transform="translate(12.5 45) scale(0.95)"/>
+    <path d="M150 690 C230 810 330 870 470 900 L440 980 L100 980 L100 690 Z" fill="#4B0790"/>
+  </g>
+  <use xlink:href="#lc-body" fill="none" stroke="#12061F" stroke-width="26" stroke-linejoin="round"/>
+  <!-- olhos de pálpebra caída -->
+  <path d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z" fill="#12061F"/>
+  <path d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z" fill="#12061F"/>
+  <!-- sorriso torto -->
+  <path d="M728 742 C830 722 922 700 980 652 C988 668 980 680 962 690 C900 722 822 742 732 750 Z" fill="#12061F"/>
+  <!-- brilho -->
+  <path d="M1095 160 C1105 250 1120 282 1240 296 C1130 310 1112 340 1110 436 C1100 340 1080 322 940 322 C1060 306 1088 272 1095 160 Z" fill="#FF3CF0" stroke="#12061F" stroke-width="18" stroke-linejoin="round"/>
+</svg>
