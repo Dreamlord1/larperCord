@@ -15,7 +15,7 @@ const Rgba = theme.Rgba;
 pub const Preview = struct {
     name: []const u8,
     description: []const u8,
-    kind: enum { classic, glass, terminal, bubbles, zen, dock, mirror, gameboy, office },
+    kind: enum { classic, glass, terminal, bubbles, zen, mirror, office },
     bg: Rgba,
     rail: Rgba,
     sidebar: Rgba,
@@ -43,6 +43,9 @@ pub const Manager = struct {
     current: usize = 0,
     active: ?theme.Theme = null,
     wal: ?[16]Rgba = null,
+    mode: theme.Mode = .dark,
+    /// Opções escolhidas pelo usuário, por tema: nome do tema -> (opção -> valor).
+    choices: std.StringHashMapUnmanaged(std.StringHashMapUnmanaged(bool)) = .empty,
     err_buf: [200]u8 = undefined,
     last_error: ?[]const u8 = null,
 
@@ -59,6 +62,14 @@ pub const Manager = struct {
 
     pub fn deinit(m: *Manager) void {
         if (m.active) |*t| t.deinit();
+        var it = m.choices.iterator();
+        while (it.next()) |e| {
+            var kit = e.value_ptr.keyIterator();
+            while (kit.next()) |k| m.gpa.free(k.*);
+            e.value_ptr.deinit(m.gpa);
+            m.gpa.free(e.key_ptr.*);
+        }
+        m.choices.deinit(m.gpa);
         m.clearEntries();
         m.entries.deinit(m.gpa);
         m.names.deinit(m.gpa);
@@ -124,7 +135,7 @@ pub const Manager = struct {
                 owned = @as([*]u8, @ptrCast(data))[0..size];
                 break :blk owned.?;
             } else e.builtin.?;
-            var t = theme.load(m.gpa, src, if (m.wal) |*w| w else null, null) catch {
+            var t = theme.loadWith(m.gpa, src, m.loadOptions(e.name), null) catch {
                 m.previews.append(m.gpa, .{ .name = e.name, .description = "(erro ao carregar)", .kind = .classic, .bg = Rgba.black, .rail = Rgba.black, .sidebar = Rgba.black, .surface = Rgba.black, .elevated = Rgba.black, .accent = Rgba.white, .text = Rgba.white, .bubble = Rgba.white, .transparent = false }) catch {};
                 continue;
             };
@@ -144,6 +155,39 @@ pub const Manager = struct {
                 .transparent = t.transparent,
             }) catch {};
         }
+    }
+
+    fn loadOptions(m: *const Manager, theme_name: []const u8) theme.LoadOptions {
+        return .{ .wal = if (m.wal) |*w| w else null, .mode = m.mode, .overrides = m.choices.getPtr(theme_name) };
+    }
+
+    /// Guarda a escolha de uma opção do tema (não recarrega).
+    pub fn choose(m: *Manager, theme_name: []const u8, option: []const u8, value: bool) void {
+        const gop = m.choices.getOrPut(m.gpa, theme_name) catch return;
+        if (!gop.found_existing) {
+            gop.key_ptr.* = m.gpa.dupe(u8, theme_name) catch return;
+            gop.value_ptr.* = .empty;
+        }
+        if (gop.value_ptr.getPtr(option)) |v| {
+            v.* = value;
+            return;
+        }
+        const key = m.gpa.dupe(u8, option) catch return;
+        gop.value_ptr.put(m.gpa, key, value) catch m.gpa.free(key);
+    }
+
+    /// Muda uma opção do tema atual e recarrega para aplicar.
+    pub fn setOption(m: *Manager, option: []const u8, value: bool) bool {
+        m.choose(m.name(), option, value);
+        return m.load(m.current);
+    }
+
+    /// Troca entre claro e escuro (recarrega o tema e as miniaturas).
+    pub fn setMode(m: *Manager, mode: theme.Mode) bool {
+        if (m.mode == mode) return true;
+        m.mode = mode;
+        m.buildPreviews();
+        return m.load(m.current);
     }
 
     pub fn indexOf(m: *const Manager, wanted: []const u8) ?usize {
@@ -171,7 +215,7 @@ pub const Manager = struct {
         } else e.builtin.?;
 
         var diag: theme.Diagnostic = .{};
-        const t = theme.load(m.gpa, src, if (m.wal) |*w| w else null, &diag) catch {
+        const t = theme.loadWith(m.gpa, src, m.loadOptions(e.name), &diag) catch {
             m.last_error = std.fmt.bufPrint(&m.err_buf, "{s}.kdl:{d}:{d}: {s}", .{ e.name, diag.line, diag.column, diag.message }) catch null;
             return false;
         };

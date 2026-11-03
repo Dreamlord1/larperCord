@@ -1,10 +1,14 @@
-// terminal — fósforo âmbar, tudo monoespaçado. Servidores como janelas do
-// tmux no topo, canais em árvore, mensagens estilo IRC e um prompt de shell.
-theme "terminal" description="Fósforo âmbar, monoespaçado, cara de tmux + IRC." author="larperCord" preview=terminal
+// terminal — tmux + IRC. Escuro: fósforo âmbar (ou verde). Claro: papel de
+// impressora matricial. Exclusivo: efeito de monitor CRT e logo em ASCII.
+theme "terminal" description="tmux + IRC: monoespaçado, canais em árvore, efeito CRT e logo em ASCII." author="larperCord" preview=terminal
 
-palette "#0b0906" "#ff6b35" "#a6e22e" "#ffb000" "#ffb000" "#d7a6ff" "#5fd7d7" "#e8d5b0" "#5a4a33" "#ff8f5a" "#b8f05a" "#ffd27a" "#ffc94d" "#e0c2ff" "#8ff0f0" "#fff1d6"
+options {
+    option "crt" label="Efeito CRT" description="Linhas de varredura e cantos escuros, como um monitor antigo." default=#true
+    option "ascii" label="Logo em ASCII" description="O nome do app desenhado com caracteres no topo dos canais." default=#true
+    option "verde" label="Fósforo verde" description="Troca o âmbar pelo verde dos terminais clássicos (modo escuro)." default=#false
+}
 
-colors {
+colors mode=dark {
     bg         "#0b0906"
     rail       "#0b0906"
     sidebar    "#0b0906"
@@ -28,7 +32,54 @@ colors {
     code-bg    "#1e170d"
     shadow     "alpha(black, 0.6)"
 }
-roles "#ffd27a" "#ff8f5a" "#a6e22e" "#5fd7d7" "#d7a6ff" "#ffb000" "#ff6b9d" "#e8d5b0"
+roles mode=dark "#ffd27a" "#ff8f5a" "#a6e22e" "#5fd7d7" "#d7a6ff" "#ffb000" "#ff6b9d" "#e8d5b0"
+
+colors mode=dark when=verde {
+    bg         "#050a06"
+    rail       "#050a06"
+    sidebar    "#050a06"
+    surface    "#050a06"
+    elevated   "#0c1a0f"
+    overlay    "#081209"
+    text       "#7dff9a"
+    muted      "#3fbf62"
+    faint      "#2a6b3a"
+    accent     "#39ff6a"
+    accent-text "#050a06"
+    border     "#1d4a28"
+    hover      "alpha(#39ff6a, 0.07)"
+    selected   "alpha(#39ff6a, 0.15)"
+    mention    "#d4ff5c"
+    link       "#5fffd0"
+    code-bg    "#0c1a0f"
+}
+roles mode=dark when=verde "#9dffb0" "#d4ff5c" "#5fffd0" "#7dff9a" "#b8ff8a" "#39ff6a" "#a0ffe0" "#cfffcf"
+
+colors mode=light {
+    bg         "#f4efe2"
+    rail       "#f4efe2"
+    sidebar    "#f4efe2"
+    surface    "#f4efe2"
+    elevated   "#e9e1cd"
+    overlay    "#fbf8ef"
+    text       "#2e2412"
+    muted      "#6e5a35"
+    faint      "#a3906a"
+    accent     "#b35c00"
+    accent-text "#fbf8ef"
+    border     "#c9b98f"
+    hover      "alpha(#b35c00, 0.07)"
+    selected   "alpha(#b35c00, 0.14)"
+    online     "#3d7a1f"
+    idle       "#b35c00"
+    dnd        "#b3261e"
+    danger     "#b3261e"
+    mention    "#b3261e"
+    link       "#1f5f8b"
+    code-bg    "#e9e1cd"
+    shadow     "alpha(black, 0.12)"
+}
+roles mode=light "#7a4a00" "#9c3f10" "#3d6b1f" "#1f5f8b" "#6b3f8c" "#8a6a00" "#9c2f5a" "#4a4034"
 
 fonts ui="JetBrains Mono" mono="JetBrains Mono" size=14
 metrics radius=0
@@ -38,22 +89,26 @@ styles {
 }
 
 layout {
-    column {
-        guild-bar height=26 shape=text bg=elevated
-        row flex=1 padding=6 gap=6 {
-            column width=232 style=box {
-                channel-list flex=1 variant=tree inset-x=2
-                user-panel height=46 variant=tty
+    stack {
+        column {
+            guild-bar height=26 shape=text bg=elevated
+            row flex=1 padding=6 gap=6 {
+                column width=244 style=box {
+                    logo height=70 variant=ascii size=11 when=ascii
+                    channel-list flex=1 variant=tree inset-x=2
+                    user-panel height=46 variant=tty
+                }
+                column flex=1 style=box {
+                    header height=28 variant=tty
+                    messages flex=1 variant=irc avatar=none
+                    spacer height=22
+                    composer height=34 variant=prompt
+                }
+                member-list width=192 style=box variant=tty hide-below=1100
             }
-            column flex=1 style=box {
-                header height=28 variant=tty
-                messages flex=1 variant=irc avatar=none
-                spacer height=22
-                composer height=34 variant=prompt
-            }
-            member-list width=192 style=box variant=tty hide-below=1100
+            tabs height=24 variant=tty bg=elevated
+            status-bar height=24 variant=tty items="conn theme ping ram frame voice spacer keys clock"
         }
-        tabs height=24 variant=tty bg=elevated
-        status-bar height=24 variant=tty items="conn theme ping ram frame voice spacer keys clock"
+        crt when=crt
     }
 }

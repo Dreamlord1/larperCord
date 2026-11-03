@@ -18,6 +18,8 @@ const palette = @import("palette.zig");
 const settings = @import("settings.zig");
 const Preview = @import("../theme/manager.zig").Preview;
 
+const extra = @import("comp_extra.zig");
+
 const Component = *const fn (*d.Ctx, *const kdl.Node, d.Rect) void;
 
 const registry = std.StaticStringMap(Component).initComptime(.{
@@ -31,6 +33,9 @@ const registry = std.StaticStringMap(Component).initComptime(.{
     .{ "member-list", side.memberList },
     .{ "status-bar", side.statusBar },
     .{ "label", label },
+    .{ "logo", extra.logo },
+    .{ "topbar", extra.topbar },
+    .{ "crt", extra.crt },
     .{ "spacer", spacer },
 });
 
@@ -71,8 +76,15 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
     ctx.fg = c.ImGui_GetForegroundDrawList();
     ctx.win = .{ .x = vp.*.Pos.x, .y = vp.*.Pos.y, .w = vp.*.Size.x, .h = vp.*.Size.y };
 
+    d.opt_theme = ctx.th;
     if (ctx.th.layout) |root| {
-        layout.solve(ctx.st.gpa, root, ctx.win, ctx.win.w, placed) catch {};
+        const Look = struct {
+            fn get(p: *const anyopaque, name: []const u8) ?bool {
+                const th: *const theme_mod.Theme = @ptrCast(@alignCast(p));
+                return th.option(name);
+            }
+        };
+        layout.solveWith(ctx.st.gpa, root, ctx.win, ctx.win.w, .{ .ctx = ctx.th, .get = Look.get }, placed) catch {};
         const base_theme = ctx.th;
         defer ctx.th = base_theme;
         var local: theme_mod.Theme = undefined;
@@ -95,6 +107,7 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
             if (registry.get(p.node.name)) |draw| {
                 if (inner.w > 4 and inner.h > 4) draw(ctx, p.node, inner);
             } else unknown(ctx, p);
+            if (d.pflag(p.node, "autohide", false)) autohide(ctx, p, i);
         }
     }
     c.ImGui_End();
@@ -104,6 +117,15 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
     palette.draw(ctx);
     toast(ctx);
     shortcuts(ctx);
+}
+
+/// `autohide`: o componente some (fica quase invisível) até o mouse chegar
+/// perto. Um véu da cor do fundo por cima faz o papel de "transparência".
+fn autohide(ctx: *d.Ctx, p: layout.Placed, i: usize) void {
+    const near = p.rect.inset(-48, -48).contains(ctx.mouse.x, ctx.mouse.y) or ctx.st.popup != .none;
+    const k = anim.to(anim.id("autohide", i), if (near) 1 else 0, 10);
+    if (k > 0.98) return;
+    d.rect(ctx.fg, p.rect, ctx.col(.bg).alpha(0.9 * (1 - k)), 0);
 }
 
 fn unknown(ctx: *d.Ctx, p: layout.Placed) void {

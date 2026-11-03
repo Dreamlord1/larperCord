@@ -1,8 +1,15 @@
-// bolhas — tema claro de mensageiro: servidores como pílulas no topo,
-// canais grandes e arredondados, conversa em balões (os seus à direita).
-theme "bolhas" description="Claro e arredondado, com balões de conversa estilo mensageiro." author="larperCord" preview=bubbles
+// bolhas — mensageiro: servidores como pílulas no topo, canais grandes e a
+// conversa em balões (os seus à direita). Exclusivo: "Entregue ✓✓" e o balão
+// de "digitando" com os três pontinhos.
+theme "bolhas" description="Mensageiro: balões de conversa, \"Entregue ✓✓\" e balão de digitando." author="larperCord" preview=bubbles
 
-colors {
+options {
+    option "entregue" label="Confirmação de entrega" description="Mostra \"Entregue ✓✓\" embaixo da sua última mensagem." default=#true
+    option "digitando" label="Balão de digitando" description="Os três pontinhos aparecem como um balão na conversa." default=#true
+    option "nomes" label="Nomes dos servidores" description="Mostra o nome ao lado do ícone na barra de cima." default=#true
+}
+
+colors mode=light {
     bg          "#e9ebf5"
     rail        "#ffffff"
     sidebar     "#ffffff"
@@ -26,7 +33,33 @@ colors {
     bubble-other "#eef0f7"
     shadow      "alpha(#2b2d6e, 0.13)"
 }
-roles "#6c5ce7" "#ef4444" "#f59e0b" "#10b981" "#3b82f6" "#ec4899" "#8b5cf6" "#14b8a6"
+roles mode=light "#6c5ce7" "#ef4444" "#d97706" "#059669" "#2563eb" "#db2777" "#7c3aed" "#0d9488"
+
+colors mode=dark {
+    bg          "#0c0e16"
+    rail        "#161925"
+    sidebar     "#161925"
+    surface     "#161925"
+    elevated    "#202433"
+    overlay     "#1c2030"
+    text        "#e8eaf6"
+    muted       "#9aa0bd"
+    faint       "#5f6585"
+    accent      "#8b7cf6"
+    accent-text "#0c0e16"
+    border      "#262b3d"
+    hover       "alpha(#8b7cf6, 0.08)"
+    selected    "alpha(#8b7cf6, 0.16)"
+    online      "#34d399"
+    mention     "#a99cff"
+    link        "#7aa7ff"
+    code-bg     "#232838"
+    bubble-self "#8b7cf6"
+    bubble-self-text "#0c0e16"
+    bubble-other "#232838"
+    shadow      "alpha(black, 0.45)"
+}
+roles mode=dark "#a99cff" "#f87171" "#fbbf24" "#34d399" "#60a5fa" "#f472b6" "#c084fc" "#2dd4bf"
 
 fonts ui="Inter" mono="JetBrains Mono" size=15
 metrics radius=12
@@ -38,7 +71,7 @@ styles {
 
 layout {
     column padding=16 gap=14 {
-        guild-bar height=56 orientation=horizontal labels=#true size=34 style=bar icon-style=soft
+        guild-bar height=56 orientation=horizontal labels="$nomes" size=34 style=bar icon-style=soft
         row flex=1 gap=14 {
             column width=272 style=sheet {
                 channel-list flex=1 variant=pills inset-y=8 inset-x=4
@@ -46,10 +79,10 @@ layout {
             }
             column flex=1 style=sheet {
                 header height=64 variant=minimal inset-x=22
-                messages flex=1 variant=bubbles avatar=circle avatar-size=30 spacing=14
+                messages flex=1 variant=bubbles avatar=circle avatar-size=30 spacing=14 ticks="$entregue" typing-bubble="$digitando"
                 column height=94 padding-x=20 {
                     spacer flex=1
-                    composer height=52 variant=pill
+                    composer height=52 variant=pill typing="$!digitando"
                     spacer height=20
                 }
             }

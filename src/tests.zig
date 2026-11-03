@@ -18,7 +18,7 @@ test {
 }
 
 /// Componentes que a interface sabe desenhar (manter igual a ui/root.zig).
-const known = [_][]const u8{ "row", "column", "stack", "guild-bar", "channel-list", "user-panel", "header", "tabs", "messages", "composer", "member-list", "status-bar", "label", "spacer" };
+const known = [_][]const u8{ "row", "column", "stack", "guild-bar", "channel-list", "user-panel", "header", "tabs", "messages", "composer", "member-list", "status-bar", "label", "spacer", "logo", "topbar", "crt" };
 
 fn checkNames(n: anytype) !void {
     for (n.children) |*ch| {

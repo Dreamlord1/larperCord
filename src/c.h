@@ -13,5 +13,6 @@
 #include <poll.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <zlib.h>
 #define CURL_DISABLE_TYPECHECK 1
 #include <curl/curl.h>

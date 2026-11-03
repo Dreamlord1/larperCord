@@ -1,6 +1,11 @@
-// classico — o layout que todo mundo já conhece, com as cores do seu pywal.
-theme "classico" description="O layout familiar, nas cores do seu wallpaper." author="larperCord" preview=classic
+// classico — o layout que todo mundo conhece, nas cores do seu pywal.
+// Exclusivo: banner do servidor no topo da lista de canais.
+theme "classico" description="O layout familiar, nas cores do seu wallpaper, com banner do servidor." author="larperCord" preview=classic
 palette "wal"
+
+options {
+    option "banner" label="Banner do servidor" description="Faixa colorida com o nome do servidor no topo dos canais." default=#true
+}
 
 fonts ui="Inter" mono="JetBrains Mono" size=16
 metrics radius=6
@@ -13,7 +18,7 @@ layout {
     row {
         guild-bar width=72 bg=rail
         column width=240 bg=sidebar {
-            channel-list flex=1
+            channel-list flex=1 banner="$banner"
             user-panel height=52 style=panel
         }
         column flex=1 bg=bg {

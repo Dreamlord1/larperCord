@@ -78,4 +78,6 @@ pub const Action = union(enum) {
     copy: []const u8,
     jump_to: Id,
     mark_read: Id,
+    /// Liga/desliga uma opção do tema atual (índice em `Theme.options`).
+    set_theme_option: struct { index: usize, value: bool },
 };

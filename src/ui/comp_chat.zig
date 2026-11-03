@@ -55,11 +55,16 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const sr: d.Rect = .{ .x = sx, .y = r.y + r.h / 2 - 13, .w = search_w, .h = 26 };
     const sh = d.hit(ctx, 1, sr);
     if (sh.clicked) ctx.act(.open_palette);
+    d.tip(ctx, sr, "Buscar canais, servidores e ações", sh.hovered);
     const sk = anim.to(anim.id("search", @intFromPtr(n)), if (sh.hovered) 1 else 0, 20);
     d.rect(dl, sr, ctx.col(.rail).mix(ctx.col(.sidebar), 0.3 + 0.3 * sk), ctx.th.radius);
     d.text(dl, fam.get(.regular), 14, sr.x + 9, d.centerY(sr, 14), ctx.col(.faint).mix(ctx.col(.muted), sk), "Buscar  Ctrl+K");
     icons.search(dl, sr.right() - 15, sr.y + 13, ctx.col(.faint).mix(ctx.col(.muted), sk).u());
-    icons.members(dl, sx - 26, r.y + r.h / 2, ctx.col(.muted).u());
+    const mr: d.Rect = .{ .x = sx - 40, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
+    const mh = d.hit(ctx, 2, mr);
+    if (mh.clicked) ctx.st.settings.show_member_list = !ctx.st.settings.show_member_list;
+    icons.members(dl, mr.x + 14, mr.y + 14, (if (ctx.st.settings.show_member_list or mh.hovered) ctx.col(.text) else ctx.col(.muted)).u());
+    d.tip(ctx, mr, if (ctx.st.settings.show_member_list) "Esconder membros" else "Mostrar membros", mh.hovered);
     if (d.pflag(n, "divider", true)) d.line(dl, r.x, r.bottom() - 0.5, r.right(), r.bottom() - 0.5, ctx.col(.border), 1);
 }
 
@@ -133,6 +138,7 @@ pub fn tabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const pr: d.Rect = .{ .x = x, .y = r.y + r.h / 2 - 12, .w = 24, .h = 24 };
     const ph = d.hit(ctx, 999, pr);
     if (ph.clicked) ctx.act(.open_palette);
+    d.tip(ctx, pr, "Abrir canal em nova aba", ph.hovered);
     const pk = anim.to(anim.id("tab-plus", @intFromPtr(n)), if (ph.hovered) 1 else 0, 20);
     if (tty) {
         d.text(dl, fam.get(.bold), fs, pr.x + 4, d.centerY(pr, fs), ctx.col(.muted).mix(ctx.col(.text), pk), "+");

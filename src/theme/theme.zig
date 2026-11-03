@@ -42,6 +42,25 @@ pub const Style = struct {
     shadow: f32 = 0,
     /// Cor da borda quando o mouse está em cima (efeito de "foco").
     glow: ?Rgba = null,
+    /// Reflexo de vidro no topo (degradê claro + linha de luz).
+    sheen: bool = false,
+};
+
+pub const Mode = enum { dark, light };
+
+/// Opção que o tema oferece nas Configurações (liga/desliga).
+pub const Option = struct {
+    name: []const u8,
+    label: []const u8,
+    description: []const u8 = "",
+    default: bool = true,
+};
+
+pub const LoadOptions = struct {
+    wal: ?*const [16]Rgba = null,
+    mode: Mode = .dark,
+    /// Valores escolhidos pelo usuário para as opções do tema.
+    overrides: ?*const std.StringHashMapUnmanaged(bool) = null,
 };
 
 /// Cor sobrescrita num pedaço do layout (`c-text="#fff"` num nó).
@@ -66,6 +85,14 @@ pub const Theme = struct {
     layout: ?*const kdl.Node = null,
     /// Sobrescritas efetivas de cada nó (já incluindo as dos pais).
     node_colors: std.AutoHashMapUnmanaged(*const kdl.Node, []const Override) = .empty,
+    mode: Mode = .dark,
+    options: []const Option = &.{},
+    option_values: std.StringHashMapUnmanaged(bool) = .empty,
+
+    /// Valor de uma opção do tema (`$nome` nas propriedades, `when="nome"`).
+    pub fn option(t: *const Theme, name: []const u8) ?bool {
+        return t.option_values.get(name);
+    }
 
     pub fn deinit(t: *Theme) void {
         t.arena.deinit();
@@ -101,7 +128,37 @@ pub const Diagnostic = struct {
 /// Carrega um tema. `wal` é a paleta do pywal (se houver); o tema decide se
 /// usa (`palette "wal"`) ou define a própria.
 pub fn load(gpa: std.mem.Allocator, src: []const u8, wal: ?*const [16]Rgba, diag: ?*Diagnostic) LoadError!Theme {
+    return loadWith(gpa, src, .{ .wal = wal }, diag);
+}
+
+/// Nó vale para o modo atual? (`colors mode=light { … }` só no claro.)
+fn forMode(n: *const kdl.Node, mode: Mode) bool {
+    const m = n.str("mode") orelse return true;
+    return std.mem.eql(u8, m, @tagName(mode));
+}
+
+/// Nó de topo vale agora? Respeita `mode=` e `when=`/`unless=` (opções).
+fn applies(t: *const Theme, n: *const kdl.Node, mode: Mode) bool {
+    if (!forMode(n, mode)) return false;
+    if (n.str("when")) |o| if (!(t.option(o) orelse false)) return false;
+    if (n.str("unless")) |o| if (t.option(o) orelse false) return false;
+    return true;
+}
+
+/// Propriedade booleana que pode apontar para uma opção: `sheen="$brilho"`.
+fn flagOrOption(t: *const Theme, n: *const kdl.Node, key: []const u8) ?bool {
+    const v = n.prop(key) orelse return null;
+    if (v.asString()) |s| if (s.len > 1 and s[0] == '$') {
+        if (s[1] == '!') return if (t.option(s[2..])) |o| !o else null;
+        return t.option(s[1..]);
+    };
+    return v.asBool();
+}
+
+pub fn loadWith(gpa: std.mem.Allocator, src: []const u8, lo: LoadOptions, diag: ?*Diagnostic) LoadError!Theme {
+    const wal = lo.wal;
     var t: Theme = .{
+        .mode = lo.mode,
         .arena = std.heap.ArenaAllocator.init(gpa),
         .colors = undefined,
         .roles = undefined,
@@ -120,8 +177,27 @@ pub fn load(gpa: std.mem.Allocator, src: []const u8, wal: ?*const [16]Rgba, diag
     // Paleta: do pywal, do próprio tema ou a padrão.
     var pal: [16]Rgba = undefined;
     for (fallback_palette, 0..) |v, i| pal[i] = Rgba.hex(v);
+    // Opções do tema (vêm antes porque estilos podem depender delas).
+    var opts: std.ArrayList(Option) = .empty;
     for (nodes) |*n| {
-        if (!std.mem.eql(u8, n.name, "palette")) continue;
+        if (!std.mem.eql(u8, n.name, "options")) continue;
+        for (n.children) |*ch| {
+            const oname = (ch.arg(0) orelse return fail(diag, ch, "opção sem nome")).asString() orelse return fail(diag, ch, "nome da opção deve ser string");
+            const o: Option = .{
+                .name = oname,
+                .label = ch.str("label") orelse oname,
+                .description = ch.str("description") orelse "",
+                .default = ch.flag("default") orelse true,
+            };
+            try opts.append(a, o);
+            const value = if (lo.overrides) |ov| ov.get(oname) orelse o.default else o.default;
+            try t.option_values.put(a, oname, value);
+        }
+    }
+    t.options = try opts.toOwnedSlice(a);
+
+    for (nodes) |*n| {
+        if (!std.mem.eql(u8, n.name, "palette") or !applies(&t, n, lo.mode)) continue;
         if (n.arg(0)) |v| if (v.asString()) |s| if (std.mem.eql(u8, s, "wal")) {
             if (wal) |w| pal = w.*;
             continue;
@@ -133,8 +209,12 @@ pub fn load(gpa: std.mem.Allocator, src: []const u8, wal: ?*const [16]Rgba, diag
         }
     }
 
-    t.colors = defaults(&pal);
+    t.colors = defaults(&pal, lo.mode);
     t.roles = .{ pal[4], pal[1], pal[3], pal[5], pal[6], pal[12], pal[9], pal[13] };
+    // No claro, cores de cargo mais escuras para ler bem sobre o branco.
+    if (lo.mode == .light) for (&t.roles) |*r| {
+        if (r.luma() > 0.45) r.* = r.mix(Rgba.black, 0.35);
+    };
 
     const Look = struct {
         fn f(ctx: *const anyopaque, name: []const u8) ?Rgba {
@@ -146,6 +226,7 @@ pub fn load(gpa: std.mem.Allocator, src: []const u8, wal: ?*const [16]Rgba, diag
     const resolver: color.Resolver = .{ .palette = &pal, .ctx = &t, .lookup = Look.f };
 
     for (nodes) |*n| {
+        if (!applies(&t, n, lo.mode)) continue;
         if (std.mem.eql(u8, n.name, "theme")) {
             if (n.arg(0)) |v| if (v.asString()) |s| {
                 t.name = s;
@@ -183,6 +264,7 @@ pub fn load(gpa: std.mem.Allocator, src: []const u8, wal: ?*const [16]Rgba, diag
                 if (ch.num("radius")) |v| st.radius = @floatCast(v);
                 if (ch.num("border-width")) |v| st.border_width = @floatCast(v);
                 if (ch.num("shadow")) |v| st.shadow = @floatCast(v);
+                st.sheen = flagOrOption(&t, ch, "sheen") orelse false;
                 try t.styles.put(a, sname, st);
             }
         } else if (std.mem.eql(u8, n.name, "layout")) {
@@ -190,25 +272,33 @@ pub fn load(gpa: std.mem.Allocator, src: []const u8, wal: ?*const [16]Rgba, diag
         }
     }
     if (t.layout == null) return fail(diag, null, "o tema precisa de um nó `layout`");
-    try collectOverrides(&t, a, t.layout.?, &.{}, resolver, diag);
+    try collectOverrides(&t, a, t.layout.?, &.{}, resolver, lo.mode, diag);
     t.transparent = t.transparent or t.colors.get(.bg).a < 0.999;
     return t;
 }
 
 /// Percorre o layout juntando `c-<token>=cor`, que valem para o nó e seus filhos.
-fn collectOverrides(t: *Theme, a: std.mem.Allocator, n: *const kdl.Node, inherited: []const Override, r: color.Resolver, diag: ?*Diagnostic) LoadError!void {
+/// `cl-…` vale só no modo claro e `cd-…` só no escuro.
+fn collectOverrides(t: *Theme, a: std.mem.Allocator, n: *const kdl.Node, inherited: []const Override, r: color.Resolver, mode: Mode, diag: ?*Diagnostic) LoadError!void {
     var list: std.ArrayList(Override) = .empty;
     try list.appendSlice(a, inherited);
     for (n.props) |p| {
-        if (!std.mem.startsWith(u8, p.key, "c-")) continue;
-        const tok = tokenFromName(p.key[2..]) orelse return fail(diag, n, "token de cor desconhecido em c-…");
+        const name = if (std.mem.startsWith(u8, p.key, "c-"))
+            p.key[2..]
+        else if (std.mem.startsWith(u8, p.key, "cl-") and mode == .light)
+            p.key[3..]
+        else if (std.mem.startsWith(u8, p.key, "cd-") and mode == .dark)
+            p.key[3..]
+        else
+            continue;
+        const tok = tokenFromName(name) orelse return fail(diag, n, "token de cor desconhecido em c-…");
         const expr = p.value.asString() orelse return fail(diag, n, "a cor deve ser uma string");
         const col = color.eval(expr, r) catch return fail(diag, n, "expressão de cor inválida");
         try list.append(a, .{ .tok = tok, .color = col });
     }
     const effective = try list.toOwnedSlice(a);
     if (effective.len > 0) try t.node_colors.put(a, n, effective);
-    for (n.children) |*ch| try collectOverrides(t, a, ch, effective, r, diag);
+    for (n.children) |*ch| try collectOverrides(t, a, ch, effective, r, mode, diag);
 }
 
 fn fail(diag: ?*Diagnostic, n: ?*const kdl.Node, msg: []const u8) LoadError {
@@ -224,7 +314,8 @@ pub fn tokenFromName(name: []const u8) ?Token {
 }
 
 /// Tokens derivados da paleta; o tema sobrescreve o que quiser.
-fn defaults(pal: *const [16]Rgba) std.EnumArray(Token, Rgba) {
+fn defaults(pal: *const [16]Rgba, mode: Mode) std.EnumArray(Token, Rgba) {
+    if (mode == .light) return lightDefaults(pal);
     const bg = pal[0];
     const fg = pal[15];
     const black = Rgba.black;
@@ -255,6 +346,69 @@ fn defaults(pal: *const [16]Rgba) std.EnumArray(Token, Rgba) {
     e.set(.bubble_other, bg.mix(fg, 0.1));
     e.set(.shadow, black.alpha(0.35));
     return e;
+}
+
+/// Modo claro derivado da mesma paleta: papel quase branco com um toque da
+/// cor de fundo, tinta escura e destaque escurecido para ter contraste.
+fn lightDefaults(pal: *const [16]Rgba) std.EnumArray(Token, Rgba) {
+    const white = Rgba.white;
+    const black = Rgba.black;
+    const tint = pal[0];
+    const bg = white.mix(tint, 0.035);
+    const ink = tint.mix(black, 0.55).mix(pal[15], 0.05);
+    const accent = if (pal[4].luma() > 0.5) pal[4].mix(black, 0.3) else pal[4];
+    var e = std.EnumArray(Token, Rgba).initUndefined();
+    e.set(.bg, bg);
+    e.set(.rail, white.mix(tint, 0.12));
+    e.set(.sidebar, white.mix(tint, 0.07));
+    e.set(.surface, bg);
+    e.set(.elevated, white.mix(tint, 0.09));
+    e.set(.overlay, white);
+    e.set(.text, ink);
+    e.set(.muted, ink.mix(bg, 0.4));
+    e.set(.faint, ink.mix(bg, 0.6));
+    e.set(.accent, accent);
+    e.set(.accent_text, if (accent.luma() > 0.6) black else white);
+    e.set(.border, ink.alpha(0.1));
+    e.set(.hover, ink.alpha(0.05));
+    e.set(.selected, accent.alpha(0.13));
+    e.set(.online, Rgba.hex(0x23a55a));
+    e.set(.idle, Rgba.hex(0xd08a12));
+    e.set(.dnd, Rgba.hex(0xd83a42));
+    e.set(.danger, Rgba.hex(0xd83a42));
+    e.set(.mention, accent);
+    e.set(.link, accent.mix(black, 0.1));
+    e.set(.code_bg, bg.mix(ink, 0.07));
+    e.set(.bubble_self, accent);
+    e.set(.bubble_self_text, if (accent.luma() > 0.6) black else white);
+    e.set(.bubble_other, white.mix(tint, 0.1));
+    e.set(.shadow, black.alpha(0.12));
+    return e;
+}
+
+test "modo claro, opções e cores por modo" {
+    const src =
+        \\options { option "brilho" label="Brilho" default=#false }
+        \\colors { accent "#ff0000" }
+        \\colors mode=light { accent "#00ff00" }
+        \\styles { style "card" sheen="$brilho" }
+        \\layout { column cl-text="#0000ff" { messages } }
+    ;
+    var dark = try loadWith(std.testing.allocator, src, .{ .mode = .dark }, null);
+    defer dark.deinit();
+    try std.testing.expectEqual(@as(f32, 1), dark.c(.accent).r);
+    try std.testing.expect(!dark.style("card").?.sheen);
+    try std.testing.expect(dark.node_colors.count() == 0);
+
+    var ov: std.StringHashMapUnmanaged(bool) = .empty;
+    defer ov.deinit(std.testing.allocator);
+    try ov.put(std.testing.allocator, "brilho", true);
+    var light = try loadWith(std.testing.allocator, src, .{ .mode = .light, .overrides = &ov }, null);
+    defer light.deinit();
+    try std.testing.expectEqual(@as(f32, 1), light.c(.accent).g);
+    try std.testing.expect(light.style("card").?.sheen);
+    try std.testing.expect(light.option("brilho").?);
+    try std.testing.expect(light.c(.bg).luma() > 0.9);
 }
 
 test "carrega tema com tokens, estilos e layout" {

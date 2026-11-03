@@ -213,6 +213,19 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const fs = d.pnum(n, "font-size", ctx.th.font_size - 1);
     var x = r.x + 8;
     var buf: [64]u8 = undefined;
+    // Primeiro as mensagens diretas, como a janela 0 do tmux.
+    {
+        const sel = ctx.st.guild == 0;
+        const lbl = " 0:DM ";
+        const tw = d.width(if (sel) bold else font, fs, lbl);
+        const tr: d.Rect = .{ .x = x, .y = r.y + 2, .w = tw, .h = r.h - 4 };
+        const hb = d.hit(ctx, 1999, tr);
+        if (hb.clicked) ctx.act(.{ .select_guild = 0 });
+        if (sel) d.rect(ctx.dl, tr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(ctx.dl, tr, ctx.col(.hover), 0);
+        d.text(ctx.dl, if (sel) bold else font, fs, x, d.centerY(tr, fs), if (sel) ctx.col(.accent_text) else ctx.col(.text), lbl);
+        d.tip(ctx, tr, "Mensagens diretas", hb.hovered);
+        x += tw + 2;
+    }
     for (ctx.store.guilds.items, 0..) |*g, i| {
         const sel = ctx.st.guild == g.id;
         const lbl = std.fmt.bufPrint(&buf, " {d}:{s} ", .{ i + 1, g.acronym }) catch continue;

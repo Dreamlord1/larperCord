@@ -82,8 +82,20 @@ pub fn pnum(n: *const kdl.Node, key: []const u8, default: f32) f32 {
     return if (n.num(key)) |x| @floatCast(x) else default;
 }
 
+/// Tema do quadro atual, para resolver `$opção` nas propriedades.
+pub var opt_theme: ?*const theme_mod.Theme = null;
+
+/// Booleano do nó; aceita `"$opção"` (uma opção do tema nas Configurações).
 pub fn pflag(n: *const kdl.Node, key: []const u8, default: bool) bool {
-    return n.flag(key) orelse default;
+    const val = n.prop(key) orelse return default;
+    if (val.asString()) |s| if (s.len > 1 and s[0] == '$') {
+        // "$!opção" = o contrário da opção.
+        const neg = s[1] == '!';
+        const t = opt_theme orelse return default;
+        const on = t.option(s[if (neg) 2 else 1..]) orelse return default;
+        return if (neg) !on else on;
+    };
+    return val.asBool() orelse default;
 }
 
 pub fn is(n: *const kdl.Node, key: []const u8, value: []const u8, default: []const u8) bool {
@@ -137,6 +149,13 @@ pub fn shadow(dl: *c.ImDrawList, r: Rect, rounding: f32, size: f32, color: Rgba)
 pub fn drawStyle(ctx: *Ctx, dl: *c.ImDrawList, st: theme_mod.Style, r: Rect, key: usize) void {
     if (st.shadow > 0) shadow(dl, r, st.radius, st.shadow, ctx.col(.shadow));
     if (st.bg) |bg| rect(dl, r, bg, st.radius);
+    if (st.sheen) {
+        // Reflexo de vidro: luz no topo que some até o meio do cartão.
+        const top: Rect = .{ .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = @min(r.h * 0.45, 140) };
+        c.ImDrawList_AddRectFilledMultiColor(dl, v(top.x, top.y + st.radius * 0.5), v(top.right(), top.bottom()), Rgba.white.col(0.07), Rgba.white.col(0.07), 0, 0);
+        rectFlags(dl, .{ .x = top.x, .y = top.y, .w = top.w, .h = st.radius * 0.5 + 1 }, Rgba.white.alpha(0.07), st.radius, c.ImDrawFlags_RoundTop);
+        line(dl, r.x + st.radius, r.y + 1, r.right() - st.radius, r.y + 1, Rgba.white.alpha(0.22), 1);
+    }
     const hov = if (st.glow != null) anim.to(anim.id("style-glow", key), if (ctx.hovering(r)) 1 else 0, 14) else 0;
     if (st.border) |b| {
         const bcol = if (st.glow) |g| b.mix(g, hov) else b;
@@ -211,6 +230,23 @@ pub fn firstGlyph(s: []const u8) []const u8 {
     if (s.len == 0) return s;
     const len = std.unicode.utf8ByteSequenceLength(s[0]) catch 1;
     return s[0..@min(len, s.len)];
+}
+
+/// Dica que aparece ao passar o mouse num botão de ícone.
+pub fn tip(ctx: *Ctx, r: Rect, label: []const u8, hovered: bool) void {
+    const key = @as(usize, @intFromFloat(@abs(r.x) * 7 + @abs(r.y) * 13));
+    const k = anim.to(anim.id("tip-btn", key), if (hovered) 1 else 0, 18);
+    if (k < 0.05) return;
+    const font = ctx.ui.get(.semibold);
+    const fs: f32 = 13;
+    const tw = width(font, fs, label);
+    var tr: Rect = .{ .x = r.x + r.w / 2 - tw / 2 - 10, .y = r.y - 34 + (1 - k) * 4, .w = tw + 20, .h = 26 };
+    if (tr.y < ctx.win.y + 4) tr.y = r.bottom() + 8;
+    tr.x = std.math.clamp(tr.x, ctx.win.x + 4, ctx.win.right() - tr.w - 4);
+    shadow(ctx.fg, tr, 6, 6, ctx.col(.shadow).alpha(k));
+    rect(ctx.fg, tr, ctx.col(.overlay).alpha(k), 6);
+    border(ctx.fg, tr, ctx.col(.border).alpha(k), 6, 1);
+    text(ctx.fg, font, fs, tr.x + 10, centerY(tr, fs), ctx.col(.text).alpha(k), label);
 }
 
 // --- Interação --------------------------------------------------------------

@@ -161,6 +161,25 @@ const Page = struct {
         p.y += 8;
     }
 
+    /// Botões lado a lado, um selecionado (como no Discord).
+    fn segmented(p: *Page, options: []const []const u8, value: *u8) void {
+        const ctx = p.ctx;
+        const gap: f32 = 8;
+        const bw = (p.w - gap * @as(f32, @floatFromInt(options.len - 1))) / @as(f32, @floatFromInt(options.len));
+        for (options, 0..) |o, i| {
+            const r: d.Rect = .{ .x = p.x + @as(f32, @floatFromInt(i)) * (bw + gap), .y = p.y, .w = bw, .h = 44 };
+            const hb = d.hit(ctx, p.id(), r);
+            if (hb.clicked) value.* = @intCast(i);
+            const sel = value.* == i;
+            const k = anim.to(anim.id("seg", i + @as(usize, @intFromPtr(value))), if (sel) 1 else if (hb.hovered) 0.4 else 0, 20);
+            d.rect(p.dl, r, ctx.col(.rail).alpha(0.6).mix(ctx.col(.accent).alpha(0.22), k), ctx.th.radius + 2);
+            d.border(p.dl, r, if (sel) ctx.col(.accent) else ctx.col(.border), ctx.th.radius + 2, if (sel) 2 else 1);
+            const tw = d.width(p.font(.semibold), 15, o);
+            d.text(p.dl, p.font(.semibold), 15, r.x + (r.w - tw) / 2, d.centerY(r, 15), if (sel) ctx.col(.text) else ctx.col(.muted), o);
+        }
+        p.y += 60;
+    }
+
     fn button(p: *Page, label: []const u8, danger: bool) bool {
         const ctx = p.ctx;
         const f = p.font(.semibold);
@@ -285,9 +304,22 @@ fn page(p: *Page, previews: []const Preview) void {
     switch (s.page) {
         .aparencia => {
             p.title("Aparência");
+            p.heading("Modo");
+            p.segmented(&.{ "Escuro", "Claro", "Seguir o sistema" }, &s.color_mode);
             p.heading("Tema");
-            p.note("Cada tema muda o layout inteiro, não só as cores. Os arquivos ficam em themes/*.kdl.");
+            p.note("Cada tema muda o layout inteiro, não só as cores. Todos têm versão clara e escura.");
             themeGrid(p, previews);
+            if (ctx.th.options.len > 0) {
+                p.divider();
+                var hbuf: [96]u8 = undefined;
+                p.heading(std.fmt.bufPrint(&hbuf, "Opções do tema {s}", .{ctx.theme_name}) catch "Opções do tema");
+                for (ctx.th.options, 0..) |o, i| {
+                    const cur = ctx.th.option(o.name) orelse o.default;
+                    var v = cur;
+                    p.toggle(o.label, o.description, &v);
+                    if (v != cur) ctx.act(.{ .set_theme_option = .{ .index = i, .value = v } });
+                }
+            }
             p.divider();
             p.heading("Escala da fonte");
             p.slider("Tamanho do texto", &s.font_scale, 0.8, 1.3, "{d:.0}%", 100);
@@ -469,18 +501,6 @@ fn miniature(dl: *c.ImDrawList, pv: Preview, m: d.Rect) void {
             d.rect(dl, .{ .x = m.right() - 40 * u, .y = m.y + 27 * u, .w = 32 * u, .h = 6 * u }, pv.bubble, 3 * u);
             d.rect(dl, .{ .x = cx + 4 * u, .y = m.y + 36 * u, .w = 22 * u, .h = 6 * u }, pv.elevated, 3 * u);
         },
-        .dock => {
-            d.rect(dl, .{ .x = m.x + 3 * u, .y = m.y + 3 * u, .w = 20 * u, .h = m.h - 20 * u }, pv.surface, 3 * u);
-            d.rect(dl, .{ .x = m.x + 26 * u, .y = m.y + 3 * u, .w = m.w - 29 * u, .h = m.h - 20 * u }, pv.surface, 3 * u);
-            d.border(dl, .{ .x = m.x + 26 * u, .y = m.y + 3 * u, .w = m.w - 29 * u, .h = m.h - 20 * u }, pv.accent.alpha(0.7), 3 * u, 1);
-            for (0..4) |i| d.rect(dl, .{ .x = m.x + 30 * u, .y = m.y + 10 * u + @as(f32, @floatFromInt(i)) * 7 * u, .w = (25 + @as(f32, @floatFromInt((i * 11) % 20))) * u, .h = 2 * u }, line_col, u);
-            const dw = 50 * u;
-            d.rect(dl, .{ .x = m.x + m.w / 2 - dw / 2, .y = m.bottom() - 13 * u, .w = dw, .h = 10 * u }, pv.elevated, 4 * u);
-            for (0..6) |i| {
-                const sz: f32 = if (i == 2) 7 else 5;
-                d.rect(dl, .{ .x = m.x + m.w / 2 - dw / 2 + 3 * u + @as(f32, @floatFromInt(i)) * 7.8 * u, .y = m.bottom() - 6 * u - sz * u, .w = sz * u, .h = sz * u }, pv.accent.alpha(if (i == 2) 1 else 0.55), 1.5 * u);
-            }
-        },
         .mirror => {
             d.rectFlags(dl, .{ .x = m.right() - 9 * u, .y = m.y, .w = 9 * u, .h = m.h }, pv.rail, radius, c.ImDrawFlags_RoundRight);
             for (0..4) |i| d.rect(dl, .{ .x = m.right() - 7.5 * u, .y = m.y + 4 * u + @as(f32, @floatFromInt(i)) * 9 * u, .w = 6 * u, .h = 6 * u }, pv.accent.alpha(if (i == 0) 1 else 0.4), u);
@@ -492,13 +512,6 @@ fn miniature(dl: *c.ImDrawList, pv: Preview, m: d.Rect) void {
                 d.rect(dl, .{ .x = m.x + 5 * u, .y = yy - 2.5 * u, .w = 5 * u, .h = 5 * u }, pv.accent.alpha(0.6), u);
                 d.rect(dl, .{ .x = m.x + 13 * u, .y = yy - 1 * u, .w = (28 + @as(f32, @floatFromInt((i * 13) % 22))) * u, .h = 2.2 * u }, line_col, u);
             }
-        },
-        .gameboy => {
-            d.border(dl, .{ .x = m.x + 3 * u, .y = m.y + 6 * u, .w = 24 * u, .h = m.h - 22 * u }, pv.text, 0, 2);
-            d.border(dl, .{ .x = m.x + 30 * u, .y = m.y + 6 * u, .w = m.w - 33 * u, .h = m.h - 22 * u }, pv.text, 0, 2);
-            for (0..6) |i| d.rect(dl, .{ .x = m.x + 33 * u, .y = m.y + 10 * u + @as(f32, @floatFromInt(i)) * 5.5 * u, .w = (20 + @as(f32, @floatFromInt((i * 17) % 30))) * u, .h = 2 * u }, pv.text.alpha(0.7), 0);
-            d.border(dl, .{ .x = m.x + 3 * u, .y = m.bottom() - 13 * u, .w = m.w - 6 * u, .h = 6 * u }, pv.text, 0, 2);
-            d.rect(dl, .{ .x = m.x + 5 * u, .y = m.bottom() - 11.5 * u, .w = 10 * u, .h = 3 * u }, pv.text, 0);
         },
         .office => {
             d.rectFlags(dl, .{ .x = m.x, .y = m.y, .w = 28 * u, .h = m.h }, pv.sidebar, radius, c.ImDrawFlags_RoundLeft);

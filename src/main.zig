@@ -11,6 +11,7 @@ const usage =
     \\  --list-themes     lista os temas embutidos
     \\  --settings        abre já nas configurações
     \\  --shot ARQ.png    salva um print quando a tela estabilizar e sai
+    \\  --mode MODO       claro ou escuro (ignora as configurações)
     \\  --demo            usa os dados de demonstração mesmo com token
     \\  --no-live         desliga as mensagens automáticas do modo demonstração
     \\  --stats           mostra tempo até o primeiro quadro
@@ -32,6 +33,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
             opts.live = false;
         } else if (std.mem.eql(u8, arg, "--no-live")) {
             opts.live = false;
+        } else if (std.mem.eql(u8, arg, "--mode")) {
+            const m = it.next() orelse return fail("--mode precisa de claro ou escuro");
+            opts.mode = if (std.mem.eql(u8, m, "claro") or std.mem.eql(u8, m, "light")) .light else .dark;
         } else if (std.mem.eql(u8, arg, "--demo")) {
             opts.demo = true;
         } else if (std.mem.eql(u8, arg, "--settings")) {

@@ -1,9 +1,15 @@
-// zen — foco: uma coluna central com letras maiores, sem avatares e sem
-// barras laterais. Só uma faixa discreta de servidores à esquerda.
-theme "zen" description="Foco: uma coluna central, letras maiores e quase nada em volta." author="larperCord" preview=zen
+// zen — foco: uma coluna central, letras maiores, sem avatares. Exclusivo: a
+// faixa de servidores se esconde sozinha e volta quando o mouse chega perto.
+theme "zen" description="Foco: coluna central, letras maiores e a navegação que se esconde sozinha." author="larperCord" preview=zen
 palette "wal"
 
-colors {
+options {
+    option "esconder" label="Esconder os servidores" description="A faixa da esquerda some até o mouse chegar perto." default=#true
+    option "abas" label="Abas de canal" description="Os canais abertos em abas acima da conversa." default=#true
+    option "status" label="Rodapé" description="Conexão, tema, RAM e relógio bem discretos embaixo." default=#true
+}
+
+colors mode=dark {
     bg       "mix(wal:0, black, 0.35)"
     surface  "mix(wal:0, black, 0.35)"
     rail     "mix(wal:0, black, 0.35)"
@@ -14,14 +20,21 @@ colors {
     border   "alpha(wal:15, 0.07)"
 }
 
+colors mode=light {
+    bg       "mix(white, wal:0, 0.025)"
+    surface  "mix(white, wal:0, 0.025)"
+    rail     "mix(white, wal:0, 0.025)"
+    elevated "mix(white, wal:0, 0.06)"
+}
+
 fonts ui="Inter" mono="JetBrains Mono" size=17
 metrics radius=10
 
 layout {
     row {
-        guild-bar width=64 size=34 icon-style=soft shape=circle
+        guild-bar width=64 size=34 icon-style=soft shape=circle autohide="$esconder"
         column flex=1 {
-            tabs height=48 variant=underline max-width=800
+            tabs height=48 variant=underline max-width=800 when=abas
             column flex=1 max-width=800 {
                 header height=88 variant=minimal inset-x=16
                 messages flex=1 avatar=none spacing=26
@@ -31,7 +44,7 @@ layout {
                     spacer height=28
                 }
             }
-            status-bar height=30 variant=plain items="conn spacer theme ram clock"
+            status-bar height=30 variant=plain when=status items="conn spacer theme ram clock"
         }
     }
 }

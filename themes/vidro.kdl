@@ -1,11 +1,17 @@
-// vidro — painéis flutuantes translúcidos. O fundo da janela é transparente,
-// então o compositor (Hyprland, KDE, …) aplica o blur de verdade sobre o seu
-// wallpaper, sem custo nenhum pro app.
-theme "vidro" description="Cartões de vidro flutuando sobre o wallpaper, com blur do compositor." author="larperCord" preview=glass
+// vidro — cartões translúcidos flutuando sobre o wallpaper. O fundo da janela
+// é transparente: o compositor (Hyprland, KDE…) aplica o blur de verdade.
+// Exclusivo: reflexo de luz no topo de cada cartão.
+theme "vidro" description="Cartões de vidro sobre o wallpaper, com blur do compositor e reflexo." author="larperCord" preview=glass
 palette "wal"
 window transparent=#true
 
-colors {
+options {
+    option "brilho" label="Reflexo nos cartões" description="Uma faixa de luz no topo de cada cartão, como vidro de verdade." default=#true
+    option "abas" label="Abas de canal" description="Mostra os canais abertos em abas acima da conversa." default=#true
+    option "status" label="Barra de status" description="Conexão, ping, RAM e relógio na parte de baixo." default=#true
+}
+
+colors mode=dark {
     bg        "alpha(mix(wal:0, black, 0.2), 0.30)"
     surface   "alpha(mix(wal:0, black, 0.15), 0.74)"
     rail      "alpha(mix(wal:0, black, 0.30), 0.80)"
@@ -19,11 +25,24 @@ colors {
     shadow    "alpha(black, 0.45)"
 }
 
+colors mode=light {
+    bg        "alpha(white, 0.22)"
+    surface   "alpha(white, 0.66)"
+    rail      "alpha(white, 0.72)"
+    sidebar   "alpha(white, 0.66)"
+    elevated  "alpha(white, 0.86)"
+    overlay   "alpha(white, 0.97)"
+    border    "alpha(white, 0.65)"
+    hover     "alpha(black, 0.05)"
+    code-bg   "alpha(black, 0.06)"
+    shadow    "alpha(black, 0.16)"
+}
+
 fonts ui="Inter" mono="JetBrains Mono" size=15
 metrics radius=10
 
 styles {
-    style "card" bg="@surface" radius=18 border="@border" glow="alpha(@accent, 0.75)" border-width=1.5 shadow=16
+    style "card" bg="@surface" radius=18 border="@border" glow="alpha(@accent, 0.75)" border-width=1.5 shadow=16 sheen="$brilho"
 }
 
 layout {
@@ -35,7 +54,7 @@ layout {
                 user-panel height=62 style=card inset-x=4
             }
             column flex=1 gap=12 {
-                tabs height=48 style=card variant=pills
+                tabs height=48 style=card variant=pills when=abas
                 column flex=1 style=card {
                     header height=52 divider=#false
                     messages flex=1 avatar=squircle inset-x=4
@@ -48,6 +67,6 @@ layout {
             }
             member-list width=236 style=card hide-below=1180 inset-y=4
         }
-        status-bar height=36 style=card variant=pills items="conn ping ram frame voice spacer theme keys clock"
+        status-bar height=36 style=card variant=pills when=status items="conn ping ram frame voice spacer theme keys clock"
     }
 }

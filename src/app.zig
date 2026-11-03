@@ -26,6 +26,8 @@ pub const Options = struct {
     theme: ?[]const u8 = null,
     shot: ?[*:0]const u8 = null,
     live: bool = true,
+    /// Força claro/escuro (ignora as configurações).
+    mode: ?@import("theme/theme.zig").Mode = null,
     /// Força o modo demonstração mesmo com token.
     demo: bool = false,
     stats: bool = false,
@@ -91,7 +93,8 @@ pub const App = struct {
         var saved_theme: ?[]const u8 = null;
         var settings_arena = std.heap.ArenaAllocator.init(gpa);
         defer settings_arena.deinit();
-        if (opts.shot == null) saved_theme = loadSettings(&app.st.settings, settings_arena.allocator());
+        if (opts.shot == null) saved_theme = app.loadSettings(settings_arena.allocator());
+        app.themes.mode = app.wantedMode();
         app.st.settings.open = opts.settings;
         const name = opts.theme orelse saved_theme orelse "classico";
         const want = app.themes.indexOf(name) orelse 0;
@@ -234,7 +237,18 @@ pub const App = struct {
     }
 
     /// Lê ~/.config/larpercord/settings.kdl. Retorna o tema salvo, se houver.
-    fn loadSettings(s: *settings_state.Settings, arena: std.mem.Allocator) ?[]const u8 {
+    /// Modo de cor pedido nas configurações (resolvendo "seguir o sistema").
+    fn wantedMode(app: *const App) @import("theme/theme.zig").Mode {
+        if (app.opts.mode) |m| return m;
+        return switch (app.st.settings.color_mode) {
+            1 => .light,
+            2 => if (c.SDL_GetSystemTheme() == c.SDL_SYSTEM_THEME_LIGHT) .light else .dark,
+            else => .dark,
+        };
+    }
+
+    fn loadSettings(app: *App, arena: std.mem.Allocator) ?[]const u8 {
+        const s = &app.st.settings;
         var buf: [512]u8 = undefined;
         const path = settingsPath(&buf) orelse return null;
         var size: usize = 0;
@@ -242,11 +256,18 @@ pub const App = struct {
         defer c.SDL_free(data);
         const src = arena.dupe(u8, @as([*]const u8, @ptrCast(data))[0..size]) catch return null;
         const nodes = kdl.parse(arena, src, null) catch return null;
-        for (nodes) |*n| if (std.mem.eql(u8, n.name, "settings")) {
-            settings_state.apply(s, n);
-            return n.str("theme");
-        };
-        return null;
+        var theme_name: ?[]const u8 = null;
+        for (nodes) |*n| {
+            if (std.mem.eql(u8, n.name, "settings")) {
+                settings_state.apply(s, n);
+                theme_name = n.str("theme");
+            } else if (std.mem.eql(u8, n.name, "theme-options")) {
+                // `theme-options "terminal" crt=#false ascii=#true`
+                const name = (n.arg(0) orelse continue).asString() orelse continue;
+                for (n.props) |p| if (p.value.asBool()) |v| app.themes.choose(name, p.key, v);
+            }
+        }
+        return theme_name;
     }
 
     fn saveSettings(app: *App) void {
@@ -261,6 +282,13 @@ pub const App = struct {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(app.gpa);
         settings_state.write(&app.st.settings, app.themes.name(), &out, app.gpa) catch return;
+        var it = app.themes.choices.iterator();
+        while (it.next()) |e| {
+            out.print(app.gpa, "theme-options \"{s}\"", .{e.key_ptr.*}) catch return;
+            var oit = e.value_ptr.iterator();
+            while (oit.next()) |o| out.print(app.gpa, " {s}={s}", .{ o.key_ptr.*, if (o.value_ptr.*) "#true" else "#false" }) catch return;
+            out.append(app.gpa, '\n') catch return;
+        }
         _ = c.SDL_SaveFile(path.ptr, out.items.ptr, out.items.len);
     }
 
@@ -474,6 +502,16 @@ pub const App = struct {
                 if (st.collapsed.contains(id)) _ = st.collapsed.remove(id) else st.collapsed.put(app.gpa, id, {}) catch {};
             },
             .set_theme => |i| app.setTheme(i),
+            .set_theme_option => |o| {
+                const th = app.themes.theme_();
+                if (o.index >= th.options.len) return;
+                // O nome vive na arena do tema, que vai ser trocado ao recarregar.
+                var buf: [64]u8 = undefined;
+                const name = buf[0..@min(buf.len, th.options[o.index].name.len)];
+                @memcpy(name, th.options[o.index].name[0..name.len]);
+                if (app.themes.setOption(name, o.value)) app.applyThemeStyle();
+                app.saveSettings();
+            },
             .next_theme => |delta| {
                 const n: i32 = @intCast(app.themes.entries.items.len);
                 app.setTheme(@intCast(@mod(@as(i32, @intCast(app.themes.current)) + delta, n)));
@@ -568,6 +606,11 @@ pub const App = struct {
             app.st.input_sync = true;
         } else if (std.mem.eql(u8, which, "select")) {
             app.st.selection = .{ .channel = ch, .a_id = prev.msg.id, .a_off = 3, .b_id = last.msg.id, .b_off = @intCast(@min(last.msg.content.len, 12)) };
+        } else if (std.mem.eql(u8, which, "opcoes")) {
+            app.st.settings.open = true;
+            app.st.settings.page = .aparencia;
+            c.ImGuiIO_AddMouseWheelEvent(app.io, 0, -6);
+            c.ImGuiIO_AddMousePosEvent(app.io, 900, 400);
         } else if (std.mem.eql(u8, which, "dm")) {
             app.handle(.{ .select_guild = 0 });
         }
@@ -613,6 +656,11 @@ pub const App = struct {
             c.cImGui_ImplSDL3_NewFrame();
             // Configurações que valem para o quadro inteiro.
             const set = &app.st.settings;
+            // Claro/escuro (inclusive quando o sistema troca, no modo "seguir").
+            const mode = app.wantedMode();
+            if (mode != app.themes.mode) {
+                if (app.themes.setMode(mode)) app.applyThemeStyle();
+            }
             d.text_scale = set.font_scale;
             anim.instant = set.reduce_motion;
             widgets.hour12 = !set.clock_24h;

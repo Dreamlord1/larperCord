@@ -47,6 +47,9 @@ const react_h: f32 = 30;
 
 var flash_id: Id = 0;
 var flash_until: i64 = 0;
+/// Última mensagem nossa no canal (recebe o "Entregue ✓✓" nas bolhas).
+var last_self_id: Id = 0;
+var show_ticks = false;
 
 fn geometry(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) Geo {
     const variant = std.meta.stringToEnum(Variant, d.pstr(n, "variant", "cozy")) orelse .cozy;
@@ -69,7 +72,7 @@ fn geometry(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) Geo {
     };
     switch (variant) {
         .cozy => {
-            g.content_x = 16 + (if (av > 0) av + 16 else 0);
+            g.content_x = 16 + (if (av > 0) av + 16 else 0) + (if (d.pflag(n, "margin-line", false)) @as(f32, 22) else 0);
             g.wrap = r.w - g.content_x - 40;
         },
         .irc => {
@@ -191,7 +194,23 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         st.offsets.items[i] = total;
         total += measure(ctx, g, m, flags);
     }
+    // Balão de "digitando" no fim da conversa (tema de bolhas).
+    const typing_bubble = g.variant == .bubbles and d.pflag(n, "typing-bubble", false) and cs.typing.items.len > 0;
+    const typing_y = total;
+    if (typing_bubble) total += 50;
     total += 16;
+    show_ticks = d.pflag(n, "ticks", false);
+    last_self_id = 0;
+    {
+        var k = msgs.len;
+        while (k > 0) {
+            k -= 1;
+            if (msgs[k].msg.author == ctx.store.me) {
+                last_self_id = if (msgs[k].pending) std.math.maxInt(Id) else msgs[k].msg.id;
+                break;
+            }
+        }
+    }
 
     const sc = st.scrollOf(ch_id);
     const max_scroll = @max(0, total - r.h);
@@ -237,6 +256,18 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         if (st.offsets.items[mid] + msgs[mid].height < s) lo = mid + 1 else hi = mid;
     }
 
+    // Papel pautado: linhas que rolam junto com a conversa + margem vermelha.
+    if (d.pflag(n, "ruled", false)) {
+        const lh = g.line_h;
+        var ly = base + 8 + @floor(s / lh) * lh;
+        while (ly < r.bottom()) : (ly += lh) d.line(dl, r.x, ly, r.right(), ly, ctx.col(.accent).mix(ctx.col(.link), 0.6).alpha(0.1), 1);
+    }
+    if (d.pflag(n, "margin-line", false)) {
+        const mx = r.x + g.content_x - 12;
+        d.line(dl, mx, r.y, mx, r.bottom(), ctx.col(.accent).alpha(0.35), 1);
+        d.line(dl, mx + 3, r.y, mx + 3, r.bottom(), ctx.col(.accent).alpha(0.18), 1);
+    }
+
     const sel = selectionRange(ctx, cs);
     var probe: rich.Probe = .{ .x = ctx.mouse.x, .y = ctx.mouse.y };
     var probe_idx: ?usize = null;
@@ -254,6 +285,17 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             to = if (i == sr.last) sr.o1 else @intCast(msgs[i].msg.content.len);
         };
         drawMessage(ctx, dl, g, &msgs[i], st.groups.items[i], r, y, under, from, to, if (under) &probe else null);
+    }
+
+    if (typing_bubble) {
+        const ty = base + typing_y + 10;
+        const uid = cs.typing.items[0].user;
+        const left: f32 = r.x + 20;
+        if (g.avatar > 0) @import("widgets.zig").avatar(ctx, dl, left + g.avatar / 2, ty + 18, g.avatar, uid, g.shape, null, 1);
+        const bx = left + (if (g.avatar > 0) g.avatar + 10 else 0);
+        const br: d.Rect = .{ .x = bx, .y = ty, .w = 64, .h = 36 };
+        d.rect(dl, br, ctx.col(.bubble_other), 18);
+        w.typingDots(dl, br.x + 24, br.y + 19, ctx.col(.muted), ctx.now_ms);
     }
 
     // Seleção de texto e botão direito.
@@ -616,6 +658,13 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 const sx = if (self) br.x - sw - 8 else br.right() + 8;
                 d.text(dl, fam.get(.medium), 11, sx, br.y + br.h / 2 - 7, ctx.col(.faint), ck);
             }
+            // "Entregue ✓✓" embaixo da nossa última mensagem.
+            if (show_ticks and self and (m.msg.id == last_self_id or (m.pending and last_self_id == std.math.maxInt(Id)))) {
+                const tick = if (m.pending) "Enviando…" else "Entregue ✓✓";
+                const tw = d.width(fam.get(.medium), 11, tick);
+                const tick_y = br.bottom() + (if (m.n_reactions > 0) react_h else 0) + 1;
+                d.text(dl, fam.get(.medium), 11, br.right() - tw - 4, tick_y, if (m.pending) ctx.col(.faint) else ctx.col(.accent), tick);
+            }
             if (show_bar) toolbar(ctx, dl, m, if (self) br.x - 50 else @min(br.right() + 180, r.right() - 12), br.y - 12);
         },
     }
@@ -725,7 +774,8 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const ak = anim.to(anim.id("attach", @intFromPtr(n)), if (ah.hovered) 1 else 0, 24);
         d.circle(dl, ar.x + 14, ar.y + 14, 11.5, ctx.col(.muted).mix(ctx.col(.text), ak));
         icons.plus(dl, ar.x + 14, ar.y + 14, 5.5, ctx.col(.elevated).u());
-        if (ah.clicked) st.showToast(ctx.now_ms, false, "anexos chegam junto com a rede", .{});
+        if (ah.clicked) st.showToast(ctx.now_ms, false, "anexos ainda não são suportados", .{});
+        d.tip(ctx, ar, "Anexar arquivo", ah.hovered);
         const ex = r.right() - (if (pill) @as(f32, 84) else 40);
         const er: d.Rect = .{ .x = ex, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
         const eh = d.hit(ctx, 2, er);
@@ -733,6 +783,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const es: f32 = 20 + 2 * ek;
         d.text(dl, fam.get(.regular), es, ex + 14 - es / 2, r.y + r.h / 2 - es * 0.6, d.Rgba.white.alpha(0.55 + 0.45 * ek), "😊");
         if (eh.clicked) ctx.popup(.{ .emoji = .{ .target = 0, .x = er.right(), .y = r.y } });
+        d.tip(ctx, er, "Emojis", eh.hovered);
         if (pill) {
             const sr: d.Rect = .{ .x = r.right() - 44, .y = r.y + r.h / 2 - 17, .w = 34, .h = 34 };
             const sh = d.hit(ctx, 3, sr);
@@ -741,6 +792,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             const ink = ctx.col(.accent_text).u();
             c.ImDrawList_AddTriangleFilled(dl, d.v(sr.x + 11, sr.y + 10), d.v(sr.x + 25, sr.y + 17), d.v(sr.x + 11, sr.y + 24), ink);
             if (sh.clicked) submit(ctx);
+            d.tip(ctx, sr, "Enviar  (Enter)", sh.hovered);
         }
         input_r = ex - 8;
     }

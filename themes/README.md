@@ -39,7 +39,7 @@ layout {
 
 | Nó | O que faz |
 |---|---|
-| `theme "nome" description=… author=… preview=…` | metadados. `preview` escolhe a miniatura nas configurações: `classic`, `glass`, `terminal`, `bubbles`, `zen`, `dock`, `mirror`, `gameboy`, `office` |
+| `theme "nome" description=… author=… preview=…` | metadados. `preview` escolhe a miniatura nas configurações: `classic`, `glass`, `terminal`, `bubbles`, `zen`, `mirror`, `office` |
 | `palette "wal"` ou `palette "#hex" …` | as 16 cores base (`wal:0` … `wal:15`). Sem isso, usa uma paleta padrão |
 | `colors { token "expressão" … }` | sobrescreve tokens de cor (lista abaixo) |
 | `roles "cor" …` | até 8 cores de cargo (nomes de usuário, ícones de servidor) |
@@ -109,9 +109,62 @@ Contêineres: `row` (horizontal), `column` (vertical), `stack` (um sobre o outro
 | `member-list` | `variant=discord\|tty` |
 | `status-bar` | `variant=pills\|tty\|plain` `items="conn ping ram frame voice spacer theme keys clock"` |
 | `label` | `text=` `size=` `weight=regular\|medium\|semibold\|bold` `color=token` `align=left\|center\|right` |
+| `logo` | `variant=ascii\|wordmark` `size=` |
+| `topbar` | barra superior (abas, busca, ajuda) |
+| `crt` | `spacing=3` `strength=0.08` |
 | `spacer` | espaço vazio |
 
 Um nome que não existe aparece com uma borda vermelha e a linha do arquivo, pra facilitar.
+
+## Claro e escuro
+
+Todo tema tem as duas versões. Blocos com `mode=` só valem num dos modos:
+
+```kdl
+colors mode=dark  { bg "#0b0906"; text "#ffcf73" }
+colors mode=light { bg "#f4efe2"; text "#2e2412" }
+roles mode=light "#7a4a00" "#9c3f10"
+```
+
+Sem `mode=`, o bloco vale nos dois. Se o tema não definir o claro, ele é derivado da paleta
+(papel quase branco, tinta escura e destaque escurecido). No layout, `cl-<token>` e `cd-<token>`
+sobrescrevem uma cor só no claro ou só no escuro. O usuário escolhe em Configurações → Aparência
+(Escuro / Claro / Seguir o sistema), ou pela linha de comando: `--mode claro`.
+
+## Opções do tema
+
+Um tema pode oferecer chaves de liga/desliga, que aparecem em Configurações → Aparência:
+
+```kdl
+options {
+    option "crt" label="Efeito CRT" description="Linhas de varredura…" default=#true
+    option "verde" label="Fósforo verde" default=#false
+}
+```
+
+Formas de usar as opções:
+
+| Onde | Como |
+|---|---|
+| esconder/mostrar um nó | `crt when=crt`, `tabs unless=compacto` |
+| propriedade booleana | `banner="$banner"`, `typing="$!digitando"` (o `!` inverte) |
+| bloco de cores, cargos, estilos | `colors mode=dark when=verde { … }` |
+| estilo | `style "card" sheen="$brilho"` |
+
+As escolhas ficam salvas por tema em `~/.config/larpercord/settings.kdl`.
+
+## Recursos exclusivos
+
+| Componente / propriedade | O que faz | Usado em |
+|---|---|---|
+| `channel-list banner=#true` | banner colorido com o nome do servidor | classico |
+| `style … sheen=#true` | reflexo de vidro no topo do cartão | vidro |
+| `crt` | linhas de varredura + vinheta, por cima de tudo (use num `stack`) | terminal |
+| `logo variant=ascii\|wordmark` | logo do app em ASCII ou em texto | terminal, escritorio |
+| `messages ruled=#true margin-line=#true` | folha pautada e margem vermelha | papel |
+| `messages ticks=#true typing-bubble=#true` | "Entregue ✓✓" e balão de digitando | bolhas |
+| `autohide=#true` (qualquer nó) | o componente some até o mouse chegar perto | zen |
+| `topbar` | voltar/avançar entre abas, busca e ajuda | escritorio |
 
 ## Os temas que vêm junto
 
@@ -120,9 +173,7 @@ Um nome que não existe aparece com uma borda vermelha e a linha do arquivo, pra
 - [`terminal.kdl`](terminal.kdl): tmux + IRC em fósforo âmbar
 - [`bolhas.kdl`](bolhas.kdl): claro, com balões de conversa
 - [`zen.kdl`](zen.kdl): uma coluna central e mais nada
-- [`neon.kdl`](neon.kdl): synthwave com dock que cresce no mouse (`variant=dock`)
 - [`papel.kdl`](papel.kdl): serifado e espelhado
-- [`gameboy.kdl`](gameboy.kdl): quatro tons de verde
 - [`escritorio.kdl`](escritorio.kdl): estilo Slack, mostra o `c-…` e o `variant=list`
 
 Os testes (`zig build test`) carregam todos os temas embutidos e montam o layout de cada um.

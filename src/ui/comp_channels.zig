@@ -24,12 +24,30 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     if (ctx.st.guild == 0) return dmList(ctx, n, fam, variant, r);
     const g = ctx.store.guild(ctx.st.guild) orelse return;
 
+    const banner = variant == .discord and d.pflag(n, "banner", false);
     if (d.pflag(n, "header", true)) {
-        const hh: f32 = if (variant == .tree) 30 else 48;
+        const hh: f32 = if (variant == .tree) 30 else if (banner) 128 else 48;
         const hr: d.Rect = .{ .x = r.x, .y = r.y, .w = r.w, .h = hh };
         const hb = d.hit(ctx, 1, hr);
+        if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         const k = anim.to(anim.id("ghead", @intFromPtr(n)), if (hb.hovered) 1 else 0, 20);
-        switch (variant) {
+        if (banner) {
+            // Banner do servidor: degradê com a cor dele, nome embaixo.
+            const col = ctx.th.role(g.color);
+            const top = col.mix(ctx.col(.sidebar), 0.25);
+            const mid = col.mix(ctx.col(.sidebar), 0.7);
+            c.ImDrawList_AddRectFilledMultiColor(ctx.dl, d.v(hr.x, hr.y), d.v(hr.right(), hr.bottom()), top.u(), col.mix(ctx.col(.accent), 0.4).mix(ctx.col(.sidebar), 0.3).u(), ctx.col(.sidebar).u(), mid.mix(ctx.col(.sidebar), 0.6).u());
+            // Pontinhos decorativos que dão textura ao banner.
+            var py = hr.y + 10;
+            while (py < hr.bottom() - 30) : (py += 14) {
+                var px = hr.x + 10 + @mod(py, 28) / 2;
+                while (px < hr.right()) : (px += 14) d.circle(ctx.dl, px, py, 1.1, d.Rgba.white.alpha(0.08));
+            }
+            d.rect(ctx.dl, hr, ctx.col(.hover).alpha(k), 0);
+            d.text(ctx.dl, fam.get(.bold), 17, r.x + 17, hr.bottom() - 33, d.Rgba.black.alpha(0.35), g.name);
+            _ = d.textClipped(ctx.dl, fam.get(.bold), 17, r.x + 16, hr.bottom() - 34, d.Rgba.white, g.name, r.w - 56);
+            icons.chevron(ctx.dl, r.right() - 24, hr.bottom() - 24, d.Rgba.white.col(0.9), 1);
+        } else switch (variant) {
             .tree => {
                 var buf: [96]u8 = undefined;
                 const t = std.fmt.bufPrint(&buf, "┌ {s}", .{g.name}) catch g.name;
@@ -222,6 +240,11 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const bx = pr.right() - 8 - @as(f32, @floatFromInt(3 - i)) * bs;
         const br: d.Rect = .{ .x = bx, .y = pr.y + pr.h / 2 - bs / 2, .w = bs, .h = bs };
         const hb = d.hit(ctx, 10 + i, br);
+        d.tip(ctx, br, switch (i) {
+            0 => if (ctx.st.muted) "Desmutar" else "Mutar microfone",
+            1 => if (ctx.st.deafened) "Voltar a ouvir" else "Ensurdecer",
+            else => "Configurações  (Ctrl+,)",
+        }, hb.hovered);
         const active = (i == 0 and ctx.st.muted) or (i == 1 and ctx.st.deafened);
         if (hb.clicked) switch (i) {
             0 => ctx.act(.toggle_mute),

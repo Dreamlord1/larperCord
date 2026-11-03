@@ -74,6 +74,8 @@ pub const Settings = struct {
     hardware_accel: bool = true,
     hot_reload: bool = true,
     language: u8 = 0,
+    /// 0 = escuro, 1 = claro, 2 = seguir o sistema. ✓
+    color_mode: u8 = 0,
 
     /// Muda quando algo que afeta o layout das mensagens muda.
     pub fn layoutKey(s: *const Settings) u32 {

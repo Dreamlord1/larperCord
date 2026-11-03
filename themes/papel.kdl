@@ -1,8 +1,13 @@
-// papel — um caderno: página cor de papel, tinta escura, títulos em serifa
-// e o "Índice" (servidores + canais) na margem direita, como num livro.
-theme "papel" description="Um caderno: página clara, títulos em serifa e o índice na margem." author="larperCord" preview=mirror
+// papel — um caderno: títulos em serifa, o índice na margem direita.
+// Exclusivo: folha pautada com a margem vermelha, que rola junto com a conversa.
+theme "papel" description="Caderno: folha pautada com margem vermelha, títulos em serifa e índice." author="larperCord" preview=mirror
 
-colors {
+options {
+    option "pautado" label="Folha pautada" description="Linhas de caderno atrás da conversa." default=#true
+    option "margem" label="Margem vermelha" description="A linha dupla da margem, como num caderno escolar." default=#true
+}
+
+colors mode=light {
     bg          "#efe8da"
     rail        "#e4dac5"
     sidebar     "#ebe3d2"
@@ -24,12 +29,33 @@ colors {
     mention     "#b23a2a"
     link        "#2f5d8c"
     code-bg     "#ece3cf"
-    bubble-self "#b23a2a"
-    bubble-other "#ebe3d2"
     shadow      "alpha(#5a4320, 0.14)"
 }
-// Cores de tinta: nada de arco-íris.
-roles "#8c3b2a" "#2f5d8c" "#4d6b35" "#6d4b7d" "#94701f" "#2f6e6e" "#8a4060" "#5b4a3a"
+roles mode=light "#8c3b2a" "#2f5d8c" "#4d6b35" "#6d4b7d" "#94701f" "#2f6e6e" "#8a4060" "#5b4a3a"
+
+// Escuro: o mesmo caderno à luz de um abajur.
+colors mode=dark {
+    bg          "#1a1612"
+    rail        "#15120f"
+    sidebar     "#1d1915"
+    surface     "#211c17"
+    elevated    "#2b251e"
+    overlay     "#2a241d"
+    text        "#ece3d2"
+    muted       "#a99c86"
+    faint       "#6f6455"
+    accent      "#e0795d"
+    accent-text "#1a1612"
+    border      "#3a3229"
+    hover       "alpha(#ece3d2, 0.05)"
+    selected    "alpha(#e0795d, 0.14)"
+    online      "#8fbf6a"
+    mention     "#e0795d"
+    link        "#86b3e0"
+    code-bg     "#2b251e"
+    shadow      "alpha(black, 0.4)"
+}
+roles mode=dark "#e8a083" "#86b3e0" "#a9c98a" "#c4a3d9" "#e0c070" "#7fc4c4" "#e090b0" "#c9b8a0"
 
 fonts ui="Inter" mono="JetBrains Mono" size=16
 metrics radius=4
@@ -38,7 +64,7 @@ layout {
     row {
         column flex=1 bg=surface {
             header height=86 variant=minimal inset-x=44 font="Liberation Serif"
-            messages flex=1 avatar=none spacing=22 inset-x=28
+            messages flex=1 avatar=none spacing=22 inset-x=28 ruled="$pautado" margin-line="$margem"
             column height=96 padding-x=44 {
                 spacer flex=1
                 composer height=46

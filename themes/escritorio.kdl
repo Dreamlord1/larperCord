@@ -1,9 +1,14 @@
-// escritorio — barra lateral berinjela com servidores em lista, conversa no
-// branco: cara de ferramenta de trabalho. Mostra as cores sobrescritas por
-// pedaço do layout (c-text, c-muted… valem para o nó e seus filhos).
-theme "escritorio" description="Barra lateral escura com os servidores em lista, estilo ferramenta de trabalho." author="larperCord" preview=office
+// escritorio — ferramenta de trabalho: barra lateral berinjela com os
+// servidores em lista e a conversa no branco. Exclusivo: barra superior com
+// voltar/avançar entre abas, busca no servidor e ajuda.
+theme "escritorio" description="Ferramenta de trabalho: barra superior com busca, servidores em lista." author="larperCord" preview=office
 
-colors {
+options {
+    option "topo" label="Barra superior" description="Voltar/avançar entre abas, busca no servidor e ajuda." default=#true
+    option "servidores" label="Lista de servidores" description="Os servidores no topo da barra lateral." default=#true
+}
+
+colors mode=light {
     bg          "#ffffff"
     rail        "#3f0e40"
     sidebar     "#3f0e40"
@@ -27,28 +32,55 @@ colors {
     bubble-other "#f4f4f6"
     shadow      "alpha(black, 0.12)"
 }
-roles "#1164a3" "#e01e5a" "#2bac76" "#ecb22e" "#7c3085" "#e8912d" "#36c5f0" "#4a154b"
+roles mode=light "#1164a3" "#e01e5a" "#2bac76" "#b8860b" "#7c3085" "#d9772d" "#1f9fd0" "#4a154b"
+
+colors mode=dark {
+    bg          "#1a1d21"
+    rail        "#19171d"
+    sidebar     "#19171d"
+    surface     "#1a1d21"
+    elevated    "#222529"
+    overlay     "#222529"
+    text        "#d1d2d3"
+    muted       "#9a9b9e"
+    faint       "#6b6c70"
+    accent      "#1d9bd1"
+    accent-text "#ffffff"
+    border      "#2f3236"
+    hover       "alpha(white, 0.04)"
+    selected    "alpha(#1d9bd1, 0.18)"
+    online      "#2bac76"
+    danger      "#e01e5a"
+    mention     "#1d9bd1"
+    link        "#1d9bd1"
+    code-bg     "#222529"
+    shadow      "alpha(black, 0.45)"
+}
+roles mode=dark "#36c5f0" "#e8678a" "#2bac76" "#ecb22e" "#c58af9" "#f2994a" "#4fd1c5" "#d1d2d3"
 
 fonts ui="Inter" mono="JetBrains Mono" size=15
 metrics radius=6
 
 layout {
-    row {
-        column width=264 bg=sidebar c-text="#ffffff" c-muted="#cdbdcd" c-faint="#9f8aa0" c-selected="#1164a3" c-hover="alpha(#ffffff, 0.08)" c-elevated="#5a2a5c" c-rail="#350d36" c-border="alpha(#ffffff, 0.12)" {
-            label height=46 text="larperCord · trabalho" size=16 weight=bold color=text
-            guild-bar height=214 variant=list shape=squircle size=24
-            channel-list flex=1 header=#false
-            user-panel height=58 bg=rail
-        }
-        column flex=1 bg=surface {
-            header height=52 c-rail="#ffffff" c-sidebar="#f1f1f3"
-            messages flex=1 avatar=square avatar-size=36
-            column height=90 padding-x=18 {
-                spacer flex=1
-                composer height=46
-                spacer height=22
+    column {
+        topbar height=42 bg=rail when=topo c-text="#ffffff" c-muted="#cdbdcd" c-faint="#9f8aa0" c-hover="alpha(#ffffff, 0.1)"
+        row flex=1 {
+            column width=264 bg=sidebar c-text="#ffffff" c-muted="#cdbdcd" c-faint="#9f8aa0" c-selected="#1164a3" c-hover="alpha(#ffffff, 0.08)" c-elevated="#5a2a5c" c-rail="#350d36" c-border="alpha(#ffffff, 0.12)" cd-selected="#1164a3" cd-elevated="#2a2830" cd-rail="#121016" {
+                logo height=48 variant=wordmark size=16
+                guild-bar height=206 variant=list shape=squircle size=24 when=servidores
+                channel-list flex=1 header=#false
+                user-panel height=58 bg=rail
             }
+            column flex=1 bg=surface {
+                header height=52 c-rail="#ffffff" c-sidebar="#f1f1f3" cd-rail="#222529" cd-sidebar="#2a2d31"
+                messages flex=1 avatar=square avatar-size=36
+                column height=90 padding-x=18 {
+                    spacer flex=1
+                    composer height=46
+                    spacer height=22
+                }
+            }
+            member-list width=232 bg=elevated hide-below=1150
         }
-        member-list width=232 bg=elevated hide-below=1150
     }
 }

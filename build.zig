@@ -1,7 +1,7 @@
 const std = @import("std");
 
 /// Temas embutidos (usados também pelo passo `snapshots`).
-const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "bolhas", "zen", "neon", "papel", "gameboy", "escritorio" };
+const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "bolhas", "zen", "papel", "escritorio" };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
     translate.linkSystemLibrary("sdl3", .{});
     translate.linkSystemLibrary("fontconfig", .{});
     translate.linkSystemLibrary("libcurl", .{});
+    translate.linkSystemLibrary("zlib", .{});
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -65,6 +66,7 @@ pub fn build(b: *std.Build) void {
     mod.linkSystemLibrary("freetype2", .{});
     mod.linkSystemLibrary("fontconfig", .{});
     mod.linkSystemLibrary("libcurl", .{});
+    mod.linkSystemLibrary("zlib", .{});
 
     const exe = b.addExecutable(.{ .name = "larpercord", .root_module = mod });
     b.installArtifact(exe);
