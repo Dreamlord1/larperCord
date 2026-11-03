@@ -9,6 +9,7 @@ const kdl = @import("../theme/kdl.zig");
 const d = @import("draw.zig");
 const anim = @import("anim.zig");
 const icons = @import("icons.zig");
+const i18n = @import("i18n.zig");
 
 const ascii_logo = [_][]const u8{
     "┬  ┌─┐┬─┐┌─┐┌─┐┬─┐┌─┐┌─┐┬─┐┌┬┐",
@@ -29,7 +30,7 @@ pub fn logo(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             d.text(dl, fam.get(.regular), fs, x, y, ctx.col(.accent), ln);
             y += lh;
         }
-        const sub = "cliente leve · zig";
+        const sub = i18n.tr("cliente leve · zig", "lightweight client · zig");
         const sw = d.width(fam.get(.regular), fs - 2, sub);
         d.text(dl, fam.get(.regular), fs - 2, r.x + (r.w - sw) / 2, y + 2, ctx.col(.faint), sub);
         return;
@@ -50,9 +51,9 @@ pub fn topbar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const fam = ctx.familyFor(n);
     const st = ctx.st;
     // Voltar / avançar entre as abas abertas.
-    const nav = [_]struct { glyph: []const u8, delta: i32, tip: []const u8 }{
-        .{ .glyph = "←", .delta = -1, .tip = "Aba anterior  (Ctrl+Shift+Tab)" },
-        .{ .glyph = "→", .delta = 1, .tip = "Próxima aba  (Ctrl+Tab)" },
+    const nav = [_]struct { glyph: []const u8, delta: i32, tip: []const u8, tip_en: []const u8 }{
+        .{ .glyph = "←", .delta = -1, .tip = "Aba anterior  (Ctrl+Shift+Tab)", .tip_en = "Previous tab  (Ctrl+Shift+Tab)" },
+        .{ .glyph = "→", .delta = 1, .tip = "Próxima aba  (Ctrl+Tab)", .tip_en = "Next tab  (Ctrl+Tab)" },
     };
     var x = r.x + 12;
     for (nav, 0..) |b, i| {
@@ -62,7 +63,7 @@ pub fn topbar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         if (hb.hovered) d.rect(dl, br, ctx.col(.hover), 5);
         const gw = d.width(fam.get(.bold), 16, b.glyph);
         d.text(dl, fam.get(.bold), 16, br.x + 13 - gw / 2, d.centerY(br, 16), if (hb.hovered) ctx.col(.text) else ctx.col(.muted), b.glyph);
-        d.tip(ctx, br, b.tip, hb.hovered);
+        d.tip(ctx, br, i18n.tr(b.tip, b.tip_en), hb.hovered);
         x += 30;
     }
     // Busca no meio (abre a paleta).
@@ -76,7 +77,11 @@ pub fn topbar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     icons.search(dl, sr.x + 16, sr.y + 14, ctx.col(.muted).u());
     var buf: [96]u8 = undefined;
     const g = ctx.store.guild(st.guild);
-    const label = std.fmt.bufPrint(&buf, "Buscar em {s}", .{if (g) |x_| x_.name else "mensagens diretas"}) catch "Buscar";
+    const label0 = if (g) |x_|
+        i18n.fmt(&buf, "Buscar em {s}", "Search {s}", .{x_.name})
+    else
+        i18n.tr("Buscar em mensagens diretas", "Search Direct Messages");
+    const label = if (label0.len == 0) i18n.tr("Buscar", "Search") else label0;
     _ = d.textClipped(dl, fam.get(.medium), 13, sr.x + 30, d.centerY(sr, 13), ctx.col(.muted), label, sr.w - 100);
     const kw = d.width(fam.get(.semibold), 11, "Ctrl K");
     d.text(dl, fam.get(.semibold), 11, sr.right() - kw - 12, d.centerY(sr, 11), ctx.col(.faint), "Ctrl K");
@@ -90,7 +95,7 @@ pub fn topbar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     c.ImDrawList_AddCircleEx(dl, d.v(hr.x + 13, hr.y + 13), 9, (if (hh.hovered) ctx.col(.text) else ctx.col(.muted)).u(), 0, 1.6, 0);
     const qw = d.width(fam.get(.bold), 12, "?");
     d.text(dl, fam.get(.bold), 12, hr.x + 13 - qw / 2, d.centerY(hr, 12), if (hh.hovered) ctx.col(.text) else ctx.col(.muted), "?");
-    d.tip(ctx, hr, "Atalhos de teclado", hh.hovered);
+    d.tip(ctx, hr, i18n.tr("Atalhos de teclado", "Keybinds"), hh.hovered);
 }
 
 /// Linhas de varredura e cantos escurecidos, desenhados por cima de tudo.

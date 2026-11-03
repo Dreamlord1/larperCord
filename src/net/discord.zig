@@ -19,6 +19,7 @@ const Queue = @import("queue.zig").Queue;
 const Sink = @import("fake_gateway.zig").Sink;
 const nowMs = @import("fake_gateway.zig").nowMs;
 const j = @import("jsonx.zig");
+const i18n = @import("../ui/i18n.zig");
 const Id = types.Id;
 const Value = std.json.Value;
 
@@ -100,8 +101,9 @@ pub const Gateway = struct {
         g.sink.push(g.sink.ctx, e);
     }
 
-    fn notice(g: *Gateway, comptime fmt: []const u8, args: anytype) void {
-        const s = std.fmt.allocPrint(alloc, fmt, args) catch return;
+    /// Aviso para a interface, nos dois idiomas.
+    fn notice(g: *Gateway, comptime pt: []const u8, comptime en: []const u8, args: anytype) void {
+        const s = i18n.allocPrint(alloc, pt, en, args) catch return;
         g.emit(.{ .notice = s });
     }
 
@@ -326,7 +328,7 @@ pub const Gateway = struct {
                 break;
             }
             if (rc != c.Z_OK and !(rc == c.Z_BUF_ERROR and produced == 0 and g.z.avail_in == 0)) {
-                g.notice("não consegui descomprimir o gateway (zlib {d})", .{rc});
+                g.notice("não consegui descomprimir o gateway (zlib {d})", "couldn't decompress the gateway (zlib {d})", .{rc});
                 return .retry;
             }
             if (g.z.avail_in == 0 and produced < out.len) break;
@@ -339,11 +341,11 @@ pub const Gateway = struct {
     fn onClose(g: *Gateway, code: u16) End {
         switch (code) {
             4004 => {
-                g.notice("token inválido ou expirado (4004). Atualize o token e reinicie.", .{});
+                g.notice("token inválido ou expirado (4004). Atualize o token e reinicie.", "invalid or expired token (4004). Update the token and restart.", .{});
                 return .fatal;
             },
             4010...4014 => {
-                g.notice("o Discord recusou a conexão (código {d}).", .{code});
+                g.notice("o Discord recusou a conexão (código {d}).", "Discord refused the connection (code {d}).", .{code});
                 return .fatal;
             },
             // Sessão caiu de vez: esquece o ID e começa outra.
@@ -624,7 +626,7 @@ pub const Gateway = struct {
     fn guildName(v: Value) []const u8 {
         if (j.str(j.get(v, "name"))) |n| if (n.len > 0) return n;
         if (j.get(v, "properties")) |p| if (j.str(j.get(p, "name"))) |n| return n;
-        return "servidor";
+        return i18n.tr("servidor", "server");
     }
 
     fn emojiOf(e: Value) types.Reaction {
@@ -666,11 +668,11 @@ pub const Gateway = struct {
         }
         if (name.len == 0) return "";
         const prefix: []const u8 = switch (kind) {
-            1 => "Transmitindo ",
-            2 => "Ouvindo ",
-            3 => "Assistindo ",
-            5 => "Competindo em ",
-            else => "Jogando ",
+            1 => i18n.tr("Transmitindo ", "Streaming "),
+            2 => i18n.tr("Ouvindo ", "Listening to "),
+            3 => i18n.tr("Assistindo ", "Watching "),
+            5 => i18n.tr("Competindo em ", "Competing in "),
+            else => i18n.tr("Jogando ", "Playing "),
         };
         return std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix, name }) catch null;
     }
@@ -737,7 +739,7 @@ pub const Gateway = struct {
                 if (recipient == 0) recipient = j.id(j.get(u, "id")) orelse 0;
                 if (name.len == 0) name = userName(u);
             }
-            if (name.len == 0) name = if (kind_i == 3) "grupo" else "?";
+            if (name.len == 0) name = if (kind_i == 3) i18n.tr("grupo", "group") else "?";
         }
         if (name.len == 0) name = "?";
 
@@ -800,7 +802,7 @@ pub const Gateway = struct {
         const atts = try attachmentsOf(m);
         errdefer types.freeAttachments(alloc, atts);
         for (j.array(j.get(m, "sticker_items"))) |s| {
-            const more = try std.fmt.allocPrint(alloc, "{s} [figurinha: {s}]", .{ content, j.str(j.get(s, "name")) orelse "?" });
+            const more = try i18n.allocPrint(alloc, "{s} [figurinha: {s}]", "{s} [sticker: {s}]", .{ content, j.str(j.get(s, "name")) orelse "?" });
             alloc.free(content);
             content = more;
         }
@@ -843,7 +845,7 @@ pub const Gateway = struct {
             const h = j.int(j.get(a, "height")) orelse 0;
             const image = w > 0 and h > 0;
             const url = (if (image) j.str(j.get(a, "proxy_url")) else null) orelse j.str(j.get(a, "url")) orelse continue;
-            const name = j.str(j.get(a, "filename")) orelse "arquivo";
+            const name = j.str(j.get(a, "filename")) orelse i18n.tr("arquivo", "file");
             const ctype = j.str(j.get(a, "content_type")) orelse "";
             try list.append(alloc, .{
                 .url = try alloc.dupe(u8, url),
@@ -865,7 +867,7 @@ pub const Gateway = struct {
             if (w <= 0 or h <= 0) continue;
             try list.append(alloc, .{
                 .url = try alloc.dupe(u8, url),
-                .filename = try alloc.dupe(u8, j.str(j.get(e, "title")) orelse "imagem"),
+                .filename = try alloc.dupe(u8, j.str(j.get(e, "title")) orelse i18n.tr("imagem", "image")),
                 .width = @intCast(@min(w, 65535)),
                 .height = @intCast(@min(h, 65535)),
                 .animated = std.mem.eql(u8, kind, "gifv"),
@@ -924,7 +926,7 @@ pub const Gateway = struct {
         for (j.array(j.get(d, "guilds"))) |gv| {
             const gid = j.id(j.get(gv, "id")) orelse continue;
             const props = j.get(gv, "properties");
-            const name = j.str(j.get(gv, "name")) orelse (if (props) |p| j.str(j.get(p, "name")) else null) orelse "servidor";
+            const name = j.str(j.get(gv, "name")) orelse (if (props) |p| j.str(j.get(p, "name")) else null) orelse i18n.tr("servidor", "server");
             try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8) });
             try appendChannels(&channels, gid, j.array(j.get(gv, "channels")));
             for (j.array(j.get(gv, "voice_states"))) |vs| {
@@ -953,7 +955,7 @@ pub const Gateway = struct {
                 };
             }
             const gname: []const u8 = j.str(j.get(pc, "name")) orelse "";
-            if (kind == 3 and gname.len == 0) name = "grupo";
+            if (kind == 3 and gname.len == 0) name = i18n.tr("grupo", "group");
             try channels.append(alloc, .{ .id = cid, .guild = 0, .name = dupe(name), .topic = dupe(""), .position = @intCast(@min(pos, 65535)), .recipient = recipient });
         }
         // DMs mais recentes primeiro (o id da última mensagem cresce com o tempo).
@@ -1104,9 +1106,9 @@ pub const Gateway = struct {
             } else |_| {}
         }
         if (detail.len > 0) {
-            g.notice("{s}: {s}", .{ what, detail });
+            g.notice("{s}: {s}", "{s}: {s}", .{ what, detail });
         } else {
-            g.notice("{s} (HTTP {d})", .{ what, resp.status });
+            g.notice("{s} (HTTP {d})", "{s} (HTTP {d})", .{ what, resp.status });
         }
     }
 
@@ -1172,7 +1174,7 @@ pub const Gateway = struct {
             }
             if (c.curl_easy_perform(h) != c.CURLE_OK) {
                 resp.body.deinit(alloc);
-                g.notice("sem conexão com a API do Discord", .{});
+                g.notice("sem conexão com a API do Discord", "no connection to the Discord API", .{});
                 return null;
             }
             _ = c.curl_easy_getinfo(h, c.CURLINFO_RESPONSE_CODE, &resp.status);
@@ -1198,7 +1200,7 @@ pub const Gateway = struct {
                     g.rate_until = @max(g.rate_until, retry_at);
                 }
                 resp.body.deinit(alloc);
-                g.notice("o Discord pediu calma: esperando {d} ms", .{wait_ms});
+                g.notice("o Discord pediu calma: esperando {d} ms", "Discord asked us to slow down: waiting {d} ms", .{wait_ms});
                 g.sleepServing(wait_ms + 100);
                 continue;
             }
@@ -1235,9 +1237,9 @@ pub const Gateway = struct {
                 defer resp.body.deinit(alloc);
                 if (resp.status != 200) {
                     if (resp.status == 403) {
-                        g.notice("sem permissão para ler esse canal", .{});
+                        g.notice("sem permissão para ler esse canal", "you don't have permission to read this channel", .{});
                     } else if (resp.status != 404) {
-                        g.noticeHttp("não consegui carregar o histórico", &resp);
+                        g.noticeHttp(i18n.tr("não consegui carregar o histórico", "couldn't load the history"), &resp);
                     }
                     return g.emit(.{ .history = .{ .channel = ch, .messages = &.{} } });
                 }
@@ -1282,8 +1284,8 @@ pub const Gateway = struct {
                 }
                 var resp = g.requestEx("POST", path, if (mime == null) b.items else null, mime) orelse return;
                 defer resp.body.deinit(alloc);
-                if (resp.status == 413) return g.notice("arquivo grande demais para o Discord (limite de 10 MB sem Nitro)", .{});
-                if (resp.status >= 300) g.noticeHttp("não foi possível enviar", &resp);
+                if (resp.status == 413) return g.notice("arquivo grande demais para o Discord (limite de 10 MB sem Nitro)", "file too large for Discord (10 MB limit without Nitro)", .{});
+                if (resp.status >= 300) g.noticeHttp(i18n.tr("não foi possível enviar", "couldn't send"), &resp);
             },
             .edit_message => |m| {
                 var b: std.ArrayList(u8) = .empty;
@@ -1294,20 +1296,20 @@ pub const Gateway = struct {
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}", .{ m.channel, m.id }) catch return;
                 var resp = g.request("PATCH", path, b.items) orelse return;
                 defer resp.body.deinit(alloc);
-                if (resp.status >= 300) g.noticeHttp("não foi possível editar", &resp);
+                if (resp.status >= 300) g.noticeHttp(i18n.tr("não foi possível editar", "couldn't edit"), &resp);
             },
             .delete_message => |m| {
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}", .{ m.channel, m.id }) catch return;
                 var resp = g.request("DELETE", path, null) orelse return;
                 defer resp.body.deinit(alloc);
-                if (resp.status >= 300) g.noticeHttp("não foi possível apagar", &resp);
+                if (resp.status >= 300) g.noticeHttp(i18n.tr("não foi possível apagar", "couldn't delete"), &resp);
             },
             .react => |r| {
                 var enc: [64]u8 = undefined;
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}/reactions/{s}/@me", .{ r.channel, r.id, j.urlEncode(&enc, r.emoji.text()) }) catch return;
                 var resp = g.request(if (r.add) "PUT" else "DELETE", path, null) orelse return;
                 defer resp.body.deinit(alloc);
-                if (resp.status >= 300 and resp.status != 404) g.noticeHttp("não foi possível reagir", &resp);
+                if (resp.status >= 300 and resp.status != 404) g.noticeHttp(i18n.tr("não foi possível reagir", "couldn't react"), &resp);
             },
             .typing => |ch| {
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/typing", .{ch}) catch return;
@@ -1316,7 +1318,7 @@ pub const Gateway = struct {
             },
             .join_voice => if (!g.voice_warned) {
                 g.voice_warned = true;
-                g.notice("voz ainda não funciona na conexão real", .{});
+                g.notice("voz ainda não funciona na conexão real", "voice doesn't work on the real connection yet", .{});
             },
             .shutdown => {},
         }

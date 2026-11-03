@@ -11,6 +11,7 @@ const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const icons = @import("icons.zig");
+const i18n = @import("i18n.zig");
 const types = @import("../core/types.zig");
 const Id = types.Id;
 
@@ -38,7 +39,7 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         var buf: [128]u8 = undefined;
         const t = std.fmt.bufPrint(&buf, "{s}", .{ch.name}) catch "";
         d.text(dl, fam.get(.bold), 22, r.x + 4, r.y + r.h / 2 - 22, ctx.col(.text), t);
-        const sub = if (ch.guild == 0) "mensagem direta" else std.fmt.bufPrint(&buf, "{s}  ·  {s}", .{ if (g) |x| x.name else "", ch.topic }) catch "";
+        const sub = if (ch.guild == 0) i18n.tr("mensagem direta", "direct message") else std.fmt.bufPrint(&buf, "{s}  ·  {s}", .{ if (g) |x| x.name else "", ch.topic }) catch "";
         _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - 8);
         return;
     }
@@ -57,17 +58,17 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const sh = d.hit(ctx, 1, sr);
     qa.mark(sr, "header-search", .{});
     if (sh.clicked) ctx.act(.open_palette);
-    d.tip(ctx, sr, "Buscar canais, servidores e ações", sh.hovered);
+    d.tip(ctx, sr, i18n.tr("Buscar canais, servidores e ações", "Search channels, servers and actions"), sh.hovered);
     const sk = anim.to(anim.id("search", @intFromPtr(n)), if (sh.hovered) 1 else 0, 20);
     d.rect(dl, sr, ctx.col(.rail).mix(ctx.col(.sidebar), 0.3 + 0.3 * sk), ctx.th.radius);
-    d.text(dl, fam.get(.regular), 14, sr.x + 9, d.centerY(sr, 14), ctx.col(.faint).mix(ctx.col(.muted), sk), "Buscar  Ctrl+K");
+    d.text(dl, fam.get(.regular), 14, sr.x + 9, d.centerY(sr, 14), ctx.col(.faint).mix(ctx.col(.muted), sk), i18n.tr("Buscar  Ctrl+K", "Search  Ctrl+K"));
     icons.search(dl, sr.right() - 15, sr.y + 13, ctx.col(.faint).mix(ctx.col(.muted), sk).u());
     const mr: d.Rect = .{ .x = sx - 40, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
     const mh = d.hit(ctx, 2, mr);
     qa.mark(mr, "header-members", .{});
     if (mh.clicked) ctx.st.settings.show_member_list = !ctx.st.settings.show_member_list;
     icons.members(dl, mr.x + 14, mr.y + 14, (if (ctx.st.settings.show_member_list or mh.hovered) ctx.col(.text) else ctx.col(.muted)).u());
-    d.tip(ctx, mr, if (ctx.st.settings.show_member_list) "Esconder membros" else "Mostrar membros", mh.hovered);
+    d.tip(ctx, mr, if (ctx.st.settings.show_member_list) i18n.tr("Esconder membros", "Hide Member List") else i18n.tr("Mostrar membros", "Show Member List"), mh.hovered);
     if (d.pflag(n, "divider", true)) d.line(dl, r.x, r.bottom() - 0.5, r.right(), r.bottom() - 0.5, ctx.col(.border), 1);
 }
 
@@ -143,7 +144,7 @@ pub fn tabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const ph = d.hit(ctx, 999, pr);
     qa.mark(pr, "tab-plus", .{});
     if (ph.clicked) ctx.act(.open_palette);
-    d.tip(ctx, pr, "Abrir canal em nova aba", ph.hovered);
+    d.tip(ctx, pr, i18n.tr("Abrir canal em nova aba", "Open channel in a new tab"), ph.hovered);
     const pk = anim.to(anim.id("tab-plus", @intFromPtr(n)), if (ph.hovered) 1 else 0, 20);
     if (tty) {
         d.text(dl, fam.get(.bold), fs, pr.x + 4, d.centerY(pr, fs), ctx.col(.muted).mix(ctx.col(.text), pk), "+");

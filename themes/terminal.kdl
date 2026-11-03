@@ -1,11 +1,11 @@
 // terminal — tmux + IRC. Escuro: fósforo âmbar (ou verde). Claro: papel de
 // impressora matricial. Exclusivo: efeito de monitor CRT e logo em ASCII.
-theme "terminal" description="tmux + IRC: monoespaçado, canais em árvore, efeito CRT e logo em ASCII." author="larperCord" preview=terminal
+theme "terminal" description="tmux + IRC: monoespaçado, canais em árvore, efeito CRT e logo em ASCII." description-en="tmux + IRC: monospace, channel tree, CRT effect and ASCII logo." author="larperCord" preview=terminal
 
 options {
-    option "crt" label="Efeito CRT" description="Linhas de varredura e cantos escuros, como um monitor antigo." default=#true
-    option "ascii" label="Logo em ASCII" description="O nome do app desenhado com caracteres no topo dos canais." default=#true
-    option "verde" label="Fósforo verde" description="Troca o âmbar pelo verde dos terminais clássicos (modo escuro)." default=#false
+    option "crt" label="Efeito CRT" description="Linhas de varredura e cantos escuros, como um monitor antigo." label-en="CRT effect" description-en="Scanlines and dark corners, like an old monitor." default=#true
+    option "ascii" label="Logo em ASCII" description="O nome do app desenhado com caracteres no topo dos canais." label-en="ASCII logo" description-en="The app name drawn in characters above the channels." default=#true
+    option "verde" label="Fósforo verde" description="Troca o âmbar pelo verde dos terminais clássicos (modo escuro)." label-en="Green phosphor" description-en="Swaps amber for the green of classic terminals (dark mode)." default=#false
 }
 
 colors mode=dark {

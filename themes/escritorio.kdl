@@ -1,11 +1,11 @@
 // escritorio — ferramenta de trabalho: barra lateral berinjela com os
 // servidores em lista e a conversa no branco. Exclusivo: barra superior com
 // voltar/avançar entre abas, busca no servidor e ajuda.
-theme "escritorio" description="Ferramenta de trabalho: barra superior com busca, servidores em lista." author="larperCord" preview=office
+theme "escritorio" description="Ferramenta de trabalho: barra superior com busca, servidores em lista." description-en="Work tool: top bar with search, servers in a list." author="larperCord" preview=office
 
 options {
-    option "topo" label="Barra superior" description="Voltar/avançar entre abas, busca no servidor e ajuda." default=#true
-    option "servidores" label="Lista de servidores" description="Os servidores no topo da barra lateral." default=#true
+    option "topo" label="Barra superior" description="Voltar/avançar entre abas, busca no servidor e ajuda." label-en="Top bar" description-en="Back/forward between tabs, server search and help." default=#true
+    option "servidores" label="Lista de servidores" description="Os servidores no topo da barra lateral." label-en="Server list" description-en="The servers at the top of the sidebar." default=#true
 }
 
 colors mode=light {

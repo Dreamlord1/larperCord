@@ -153,6 +153,19 @@ Formas de usar as opções:
 
 As escolhas ficam salvas por tema em `~/.config/larpercord/settings.kdl`.
 
+### Em inglês
+
+A interface tem português e inglês. Para o seu tema aparecer bem nos dois, ponha a versão em
+inglês ao lado: `label-en=` e `description-en=` nas opções, e `description-en=` no nó `theme`.
+Sem elas, aparece o texto em português.
+
+```kdl
+theme "meu-tema" description="Servidores embaixo." description-en="Servers at the bottom."
+options {
+    option "crt" label="Efeito CRT" label-en="CRT effect" description="Linhas de varredura" description-en="Scanlines"
+}
+```
+
 ## Recursos exclusivos
 
 | Componente / propriedade | O que faz | Usado em |

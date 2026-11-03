@@ -21,6 +21,7 @@ const root = @import("ui/root.zig");
 const login_mod = @import("ui/login.zig");
 const qa_mod = @import("ui/qa.zig");
 const images = @import("ui/images.zig");
+const i18n = @import("ui/i18n.zig");
 const widgets = @import("ui/widgets.zig");
 const settings_state = @import("ui/settings_state.zig");
 const kdl = @import("theme/kdl.zig");
@@ -39,6 +40,8 @@ pub const Options = struct {
     qa: bool = false,
     /// Mostra a tela de login sem usar o token salvo.
     login: bool = false,
+    /// Força o idioma (ignora as configurações).
+    lang: ?@import("ui/i18n.zig").Lang = null,
 };
 
 var wake_type_global: u32 = 0;
@@ -114,6 +117,8 @@ pub const App = struct {
         defer settings_arena.deinit();
         if (opts.shot == null and !opts.qa) saved_theme = app.loadSettings(settings_arena.allocator());
         app.themes.mode = app.wantedMode();
+        // Já aqui: os dados da demonstração saem no idioma da interface.
+        i18n.lang = if (opts.qa) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language);
         app.st.settings.open = opts.settings;
         const name = opts.theme orelse saved_theme orelse "classico";
         const want = app.themes.indexOf(name) orelse 0;
@@ -230,16 +235,16 @@ pub const App = struct {
     /// Coloca um arquivo na bandeja da próxima mensagem.
     pub fn attachFile(app: *App, path: []const u8) void {
         const st = &app.st;
-        if (st.uploads.items.len >= 10) return st.showToast(now(), true, "no máximo 10 arquivos por mensagem", .{});
+        if (st.uploads.items.len >= 10) return st.showToast(now(), true, "no máximo 10 arquivos por mensagem", "at most 10 files per message", .{});
         const z = std.heap.c_allocator.dupeSentinel(u8, path, 0) catch return;
         var info: c.SDL_PathInfo = undefined;
         if (!c.SDL_GetPathInfo(z.ptr, &info) or info.type != c.SDL_PATHTYPE_FILE) {
             std.heap.c_allocator.free(z);
-            return st.showToast(now(), true, "não consegui abrir esse arquivo", .{});
+            return st.showToast(now(), true, "não consegui abrir esse arquivo", "couldn't open that file", .{});
         }
         if (info.size > max_upload) {
             std.heap.c_allocator.free(z);
-            return st.showToast(now(), true, "arquivo maior que 10 MB (limite do Discord sem Nitro)", .{});
+            return st.showToast(now(), true, "arquivo maior que 10 MB (limite do Discord sem Nitro)", "file larger than 10 MB (Discord's limit without Nitro)", .{});
         }
         var up: @import("ui/state.zig").Upload = .{ .path = z, .size = info.size };
         // Imagem? Lê só as dimensões (para reservar o espaço na conversa).
@@ -282,8 +287,10 @@ pub const App = struct {
         const dir: []const u8 = if (c.SDL_getenv("XDG_RUNTIME_DIR")) |x| std.mem.span(x) else "/tmp";
         var pbuf: [512]u8 = undefined;
         app.paste_n += 1;
-        const path = std.fmt.bufPrintSentinel(&pbuf, "{s}/larpercord-colado-{d}-{d}.png", .{ dir, c.getpid(), app.paste_n }, 0) catch return;
-        if (!c.SDL_SaveFile(path.ptr, data, size)) return app.st.showToast(now(), true, "não consegui colar a imagem", .{});
+        // O nome do arquivo aparece na bandeja e vai junto para o Discord.
+        const path = i18n.fmtZ(&pbuf, "{s}/larpercord-colado-{d}-{d}.png", "{s}/larpercord-pasted-{d}-{d}.png", .{ dir, c.getpid(), app.paste_n });
+        if (path.len == 0) return;
+        if (!c.SDL_SaveFile(path.ptr, data, size)) return app.st.showToast(now(), true, "não consegui colar a imagem", "couldn't paste the image", .{});
         app.attachFile(path);
     }
 
@@ -317,20 +324,20 @@ pub const App = struct {
         switch (r) {
             .submit => {
                 const t = lg.tokenText();
-                if (t.len == 0) return lg.fail("Cole o token no campo acima.");
+                if (t.len == 0) return lg.fail(i18n.tr("Cole o token no campo acima.", "Paste the token in the field above."));
                 if (t.len < 50 or std.mem.indexOfAny(u8, t, " \t") != null)
-                    return lg.fail("Isso não parece um token do Discord.");
+                    return lg.fail(i18n.tr("Isso não parece um token do Discord.", "That doesn't look like a Discord token."));
                 if (app.opts.qa) {
                     // O QA nunca fala com o Discord: simula a recusa.
                     lg.clearToken();
-                    return lg.fail("O Discord recusou esse token (teste).");
+                    return lg.fail(i18n.tr("O Discord recusou esse token (teste).", "Discord rejected that token (test)."));
                 }
-                const owned = std.heap.c_allocator.dupeSentinel(u8, t, 0) catch return lg.fail("Sem memória.");
+                const owned = std.heap.c_allocator.dupeSentinel(u8, t, 0) catch return lg.fail(i18n.tr("Sem memória.", "Out of memory."));
                 lg.clearToken();
                 app.resetSession();
                 app.save_token = lg.remember;
                 app.last_notice_len = 0;
-                app.startReal(owned) catch return lg.fail("Não consegui iniciar a conexão.");
+                app.startReal(owned) catch return lg.fail(i18n.tr("Não consegui iniciar a conexão.", "Couldn't start the connection."));
                 lg.setPhase(.connecting);
             },
             .demo => {
@@ -491,9 +498,9 @@ pub const App = struct {
     fn setTheme(app: *App, i: usize) void {
         if (app.themes.load(i)) {
             app.applyThemeStyle();
-            app.st.showToast(now(), false, "tema: {s}", .{app.themes.name()});
+            app.st.showToast(now(), false, "tema: {s}", "theme: {s}", .{app.themes.name()});
             app.saveSettings();
-        } else app.st.showToast(now(), true, "{s}", .{app.themes.last_error orelse "erro no tema"});
+        } else app.st.showToast(now(), true, "{s}", "{s}", .{app.themes.last_error orelse i18n.tr("erro no tema", "theme error")});
     }
 
     // --- Ações da interface ------------------------------------------------
@@ -658,7 +665,7 @@ pub const App = struct {
                 const ch = f.cs.info.id;
                 app.store.apply(.{ .message_delete = .{ .channel = ch, .id = id } }, now()) catch {};
                 app.cmd(.{ .delete_message = .{ .channel = ch, .id = id } });
-                st.showToast(now(), false, "mensagem excluída", .{});
+                st.showToast(now(), false, "mensagem excluída", "message deleted", .{});
             },
             .react => |r| {
                 const f = app.store.findAny(r.id) orelse return;
@@ -673,7 +680,7 @@ pub const App = struct {
                 for (app.store.channelsOf(0)) |id| if (app.store.channel(id)) |cs| if (cs.info.recipient == user) {
                     return app.openChannel(id, false);
                 };
-                st.showToast(now(), false, "ainda não existe uma DM com essa pessoa", .{});
+                st.showToast(now(), false, "ainda não existe uma DM com essa pessoa", "there's no DM with this person yet", .{});
             },
             .send_dm => |dm| {
                 defer app.gpa.free(dm.text);
@@ -686,7 +693,7 @@ pub const App = struct {
                 const z = app.gpa.dupeSentinel(u8, text, 0) catch return;
                 defer app.gpa.free(z);
                 _ = c.SDL_SetClipboardText(z.ptr);
-                st.showToast(now(), false, "copiado ✓", .{});
+                st.showToast(now(), false, "copiado ✓", "copied ✓", .{});
             },
             .jump_to => |id| st.jump = id,
             .mark_read => |id| {
@@ -779,7 +786,7 @@ pub const App = struct {
         var failed = false;
         for (batch.items) |e| {
             if (e == .notice) {
-                app.st.showToast(now(), true, "{s}", .{e.notice});
+                app.st.showToast(now(), true, "{s}", "{s}", .{e.notice});
                 const n = @min(e.notice.len, app.last_notice.len);
                 @memcpy(app.last_notice[0..n], e.notice[0..n]);
                 app.last_notice_len = n;
@@ -801,9 +808,9 @@ pub const App = struct {
             if (app.save_token and app.net == .real) {
                 app.save_token = false;
                 switch (discord.saveToken(app.net.real.token)) {
-                    .keyring => app.st.showToast(now(), false, "token guardado no chaveiro do sistema", .{}),
-                    .file => app.st.showToast(now(), false, "token guardado em ~/.config/larpercord/token", .{}),
-                    .failed => app.st.showToast(now(), true, "não consegui guardar o token", .{}),
+                    .keyring => app.st.showToast(now(), false, "token guardado no chaveiro do sistema", "token saved to the system keyring", .{}),
+                    .file => app.st.showToast(now(), false, "token guardado em ~/.config/larpercord/token", "token saved to ~/.config/larpercord/token", .{}),
+                    .failed => app.st.showToast(now(), true, "não consegui guardar o token", "couldn't save the token", .{}),
                 }
             }
         }
@@ -811,7 +818,7 @@ pub const App = struct {
             // Token recusado (ou erro fatal) antes de entrar: volta ao login.
             app.stopNet();
             app.resetSession();
-            app.login.fail(if (app.last_notice_len > 0) app.last_notice[0..app.last_notice_len] else "Não deu pra entrar com esse token.");
+            app.login.fail(if (app.last_notice_len > 0) app.last_notice[0..app.last_notice_len] else i18n.tr("Não deu pra entrar com esse token.", "Couldn't sign in with that token."));
             return;
         }
         // GUILD_DELETE/CHANNEL_DELETE: não deixa a interface apontando para
@@ -875,7 +882,7 @@ pub const App = struct {
             app.st.popup = .{ .emoji = .{ .target = 0, .x = 1000, .y = 730 } };
         } else if (std.mem.eql(u8, which, "reply")) {
             app.handle(.{ .reply = prev.msg.id });
-            const t = "isso aqui tá **muito** bom 😍";
+            const t = i18n.tr("isso aqui tá **muito** bom 😍", "this is **really** good 😍");
             @memcpy(app.st.input[0..t.len], t);
             app.st.input_sync = true;
         } else if (std.mem.eql(u8, which, "select")) {
@@ -903,6 +910,7 @@ pub const App = struct {
         var settled_frames: u32 = 0;
         var first_frame_logged = false;
         var login_result: ?login_mod.Result = null;
+        var lang_setting: i16 = -1;
         // LARPER_RECORD=pasta: salva cada quadro da tela de login (a 30 qps fixos)
         // para montar o vídeo/GIF da documentação.
         const record_dir: ?[*:0]const u8 = c.SDL_getenv("LARPER_RECORD");
@@ -919,8 +927,8 @@ pub const App = struct {
                         .gateway => app.drainEvents(),
                         .theme => if (app.themes.reload()) {
                             app.applyThemeStyle();
-                            app.st.showToast(now(), false, "tema recarregado: {s}", .{app.themes.name()});
-                        } else app.st.showToast(now(), true, "{s}", .{app.themes.last_error orelse "erro no tema"}),
+                            app.st.showToast(now(), false, "tema recarregado: {s}", "theme reloaded: {s}", .{app.themes.name()});
+                        } else app.st.showToast(now(), true, "{s}", "{s}", .{app.themes.last_error orelse i18n.tr("erro no tema", "theme error")}),
                         .tick => {},
                         .media => {},
                     }
@@ -963,6 +971,12 @@ pub const App = struct {
                 if (app.themes.setMode(mode)) app.applyThemeStyle();
             }
             d.text_scale = set.font_scale;
+            // Idioma: o QA roda sempre em português (as marcações usam os rótulos).
+            if (set.language != lang_setting) {
+                lang_setting = set.language;
+                i18n.lang = if (app.opts.qa) .pt else app.opts.lang orelse i18n.fromSetting(set.language);
+                app.st.theme_gen +%= 1;
+            }
             anim.instant = set.reduce_motion;
             widgets.hour12 = !set.clock_24h;
             const key = set.layoutKey();

@@ -10,6 +10,7 @@ const d = @import("draw.zig");
 const anim = @import("anim.zig");
 const logo = @import("logo.zig");
 const qa = @import("qa.zig");
+const i18n = @import("i18n.zig");
 
 const Rgba = d.Rgba;
 const Rect = d.Rect;
@@ -321,7 +322,7 @@ pub fn draw(l: *Login, env: Env) ?Result {
         const word_y = hero_cy + logo_size * 0.375 + 14;
         wordmark(&f, hero_cx, word_y, 50);
         const tag_k = outCubic(seg(t, 1.35, 1.8));
-        f.centered(.medium, 17, hero_cx, word_y + 50 * 1.25 + (1 - tag_k) * 8, f.p.muted.alpha(tag_k), "o Discord leve, nativo e do seu jeito");
+        f.centered(.medium, 17, hero_cx, word_y + 50 * 1.25 + (1 - tag_k) * 8, f.p.muted.alpha(tag_k), i18n.tr("o Discord leve, nativo e do seu jeito", "a light, native Discord, your way"));
     } else {
         const ww = f.width(.bold, 34, "larperCord");
         wordmark(&f, hero_cx + logo_size / 2 + 10 + ww / 2, hero_cy - 34 * 0.62, 34);
@@ -353,8 +354,8 @@ pub fn draw(l: *Login, env: Env) ?Result {
     const fcx = cr.x + cr.w / 2;
     // Sem espaço embaixo do cartão: o aviso não pode cobrir os botões.
     f.a = if (foot_y + 34 > f.win.bottom()) 0 else foot_k;
-    f.centered(.regular, 12, fcx, foot_y, f.p.faint, "cliente não oficial · vai contra os Termos do Discord, use por sua conta e risco");
-    f.centered(.regular, 12, fcx, foot_y + 17, f.p.faint, "o token fica neste computador e só é enviado ao próprio Discord");
+    f.centered(.regular, 12, fcx, foot_y, f.p.faint, i18n.tr("cliente não oficial · vai contra os Termos do Discord, use por sua conta e risco", "unofficial client · against Discord's Terms of Service, use at your own risk"));
+    f.centered(.regular, 12, fcx, foot_y + 17, f.p.faint, i18n.tr("o token fica neste computador e só é enviado ao próprio Discord", "your token stays on this computer and is only ever sent to Discord"));
     return result;
 }
 
@@ -420,9 +421,9 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
     var result: ?Result = null;
     var y = y0;
 
-    f.text(.semibold, 24, x, y, f.p.text, "Entrar");
+    f.text(.semibold, 24, x, y, f.p.text, i18n.tr("Entrar", "Sign in"));
     y += 36;
-    f.text(.regular, 14.5, x, y, f.p.muted, "Cole o token da sua conta do Discord pra começar.");
+    f.text(.regular, 14.5, x, y, f.p.muted, i18n.tr("Cole o token da sua conta do Discord pra começar.", "Paste your Discord account token to get started."));
     y += 34;
 
     // Campo do token.
@@ -442,7 +443,8 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
     // Botões dentro do campo: colar (vazio) e mostrar/ocultar.
     const eye_r: Rect = .{ .x = fr.right() - 42, .y = fr.y + 5, .w = 36, .h = 36 };
     const empty = l.tokenText().len == 0;
-    const paste_w = f.width(.semibold, 12.5, "Colar") + 20;
+    const paste_label = i18n.tr("Colar", "Paste");
+    const paste_w = f.width(.semibold, 12.5, paste_label) + 20;
     const paste_r: Rect = .{ .x = eye_r.x - paste_w - 4, .y = fr.y + 10, .w = paste_w, .h = 26 };
 
     const tx = fr.x + 40;
@@ -458,7 +460,7 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         l.want_focus = false;
     }
     const flags = c.ImGuiInputTextFlags_EnterReturnsTrue | (if (l.show) 0 else c.ImGuiInputTextFlags_Password);
-    const enter = c.ImGui_InputTextWithHint("##token", "Cole aqui o seu token", &l.token, l.token.len, flags);
+    const enter = c.ImGui_InputTextWithHint("##token", i18n.trZ("Cole aqui o seu token", "Paste your token here").ptr, &l.token, l.token.len, flags);
     const focused = c.ImGui_IsItemActive();
     if (c.ImGui_IsItemEdited()) l.err_len = 0;
     c.ImGui_PopStyleColorEx(4);
@@ -471,7 +473,7 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         qa.mark(paste_r, "login:colar", .{});
         d.rect(dl, paste_r, f.p.text.alpha((if (hp.hovered) @as(f32, 0.1) else 0.05) * f.a), 6);
         d.border(dl, paste_r, f.p.field_border.alpha(f.a), 6, 1);
-        f.text(.medium, 12.5, paste_r.x + 10, d.centerY(paste_r, 12.5), f.p.muted, "Colar");
+        f.text(.medium, 12.5, paste_r.x + 10, d.centerY(paste_r, 12.5), f.p.muted, paste_label);
         if (hp.clicked) paste(l);
     }
     const he = hit(31, eye_r);
@@ -502,9 +504,10 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         const tr: Rect = .{ .x = x, .y = y + 4, .w = 32, .h = 18 };
         d.rect(dl, tr, f.p.field_border.mix(f.p.accent, l.remember_k).alpha(f.a), 9);
         d.circle(dl, tr.x + 9 + 14 * l.remember_k, tr.y + 9, 6.5, Rgba.white.alpha(f.a));
-        f.text(.regular, 14, x + 44, y + 3, f.p.text, "Lembrar neste computador");
-        const note = "no chaveiro do sistema";
-        f.text(.regular, 12.5, x + 44 + f.width(.regular, 14, "Lembrar neste computador") + 8, y + 4.5, f.p.faint, note);
+        const remember_label = i18n.tr("Lembrar neste computador", "Remember on this computer");
+        f.text(.regular, 14, x + 44, y + 3, f.p.text, remember_label);
+        const note = i18n.tr("no chaveiro do sistema", "in the system keyring");
+        f.text(.regular, 12.5, x + 44 + f.width(.regular, 14, remember_label) + 8, y + 4.5, f.p.faint, note);
         y += row.h + 22;
     }
 
@@ -517,7 +520,7 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         const hk = anim.to(anim.id("login-entrar", 0), if (hb.hovered) 1 else 0, 18);
         const fill = f.p.primary.mix(f.p.card, if (hb.held) 0.2 else 0.1 * hk);
         d.rect(dl, br, fill.alpha(f.a), 8);
-        const label = "Entrar";
+        const label = i18n.tr("Entrar", "Sign in");
         const lw = f.width(.semibold, 15, label);
         f.text(.semibold, 15, br.x + (br.w - lw) / 2 - 9, d.centerY(br, 15), f.p.on_primary, label);
         // Setinha que anda um pouco no hover.
@@ -532,11 +535,12 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
 
     // ou
     {
-        const ow = f.width(.semibold, 12, "ou");
+        const ou = i18n.tr("ou", "or");
+        const ow = f.width(.semibold, 12, ou);
         const my = y + 8;
         d.line(dl, x, my, x + w / 2 - ow / 2 - 12, my, f.p.card_border.alpha(f.a * 1.4), 1);
         d.line(dl, x + w / 2 + ow / 2 + 12, my, x + w, my, f.p.card_border.alpha(f.a * 1.4), 1);
-        f.centered(.regular, 12, x + w / 2, y, f.p.faint, "ou");
+        f.centered(.regular, 12, x + w / 2, y, f.p.faint, ou);
         y += 30;
     }
 
@@ -548,14 +552,14 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         if (hb.clicked) result = .demo;
         d.rect(dl, br, f.p.text.alpha((if (hb.hovered) @as(f32, 0.06) else 0) * f.a), 8);
         d.border(dl, br, f.p.field_border.alpha(f.a), 8, 1);
-        const label = "Explorar o modo demonstração";
+        const label = i18n.tr("Explorar o modo demonstração", "Explore the demo");
         f.centered(.medium, 14.5, x + w / 2, d.centerY(br, 14.5), f.p.text, label);
         y += br.h + 18;
     }
 
     // Ajuda.
     {
-        const label = if (l.help) "Esconder a ajuda" else "Onde encontro o meu token?";
+        const label = if (l.help) i18n.tr("Esconder a ajuda", "Hide help") else i18n.tr("Onde encontro o meu token?", "Where do I find my token?");
         const lw = f.width(.semibold, 13.5, label);
         const lr: Rect = .{ .x = x + (w - lw) / 2 - 6, .y = y - 3, .w = lw + 12, .h = 24 };
         const hh = hit(35, lr);
@@ -567,12 +571,19 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         y += 28;
         l.help_k = anim.step(l.help_k, if (l.help) 1 else 0, 14);
         if (l.help_k > 0.01) {
-            const steps = [_][]const u8{
+            const steps_pt = [_][]const u8{
                 "Abra discord.com/app no navegador e entre na conta.",
                 "Aperte F12 e vá na aba Rede (Network).",
                 "Troque de canal e clique numa requisição para /api.",
                 "Em Cabeçalhos, copie o valor de Authorization.",
             };
+            const steps_en = [_][]const u8{
+                "Open discord.com/app in your browser and log in.",
+                "Press F12 and go to the Network tab.",
+                "Switch channels and click a request to /api.",
+                "Under Headers, copy the Authorization value.",
+            };
+            const steps = if (i18n.en()) steps_en else steps_pt;
             const full_h: f32 = 4 * 26 + 50;
             const hr: Rect = .{ .x = x, .y = y, .w = w, .h = full_h * l.help_k };
             c.ImDrawList_PushClipRect(dl, d.v(hr.x - 2, hr.y), d.v(hr.right() + 2, hr.bottom()), true);
@@ -589,7 +600,7 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
                 hy += 26;
             }
             hy += 4;
-            _ = d.textClipped(dl, f.font(.medium), 12.5, hr.x + 16, hy, f.p.danger.alpha(f.a), "Quem tem o token tem a sua conta. Não mande pra ninguém.", hr.w - 28);
+            _ = d.textClipped(dl, f.font(.medium), 12.5, hr.x + 16, hy, f.p.danger.alpha(f.a), i18n.tr("Quem tem o token tem a sua conta. Não mande pra ninguém.", "Anyone with your token has your account. Never share it."), hr.w - 28);
             c.ImDrawList_PopClipRect(dl);
             y += hr.h + 6;
         }
@@ -618,14 +629,20 @@ fn connecting(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
 
     const dots = @as(usize, @intFromFloat(@mod(t * 2.5, 4)));
     var buf: [48]u8 = undefined;
-    const title = std.fmt.bufPrint(&buf, "Conectando ao Discord{s}", .{"..."[0..dots]}) catch "";
-    f.text(.bold, 20, cx - f.width(.bold, 20, "Conectando ao Discord...") / 2, y, f.p.text, title);
+    const title = i18n.fmt(&buf, "Conectando ao Discord{s}", "Connecting to Discord{s}", .{"..."[0..dots]});
+    f.text(.bold, 20, cx - f.width(.bold, 20, i18n.tr("Conectando ao Discord...", "Connecting to Discord...")) / 2, y, f.p.text, title);
     y += 32;
-    const tips = [_][]const u8{
+    const tips_pt = [_][]const u8{
         "Abrindo a conexão com o gateway",
         "Carregando servidores e mensagens diretas",
         "Arrumando os seus canais",
     };
+    const tips_en = [_][]const u8{
+        "Opening the gateway connection",
+        "Loading servers and direct messages",
+        "Getting your channels ready",
+    };
+    const tips = if (i18n.en()) tips_en else tips_pt;
     const since = t - l.phase_at;
     const tip = tips[@min(tips.len - 1, @as(usize, @intFromFloat(since / 1.6)))];
     f.centered(.regular, 14, cx, y, f.p.muted, tip);
@@ -637,7 +654,7 @@ fn connecting(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
         const sa = f.a;
         f.a *= k;
         defer f.a = sa;
-        f.centered(.regular, 13, cx, y, f.p.faint, "Está demorando mais que o normal. Confira a internet.");
+        f.centered(.regular, 13, cx, y, f.p.faint, i18n.tr("Está demorando mais que o normal. Confira a internet.", "This is taking longer than usual. Check your connection."));
         y += 30;
         const bw = (w - 12) / 2;
         const r1: Rect = .{ .x = x, .y = y, .w = bw, .h = 40 };
@@ -647,7 +664,7 @@ fn connecting(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
             qa.mark(r, "login:{s}", .{if (i == 0) "outro" else "demo"});
             d.rect(dl, r, f.p.text.alpha((if (hb.hovered) @as(f32, 0.1) else 0.05) * f.a), 11);
             d.border(dl, r, f.p.card_border.alpha(f.a), 11, 1);
-            f.centered(.semibold, 13.5, r.x + r.w / 2, d.centerY(r, 13.5), f.p.text, if (i == 0) "Usar outro token" else "Modo demonstração");
+            f.centered(.semibold, 13.5, r.x + r.w / 2, d.centerY(r, 13.5), f.p.text, if (i == 0) i18n.tr("Usar outro token", "Use another token") else i18n.tr("Modo demonstração", "Demo mode"));
             if (hb.clicked) result = if (i == 0) .cancel else .demo;
         }
         y += 52;

@@ -2,6 +2,7 @@
 //! paleta. Os dados em si ficam no Store.
 const std = @import("std");
 const Id = @import("../core/types.zig").Id;
+const i18n = @import("i18n.zig");
 pub const Settings = @import("settings_state.zig").Settings;
 
 pub const MenuKind = enum { message, user, channel, guild };
@@ -139,8 +140,9 @@ pub const State = struct {
         return gop.value_ptr;
     }
 
-    pub fn showToast(s: *State, now_ms: i64, is_error: bool, comptime fmt: []const u8, args: anytype) void {
-        const out = std.fmt.bufPrint(&s.toast.buf, fmt, args) catch s.toast.buf[0..0];
+    /// Aviso rápido no topo, nos dois idiomas: showToast(now, false, "copiado ✓", "copied ✓", .{}).
+    pub fn showToast(s: *State, now_ms: i64, is_error: bool, comptime pt: []const u8, comptime en: []const u8, args: anytype) void {
+        const out = i18n.fmt(&s.toast.buf, pt, en, args);
         s.toast.len = out.len;
         s.toast.until_ms = now_ms + if (is_error) @as(i64, 6000) else 1800;
         s.toast.is_error = is_error;

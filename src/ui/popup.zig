@@ -9,6 +9,7 @@ const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const state = @import("state.zig");
 const types = @import("../core/types.zig");
+const i18n = @import("i18n.zig");
 const Id = types.Id;
 
 pub const emojis = [_][]const u8{
@@ -21,6 +22,7 @@ pub const emojis = [_][]const u8{
 const quick = [_][]const u8{ "👍", "😂", "😭", "🔥" };
 
 const role_names = [_][]const u8{ "Admin", "Moderação", "Zig", "Rice", "Gamer", "Arte", "Música", "Membro" };
+const role_names_en = [_][]const u8{ "Admin", "Moderation", "Zig", "Rice", "Gamer", "Art", "Music", "Member" };
 
 fn close(ctx: *d.Ctx) void {
     if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[popup] fechou\n", .{});
@@ -93,7 +95,8 @@ pub fn draw(ctx: *d.Ctx) void {
 
 // --- Menu de contexto -------------------------------------------------------
 
-const Item = struct { label: []const u8, id: u8, danger: bool = false, sep: bool = false };
+/// `label` (português) também é a marca do QA; `en` é o texto em inglês.
+const Item = struct { label: []const u8, en: []const u8, id: u8, danger: bool = false, sep: bool = false };
 
 fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     var items: [12]Item = undefined;
@@ -112,37 +115,37 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         .message => {
             const found = ctx.store.findAny(id) orelse return close(ctx);
             own = found.m.msg.author == ctx.store.me and found.m.msg.id != 0;
-            add(&items, &n, .{ .label = "Responder", .id = 1 });
-            if (own) add(&items, &n, .{ .label = "Editar mensagem", .id = 2 });
-            add(&items, &n, .{ .label = "Adicionar reação", .id = 3 });
-            add(&items, &n, .{ .label = if (ctx.st.selection.empty()) "Copiar texto" else "Copiar seleção", .id = 4 });
-            add(&items, &n, .{ .label = "Copiar link da mensagem", .id = 5 });
-            add(&items, &n, .{ .label = "Fixar mensagem", .id = 6 });
-            add(&items, &n, .{ .label = "Marcar como não lida", .id = 7 });
-            if (dev) add(&items, &n, .{ .label = "Copiar ID da mensagem", .id = 8 });
-            if (own) add(&items, &n, .{ .label = "Excluir mensagem", .id = 9, .danger = true, .sep = true });
+            add(&items, &n, .{ .label = "Responder", .en = "Reply", .id = 1 });
+            if (own) add(&items, &n, .{ .label = "Editar mensagem", .en = "Edit Message", .id = 2 });
+            add(&items, &n, .{ .label = "Adicionar reação", .en = "Add Reaction", .id = 3 });
+            add(&items, &n, .{ .label = if (ctx.st.selection.empty()) "Copiar texto" else "Copiar seleção", .en = if (ctx.st.selection.empty()) "Copy Text" else "Copy Selection", .id = 4 });
+            add(&items, &n, .{ .label = "Copiar link da mensagem", .en = "Copy Message Link", .id = 5 });
+            add(&items, &n, .{ .label = "Fixar mensagem", .en = "Pin Message", .id = 6 });
+            add(&items, &n, .{ .label = "Marcar como não lida", .en = "Mark Unread", .id = 7 });
+            if (dev) add(&items, &n, .{ .label = "Copiar ID da mensagem", .en = "Copy Message ID", .id = 8 });
+            if (own) add(&items, &n, .{ .label = "Excluir mensagem", .en = "Delete Message", .id = 9, .danger = true, .sep = true });
         },
         .user => {
-            add(&items, &n, .{ .label = "Perfil", .id = 20 });
-            add(&items, &n, .{ .label = "Mencionar", .id = 21 });
-            if (id != ctx.store.me) add(&items, &n, .{ .label = "Mensagem", .id = 22 });
-            if (id != ctx.store.me) add(&items, &n, .{ .label = "Ligar", .id = 23 });
-            add(&items, &n, .{ .label = "Copiar nome de usuário", .id = 24, .sep = true });
-            if (dev) add(&items, &n, .{ .label = "Copiar ID do usuário", .id = 25 });
+            add(&items, &n, .{ .label = "Perfil", .en = "Profile", .id = 20 });
+            add(&items, &n, .{ .label = "Mencionar", .en = "Mention", .id = 21 });
+            if (id != ctx.store.me) add(&items, &n, .{ .label = "Mensagem", .en = "Message", .id = 22 });
+            if (id != ctx.store.me) add(&items, &n, .{ .label = "Ligar", .en = "Call", .id = 23 });
+            add(&items, &n, .{ .label = "Copiar nome de usuário", .en = "Copy Username", .id = 24, .sep = true });
+            if (dev) add(&items, &n, .{ .label = "Copiar ID do usuário", .en = "Copy User ID", .id = 25 });
         },
         .channel => {
-            add(&items, &n, .{ .label = "Marcar como lido", .id = 40 });
-            add(&items, &n, .{ .label = "Abrir em nova aba", .id = 41 });
-            add(&items, &n, .{ .label = if (ctx.st.muted_channels.contains(id)) "Reativar notificações" else "Silenciar canal", .id = 42 });
-            add(&items, &n, .{ .label = "Copiar link", .id = 43, .sep = true });
-            if (dev) add(&items, &n, .{ .label = "Copiar ID do canal", .id = 44 });
+            add(&items, &n, .{ .label = "Marcar como lido", .en = "Mark As Read", .id = 40 });
+            add(&items, &n, .{ .label = "Abrir em nova aba", .en = "Open in New Tab", .id = 41 });
+            add(&items, &n, .{ .label = if (ctx.st.muted_channels.contains(id)) "Reativar notificações" else "Silenciar canal", .en = if (ctx.st.muted_channels.contains(id)) "Unmute Channel" else "Mute Channel", .id = 42 });
+            add(&items, &n, .{ .label = "Copiar link", .en = "Copy Link", .id = 43, .sep = true });
+            if (dev) add(&items, &n, .{ .label = "Copiar ID do canal", .en = "Copy Channel ID", .id = 44 });
         },
         .guild => {
-            add(&items, &n, .{ .label = "Marcar como lido", .id = 60 });
-            add(&items, &n, .{ .label = "Convidar pessoas", .id = 61 });
-            add(&items, &n, .{ .label = "Configurações do servidor", .id = 62 });
-            if (dev) add(&items, &n, .{ .label = "Copiar ID do servidor", .id = 63 });
-            add(&items, &n, .{ .label = "Sair do servidor", .id = 64, .danger = true, .sep = true });
+            add(&items, &n, .{ .label = "Marcar como lido", .en = "Mark As Read", .id = 60 });
+            add(&items, &n, .{ .label = "Convidar pessoas", .en = "Invite People", .id = 61 });
+            add(&items, &n, .{ .label = "Configurações do servidor", .en = "Server Settings", .id = 62 });
+            if (dev) add(&items, &n, .{ .label = "Copiar ID do servidor", .en = "Copy Server ID", .id = 63 });
+            add(&items, &n, .{ .label = "Sair do servidor", .en = "Leave Server", .id = 64, .danger = true, .sep = true });
         },
     }
 
@@ -193,7 +196,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         const base = if (it.danger) ctx.col(.danger) else ctx.col(.accent);
         if (hb.hovered) d.rect(dl, ir, base, @max(ctx.th.radius - 2, 2));
         const tc = if (hb.hovered) (if (it.danger) d.Rgba.white else ctx.col(.accent_text)) else if (it.danger) ctx.col(.danger) else ctx.col(.text).mix(ctx.col(.muted), 0.15);
-        d.text(dl, fam.get(.medium), 14, ir.x + 10, d.centerY(ir, 14), tc, it.label);
+        d.text(dl, fam.get(.medium), 14, ir.x + 10, d.centerY(ir, 14), tc, i18n.tr(it.label, it.en));
         if (hb.clicked) return choose(ctx, kind, id, it.id, r);
         yy += row_h;
     }
@@ -216,7 +219,7 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             if (selectionText(ctx)) |s| ctx.act(.{ .copy = s });
         } else if (ctx.store.findAny(id)) |f| copyFmt(ctx, "{s}", .{f.m.msg.content}),
         5 => if (ctx.store.findAny(id)) |f| copyFmt(ctx, "https://discord.com/channels/{d}/{d}/{d}", .{ f.cs.info.guild, f.cs.info.id, id }),
-        6 => st.showToast(ctx.now_ms, false, "📌 mensagem fixada", .{}),
+        6 => st.showToast(ctx.now_ms, false, "📌 mensagem fixada", "📌 message pinned", .{}),
         7 => if (ctx.store.findAny(id)) |f| {
             f.cs.info.unread = true;
         },
@@ -227,7 +230,7 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             insertText(st, u.name, true);
         },
         22 => ctx.act(.{ .open_dm = id }),
-        23 => st.showToast(ctx.now_ms, false, "📞 voz ainda não está conectada", .{}),
+        23 => st.showToast(ctx.now_ms, false, "📞 voz ainda não está conectada", "📞 voice isn't connected yet", .{}),
         24 => if (ctx.store.user(id)) |u| copyFmt(ctx, "{s}", .{u.name}),
         40, 60 => ctx.act(.{ .mark_read = id }),
         41 => {
@@ -239,8 +242,8 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         } else st.muted_channels.put(st.gpa, id, {}) catch {},
         43 => if (ctx.store.channel(id)) |cs| copyFmt(ctx, "https://discord.com/channels/{d}/{d}", .{ cs.info.guild, id }),
         61 => copyFmt(ctx, "https://discord.gg/larper{d}", .{id % 10000}),
-        62 => st.showToast(ctx.now_ms, false, "configurações do servidor: em breve", .{}),
-        64 => st.showToast(ctx.now_ms, false, "calma, ninguém sai daqui 😄", .{}),
+        62 => st.showToast(ctx.now_ms, false, "configurações do servidor: em breve", "server settings: coming soon", .{}),
+        64 => st.showToast(ctx.now_ms, false, "calma, ninguém sai daqui 😄", "relax, nobody leaves here 😄", .{}),
         else => {},
     }
 }
@@ -321,8 +324,8 @@ fn profile(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
     var buf: [64]u8 = undefined;
     const status = switch (u.status) {
         .online => "Online",
-        .idle => "Ausente",
-        .dnd => "Não perturbe",
+        .idle => i18n.tr("Ausente", "Idle"),
+        .dnd => i18n.tr("Não perturbe", "Do Not Disturb"),
         .offline => "Offline",
     };
     d.circle(dl, r.x + 21, yy + 9, 5, w.statusColor(ctx, u.status));
@@ -332,21 +335,21 @@ fn profile(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
     d.rect(dl, inner, ctx.col(.rail).alpha(0.7), @max(ctx.th.radius, 4));
     var iy = inner.y + 12;
     if (u.activity) |a| {
-        d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), "ATIVIDADE");
+        d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), i18n.tr("ATIVIDADE", "ACTIVITY"));
         iy += 18;
         _ = d.textClipped(dl, fam.get(.medium), 14, inner.x + 12, iy, ctx.col(.text), a, inner.w - 24);
         iy += 28;
     }
-    d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), "MEMBRO DESDE");
+    d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), i18n.tr("MEMBRO DESDE", "MEMBER SINCE"));
     iy += 18;
-    const since = std.fmt.bufPrint(&buf, "{d} de {s} de {d}", .{ 1 + uid % 28, w.months[uid % 12], 2016 + uid % 9 }) catch "";
+    const since = w.dateLong(&buf, 1 + uid % 28, 1 + uid % 12, 2016 + uid % 9);
     d.text(dl, fam.get(.regular), 14, inner.x + 12, iy, ctx.col(.text), since);
     iy += 28;
-    d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), "CARGOS");
+    d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), i18n.tr("CARGOS", "ROLES"));
     iy += 20;
     var rx = inner.x + 12;
     for ([_]u8{ u.role, 7 }) |ri| {
-        const name = role_names[ri % role_names.len];
+        const name = if (i18n.en()) role_names_en[ri % role_names_en.len] else role_names[ri % role_names.len];
         const tw = d.width(fam.get(.medium), 12, name);
         const cr: d.Rect = .{ .x = rx, .y = iy, .w = tw + 26, .h = 22 };
         d.rect(dl, cr, ctx.col(.elevated), 5);
@@ -363,7 +366,7 @@ fn profile(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
         c.ImGui_SetCursorScreenPos(d.v(ir.x + 10, ir.y + 9));
         c.ImGui_SetNextItemWidth(ir.w - 20);
         var hint: [80]u8 = undefined;
-        const h = std.fmt.bufPrintSentinel(&hint, "Mensagem @{s}", .{u.name}, 0) catch "";
+        const h = i18n.fmtZ(&hint, "Mensagem @{s}", "Message @{s}", .{u.name});
         if (appearing) c.ImGui_SetKeyboardFocusHere();
         if (c.ImGui_InputTextWithHint("##pmsg", h.ptr, &ctx.st.popup_input, ctx.st.popup_input.len, c.ImGuiInputTextFlags_EnterReturnsTrue)) {
             const t = std.mem.sliceTo(&ctx.st.popup_input, 0);
@@ -393,7 +396,7 @@ fn emojiPicker(ctx: *d.Ctx, target: Id, x: f32, y: f32) void {
     d.shadow(dl, r, radius, 16, ctx.col(.shadow));
     d.rect(dl, r, ctx.col(.overlay), radius);
     d.border(dl, r, ctx.col(.border), radius, 1);
-    d.text(dl, ctx.ui.get(.bold), 12, r.x + 14, r.y + 12, ctx.col(.muted), if (target == 0) "EMOJIS" else "REAGIR");
+    d.text(dl, ctx.ui.get(.bold), 12, r.x + 14, r.y + 12, ctx.col(.muted), if (target == 0) i18n.tr("EMOJIS", "EMOJI") else i18n.tr("REAGIR", "REACT"));
     for (emojis, 0..) |e, i| {
         const cx = r.x + 10 + @as(f32, @floatFromInt(i % cols)) * cell;
         const cy = r.y + 38 + @as(f32, @floatFromInt(i / cols)) * cell;

@@ -13,6 +13,7 @@ const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const icons = @import("icons.zig");
+const i18n = @import("i18n.zig");
 const types = @import("../core/types.zig");
 const Id = types.Id;
 
@@ -247,9 +248,9 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const hb = d.hit(ctx, 10 + i, br);
         qa.mark(br, "user-btn:{d}", .{i});
         d.tip(ctx, br, switch (i) {
-            0 => if (ctx.st.muted) "Desmutar" else "Mutar microfone",
-            1 => if (ctx.st.deafened) "Voltar a ouvir" else "Ensurdecer",
-            else => "Configurações  (Ctrl+,)",
+            0 => if (ctx.st.muted) i18n.tr("Desmutar", "Unmute") else i18n.tr("Mutar microfone", "Mute"),
+            1 => if (ctx.st.deafened) i18n.tr("Voltar a ouvir", "Undeafen") else i18n.tr("Ensurdecer", "Deafen"),
+            else => i18n.tr("Configurações  (Ctrl+,)", "User Settings  (Ctrl+,)"),
         }, hb.hovered);
         const active = (i == 0 and ctx.st.muted) or (i == 1 and ctx.st.deafened);
         if (hb.clicked) switch (i) {
@@ -287,7 +288,7 @@ fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     const g = ctx.store.guild(cs.info.guild);
     var buf: [128]u8 = undefined;
     if (tty) {
-        const t = std.fmt.bufPrint(&buf, "♪ {s}  [sair]", .{cs.info.name}) catch "";
+        const t = i18n.fmt(&buf, "♪ {s}  [sair]", "♪ {s}  [leave]", .{cs.info.name});
         d.text(ctx.dl, fam.get(.bold), ctx.th.font_size - 2, r.x + 10, d.centerY(r, ctx.th.font_size - 2), ctx.col(.online), t);
         const hb = d.hit(ctx, 50, r);
         qa.mark(r, "hangup", .{});
@@ -295,7 +296,7 @@ fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
         return;
     }
     d.line(ctx.dl, r.x + 8, r.bottom() - 0.5, r.right() - 8, r.bottom() - 0.5, ctx.col(.border), 1);
-    d.text(ctx.dl, fam.get(.semibold), 14, r.x + 14, r.y + 9, ctx.col(.online), "Voz conectada");
+    d.text(ctx.dl, fam.get(.semibold), 14, r.x + 14, r.y + 9, ctx.col(.online), i18n.tr("Voz conectada", "Voice Connected"));
     const sub = std.fmt.bufPrint(&buf, "{s} / {s}", .{ cs.info.name, if (g) |x| x.name else "" }) catch "";
     _ = d.textClipped(ctx.dl, fam.get(.regular), 13, r.x + 14, r.y + 29, ctx.col(.muted), sub, r.w - 70);
     const br: d.Rect = .{ .x = r.right() - 44, .y = r.y + 11, .w = 32, .h = 32 };
@@ -321,7 +322,7 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
         const hh: f32 = if (tree) 30 else 48;
         const hr: d.Rect = .{ .x = r.x, .y = r.y, .w = r.w, .h = hh };
         if (tree) {
-            d.text(ctx.dl, fam.get(.bold), fs, r.x + 10, d.centerY(hr, fs), ctx.col(.accent), "┌ mensagens diretas");
+            d.text(ctx.dl, fam.get(.bold), fs, r.x + 10, d.centerY(hr, fs), ctx.col(.accent), i18n.tr("┌ mensagens diretas", "┌ direct messages"));
         } else {
             // Caixa "Encontre ou comece uma conversa" (abre a paleta).
             const sr = hr.inset(10, 10);
@@ -329,7 +330,7 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
             qa.mark(sr, "dm-search", .{});
             if (hb.clicked) ctx.act(.open_palette);
             d.rect(ctx.dl, sr, ctx.col(.rail).mix(ctx.col(.sidebar), if (hb.hovered) 0.1 else 0.4), @max(ctx.th.radius - 2, 2));
-            d.text(ctx.dl, fam.get(.medium), 13, sr.x + 8, d.centerY(sr, 13), ctx.col(.faint), "Encontre ou comece uma conversa");
+            d.text(ctx.dl, fam.get(.medium), 13, sr.x + 8, d.centerY(sr, 13), ctx.col(.faint), i18n.tr("Encontre ou comece uma conversa", "Find or start a conversation"));
             if (variant == .discord) d.line(ctx.dl, r.x, hr.bottom() - 0.5, r.right(), hr.bottom() - 0.5, ctx.col(.border), 1);
         }
         r.y += hh;
@@ -339,7 +340,7 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
     const o = c.ImGui_GetCursorScreenPos();
     var y = o.y + 10;
     if (!tree) {
-        d.text(dl, fam.get(.semibold), 12, r.x + 18, y + 4, ctx.col(.faint).mix(ctx.col(.muted), 0.4), "MENSAGENS DIRETAS");
+        d.text(dl, fam.get(.semibold), 12, r.x + 18, y + 4, ctx.col(.faint).mix(ctx.col(.muted), 0.4), i18n.tr("MENSAGENS DIRETAS", "DIRECT MESSAGES"));
         y += 28;
     }
     for (ctx.store.channelsOf(0), 0..) |id, idx| {

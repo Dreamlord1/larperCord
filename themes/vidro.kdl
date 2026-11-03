@@ -1,13 +1,13 @@
 // vidro — cartões translúcidos flutuando sobre o wallpaper. O fundo da janela
 // é transparente: o compositor (Hyprland, KDE…) aplica o blur de verdade.
 // Exclusivo: reflexo de luz no topo de cada cartão.
-theme "vidro" description="Cartões de vidro sobre o wallpaper, com blur do compositor e reflexo." author="larperCord" preview=glass
+theme "vidro" description="Cartões de vidro sobre o wallpaper, com blur do compositor e reflexo." description-en="Glass cards over the wallpaper, with compositor blur and a sheen." author="larperCord" preview=glass
 palette "wal"
 window transparent=#true
 
 options {
-    option "brilho" label="Reflexo nos cartões" description="Uma faixa de luz no topo de cada cartão, como vidro de verdade." default=#true
-    option "abas" label="Abas de canal" description="Mostra os canais abertos em abas acima da conversa." default=#true
+    option "brilho" label="Reflexo nos cartões" description="Uma faixa de luz no topo de cada cartão, como vidro de verdade." label-en="Card sheen" description-en="A strip of light at the top of each card, like real glass." default=#true
+    option "abas" label="Abas de canal" description="Mostra os canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Shows open channels as tabs above the conversation." default=#true
 }
 
 colors mode=dark {

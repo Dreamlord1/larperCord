@@ -53,6 +53,9 @@ pub const Option = struct {
     name: []const u8,
     label: []const u8,
     description: []const u8 = "",
+    /// Versões em inglês (`label-en=`, `description-en=`); vazias = usa as de cima.
+    label_en: []const u8 = "",
+    description_en: []const u8 = "",
     default: bool = true,
 };
 
@@ -70,6 +73,7 @@ pub const Theme = struct {
     arena: std.heap.ArenaAllocator,
     name: []const u8 = "sem nome",
     description: []const u8 = "",
+    description_en: []const u8 = "",
     author: []const u8 = "",
     /// Tipo de miniatura nas configurações (classic, glass, terminal, bubbles, zen).
     preview: []const u8 = "classic",
@@ -187,6 +191,8 @@ pub fn loadWith(gpa: std.mem.Allocator, src: []const u8, lo: LoadOptions, diag: 
                 .name = oname,
                 .label = ch.str("label") orelse oname,
                 .description = ch.str("description") orelse "",
+                .label_en = ch.str("label-en") orelse "",
+                .description_en = ch.str("description-en") orelse "",
                 .default = ch.flag("default") orelse true,
             };
             try opts.append(a, o);
@@ -232,6 +238,7 @@ pub fn loadWith(gpa: std.mem.Allocator, src: []const u8, lo: LoadOptions, diag: 
                 t.name = s;
             };
             t.description = n.str("description") orelse t.description;
+            t.description_en = n.str("description-en") orelse t.description_en;
             t.author = n.str("author") orelse t.author;
             t.preview = n.str("preview") orelse t.preview;
         } else if (std.mem.eql(u8, n.name, "colors")) {

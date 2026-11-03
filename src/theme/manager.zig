@@ -15,6 +15,7 @@ const Rgba = theme.Rgba;
 pub const Preview = struct {
     name: []const u8,
     description: []const u8,
+    description_en: []const u8 = "",
     kind: enum { classic, glass, terminal, bubbles, zen, mirror, office },
     bg: Rgba,
     rail: Rgba,
@@ -143,6 +144,7 @@ pub const Manager = struct {
             m.previews.append(m.gpa, .{
                 .name = e.name,
                 .description = a.dupe(u8, t.description) catch "",
+                .description_en = a.dupe(u8, t.description_en) catch "",
                 .kind = std.meta.stringToEnum(@FieldType(Preview, "kind"), t.preview) orelse .classic,
                 .bg = t.c(.bg),
                 .rail = t.c(.rail),

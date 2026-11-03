@@ -5,6 +5,7 @@ const c = @import("c");
 const md = @import("../core/markdown.zig");
 const Store = @import("../core/store.zig").Store;
 const d = @import("draw.zig");
+const i18n = @import("i18n.zig");
 
 pub const Opts = struct {
     family: *d.Family,
@@ -84,8 +85,8 @@ fn fontFor(o: Opts, sp: *const md.Span) *c.ImFont {
 fn label(store: *const Store, sp: *const md.Span, buf: []u8) []const u8 {
     return switch (sp.mention) {
         .none => sp.text,
-        .user => |id| std.fmt.bufPrint(buf, "@{s}", .{if (store.user(id)) |u| u.name else "desconhecido"}) catch sp.text,
-        .channel => |id| std.fmt.bufPrint(buf, "#{s}", .{if (store.channel(id)) |ch| ch.info.name else "canal"}) catch sp.text,
+        .user => |id| std.fmt.bufPrint(buf, "@{s}", .{if (store.user(id)) |u| u.name else i18n.tr("desconhecido", "unknown-user")}) catch sp.text,
+        .channel => |id| std.fmt.bufPrint(buf, "#{s}", .{if (store.channel(id)) |ch| ch.info.name else i18n.tr("canal", "unknown")}) catch sp.text,
     };
 }
 

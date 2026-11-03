@@ -7,6 +7,7 @@ const anim = @import("anim.zig");
 const fuzzy = @import("fuzzy.zig");
 const icons = @import("icons.zig");
 const state = @import("state.zig");
+const i18n = @import("i18n.zig");
 
 fn rebuild(ctx: *d.Ctx) void {
     const p = &ctx.st.palette;
@@ -33,21 +34,21 @@ fn rebuild(ctx: *d.Ctx) void {
             add(p, gpa, q, .{ .label = label, .hint = g.name, .kind = .channel, .id = id });
         }
         const label = std.fmt.allocPrint(a, "{s}", .{g.name}) catch continue;
-        add(p, gpa, q, .{ .label = label, .hint = "servidor", .kind = .guild, .id = g.id });
+        add(p, gpa, q, .{ .label = label, .hint = i18n.tr("servidor", "server"), .kind = .guild, .id = g.id });
     }
     for (ctx.theme_names, 0..) |name, i| {
-        const label = std.fmt.allocPrint(a, "tema: {s}", .{name}) catch continue;
-        add(p, gpa, q, .{ .label = label, .hint = if (i == ctx.theme_index) "atual" else "aparência", .kind = .theme, .index = i });
+        const label = i18n.allocPrint(a, "tema: {s}", "theme: {s}", .{name}) catch continue;
+        add(p, gpa, q, .{ .label = label, .hint = if (i == ctx.theme_index) i18n.tr("atual", "current") else i18n.tr("aparência", "appearance"), .kind = .theme, .index = i });
     }
-    const actions = [_]struct { label: []const u8, index: usize }{
-        .{ .label = "Mutar / desmutar microfone", .index = 0 },
-        .{ .label = "Ensurdecer / ouvir", .index = 1 },
-        .{ .label = "Sair da call", .index = 2 },
-        .{ .label = "Próximo tema", .index = 3 },
-        .{ .label = "Configurações", .index = 4 },
-        .{ .label = "Aparência e temas", .index = 5 },
+    const actions = [_]struct { label: []const u8, label_en: []const u8, index: usize }{
+        .{ .label = "Mutar / desmutar microfone", .label_en = "Mute / unmute microphone", .index = 0 },
+        .{ .label = "Ensurdecer / ouvir", .label_en = "Deafen / undeafen", .index = 1 },
+        .{ .label = "Sair da call", .label_en = "Leave call", .index = 2 },
+        .{ .label = "Próximo tema", .label_en = "Next theme", .index = 3 },
+        .{ .label = "Configurações", .label_en = "Settings", .index = 4 },
+        .{ .label = "Aparência e temas", .label_en = "Appearance & themes", .index = 5 },
     };
-    for (actions) |ac| add(p, gpa, q, .{ .label = ac.label, .hint = "ação", .kind = .action, .index = ac.index });
+    for (actions) |ac| add(p, gpa, q, .{ .label = i18n.tr(ac.label, ac.label_en), .hint = i18n.tr("ação", "action"), .kind = .action, .index = ac.index });
 
     std.mem.sort(state.PaletteItem, p.items.items, {}, struct {
         fn lt(_: void, x: state.PaletteItem, y: state.PaletteItem) bool {
@@ -109,7 +110,7 @@ pub fn draw(ctx: *d.Ctx) void {
         rebuild(ctx);
     }
     c.ImGui_SetNextItemWidth(box.w - 60);
-    if (c.ImGui_InputTextWithHint("##q", "Ir para canal, servidor, tema ou ação…", &p.query, p.query.len, 0)) {
+    if (c.ImGui_InputTextWithHint("##q", i18n.trZ("Ir para canal, servidor, tema ou ação…", "Go to a channel, server, theme or action…").ptr, &p.query, p.query.len, 0)) {
         p.selected = 0;
         rebuild(ctx);
     }
@@ -144,5 +145,5 @@ pub fn draw(ctx: *d.Ctx) void {
         _ = d.textClipped(fg, font, 13, rr.right() - 14 - @min(hw, 150), d.centerY(rr, 13), ctx.col(.faint), item.hint, 150);
         y += row_h;
     }
-    if (n == 0) d.text(fg, font, 15, box.x + 24, box.y + 80, ctx.col(.faint), "Nada encontrado.");
+    if (n == 0) d.text(fg, font, 15, box.x + 24, box.y + 80, ctx.col(.faint), i18n.tr("Nada encontrado.", "Nothing found."));
 }

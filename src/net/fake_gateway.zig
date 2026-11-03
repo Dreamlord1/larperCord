@@ -7,6 +7,7 @@ const c = @import("c");
 const types = @import("../core/types.zig");
 const ev = @import("../core/event.zig");
 const Queue = @import("queue.zig").Queue;
+const i18n = @import("../ui/i18n.zig");
 const Id = types.Id;
 
 const alloc = std.heap.c_allocator;
@@ -148,7 +149,7 @@ pub const Gateway = struct {
                     .channel = t.channel,
                     .author = t.user,
                     .timestamp = @divTrunc(now, 1000),
-                    .content = try alloc.dupe(u8, phrases[r.uintLessThan(usize, phrases.len)]),
+                    .content = try alloc.dupe(u8, phrase(r.uintLessThan(usize, phrases.len))),
                     .reply_to = if (r.uintLessThan(u8, 3) == 0) g.last_live else 0,
                 } });
                 g.last_live = id;
@@ -176,59 +177,68 @@ pub fn nowMs() i64 {
 }
 
 // --- Dados de demonstração -------------------------------------------------
+//
+// Os textos têm versão em inglês ao lado (`*_en`), escolhida na hora em que o
+// READY ou o histórico é montado. Nomes, ids, ordem e sorteios são os mesmos
+// nos dois idiomas: só muda o texto.
+
+/// O texto no idioma atual: `en` quando existir e a interface estiver em inglês.
+fn pick(pt: []const u8, en: ?[]const u8) []const u8 {
+    return if (i18n.en()) en orelse pt else pt;
+}
 
 const me_id: Id = 1000;
 
-const UserSeed = struct { id: Id, name: []const u8, role: u8, status: types.Status, activity: ?[]const u8 = null };
+const UserSeed = struct { id: Id, name: []const u8, role: u8, status: types.Status, activity: ?[]const u8 = null, activity_en: ?[]const u8 = null };
 
 const users = [_]UserSeed{
-    .{ .id = 1000, .name = "rsha", .role = 0, .status = .online, .activity = "Programando em Zig" },
-    .{ .id = 1001, .name = "ana.exe", .role = 1, .status = .online, .activity = "Ouvindo Spotify" },
-    .{ .id = 1002, .name = "brunão", .role = 2, .status = .dnd, .activity = "Jogando Hollow Knight" },
+    .{ .id = 1000, .name = "rsha", .role = 0, .status = .online, .activity = "Programando em Zig", .activity_en = "Coding in Zig" },
+    .{ .id = 1001, .name = "ana.exe", .role = 1, .status = .online, .activity = "Ouvindo Spotify", .activity_en = "Listening to Spotify" },
+    .{ .id = 1002, .name = "brunão", .role = 2, .status = .dnd, .activity = "Jogando Hollow Knight", .activity_en = "Playing Hollow Knight" },
     .{ .id = 1003, .name = "kaique", .role = 3, .status = .online },
-    .{ .id = 1004, .name = "lulu", .role = 4, .status = .idle, .activity = "Assistindo YouTube" },
-    .{ .id = 1005, .name = "duda", .role = 5, .status = .online, .activity = "No Hyprland 🌸" },
+    .{ .id = 1004, .name = "lulu", .role = 4, .status = .idle, .activity = "Assistindo YouTube", .activity_en = "Watching YouTube" },
+    .{ .id = 1005, .name = "duda", .role = 5, .status = .online, .activity = "No Hyprland 🌸", .activity_en = "On Hyprland 🌸" },
     .{ .id = 1006, .name = "thiaguinho", .role = 6, .status = .idle },
-    .{ .id = 1007, .name = "mari", .role = 7, .status = .online, .activity = "Jogando Minecraft" },
+    .{ .id = 1007, .name = "mari", .role = 7, .status = .online, .activity = "Jogando Minecraft", .activity_en = "Playing Minecraft" },
     .{ .id = 1008, .name = "gustavo", .role = 2, .status = .offline },
     .{ .id = 1009, .name = "nanda", .role = 3, .status = .offline },
     .{ .id = 1010, .name = "pedro", .role = 5, .status = .offline },
     .{ .id = 1011, .name = "joão vitor", .role = 1, .status = .offline },
 };
 
-const GuildSeed = struct { name: []const u8, acronym: []const u8, color: u8, unread: bool = false, mentions: u16 = 0 };
+const GuildSeed = struct { name: []const u8, acronym: []const u8, color: u8, unread: bool = false, mentions: u16 = 0, name_en: ?[]const u8 = null, acronym_en: ?[]const u8 = null };
 
 const guilds = [_]GuildSeed{
     .{ .name = "larperCord dev", .acronym = "LC", .color = 0, .unread = true, .mentions = 3 },
-    .{ .name = "Rice do Hyprland", .acronym = "RH", .color = 4, .unread = true },
-    .{ .name = "Zig Brasil", .acronym = "Z", .color = 1 },
-    .{ .name = "os larpers", .acronym = "ol", .color = 3, .unread = true, .mentions = 12 },
-    .{ .name = "CTF da madrugada", .acronym = "CTF", .color = 6 },
-    .{ .name = "Faculdade 2026", .acronym = "F26", .color = 2, .unread = true },
+    .{ .name = "Rice do Hyprland", .acronym = "RH", .color = 4, .unread = true, .name_en = "Hyprland Rice", .acronym_en = "HR" },
+    .{ .name = "Zig Brasil", .acronym = "Z", .color = 1, .name_en = "Zig Brazil" },
+    .{ .name = "os larpers", .acronym = "ol", .color = 3, .unread = true, .mentions = 12, .name_en = "the larpers", .acronym_en = "tl" },
+    .{ .name = "CTF da madrugada", .acronym = "CTF", .color = 6, .name_en = "Late-night CTF" },
+    .{ .name = "Faculdade 2026", .acronym = "F26", .color = 2, .unread = true, .name_en = "College 2026", .acronym_en = "C26" },
     .{ .name = "Minecraft SMP", .acronym = "MC", .color = 7 },
-    .{ .name = "Lo-fi & café", .acronym = "☕", .color = 5 },
+    .{ .name = "Lo-fi & café", .acronym = "☕", .color = 5, .name_en = "Lo-fi & coffee" },
     .{ .name = "Arch Linux BR", .acronym = "A", .color = 4 },
     .{ .name = "Memes", .acronym = "😂", .color = 1, .unread = true },
 };
 
-const ChannelSeed = struct { name: []const u8, kind: types.ChannelKind = .text, unread: bool = false, topic: []const u8 = "" };
+const ChannelSeed = struct { name: []const u8, kind: types.ChannelKind = .text, unread: bool = false, topic: []const u8 = "", name_en: ?[]const u8 = null, topic_en: ?[]const u8 = null };
 
 const channel_tree = [_]ChannelSeed{
-    .{ .name = "informações", .kind = .category },
-    .{ .name = "regras", .topic = "leia antes de postar" },
-    .{ .name = "anúncios", .unread = true, .topic = "novidades do servidor" },
-    .{ .name = "geral", .kind = .category },
-    .{ .name = "geral", .unread = true, .topic = "papo livre, sem spam 🙏" },
-    .{ .name = "memes", .unread = true, .topic = "só o suprassumo" },
-    .{ .name = "setups", .topic = "mostra o rice" },
-    .{ .name = "música", .topic = "o que vocês estão ouvindo?" },
-    .{ .name = "projetos", .kind = .category },
-    .{ .name = "zig", .unread = true, .topic = "allocators, comptime e sofrimento" },
-    .{ .name = "interface", .topic = "design do larperCord" },
-    .{ .name = "bugs", .topic = "reporte com print" },
-    .{ .name = "voz", .kind = .category },
-    .{ .name = "Call da madrugada", .kind = .voice },
-    .{ .name = "Jogando", .kind = .voice },
+    .{ .name = "informações", .kind = .category, .name_en = "info" },
+    .{ .name = "regras", .topic = "leia antes de postar", .name_en = "rules", .topic_en = "read before posting" },
+    .{ .name = "anúncios", .unread = true, .topic = "novidades do servidor", .name_en = "announcements", .topic_en = "server news" },
+    .{ .name = "geral", .kind = .category, .name_en = "general" },
+    .{ .name = "geral", .unread = true, .topic = "papo livre, sem spam 🙏", .name_en = "general", .topic_en = "free talk, no spam 🙏" },
+    .{ .name = "memes", .unread = true, .topic = "só o suprassumo", .topic_en = "only the finest" },
+    .{ .name = "setups", .topic = "mostra o rice", .topic_en = "show off your rice" },
+    .{ .name = "música", .topic = "o que vocês estão ouvindo?", .name_en = "music", .topic_en = "what are you all listening to?" },
+    .{ .name = "projetos", .kind = .category, .name_en = "projects" },
+    .{ .name = "zig", .unread = true, .topic = "allocators, comptime e sofrimento", .topic_en = "allocators, comptime and suffering" },
+    .{ .name = "interface", .topic = "design do larperCord", .topic_en = "larperCord's design" },
+    .{ .name = "bugs", .topic = "reporte com print", .topic_en = "report with a screenshot" },
+    .{ .name = "voz", .kind = .category, .name_en = "voice" },
+    .{ .name = "Call da madrugada", .kind = .voice, .name_en = "Late-night call" },
+    .{ .name = "Jogando", .kind = .voice, .name_en = "Gaming" },
     .{ .name = "AFK", .kind = .voice },
 };
 
@@ -259,13 +269,13 @@ fn buildReady() !ev.Ready {
         .name = try alloc.dupe(u8, u.name),
         .role = u.role,
         .status = u.status,
-        .activity = if (u.activity) |a| try alloc.dupe(u8, a) else null,
+        .activity = if (u.activity) |a| try alloc.dupe(u8, pick(a, u.activity_en)) else null,
     };
     const gs = try alloc.alloc(types.Guild, guilds.len);
     for (guilds, 0..) |g, i| gs[i] = .{
         .id = guildId(i),
-        .name = try alloc.dupe(u8, g.name),
-        .acronym = try alloc.dupe(u8, g.acronym),
+        .name = try alloc.dupe(u8, pick(g.name, g.name_en)),
+        .acronym = try alloc.dupe(u8, pick(g.acronym, g.acronym_en)),
         .color = g.color,
         .unread = g.unread,
         .mentions = g.mentions,
@@ -282,8 +292,8 @@ fn buildReady() !ev.Ready {
                 .guild = guildId(gi),
                 .parent = if (ch.kind == .category) null else parent,
                 .kind = ch.kind,
-                .name = try alloc.dupe(u8, ch.name),
-                .topic = try alloc.dupe(u8, ch.topic),
+                .name = try alloc.dupe(u8, pick(ch.name, ch.name_en)),
+                .topic = try alloc.dupe(u8, pick(ch.topic, ch.topic_en)),
                 .position = @intCast(ci),
                 .unread = ch.unread and gi % 2 == 0,
             };
@@ -333,7 +343,7 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
             .channel = channel,
             .author = author,
             .timestamp = t,
-            .content = try alloc.dupe(u8, phrases[r.uintLessThan(usize, phrases.len)]),
+            .content = try alloc.dupe(u8, phrase(r.uintLessThan(usize, phrases.len))),
             .edited = r.uintLessThan(u8, 25) == 0,
         };
         const gap: i64 = if (r.uintLessThan(u8, 10) == 0) r.intRangeLessThan(i64, 1800, 14000) else r.intRangeLessThan(i64, 5, 240);
@@ -344,19 +354,19 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         if (j > 3 and r.uintLessThan(u8, 9) == 0) m.reply_to = msgs[j - 1 - r.uintLessThan(usize, 3)].id;
     }
     // Imagens (geradas na hora pelo carregador: "demo:N") e um arquivo.
-    const pics = [_]struct { back: usize, text: []const u8, url: []const u8, name: []const u8, w: u16, h: u16 }{
-        .{ .back = 5, .text = "olha o pôr do sol daqui de casa 🌅", .url = "demo:1", .name = "por-do-sol.png", .w = 900, .h = 560 },
-        .{ .back = 14, .text = "wallpaper novo, que acharam?", .url = "demo:2", .name = "synthwave.png", .w = 720, .h = 720 },
+    const pics = [_]struct { back: usize, text: []const u8, url: []const u8, name: []const u8, w: u16, h: u16, text_en: ?[]const u8 = null, name_en: ?[]const u8 = null }{
+        .{ .back = 5, .text = "olha o pôr do sol daqui de casa 🌅", .url = "demo:1", .name = "por-do-sol.png", .w = 900, .h = 560, .text_en = "check out the sunset from my place 🌅", .name_en = "sunset.png" },
+        .{ .back = 14, .text = "wallpaper novo, que acharam?", .url = "demo:2", .name = "synthwave.png", .w = 720, .h = 720, .text_en = "new wallpaper, thoughts?" },
         .{ .back = 23, .text = "", .url = "demo:3", .name = "aurora.png", .w = 960, .h = 540 },
-        .{ .back = 31, .text = "o relatório que eu falei", .url = "demo:file", .name = "relatorio-de-ram.pdf", .w = 0, .h = 0 },
+        .{ .back = 31, .text = "o relatório que eu falei", .url = "demo:file", .name = "relatorio-de-ram.pdf", .w = 0, .h = 0, .text_en = "the report i mentioned", .name_en = "ram-report.pdf" },
     };
     for (pics) |p| {
         const m = &msgs[n - p.back];
         alloc.free(m.content);
-        m.content = try alloc.dupe(u8, p.text);
+        m.content = try alloc.dupe(u8, pick(p.text, p.text_en));
         m.reply_to = 0;
         const list = try alloc.alloc(types.Attachment, 1);
-        list[0] = .{ .url = try alloc.dupe(u8, p.url), .filename = try alloc.dupe(u8, p.name), .width = p.w, .height = p.h, .size = if (p.w == 0) 482_133 else 0 };
+        list[0] = .{ .url = try alloc.dupe(u8, p.url), .filename = try alloc.dupe(u8, pick(p.name, p.name_en)), .width = p.w, .height = p.h, .size = if (p.w == 0) 482_133 else 0 };
         m.attachments = list;
     }
     return msgs;
@@ -402,3 +412,53 @@ const phrases = [_][]const u8{
     "docs aqui: https://ziglang.org/documentation/master",
     "temas em KDL que mudam o layout inteiro? isso é *outro* nível",
 };
+
+/// As mesmas frases em inglês, na mesma ordem (o sorteio é pelo índice).
+const phrases_en = [_][]const u8{
+    "morning everyone ☀️",
+    "anyone gaming tonight?",
+    "LMAOOOOOOOOO",
+    "look at vesktop's `ps aux`: **1.28 GB** of RAM just to send a message 💀",
+    "<@1000> did you see this?",
+    "just updated to zig 0.17 and everything broke again 🙃",
+    "dude the new hyprland is *so* smooth",
+    "**finally** got it to compile",
+    "anyone got a good wallpaper? i'm sick of mine",
+    "this is so larper lmao",
+    "going to bed, got an exam early tomorrow 😴",
+    "ok, but what about the allocator? who calls `free` on this?",
+    "send a screenshot",
+    "whoa, that looks way too good 😍",
+    "i think the problem is the cache, try clearing it with `rm -rf ~/.cache/zig` and build again",
+    "imagine a discord client that opens in 200ms and uses 30MB. that'd be the dream huh",
+    "<@1005> which theme do you use in kitty?",
+    "based",
+    "yes",
+    "no idea, but trust me",
+    "played that game you told me about, got completely hooked. stayed up till 4am without noticing, now i'm a zombie at work 🧟",
+    "**urgent**: anyone got a usb-c laptop charger in the room?",
+    "😂😂😂",
+    "the secret is sleeping when nothing's happening. 0% cpu when idle is next level",
+    "ok",
+    "i'd bump the border radius to like 8px, looks more modern",
+    "listening to lo-fi and coding, perfect vibe ☕",
+    "who stole my energy drink from the fridge 😤",
+    "call tomorrow?",
+    "wrote a script that recolors the whole system to match the wallpaper, i'll send the repo later",
+    "<@1003> you in?",
+    "annoyingly, that makes sense",
+    "gonna test it here and get back to you",
+    "it works!!! 🎉",
+    "the show's ending is ||the dog was the villain the whole time|| 😭",
+    "~~no~~ yes, i admit it",
+    "docs here: https://ziglang.org/documentation/master",
+    "KDL themes that change the whole layout? that's *next* level",
+};
+
+comptime {
+    std.debug.assert(phrases.len == phrases_en.len);
+}
+
+fn phrase(i: usize) []const u8 {
+    return if (i18n.en()) phrases_en[i] else phrases[i];
+}

@@ -1,12 +1,12 @@
 // zen — foco: uma coluna central, letras maiores, sem avatares. Exclusivo: a
 // faixa de servidores se esconde sozinha e volta quando o mouse chega perto.
-theme "zen" description="Foco: coluna central, letras maiores e a navegação que se esconde sozinha." author="larperCord" preview=zen
+theme "zen" description="Foco: coluna central, letras maiores e a navegação que se esconde sozinha." description-en="Focus: a centered column, bigger text and navigation that hides itself." author="larperCord" preview=zen
 palette "wal"
 
 options {
-    option "esconder" label="Esconder os servidores" description="A faixa da esquerda some até o mouse chegar perto." default=#true
-    option "abas" label="Abas de canal" description="Os canais abertos em abas acima da conversa." default=#true
-    option "status" label="Rodapé" description="Conexão, tema, RAM e relógio bem discretos embaixo." default=#true
+    option "esconder" label="Esconder os servidores" description="A faixa da esquerda some até o mouse chegar perto." label-en="Hide servers" description-en="The left strip disappears until the mouse gets close." default=#true
+    option "abas" label="Abas de canal" description="Os canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Open channels as tabs above the conversation." default=#true
+    option "status" label="Rodapé" description="Conexão, tema, RAM e relógio bem discretos embaixo." label-en="Footer" description-en="Connection, theme, RAM and clock, tucked away at the bottom." default=#true
 }
 
 colors mode=dark {

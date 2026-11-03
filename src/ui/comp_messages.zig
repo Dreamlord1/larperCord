@@ -21,6 +21,7 @@ const popup = @import("popup.zig");
 const sigil = @import("comp_chat.zig").sigil;
 const store_mod = @import("../core/store.zig");
 const types = @import("../core/types.zig");
+const i18n = @import("i18n.zig");
 const Id = types.Id;
 const StoredMessage = store_mod.StoredMessage;
 
@@ -111,12 +112,17 @@ fn textH(g: Geo, m: *const StoredMessage, t: rich.Measure) f32 {
     return h;
 }
 
+fn editedLabel() []const u8 {
+    return i18n.tr("(editado)", "(edited)");
+}
+
 fn editedW(g: Geo) f32 {
-    return d.width(g.fam.get(.regular), 11, "(editado)") + 6;
+    return d.width(g.fam.get(.regular), 11, editedLabel()) + 6;
 }
 
 fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
-    const key: u32 = @as(u32, @intFromEnum(g.variant)) | (@as(u32, ctx.st.theme_gen) << 2) | (@as(u32, flags) << 10);
+    // O idioma entra na chave: "(editado)" e "(edited)" têm larguras diferentes.
+    const key: u32 = @as(u32, @intFromEnum(g.variant)) | (@as(u32, ctx.st.theme_gen) << 2) | (@as(u32, flags) << 10) | (@as(u32, @intFromEnum(i18n.lang)) << 18);
     if (m.layout_w == g.wrap and m.layout_variant == key) return m.height;
     const self = m.msg.author == ctx.store.me;
     const t = rich.layout(null, ctx.store, ctx.th, m.spans, 0, 0, g.wrap, textOpts(ctx, g, self and g.variant == .bubbles), ctx.mouse);
@@ -427,7 +433,7 @@ fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x:
         xx += d.width(fam.get(.semibold), 13, nm) + 6;
         _ = d.textClipped(dl, fam.get(.regular), 13, xx, y + 1, if (hb.hovered) ctx.col(.text) else muted, snippet(buf[40..], f.m.msg.content), max_w - (xx - x));
     } else {
-        d.text(dl, fam.get(.italic), 13, x, y + 1, muted, "mensagem original não carregada");
+        d.text(dl, fam.get(.italic), 13, x, y + 1, muted, i18n.tr("mensagem original não carregada", "Original message could not be loaded"));
     }
 }
 
@@ -695,7 +701,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             }
             // "Entregue ✓✓" embaixo da nossa última mensagem.
             if (show_ticks and self and (m.msg.id == last_self_id or (m.pending and last_self_id == std.math.maxInt(Id)))) {
-                const tick = if (m.pending) "Enviando…" else "Entregue ✓✓";
+                const tick = if (m.pending) i18n.tr("Enviando…", "Sending…") else i18n.tr("Entregue ✓✓", "Delivered ✓✓");
                 const tw = d.width(fam.get(.medium), 11, tick);
                 const tick_y = br.bottom() + (if (m.n_reactions > 0) react_h else 0) + 1;
                 d.text(dl, fam.get(.medium), 11, br.right() - tw - 4, tick_y, if (m.pending) ctx.col(.faint) else ctx.col(.accent), tick);
@@ -711,7 +717,7 @@ fn editedMark(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x
     const wraps = t.last_x + ew > g.wrap;
     const ex = if (wraps) x else x + t.last_x + 6;
     const ey = y + t.h - g.line_h + (if (wraps) g.line_h else 0);
-    d.text(dl, g.fam.get(.regular), 11, ex, ey + (g.line_h - 13) / 2, ctx.col(.faint), "(editado)");
+    d.text(dl, g.fam.get(.regular), 11, ex, ey + (g.line_h - 13) / 2, ctx.col(.faint), editedLabel());
 }
 
 fn daySeparator(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, r: d.Rect, mid: f32, ts: i64, tty: bool) void {
@@ -765,11 +771,12 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         d.rectFlags(dl, bar, ctx.col(.rail).mix(ctx.col(.elevated), 0.5), @max(ctx.th.radius + 4, 4), c.ImDrawFlags_RoundTop);
         var buf: [128]u8 = undefined;
         const t = if (st.editing != 0)
-            "Editando mensagem  ·  Esc cancela  ·  Enter salva"
+            i18n.tr("Editando mensagem  ·  Esc cancela  ·  Enter salva", "Editing message  ·  Esc to cancel  ·  Enter to save")
         else blk: {
             const f = ctx.store.findAny(st.reply_to);
             const u = if (f) |x| ctx.store.user(x.m.msg.author) else null;
-            break :blk std.fmt.bufPrint(&buf, "Respondendo a {s}", .{if (u) |x| x.name else "mensagem"}) catch "";
+            if (u) |x| break :blk i18n.fmt(&buf, "Respondendo a {s}", "Replying to {s}", .{x.name});
+            break :blk i18n.tr("Respondendo a mensagem", "Replying to a message");
         };
         d.text(dl, fam.get(.medium), 13, bar.x + 14, bar.y + 8, ctx.col(.muted), t);
         const xr: d.Rect = .{ .x = bar.right() - 30, .y = bar.y + 5, .w = 22, .h = 22 };
@@ -786,7 +793,8 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     if (d.pflag(n, "typing", true) and cs.typing.items.len > 0) {
         const u = ctx.store.user(cs.typing.items[0].user);
         var buf: [96]u8 = undefined;
-        const t = std.fmt.bufPrint(&buf, "{s} está digitando", .{if (u) |x| x.name else "alguém"}) catch "";
+        const who = if (u) |x| x.name else i18n.tr("alguém", "someone");
+        const t = i18n.fmt(&buf, "{s} está digitando", "{s} is typing", .{who});
         const ty = top - 19;
         const tx = r.x + (if (prompt) @as(f32, 10) else 6);
         w.typingDots(dl, tx + 4, ty + 8, ctx.col(.muted), ctx.now_ms);
@@ -799,7 +807,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         d.line(dl, r.x, r.y + 0.5, r.right(), r.y + 0.5, ctx.col(.border), 1);
         const me = ctx.store.user(ctx.store.me);
         var buf: [96]u8 = undefined;
-        const p = std.fmt.bufPrint(&buf, "{s}@{s}{s} {s} ", .{ if (me) |x| x.name else "eu", sigil(&cs.info), cs.info.name, if (st.editing != 0) "✎" else if (st.reply_to != 0) "↩" else "❯" }) catch "❯ ";
+        const p = std.fmt.bufPrint(&buf, "{s}@{s}{s} {s} ", .{ if (me) |x| x.name else i18n.tr("eu", "me"), sigil(&cs.info), cs.info.name, if (st.editing != 0) "✎" else if (st.reply_to != 0) "↩" else "❯" }) catch "❯ ";
         const fs = ctx.th.font_size;
         d.text(dl, fam.get(.bold), fs, r.x + 10, d.centerY(r, fs), ctx.col(.accent), p);
         input_x = r.x + 10 + d.width(fam.get(.bold), fs, p);
@@ -809,7 +817,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         qa.mark(pr, "composer-attach", .{});
         d.text(dl, fam.get(.bold), fs, pr.x + 4, d.centerY(pr, fs), if (ph.hovered) ctx.col(.accent) else ctx.col(.muted), "[+]");
         if (ph.clicked) ctx.act(.pick_files);
-        d.tip(ctx, pr, "Anexar arquivo", ph.hovered);
+        d.tip(ctx, pr, i18n.tr("Anexar arquivo", "Attach File"), ph.hovered);
         const er: d.Rect = .{ .x = r.right() - 36, .y = r.y + r.h / 2 - 13, .w = 26, .h = 26 };
         const eh = d.hit(ctx, 2, er);
         qa.mark(er, "composer-emoji", .{});
@@ -826,7 +834,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         d.circle(dl, ar.x + 14, ar.y + 14, 11.5, ctx.col(.muted).mix(ctx.col(.text), ak));
         icons.plus(dl, ar.x + 14, ar.y + 14, 5.5, ctx.col(.elevated).u());
         if (ah.clicked) ctx.act(.pick_files);
-        d.tip(ctx, ar, "Anexar arquivo", ah.hovered);
+        d.tip(ctx, ar, i18n.tr("Anexar arquivo", "Attach File"), ah.hovered);
         const ex = r.right() - (if (pill) @as(f32, 84) else 40);
         const er: d.Rect = .{ .x = ex, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
         const eh = d.hit(ctx, 2, er);
@@ -835,7 +843,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const es: f32 = 20 + 2 * ek;
         d.text(dl, fam.get(.regular), es, ex + 14 - es / 2, r.y + r.h / 2 - es * 0.6, d.Rgba.white.alpha(0.55 + 0.45 * ek), "😊");
         if (eh.clicked) ctx.popup(.{ .emoji = .{ .target = 0, .x = er.right(), .y = r.y } });
-        d.tip(ctx, er, "Emojis", eh.hovered);
+        d.tip(ctx, er, i18n.tr("Emojis", "Emoji"), eh.hovered);
         if (pill) {
             const sr: d.Rect = .{ .x = r.right() - 44, .y = r.y + r.h / 2 - 17, .w = 34, .h = 34 };
             const sh = d.hit(ctx, 3, sr);
@@ -845,7 +853,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             const ink = ctx.col(.accent_text).u();
             c.ImDrawList_AddTriangleFilled(dl, d.v(sr.x + 11, sr.y + 10), d.v(sr.x + 25, sr.y + 17), d.v(sr.x + 11, sr.y + 24), ink);
             if (sh.clicked) submit(ctx);
-            d.tip(ctx, sr, "Enviar  (Enter)", sh.hovered);
+            d.tip(ctx, sr, i18n.tr("Enviar  (Enter)", "Send  (Enter)"), sh.hovered);
         }
         input_r = ex - 8;
     }
@@ -862,9 +870,9 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     }
     var hint_buf: [96]u8 = undefined;
     const hint = if (prompt) "" else if (cs.info.guild == 0)
-        std.fmt.bufPrintSentinel(&hint_buf, "Conversar com @{s}", .{cs.info.name}, 0) catch ""
+        i18n.fmtZ(&hint_buf, "Conversar com @{s}", "Message @{s}", .{cs.info.name})
     else
-        std.fmt.bufPrintSentinel(&hint_buf, "Conversar em #{s}", .{cs.info.name}, 0) catch "";
+        i18n.fmtZ(&hint_buf, "Conversar em #{s}", "Message #{s}", .{cs.info.name});
     const flags = c.ImGuiInputTextFlags_EnterReturnsTrue | c.ImGuiInputTextFlags_CallbackAlways | c.ImGuiInputTextFlags_CallbackHistory;
     if (c.ImGui_InputTextWithHintEx("##composer", hint.ptr, &st.input, st.input.len, flags, inputCallback, st)) submit(ctx);
     // Avisa o Discord quando o texto muda (o app limita a um a cada 8 s).

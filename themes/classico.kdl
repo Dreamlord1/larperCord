@@ -1,10 +1,10 @@
 // classico — o layout que todo mundo conhece, nas cores do seu pywal.
 // Exclusivo: banner do servidor no topo da lista de canais.
-theme "classico" description="O layout familiar, nas cores do seu wallpaper, com banner do servidor." author="larperCord" preview=classic
+theme "classico" description="O layout familiar, nas cores do seu wallpaper, com banner do servidor." description-en="The familiar layout, in your wallpaper's colors, with a server banner." author="larperCord" preview=classic
 palette "wal"
 
 options {
-    option "banner" label="Banner do servidor" description="Faixa colorida com o nome do servidor no topo dos canais." default=#true
+    option "banner" label="Banner do servidor" description="Faixa colorida com o nome do servidor no topo dos canais." label-en="Server banner" description-en="A colored strip with the server name above the channels." default=#true
 }
 
 fonts ui="Inter" mono="JetBrains Mono" size=16

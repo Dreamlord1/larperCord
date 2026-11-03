@@ -8,29 +8,30 @@ const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const icons = @import("icons.zig");
 const S = @import("settings_state.zig");
+const i18n = @import("i18n.zig");
 const Preview = @import("../theme/manager.zig").Preview;
 
-const Section = struct { title: []const u8, items: []const struct { page: S.Page, label: []const u8 } };
+const Section = struct { title: []const u8, title_en: []const u8, items: []const struct { page: S.Page, label: []const u8, label_en: []const u8 } };
 
 const sections = [_]Section{
-    .{ .title = "CONFIGURAÇÕES DE USUÁRIO", .items = &.{
-        .{ .page = .conta, .label = "Minha conta" },
-        .{ .page = .perfis, .label = "Perfis" },
-        .{ .page = .privacidade, .label = "Privacidade e segurança" },
+    .{ .title = "CONFIGURAÇÕES DE USUÁRIO", .title_en = "USER SETTINGS", .items = &.{
+        .{ .page = .conta, .label = "Minha conta", .label_en = "My Account" },
+        .{ .page = .perfis, .label = "Perfis", .label_en = "Profiles" },
+        .{ .page = .privacidade, .label = "Privacidade e segurança", .label_en = "Privacy & Safety" },
     } },
-    .{ .title = "CONFIGURAÇÕES DO APLICATIVO", .items = &.{
-        .{ .page = .aparencia, .label = "Aparência" },
-        .{ .page = .acessibilidade, .label = "Acessibilidade" },
-        .{ .page = .voz, .label = "Voz e vídeo" },
-        .{ .page = .chat, .label = "Chat" },
-        .{ .page = .notificacoes, .label = "Notificações" },
-        .{ .page = .atalhos, .label = "Atalhos de teclado" },
-        .{ .page = .idioma, .label = "Idioma" },
-        .{ .page = .avancado, .label = "Avançado" },
+    .{ .title = "CONFIGURAÇÕES DO APLICATIVO", .title_en = "APP SETTINGS", .items = &.{
+        .{ .page = .aparencia, .label = "Aparência", .label_en = "Appearance" },
+        .{ .page = .acessibilidade, .label = "Acessibilidade", .label_en = "Accessibility" },
+        .{ .page = .voz, .label = "Voz e vídeo", .label_en = "Voice & Video" },
+        .{ .page = .chat, .label = "Chat", .label_en = "Chat" },
+        .{ .page = .notificacoes, .label = "Notificações", .label_en = "Notifications" },
+        .{ .page = .atalhos, .label = "Atalhos de teclado", .label_en = "Keybinds" },
+        .{ .page = .idioma, .label = "Idioma", .label_en = "Language" },
+        .{ .page = .avancado, .label = "Avançado", .label_en = "Advanced" },
     } },
-    .{ .title = "LARPERCORD", .items = &.{
-        .{ .page = .desempenho, .label = "Desempenho" },
-        .{ .page = .sobre, .label = "Sobre" },
+    .{ .title = "LARPERCORD", .title_en = "LARPERCORD", .items = &.{
+        .{ .page = .desempenho, .label = "Desempenho", .label_en = "Performance" },
+        .{ .page = .sobre, .label = "Sobre", .label_en = "About" },
     } },
 };
 
@@ -254,16 +255,17 @@ pub fn draw(ctx: *d.Ctx, previews: []const Preview) void {
     const mx = side.right() - 210;
     const fam = ctx.ui;
     for (sections, 0..) |sec, si| {
-        d.text(dl, fam.get(.bold), 11.5, mx + 10, y, ctx.col(.faint), sec.title);
+        d.text(dl, fam.get(.bold), 11.5, mx + 10, y, ctx.col(.faint), i18n.tr(sec.title, sec.title_en));
         y += 24;
         for (sec.items, 0..) |it, ii| {
             const r: d.Rect = .{ .x = mx, .y = y, .w = 192, .h = 32 };
             const hb = d.hit(ctx, 100 + si * 20 + ii, r);
-            qa.mark(r, "settings:{s}", .{it.label});
+            const label = i18n.tr(it.label, it.label_en);
+            qa.mark(r, "settings:{s}", .{label});
             if (hb.clicked) s.page = it.page;
             const sel = s.page == it.page;
             if (sel) d.rect(dl, r, ctx.col(.selected).mix(ctx.col(.text), 0.04), ctx.th.radius) else if (hb.hovered) d.rect(dl, r, ctx.col(.hover), ctx.th.radius);
-            d.text(dl, fam.get(if (sel) .semibold else .medium), 15, r.x + 10, d.centerY(r, 15), if (sel) ctx.col(.text) else ctx.col(.muted), it.label);
+            d.text(dl, fam.get(if (sel) .semibold else .medium), 15, r.x + 10, d.centerY(r, 15), if (sel) ctx.col(.text) else ctx.col(.muted), label);
             y += 34;
         }
         y += 8;
@@ -273,10 +275,11 @@ pub fn draw(ctx: *d.Ctx, previews: []const Preview) void {
     {
         const r: d.Rect = .{ .x = mx, .y = y, .w = 192, .h = 32 };
         const hb = d.hit(ctx, 99, r);
-        qa.mark(r, "settings:Sair", .{});
+        const label = i18n.tr("Sair", "Log Out");
+        qa.mark(r, "settings:{s}", .{label});
         if (hb.hovered) d.rect(dl, r, ctx.col(.hover), ctx.th.radius);
-        d.text(dl, fam.get(.medium), 15, r.x + 10, d.centerY(r, 15), ctx.col(.danger), "Sair");
-        if (hb.clicked) ctx.st.showToast(ctx.now_ms, false, "isso aqui é só um protótipo, você não sai daqui não 😄", .{});
+        d.text(dl, fam.get(.medium), 15, r.x + 10, d.centerY(r, 15), ctx.col(.danger), label);
+        if (hb.clicked) ctx.st.showToast(ctx.now_ms, false, "isso aqui é só um protótipo, você não sai daqui não 😄", "this is just a prototype, you're not going anywhere 😄", .{});
     }
 
     // Conteúdo com rolagem.
@@ -313,112 +316,117 @@ fn page(p: *Page, previews: []const Preview) void {
     const s = &ctx.st.settings;
     switch (s.page) {
         .aparencia => {
-            p.title("Aparência");
-            p.heading("Modo");
-            p.segmented(&.{ "Escuro", "Claro", "Seguir o sistema" }, &s.color_mode);
-            p.heading("Tema");
-            p.note("Cada tema muda o layout inteiro, não só as cores. Todos têm versão clara e escura.");
+            p.title(i18n.tr("Aparência", "Appearance"));
+            p.heading(i18n.tr("Modo", "Mode"));
+            p.segmented(if (i18n.en()) &.{ "Dark", "Light", "Follow system" } else &.{ "Escuro", "Claro", "Seguir o sistema" }, &s.color_mode);
+            p.heading(i18n.tr("Tema", "Theme"));
+            p.note(i18n.tr("Cada tema muda o layout inteiro, não só as cores. Todos têm versão clara e escura.", "Each theme changes the whole layout, not just the colors. All of them come in light and dark."));
             themeGrid(p, previews);
             if (ctx.th.options.len > 0) {
                 p.divider();
                 var hbuf: [96]u8 = undefined;
-                p.heading(std.fmt.bufPrint(&hbuf, "Opções do tema {s}", .{ctx.theme_name}) catch "Opções do tema");
+                p.heading(i18n.fmt(&hbuf, "Opções do tema {s}", "{s} theme options", .{ctx.theme_name}));
                 for (ctx.th.options, 0..) |o, i| {
                     const cur = ctx.th.option(o.name) orelse o.default;
                     var v = cur;
-                    p.toggle(o.label, o.description, &v);
+                    const en = i18n.en();
+                    p.toggle(if (en and o.label_en.len > 0) o.label_en else o.label, if (en and o.description_en.len > 0) o.description_en else o.description, &v);
                     if (v != cur) ctx.act(.{ .set_theme_option = .{ .index = i, .value = v } });
                 }
             }
             p.divider();
-            p.heading("Escala da fonte");
-            p.slider("Tamanho do texto", &s.font_scale, 0.8, 1.3, "{d:.0}%", 100);
-            p.heading("Exibição das mensagens");
-            p.toggle("Modo compacto", "Menos espaço entre grupos e avatares menores.", &s.compact);
-            p.toggle("Mostrar avatares", "Exibe a foto ao lado do nome.", &s.show_avatars);
-            p.toggle("Relógio de 24 horas", "Ex.: 21:30 em vez de 9:30 PM.", &s.clock_24h);
+            p.heading(i18n.tr("Escala da fonte", "Font scaling"));
+            p.slider(i18n.tr("Tamanho do texto", "Text size"), &s.font_scale, 0.8, 1.3, "{d:.0}%", 100);
+            p.heading(i18n.tr("Exibição das mensagens", "Message display"));
+            p.toggle(i18n.tr("Modo compacto", "Compact mode"), i18n.tr("Menos espaço entre grupos e avatares menores.", "Less space between groups and smaller avatars."), &s.compact);
+            p.toggle(i18n.tr("Mostrar avatares", "Show avatars"), i18n.tr("Exibe a foto ao lado do nome.", "Shows the profile picture next to the name."), &s.show_avatars);
+            p.toggle(i18n.tr("Relógio de 24 horas", "24-hour clock"), i18n.tr("Ex.: 21:30 em vez de 9:30 PM.", "E.g. 21:30 instead of 9:30 PM."), &s.clock_24h);
             p.heading("Layout");
-            p.toggle("Lista de membros", "Mostra quem está no servidor (quando o tema tem uma).", &s.show_member_list);
-            p.toggle("Barra de status", "Conexão, ping, RAM e relógio (quando o tema tem uma).", &s.show_status_bar);
+            p.toggle(i18n.tr("Lista de membros", "Member list"), i18n.tr("Mostra quem está no servidor (quando o tema tem uma).", "Shows who's in the server (when the theme has one)."), &s.show_member_list);
+            p.toggle(i18n.tr("Barra de status", "Status bar"), i18n.tr("Conexão, ping, RAM e relógio (quando o tema tem uma).", "Connection, ping, RAM and clock (when the theme has one)."), &s.show_status_bar);
         },
         .acessibilidade => {
-            p.title("Acessibilidade");
-            p.heading("Movimento");
-            p.toggle("Reduzir movimento", "Desliga as animações de hover, rolagem e transições.", &s.reduce_motion);
-            p.heading("Cores");
-            p.slider("Saturação", &s.saturation, 0, 1, "{d:.0}%", 100);
-            p.toggle("Cores dos cargos", "Pinta os nomes com a cor do cargo.", &s.role_colors);
-            p.toggle("Sublinhar links", "Deixa os links sempre sublinhados.", &s.underline_links);
+            p.title(i18n.tr("Acessibilidade", "Accessibility"));
+            p.heading(i18n.tr("Movimento", "Motion"));
+            p.toggle(i18n.tr("Reduzir movimento", "Reduce motion"), i18n.tr("Desliga as animações de hover, rolagem e transições.", "Turns off hover, scrolling and transition animations."), &s.reduce_motion);
+            p.heading(i18n.tr("Cores", "Colors"));
+            p.slider(i18n.tr("Saturação", "Saturation"), &s.saturation, 0, 1, "{d:.0}%", 100);
+            p.toggle(i18n.tr("Cores dos cargos", "Role colors"), i18n.tr("Pinta os nomes com a cor do cargo.", "Shows names in their role color."), &s.role_colors);
+            p.toggle(i18n.tr("Sublinhar links", "Underline links"), i18n.tr("Deixa os links sempre sublinhados.", "Keeps links underlined at all times."), &s.underline_links);
         },
         .chat => {
             p.title("Chat");
-            p.heading("Mídia");
-            p.toggle("Reproduzir GIFs automaticamente", "", &s.autoplay_gifs);
-            p.toggle("Emojis animados", "", &s.animated_emoji);
-            p.toggle("Pré-visualização de links", "", &s.link_previews);
-            p.toggle("Mostrar embeds", "", &s.show_embeds);
-            p.heading("Conteúdo");
-            p.toggle("Sempre mostrar spoilers", "Revela o texto ||escondido|| sem passar o mouse.", &s.show_spoilers);
-            p.toggle("Corretor ortográfico", "", &s.spellcheck);
-            p.toggle("Enviar indicador de digitação", "Os outros veem quando você está digitando.", &s.send_typing);
+            p.heading(i18n.tr("Mídia", "Media"));
+            p.toggle(i18n.tr("Reproduzir GIFs automaticamente", "Automatically play GIFs"), "", &s.autoplay_gifs);
+            p.toggle(i18n.tr("Emojis animados", "Play animated emoji"), "", &s.animated_emoji);
+            p.toggle(i18n.tr("Pré-visualização de links", "Show link previews"), "", &s.link_previews);
+            p.toggle(i18n.tr("Mostrar embeds", "Show embeds"), "", &s.show_embeds);
+            p.heading(i18n.tr("Conteúdo", "Content"));
+            p.toggle(i18n.tr("Sempre mostrar spoilers", "Always show spoilers"), i18n.tr("Revela o texto ||escondido|| sem passar o mouse.", "Reveals ||hidden|| text without hovering."), &s.show_spoilers);
+            p.toggle(i18n.tr("Corretor ortográfico", "Spellcheck"), "", &s.spellcheck);
+            p.toggle(i18n.tr("Enviar indicador de digitação", "Send typing indicator"), i18n.tr("Os outros veem quando você está digitando.", "Others can see when you're typing."), &s.send_typing);
         },
         .notificacoes => {
-            p.title("Notificações");
-            p.toggle("Notificações na área de trabalho", "Via D-Bus, sem o Chromium no meio.", &s.desktop_notifs);
-            p.toggle("Contador de não lidas", "Mostra o número de menções no ícone.", &s.unread_badge);
-            p.toggle("Piscar na barra de tarefas", "", &s.taskbar_flash);
-            p.toggle("Sons", "Som ao receber mensagem e entrar em call.", &s.notif_sounds);
-            p.toggle("Só menções", "Ignora mensagens que não citam você.", &s.mention_only);
+            p.title(i18n.tr("Notificações", "Notifications"));
+            p.toggle(i18n.tr("Notificações na área de trabalho", "Desktop notifications"), i18n.tr("Via D-Bus, sem o Chromium no meio.", "Through D-Bus, no Chromium in the way."), &s.desktop_notifs);
+            p.toggle(i18n.tr("Contador de não lidas", "Unread message badge"), i18n.tr("Mostra o número de menções no ícone.", "Shows the mention count on the icon."), &s.unread_badge);
+            p.toggle(i18n.tr("Piscar na barra de tarefas", "Flash taskbar"), "", &s.taskbar_flash);
+            p.toggle(i18n.tr("Sons", "Sounds"), i18n.tr("Som ao receber mensagem e entrar em call.", "Plays a sound for new messages and when joining a call."), &s.notif_sounds);
+            p.toggle(i18n.tr("Só menções", "Mentions only"), i18n.tr("Ignora mensagens que não citam você.", "Ignores messages that don't mention you."), &s.mention_only);
         },
         .privacidade => {
-            p.title("Privacidade e segurança");
-            p.heading("Filtro de conteúdo explícito");
-            p.radio(&.{ "Me proteja", "Amigos são legais", "Sem filtro" }, &.{ "Analisa mensagens diretas de todo mundo.", "Analisa só quem não é seu amigo.", "Não analisa nada." }, &s.explicit_filter);
-            p.heading("Mensagens diretas");
-            p.toggle("Permitir DMs de membros dos servidores", "", &s.dms_from_servers);
-            p.toggle("Pedidos de mensagem", "Filtra DMs de quem você talvez não conheça.", &s.message_requests);
-            p.toggle("Mostrar atividade atual", "\"Jogando…\", \"Ouvindo…\" no seu perfil.", &s.activity_status);
+            p.title(i18n.tr("Privacidade e segurança", "Privacy & Safety"));
+            p.heading(i18n.tr("Filtro de conteúdo explícito", "Explicit content filter"));
+            if (i18n.en())
+                p.radio(&.{ "Keep me safe", "My friends are nice", "Do not scan" }, &.{ "Scan direct messages from everyone.", "Scan direct messages from anyone who isn't a friend.", "Don't scan anything." }, &s.explicit_filter)
+            else
+                p.radio(&.{ "Me proteja", "Amigos são legais", "Sem filtro" }, &.{ "Analisa mensagens diretas de todo mundo.", "Analisa só quem não é seu amigo.", "Não analisa nada." }, &s.explicit_filter);
+            p.heading(i18n.tr("Mensagens diretas", "Direct messages"));
+            p.toggle(i18n.tr("Permitir DMs de membros dos servidores", "Allow DMs from server members"), "", &s.dms_from_servers);
+            p.toggle(i18n.tr("Pedidos de mensagem", "Message requests"), i18n.tr("Filtra DMs de quem você talvez não conheça.", "Filters DMs from people you may not know."), &s.message_requests);
+            p.toggle(i18n.tr("Mostrar atividade atual", "Display current activity"), i18n.tr("\"Jogando…\", \"Ouvindo…\" no seu perfil.", "\"Playing…\", \"Listening to…\" on your profile."), &s.activity_status);
         },
         .voz => {
-            p.title("Voz e vídeo");
-            p.select("DISPOSITIVO DE ENTRADA", &.{ "Padrão do sistema (PipeWire)", "Microfone USB", "Headset" }, &s.input_device);
-            p.select("DISPOSITIVO DE SAÍDA", &.{ "Padrão do sistema (PipeWire)", "Fones de ouvido", "Alto-falantes HDMI" }, &s.output_device);
-            p.slider("Volume de entrada", &s.input_volume, 0, 2, "{d:.0}%", 100);
-            p.slider("Volume de saída", &s.output_volume, 0, 2, "{d:.0}%", 100);
-            p.heading("Modo de entrada");
+            p.title(i18n.tr("Voz e vídeo", "Voice & Video"));
+            p.select(i18n.tr("DISPOSITIVO DE ENTRADA", "INPUT DEVICE"), if (i18n.en()) &.{ "System default (PipeWire)", "USB microphone", "Headset" } else &.{ "Padrão do sistema (PipeWire)", "Microfone USB", "Headset" }, &s.input_device);
+            p.select(i18n.tr("DISPOSITIVO DE SAÍDA", "OUTPUT DEVICE"), if (i18n.en()) &.{ "System default (PipeWire)", "Headphones", "HDMI speakers" } else &.{ "Padrão do sistema (PipeWire)", "Fones de ouvido", "Alto-falantes HDMI" }, &s.output_device);
+            p.slider(i18n.tr("Volume de entrada", "Input volume"), &s.input_volume, 0, 2, "{d:.0}%", 100);
+            p.slider(i18n.tr("Volume de saída", "Output volume"), &s.output_volume, 0, 2, "{d:.0}%", 100);
+            p.heading(i18n.tr("Modo de entrada", "Input mode"));
             var mode: u8 = @intFromBool(s.push_to_talk);
-            p.radio(&.{ "Detecção de voz", "Aperte para falar" }, &.{}, &mode);
+            p.radio(if (i18n.en()) &.{ "Voice Activity", "Push to Talk" } else &.{ "Detecção de voz", "Aperte para falar" }, &.{}, &mode);
             s.push_to_talk = mode == 1;
-            p.toggle("Sensibilidade automática", "", &s.auto_sensitivity);
-            if (!s.auto_sensitivity) p.slider("Sensibilidade", &s.sensitivity, 0, 1, "{d:.0}%", 100);
-            p.heading("Processamento");
-            p.toggle("Supressão de ruído (RNNoise)", "", &s.noise_suppression);
-            p.toggle("Cancelamento de eco", "", &s.echo_cancel);
-            p.note("A voz ainda não está conectada neste protótipo.");
+            p.toggle(i18n.tr("Sensibilidade automática", "Automatically determine input sensitivity"), "", &s.auto_sensitivity);
+            if (!s.auto_sensitivity) p.slider(i18n.tr("Sensibilidade", "Input sensitivity"), &s.sensitivity, 0, 1, "{d:.0}%", 100);
+            p.heading(i18n.tr("Processamento", "Voice processing"));
+            p.toggle(i18n.tr("Supressão de ruído (RNNoise)", "Noise suppression (RNNoise)"), "", &s.noise_suppression);
+            p.toggle(i18n.tr("Cancelamento de eco", "Echo cancellation"), "", &s.echo_cancel);
+            p.note(i18n.tr("A voz ainda não está conectada neste protótipo.", "Voice isn't hooked up yet in this prototype."));
         },
         .atalhos => {
-            p.title("Atalhos de teclado");
-            p.keyRow("Paleta de comandos", "Ctrl+K");
-            p.keyRow("Configurações", "Ctrl+,");
-            p.keyRow("Próximo tema", "F2");
-            p.keyRow("Tema anterior", "Shift+F2");
-            p.keyRow("Próxima aba", "Ctrl+Tab");
-            p.keyRow("Aba anterior", "Ctrl+Shift+Tab");
-            p.keyRow("Ir para a aba N", "Alt+1…9");
-            p.keyRow("Fechar aba", "Ctrl+W");
-            p.keyRow("Abrir canal em nova aba", "Ctrl+Clique");
-            p.keyRow("Fechar aba com o mouse", "Botão do meio");
+            p.title(i18n.tr("Atalhos de teclado", "Keybinds"));
+            p.keyRow(i18n.tr("Paleta de comandos", "Command palette"), "Ctrl+K");
+            p.keyRow(i18n.tr("Configurações", "Settings"), "Ctrl+,");
+            p.keyRow(i18n.tr("Próximo tema", "Next theme"), "F2");
+            p.keyRow(i18n.tr("Tema anterior", "Previous theme"), "Shift+F2");
+            p.keyRow(i18n.tr("Próxima aba", "Next tab"), "Ctrl+Tab");
+            p.keyRow(i18n.tr("Aba anterior", "Previous tab"), "Ctrl+Shift+Tab");
+            p.keyRow(i18n.tr("Ir para a aba N", "Go to tab N"), "Alt+1…9");
+            p.keyRow(i18n.tr("Fechar aba", "Close tab"), "Ctrl+W");
+            p.keyRow(i18n.tr("Abrir canal em nova aba", "Open channel in a new tab"), i18n.tr("Ctrl+Clique", "Ctrl+Click"));
+            p.keyRow(i18n.tr("Fechar aba com o mouse", "Close tab with the mouse"), i18n.tr("Botão do meio", "Middle click"));
         },
         .idioma => {
-            p.title("Idioma");
-            p.radio(&.{ "Português (Brasil)", "English (US)", "Español" }, &.{}, &s.language);
-            p.note("Por enquanto a interface está toda em português.");
+            p.title(i18n.tr("Idioma", "Language"));
+            // Os nomes dos idiomas ficam sempre na própria língua.
+            p.radio(&.{ i18n.tr("Seguir o sistema", "Follow system"), "Português (Brasil)", "English (US)" }, &.{}, &s.language);
+            p.note(i18n.tr("Por padrão o app segue o idioma do sistema. A troca vale na hora.", "By default the app follows your system language. Changes apply right away."));
         },
         .avancado => {
-            p.title("Avançado");
-            p.toggle("Modo desenvolvedor", "Mostra o ID das mensagens ao passar o mouse.", &s.developer_mode);
-            p.toggle("Aceleração por hardware", "Desenha com a GPU (OpenGL). Precisa reiniciar.", &s.hardware_accel);
-            p.toggle("Recarregar temas ao salvar", "Vigia themes/ e ~/.config/larpercord/themes com inotify.", &s.hot_reload);
+            p.title(i18n.tr("Avançado", "Advanced"));
+            p.toggle(i18n.tr("Modo desenvolvedor", "Developer Mode"), i18n.tr("Mostra o ID das mensagens ao passar o mouse.", "Shows message IDs on hover."), &s.developer_mode);
+            p.toggle(i18n.tr("Aceleração por hardware", "Hardware acceleration"), i18n.tr("Desenha com a GPU (OpenGL). Precisa reiniciar.", "Draws with the GPU (OpenGL). Requires a restart."), &s.hardware_accel);
+            p.toggle(i18n.tr("Recarregar temas ao salvar", "Reload themes on save"), i18n.tr("Vigia themes/ e ~/.config/larpercord/themes com inotify.", "Watches themes/ and ~/.config/larpercord/themes with inotify."), &s.hot_reload);
         },
         .conta => account(p),
         .perfis => profile(p),
@@ -448,7 +456,7 @@ fn themeGrid(p: *Page, previews: []const Preview) void {
         miniature(p.dl, pv, m);
         d.border(p.dl, r, ctx.col(.accent).alpha(0.25 + 0.75 * k), 12, 1 + k * 1.5);
         d.text(p.dl, p.font(.semibold), 15, r.x + 12, r.bottom() - 42, ctx.col(.text), pv.name);
-        _ = d.textClipped(p.dl, p.font(.regular), 12, r.x + 12, r.bottom() - 22, ctx.col(.muted), pv.description, r.w - 24);
+        _ = d.textClipped(p.dl, p.font(.regular), 12, r.x + 12, r.bottom() - 22, ctx.col(.muted), if (i18n.en() and pv.description_en.len > 0) pv.description_en else pv.description, r.w - 24);
         if (sel) {
             d.circle(p.dl, r.right() - 18, r.y + 18, 10, ctx.col(.accent));
             d.line(p.dl, r.right() - 22, r.y + 18, r.right() - 19, r.y + 21, ctx.col(.accent_text), 2);
@@ -552,7 +560,7 @@ fn account(p: *Page) void {
     const ctx = p.ctx;
     const s = &ctx.st.settings;
     const me = ctx.store.user(ctx.store.me) orelse return;
-    p.title("Minha conta");
+    p.title(i18n.tr("Minha conta", "My Account"));
     const card: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = 260 };
     d.rect(p.dl, card, ctx.col(.rail), 10);
     const banner: d.Rect = .{ .x = card.x, .y = card.y, .w = card.w, .h = 100 };
@@ -563,28 +571,28 @@ fn account(p: *Page) void {
     d.text(p.dl, p.font(.bold), 20, card.x + 120, banner.bottom() + 10, ctx.col(.text), me.name);
     const er: d.Rect = .{ .x = card.x + 16, .y = banner.bottom() + 56, .w = card.w - 32, .h = 88 };
     d.rect(p.dl, er, ctx.col(.sidebar), 8);
-    d.text(p.dl, p.font(.bold), 12, er.x + 14, er.y + 12, ctx.col(.muted), "NOME DE USUÁRIO");
+    d.text(p.dl, p.font(.bold), 12, er.x + 14, er.y + 12, ctx.col(.muted), i18n.tr("NOME DE USUÁRIO", "USERNAME"));
     d.text(p.dl, p.font(.medium), 15, er.x + 14, er.y + 28, ctx.col(.text), me.name);
-    d.text(p.dl, p.font(.bold), 12, er.x + 14, er.y + 52, ctx.col(.muted), "E-MAIL");
-    d.text(p.dl, p.font(.medium), 15, er.x + 14, er.y + 66, ctx.col(.text), if (s.streamer_mode) "••••••••••@••••••.com" else "voce@exemplo.com");
+    d.text(p.dl, p.font(.bold), 12, er.x + 14, er.y + 52, ctx.col(.muted), i18n.tr("E-MAIL", "EMAIL"));
+    d.text(p.dl, p.font(.medium), 15, er.x + 14, er.y + 66, ctx.col(.text), if (s.streamer_mode) "••••••••••@••••••.com" else i18n.tr("voce@exemplo.com", "you@example.com"));
     p.y += card.h + 24;
-    p.toggle("Modo streamer", "Esconde informações pessoais na tela.", &s.streamer_mode);
-    p.heading("Senha e autenticação");
-    _ = p.button("Alterar senha", false);
+    p.toggle(i18n.tr("Modo streamer", "Streamer Mode"), i18n.tr("Esconde informações pessoais na tela.", "Hides personal information on screen."), &s.streamer_mode);
+    p.heading(i18n.tr("Senha e autenticação", "Password and Authentication"));
+    _ = p.button(i18n.tr("Alterar senha", "Change Password"), false);
     p.y += 52;
-    p.heading("Sessão");
-    p.note(if (ctx.store.demo) "Você está no modo demonstração." else "Sair apaga o token guardado neste computador.");
-    if (p.button("Sair", true)) ctx.act(.logout);
+    p.heading(i18n.tr("Sessão", "Session"));
+    p.note(if (ctx.store.demo) i18n.tr("Você está no modo demonstração.", "You're in demo mode.") else i18n.tr("Sair apaga o token guardado neste computador.", "Logging out deletes the token saved on this computer."));
+    if (p.button(i18n.tr("Sair", "Log Out"), true)) ctx.act(.logout);
     p.y += 52;
-    p.heading("Remoção de conta");
-    if (p.button("Excluir conta", true)) ctx.st.showToast(ctx.now_ms, false, "calma, ninguém vai excluir nada 😅", .{});
+    p.heading(i18n.tr("Remoção de conta", "Account Removal"));
+    if (p.button(i18n.tr("Excluir conta", "Delete Account"), true)) ctx.st.showToast(ctx.now_ms, false, "calma, ninguém vai excluir nada 😅", "relax, nobody's deleting anything 😅", .{});
     p.y += 44;
 }
 
 fn profile(p: *Page) void {
     const ctx = p.ctx;
-    p.title("Perfis");
-    p.note("Como os outros veem você.");
+    p.title(i18n.tr("Perfis", "Profiles"));
+    p.note(i18n.tr("Como os outros veem você.", "How others see you."));
     const me = ctx.store.user(ctx.store.me) orelse return;
     const card: d.Rect = .{ .x = p.x, .y = p.y, .w = @min(340, p.w), .h = 300 };
     d.shadow(p.dl, card, 12, 14, ctx.col(.shadow));
@@ -594,21 +602,21 @@ fn profile(p: *Page) void {
     d.text(p.dl, p.font(.bold), 20, card.x + 16, card.y + 140, ctx.col(.text), me.name);
     d.text(p.dl, p.font(.regular), 14, card.x + 16, card.y + 166, ctx.col(.muted), me.activity orelse "");
     d.line(p.dl, card.x + 16, card.y + 196, card.right() - 16, card.y + 196, ctx.col(.border), 1);
-    d.text(p.dl, p.font(.bold), 12, card.x + 16, card.y + 210, ctx.col(.text), "SOBRE MIM");
-    d.text(p.dl, p.font(.regular), 14, card.x + 16, card.y + 230, ctx.col(.muted), "fazendo um discord de 40 MB 🌸");
+    d.text(p.dl, p.font(.bold), 12, card.x + 16, card.y + 210, ctx.col(.text), i18n.tr("SOBRE MIM", "ABOUT ME"));
+    d.text(p.dl, p.font(.regular), 14, card.x + 16, card.y + 230, ctx.col(.muted), i18n.tr("fazendo um discord de 40 MB 🌸", "making a 40 MB discord 🌸"));
     p.y += card.h + 20;
 }
 
 fn performance(p: *Page) void {
     const ctx = p.ctx;
-    p.title("Desempenho");
-    p.note("Números ao vivo deste processo.");
+    p.title(i18n.tr("Desempenho", "Performance"));
+    p.note(i18n.tr("Números ao vivo deste processo.", "Live numbers from this process."));
     var buf: [96]u8 = undefined;
     const stats = [_]struct { label: []const u8, value: []const u8 }{
         .{ .label = "RAM (PSS)", .value = std.fmt.bufPrint(buf[0..32], "{d}.{d} MB", .{ ctx.stats.ram_kb / 1024, (ctx.stats.ram_kb % 1024) * 10 / 1024 }) catch "" },
-        .{ .label = "Tempo de CPU por quadro", .value = std.fmt.bufPrint(buf[32..64], "{d}.{d:0>2} ms", .{ ctx.stats.frame_us / 1000, (ctx.stats.frame_us % 1000) / 10 }) catch "" },
-        .{ .label = "CPU parado", .value = "0% (dorme esperando eventos)" },
-        .{ .label = "Mensagens por canal", .value = std.fmt.bufPrint(buf[64..96], "até {d} na memória", .{ctx.store.max_messages}) catch "" },
+        .{ .label = i18n.tr("Tempo de CPU por quadro", "CPU time per frame"), .value = std.fmt.bufPrint(buf[32..64], "{d}.{d:0>2} ms", .{ ctx.stats.frame_us / 1000, (ctx.stats.frame_us % 1000) / 10 }) catch "" },
+        .{ .label = i18n.tr("CPU parado", "Idle CPU"), .value = i18n.tr("0% (dorme esperando eventos)", "0% (sleeps until there are events)") },
+        .{ .label = i18n.tr("Mensagens por canal", "Messages per channel"), .value = i18n.fmt(buf[64..96], "até {d} na memória", "up to {d} in memory", .{ctx.store.max_messages}) },
     };
     for (stats) |st| {
         const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = 56 };
@@ -618,7 +626,7 @@ fn performance(p: *Page) void {
         d.text(p.dl, p.font(.bold), 18, r.right() - 16 - vw, d.centerY(r, 18), ctx.col(.accent).mix(ctx.col(.text), 0.3), st.value);
         p.y += 64;
     }
-    p.heading("Comparação (medido no mesmo PC)");
+    p.heading(i18n.tr("Comparação (medido no mesmo PC)", "Comparison (measured on the same PC)"));
     bar(p, "Vesktop (Electron)", 1279, 1279);
     bar(p, "larperCord", @as(f32, @floatFromInt(ctx.stats.ram_kb)) / 1024, 1279);
 }
@@ -639,13 +647,13 @@ fn bar(p: *Page, label: []const u8, mb: f32, max: f32) void {
 
 fn about(p: *Page) void {
     const ctx = p.ctx;
-    p.title("Sobre");
+    p.title(i18n.tr("Sobre", "About"));
     d.text(p.dl, p.font(.bold), 28, p.x, p.y, ctx.col(.accent), "larperCord");
     p.y += 40;
-    p.note("Cliente de Discord nativo: Zig + SDL3 + Dear ImGui + FreeType.");
-    p.note("Temas em KDL que reorganizam a interface inteira, recarregados ao salvar.");
-    p.note("Versão 0.2.0 · protótipo (ainda sem conexão com o Discord).");
+    p.note(i18n.tr("Cliente de Discord nativo: Zig + SDL3 + Dear ImGui + FreeType.", "Native Discord client: Zig + SDL3 + Dear ImGui + FreeType."));
+    p.note(i18n.tr("Temas em KDL que reorganizam a interface inteira, recarregados ao salvar.", "KDL themes that rearrange the whole interface, reloaded on save."));
+    p.note(i18n.tr("Versão 0.2.0 · protótipo (ainda sem conexão com o Discord).", "Version 0.2.0 · prototype (not connected to Discord yet)."));
     p.divider();
-    p.heading("Feito com");
+    p.heading(i18n.tr("Feito com", "Built with"));
     for ([_][]const u8{ "Zig 0.17", "SDL 3.4", "Dear ImGui 1.93 (dear_bindings)", "FreeType + fontconfig", "Inter, JetBrains Mono, Noto Color Emoji" }) |t| p.note(t);
 }

@@ -1,10 +1,10 @@
 // papel — um caderno: títulos em serifa, o índice na margem direita.
 // Exclusivo: folha pautada com a margem vermelha, que rola junto com a conversa.
-theme "papel" description="Caderno: folha pautada com margem vermelha, títulos em serifa e índice." author="larperCord" preview=mirror
+theme "papel" description="Caderno: folha pautada com margem vermelha, títulos em serifa e índice." description-en="Notebook: ruled paper with a red margin, serif headings and an index." author="larperCord" preview=mirror
 
 options {
-    option "pautado" label="Folha pautada" description="Linhas de caderno atrás da conversa." default=#true
-    option "margem" label="Margem vermelha" description="A linha dupla da margem, como num caderno escolar." default=#true
+    option "pautado" label="Folha pautada" description="Linhas de caderno atrás da conversa." label-en="Ruled paper" description-en="Notebook lines behind the conversation." default=#true
+    option "margem" label="Margem vermelha" description="A linha dupla da margem, como num caderno escolar." label-en="Red margin" description-en="The double margin line, like a school notebook." default=#true
 }
 
 colors mode=light {

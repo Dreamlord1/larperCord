@@ -11,6 +11,7 @@ const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const types = @import("../core/types.zig");
+const i18n = @import("i18n.zig");
 
 pub fn memberList(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const fam = ctx.familyFor(n);
@@ -121,10 +122,10 @@ pub fn statusBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
                     else => ctx.col(.idle),
                 };
                 break :blk switch (conn) {
-                    .ready => if (ctx.store.demo) "● demonstração" else "● conectado",
-                    .connecting => "◌ conectando…",
-                    .reconnecting => "◌ reconectando…",
-                    .failed => "✕ falhou",
+                    .ready => if (ctx.store.demo) i18n.tr("● demonstração", "● demo") else i18n.tr("● conectado", "● connected"),
+                    .connecting => i18n.tr("◌ conectando…", "◌ connecting…"),
+                    .reconnecting => i18n.tr("◌ reconectando…", "◌ reconnecting…"),
+                    .failed => i18n.tr("✕ falhou", "✕ failed"),
                     .offline => "○ offline",
                 };
             },
@@ -133,15 +134,15 @@ pub fn statusBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
                 color = ctx.col(.accent).mix(ctx.col(.text), 0.3);
                 break :blk std.fmt.bufPrint(b, "▣ {d}.{d} MB", .{ ctx.stats.ram_kb / 1024, (ctx.stats.ram_kb % 1024) * 10 / 1024 }) catch "";
             },
-            .frame => std.fmt.bufPrint(b, "⚡ {d}.{d:0>2} ms/quadro", .{ ctx.stats.frame_us / 1000, (ctx.stats.frame_us % 1000) / 10 }) catch "",
+            .frame => i18n.fmt(b, "⚡ {d}.{d:0>2} ms/quadro", "⚡ {d}.{d:0>2} ms/frame", .{ ctx.stats.frame_us / 1000, (ctx.stats.frame_us % 1000) / 10 }),
             .voice => blk: {
                 const vc = ctx.st.voice orelse continue;
                 const cs = ctx.store.channel(vc) orelse continue;
                 color = ctx.col(.online);
-                break :blk std.fmt.bufPrint(b, "🔊 {s}{s}", .{ cs.info.name, if (ctx.st.muted) " (mudo)" else "" }) catch "";
+                break :blk std.fmt.bufPrint(b, "🔊 {s}{s}", .{ cs.info.name, if (ctx.st.muted) i18n.tr(" (mudo)", " (muted)") else "" }) catch "";
             },
             .theme => std.fmt.bufPrint(b, "◆ {s}", .{ctx.theme_name}) catch "",
-            .keys => "Ctrl+K comandos · F2 tema",
+            .keys => i18n.tr("Ctrl+K comandos · F2 tema", "Ctrl+K commands · F2 theme"),
             .clock => w.clock(b, @divTrunc(ctx.now_ms, 1000)),
             .spacer => unreachable,
         };

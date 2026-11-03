@@ -7,6 +7,7 @@ const kdl = @import("../theme/kdl.zig");
 const layout = @import("../theme/layout.zig");
 const theme_mod = @import("../theme/theme.zig");
 const d = @import("draw.zig");
+const i18n = @import("i18n.zig");
 const anim = @import("anim.zig");
 const rail = @import("comp_rail.zig");
 const channels = @import("comp_channels.zig");
@@ -133,7 +134,7 @@ fn unknown(ctx: *d.Ctx, p: layout.Placed) void {
     // Ajuda quem está escrevendo um tema: mostra o nome que não existe.
     d.border(ctx.dl, p.rect, ctx.col(.danger), 4, 2);
     var buf: [96]u8 = undefined;
-    const t = std.fmt.bufPrint(&buf, "componente desconhecido: {s} (linha {d})", .{ p.node.name, p.node.line }) catch "";
+    const t = i18n.fmt(&buf, "componente desconhecido: {s} (linha {d})", "unknown component: {s} (line {d})", .{ p.node.name, p.node.line });
     d.text(ctx.dl, ctx.ui.get(.semibold), 13, p.rect.x + 8, p.rect.y + 6, ctx.col(.danger), t);
 }
 

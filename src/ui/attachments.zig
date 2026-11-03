@@ -9,6 +9,7 @@ const qa = @import("qa.zig");
 const types = @import("../core/types.zig");
 const StoredMessage = @import("../core/store.zig").StoredMessage;
 const state = @import("state.zig");
+const i18n = @import("i18n.zig");
 
 const Attachment = types.Attachment;
 
@@ -103,7 +104,7 @@ fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale:
             d.rect(dl, r, ctx.col(.elevated).alpha(alpha), radius);
             d.border(dl, r, ctx.col(.border), radius, 1);
             const f = ctx.ui.get(.medium);
-            const msg = "imagem indisponível";
+            const msg = i18n.tr("imagem indisponível", "image unavailable");
             const tw = d.width(f, 13, msg);
             pictureIcon(dl, r.x + r.w / 2, r.y + r.h / 2 - 12, ctx.col(.faint));
             if (r.h > 60) d.text(dl, f, 13, r.x + (r.w - tw) / 2, r.y + r.h / 2 + 8, ctx.col(.faint), msg);
@@ -128,12 +129,12 @@ fn fileCard(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, alp
     const fam = ctx.ui;
     _ = d.textClipped(dl, fam.get(.semibold), 14, r.x + 50, r.y + 11, ctx.col(.link).alpha(alpha), a.filename, r.w - 64);
     var buf: [32]u8 = undefined;
-    d.text(dl, fam.get(.regular), 12, r.x + 50, r.y + 31, ctx.col(.faint).alpha(alpha), if (a.size > 0) formatSize(&buf, a.size) else "arquivo");
-    if (hb.hovered) d.tip(ctx, r, "Abrir no navegador", true);
+    d.text(dl, fam.get(.regular), 12, r.x + 50, r.y + 31, ctx.col(.faint).alpha(alpha), if (a.size > 0) formatSize(&buf, a.size) else i18n.tr("arquivo", "file"));
+    if (hb.hovered) d.tip(ctx, r, i18n.tr("Abrir no navegador", "Open in Browser"), true);
     if (hb.clicked) {
         if (std.mem.startsWith(u8, a.url, "https://")) {
             openUrl(a.url);
-        } else ctx.st.showToast(ctx.now_ms, false, "arquivo de demonstração", .{});
+        } else ctx.st.showToast(ctx.now_ms, false, "arquivo de demonstração", "demo file", .{});
     }
 }
 
@@ -203,7 +204,7 @@ pub fn viewer(ctx: *d.Ctx) void {
         },
         .failed => {
             const f = ctx.ui.get(.medium);
-            const msg = "não deu pra carregar a imagem";
+            const msg = i18n.tr("não deu pra carregar a imagem", "couldn't load the image");
             d.text(dl, f, 15, win.x + (win.w - d.width(f, 15, msg)) / 2, ir.y + ir.h / 2 - 9, d.Rgba.white.alpha(0.7 * k), msg);
         },
     }
@@ -217,21 +218,24 @@ pub fn viewer(ctx: *d.Ctx) void {
     d.text(dl, fam.get(.semibold), 14, win.x + 24, by + 4, d.Rgba.white.alpha(k), name);
     d.text(dl, fam.get(.regular), 12.5, win.x + 24, by + 24, d.Rgba.white.alpha(0.55 * k), dims);
     var bx = win.right() - 24;
+    // Rótulos em português também servem de marca para o QA.
     const actions = [_][]const u8{ "Copiar link", "Abrir no navegador" };
+    const actions_en = [_][]const u8{ "Copy Link", "Open in Browser" };
     var clicked_action = false;
-    for (actions, 0..) |label, i| {
+    for (actions, 0..) |mark_label, i| {
+        const label = i18n.tr(mark_label, actions_en[i]);
         const can = std.mem.startsWith(u8, url, "https://");
         const tw = d.width(fam.get(.medium), 13, label);
         const br: d.Rect = .{ .x = bx - tw - 24, .y = by + 2, .w = tw + 24, .h = 32 };
         bx = br.x - 8;
         const hb = d.hit(ctx, 0x7100 + i, br);
-        qa.mark(br, "viewer:{s}", .{label});
+        qa.mark(br, "viewer:{s}", .{mark_label});
         d.rect(dl, br, d.Rgba.white.alpha((if (hb.hovered and can) @as(f32, 0.16) else 0.08) * k), 6);
         d.text(dl, fam.get(.medium), 13, br.x + 12, d.centerY(br, 13), d.Rgba.white.alpha((if (can) @as(f32, 0.95) else 0.4) * k), label);
         if (hb.clicked) {
             clicked_action = true;
             if (!can) {
-                ctx.st.showToast(ctx.now_ms, false, "imagem de demonstração", .{});
+                ctx.st.showToast(ctx.now_ms, false, "imagem de demonstração", "demo image", .{});
             } else if (i == 0) {
                 if (ctx.st.gpa.dupe(u8, url)) |owned| ctx.act(.{ .copy = owned }) else |_| {}
             } else openUrl(url);

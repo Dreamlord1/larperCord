@@ -1,12 +1,12 @@
 // bolhas — mensageiro: servidores como pílulas no topo, canais grandes e a
 // conversa em balões (os seus à direita). Exclusivo: "Entregue ✓✓" e o balão
 // de "digitando" com os três pontinhos.
-theme "bolhas" description="Mensageiro: balões de conversa, \"Entregue ✓✓\" e balão de digitando." author="larperCord" preview=bubbles
+theme "bolhas" description="Mensageiro: balões de conversa, \"Entregue ✓✓\" e balão de digitando." description-en="Messenger: chat bubbles, \"Delivered ✓✓\" and a typing bubble." author="larperCord" preview=bubbles
 
 options {
-    option "entregue" label="Confirmação de entrega" description="Mostra \"Entregue ✓✓\" embaixo da sua última mensagem." default=#true
-    option "digitando" label="Balão de digitando" description="Os três pontinhos aparecem como um balão na conversa." default=#true
-    option "nomes" label="Nomes dos servidores" description="Mostra o nome ao lado do ícone na barra de cima." default=#true
+    option "entregue" label="Confirmação de entrega" description="Mostra \"Entregue ✓✓\" embaixo da sua última mensagem." label-en="Delivery receipt" description-en="Shows \"Delivered ✓✓\" under your last message." default=#true
+    option "digitando" label="Balão de digitando" description="Os três pontinhos aparecem como um balão na conversa." label-en="Typing bubble" description-en="The three dots show up as a bubble in the chat." default=#true
+    option "nomes" label="Nomes dos servidores" description="Mostra o nome ao lado do ícone na barra de cima." label-en="Server names" description-en="Shows the name next to the icon in the top bar." default=#true
 }
 
 colors mode=light {

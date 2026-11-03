@@ -4,6 +4,7 @@ const c = @import("c");
 const d = @import("draw.zig");
 const anim = @import("anim.zig");
 const types = @import("../core/types.zig");
+const i18n = @import("i18n.zig");
 
 pub const Shape = enum { circle, squircle, square };
 
@@ -87,25 +88,33 @@ pub fn localTime(unix_s: i64) LocalTime {
 }
 
 pub const months = [_][]const u8{ "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro" };
+pub const months_en = [_][]const u8{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
 
-/// "Hoje às 14:31", "Ontem às 09:02" ou "31/10/2026 14:31".
+/// Nome do mês (1..12) no idioma da interface.
+pub fn monthName(m: anytype) []const u8 {
+    const i: usize = @intCast(m - 1);
+    return if (i18n.en()) months_en[i] else months[i];
+}
+
+/// Data por extenso: "3 de novembro de 2026" / "November 3, 2026".
+/// `month` vai de 1 a 12.
+pub fn dateLong(buf: []u8, day: anytype, month: anytype, year: anytype) []const u8 {
+    return i18n.fmt(buf, "{d} de {s} de {d}", "{1s} {0d}, {2d}", .{ day, monthName(month), year });
+}
+
+/// "Hoje às 14:31", "Ontem às 09:02" ou "31/10/2026 14:31"
+/// (em inglês: "Today at 14:31", "Yesterday at 9:02 AM", "10/31/2026 14:31").
 pub fn stamp(buf: []u8, ts: i64, now_s: i64) []const u8 {
     const t = localTime(ts);
     const today = localTime(now_s).day_index;
-    if (hour12) {
-        var cb: [16]u8 = undefined;
-        const hm = clock(&cb, ts);
-        return switch (today - t.day_index) {
-            0 => std.fmt.bufPrint(buf, "Hoje às {s}", .{hm}),
-            1 => std.fmt.bufPrint(buf, "Ontem às {s}", .{hm}),
-            else => std.fmt.bufPrint(buf, "{d:0>2}/{d:0>2}/{d} {s}", .{ t.day, t.month, t.year, hm }),
-        } catch "";
-    }
+    var cb: [16]u8 = undefined;
+    const hm = clock(&cb, ts);
     return switch (today - t.day_index) {
-        0 => std.fmt.bufPrint(buf, "Hoje às {d:0>2}:{d:0>2}", .{ t.hour, t.minute }),
-        1 => std.fmt.bufPrint(buf, "Ontem às {d:0>2}:{d:0>2}", .{ t.hour, t.minute }),
-        else => std.fmt.bufPrint(buf, "{d:0>2}/{d:0>2}/{d} {d:0>2}:{d:0>2}", .{ t.day, t.month, t.year, t.hour, t.minute }),
-    } catch "";
+        0 => i18n.fmt(buf, "Hoje às {s}", "Today at {s}", .{hm}),
+        1 => i18n.fmt(buf, "Ontem às {s}", "Yesterday at {s}", .{hm}),
+        // Em inglês, mês antes do dia (10/31/2026).
+        else => i18n.fmt(buf, "{d:0>2}/{d:0>2}/{d} {s}", "{1d:0>2}/{0d:0>2}/{2d} {3s}", .{ t.day, t.month, t.year, hm }),
+    };
 }
 
 pub var hour12 = false;
@@ -118,7 +127,7 @@ pub fn clock(buf: []u8, ts: i64) []const u8 {
 
 pub fn dayLabel(buf: []u8, ts: i64) []const u8 {
     const t = localTime(ts);
-    return std.fmt.bufPrint(buf, "{d} de {s} de {d}", .{ t.day, months[t.month - 1], t.year }) catch "";
+    return dateLong(buf, t.day, t.month, t.year);
 }
 
 /// Três pontinhos animados ("digitando…").
