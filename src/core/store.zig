@@ -630,6 +630,8 @@ pub const Store = struct {
                 };
             },
             .member_info => |mi| try s.members.put(s.gpa, .{ mi.guild, mi.user }, mi.info),
+            .role_delete => |rid| if (s.roles.fetchRemove(rid)) |kv| ev_alloc.free(kv.value.name),
+            .member_remove => |mr| _ = s.members.remove(.{ mr.guild, mr.user }),
             .guild_folders => |list| {
                 freeFolders(s.folders);
                 s.folders = list;

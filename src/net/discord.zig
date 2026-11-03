@@ -810,6 +810,16 @@ pub const Gateway = struct {
             if (settings_proto.fromProtoBase64(alloc, b64)) |layout| g.emitFolders(layout) else |_| {}
             return;
         }
+        if (std.mem.eql(u8, t, "GUILD_ROLE_DELETE")) {
+            if (j.id(j.get(d, "role_id"))) |rid| g.emit(.{ .role_delete = rid });
+            return;
+        }
+        if (std.mem.eql(u8, t, "GUILD_MEMBER_REMOVE")) {
+            const gid = j.id(j.get(d, "guild_id")) orelse return;
+            const u = j.get(d, "user") orelse return;
+            g.emit(.{ .member_remove = .{ .guild = gid, .user = j.id(j.get(u, "id")) orelse return } });
+            return;
+        }
         if (std.mem.eql(u8, t, "GUILD_MEMBER_LIST_UPDATE")) {
             try g.onMemberList(d);
             return;

@@ -64,6 +64,9 @@ pub const Event = union(enum) {
     /// quando a lista é de outro canal (permissões diferentes).
     /// `counts`: (grupo, quantos) de todos os grupos, que o Discord manda à parte.
     member_list: struct { guild: Id, list_id: u64, online: u32, total: u32, ops: []types.MemberOp, counts: []const [2]u64 = &.{} },
+    /// Cargo apagado / alguém saiu do servidor (GUILD_ROLE_DELETE, GUILD_MEMBER_REMOVE).
+    role_delete: Id,
+    member_remove: struct { guild: Id, user: Id },
     /// Cargos e cor do nome de alguém num servidor.
     member_info: struct { guild: Id, user: Id, info: types.MemberInfo },
     /// Ordem dos servidores e pastas (READY / mudança nas configurações).
