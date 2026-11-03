@@ -20,6 +20,7 @@ const Sink = @import("fake_gateway.zig").Sink;
 const nowMs = @import("fake_gateway.zig").nowMs;
 const j = @import("jsonx.zig");
 const i18n = @import("../ui/i18n.zig");
+const media_url = @import("media_url.zig");
 const Id = types.Id;
 const Value = std.json.Value;
 
@@ -56,6 +57,11 @@ pub const Gateway = struct {
     /// libcurl (que pode levar até 180 s): o app fecha sem esperar.
     abort: std.atomic.Value(bool) = .init(false),
     voice_warned: bool = false,
+    /// Cargo -> cor e posição, para a cor do nome de cada membro.
+    role_info: std.AutoHashMapUnmanaged(Id, RoleInfo) = .empty,
+    /// Última lista de membros pedida (op 14): repetida depois de um READY.
+    sub_guild: Id = 0,
+    sub_channel: Id = 0,
     /// Sessão do gateway, para o RESUME (op 6).
     session_id: [64]u8 = @splat(0),
     session_len: u8 = 0,
@@ -87,7 +93,10 @@ pub const Gateway = struct {
         for (g.pending.items) |cmd| freeCommand(cmd);
         g.pending.deinit(alloc);
         g.zout.deinit(alloc);
+        g.role_info.deinit(alloc);
     }
+
+    const RoleInfo = struct { color: u32, pos: i64 };
 
     fn canResume(g: *const Gateway) bool {
         return g.session_len > 0 and g.seq != null;
@@ -477,6 +486,161 @@ pub const Gateway = struct {
         return j.str(j.get(u, "username")) orelse "?";
     }
 
+    /// Cópia de um texto opcional (null se vier vazio).
+    fn optDupe(v: ?[]const u8) ?[]u8 {
+        const t = v orelse return null;
+        if (t.len == 0) return null;
+        return alloc.dupe(u8, t) catch null;
+    }
+
+    fn avatarOf(u: Value) ?[]u8 {
+        return optDupe(j.str(j.get(u, "avatar")));
+    }
+
+    fn guildIcon(v: Value) ?[]u8 {
+        if (j.str(j.get(v, "icon"))) |i| return optDupe(i);
+        if (j.get(v, "properties")) |p| return optDupe(j.str(j.get(p, "icon")));
+        return null;
+    }
+
+    /// Guarda as cores dos cargos e manda os nomes para o Store (grupos da
+    /// lista de membros).
+    fn ingestRoles(g: *Gateway, gid: Id, list: []const Value) void {
+        var out: std.ArrayList(types.Role) = .empty;
+        for (list) |rv| {
+            const rid = j.id(j.get(rv, "id")) orelse continue;
+            const color: u32 = @intCast(std.math.clamp(j.int(j.get(rv, "color")) orelse 0, 0, 0xffffff));
+            const pos = j.int(j.get(rv, "position")) orelse 0;
+            g.role_info.put(alloc, rid, .{ .color = color, .pos = pos }) catch {};
+            out.append(alloc, .{
+                .id = rid,
+                .guild = gid,
+                .name = dupe(j.str(j.get(rv, "name")) orelse "?"),
+                .color = color,
+                .position = @intCast(std.math.clamp(pos, -1000, 100000)),
+            }) catch {};
+        }
+        g.emit(.{ .roles = .{ .guild = gid, .roles = out.toOwnedSlice(alloc) catch return } });
+    }
+
+    /// Cargos de um membro, do mais alto para o mais baixo, e a cor do
+    /// nome (a do cargo mais alto que tem cor).
+    fn infoOf(g: *const Gateway, roles: []const Value) types.MemberInfo {
+        const R = struct { id: Id, pos: i64, color: u32 };
+        var tmp: [32]R = undefined;
+        var n: usize = 0;
+        for (roles) |rv| {
+            if (n == tmp.len) break;
+            const rid = j.id(rv) orelse continue;
+            const info = g.role_info.get(rid) orelse continue;
+            tmp[n] = .{ .id = rid, .pos = info.pos, .color = info.color };
+            n += 1;
+        }
+        std.mem.sort(R, tmp[0..n], {}, struct {
+            fn f(_: void, a: R, b: R) bool {
+                return a.pos > b.pos;
+            }
+        }.f);
+        var out: types.MemberInfo = .{};
+        for (tmp[0..n]) |r| {
+            if (out.color == 0 and r.color != 0) out.color = r.color;
+            if (out.n_roles < out.roles.len) {
+                out.roles[out.n_roles] = r.id;
+                out.n_roles += 1;
+            }
+        }
+        return out;
+    }
+
+    /// Objeto `member` de uma mensagem/digitando: guarda cor e cargos.
+    fn memberColor(g: *Gateway, gid: Id, uid: Id, m: Value) void {
+        if (gid == 0 or uid == 0) return;
+        g.emit(.{ .member_info = .{ .guild = gid, .user = uid, .info = g.infoOf(j.array(j.get(m, "roles"))) } });
+    }
+
+    /// Grupo da lista de membros: "online", "offline" ou o ID de um cargo.
+    fn groupId(s: []const u8) Id {
+        if (std.mem.eql(u8, s, "online")) return types.group_online;
+        if (std.mem.eql(u8, s, "offline")) return types.group_offline;
+        return std.fmt.parseInt(Id, s, 10) catch types.group_online;
+    }
+
+    /// Uma linha de GUILD_MEMBER_LIST_UPDATE.
+    fn memberItem(g: *Gateway, it: Value) types.MemberItem {
+        if (j.get(it, "group")) |gv| {
+            const gid = groupId(j.str(j.get(gv, "id")) orelse "");
+            return .{ .group = .{ .id = gid, .count = @intCast(std.math.clamp(j.int(j.get(gv, "count")) orelse 0, 0, std.math.maxInt(u32))) } };
+        }
+        const m = j.get(it, "member") orelse return .none;
+        const u = j.get(m, "user") orelse return .none;
+        const uid = j.id(j.get(u, "id")) orelse return .none;
+        g.upsert(u);
+        if (j.get(m, "presence")) |p| g.emit(.{ .presence_update = .{ .user = uid, .status = statusOf(p), .activity = presenceActivity(p) } });
+        return .{ .member = .{ .user = uid, .info = g.infoOf(j.array(j.get(m, "roles"))) } };
+    }
+
+    fn onMemberList(g: *Gateway, d: Value) !void {
+        const gid = j.id(j.get(d, "guild_id")) orelse return;
+        var ops: std.ArrayList(types.MemberOp) = .empty;
+        errdefer {
+            for (ops.items) |op| if (op.items.len > 0) alloc.free(op.items);
+            ops.deinit(alloc);
+        }
+        for (j.array(j.get(d, "ops"))) |ov| {
+            const name = j.str(j.get(ov, "op")) orelse continue;
+            const range = j.array(j.get(ov, "range"));
+            const r0: u32 = if (range.len > 0) @intCast(std.math.clamp(j.int(range[0]) orelse 0, 0, 100_000)) else 0;
+            const r1: u32 = if (range.len > 1) @intCast(std.math.clamp(j.int(range[1]) orelse 0, 0, 100_000)) else r0;
+            const index: u32 = @intCast(std.math.clamp(j.int(j.get(ov, "index")) orelse 0, 0, 100_000));
+            if (std.mem.eql(u8, name, "SYNC")) {
+                const src = j.array(j.get(ov, "items"));
+                const items = try alloc.alloc(types.MemberItem, src.len);
+                for (src, 0..) |it, i| items[i] = g.memberItem(it);
+                try ops.append(alloc, .{ .kind = .sync, .index = r0, .end = r1, .items = items });
+            } else if (std.mem.eql(u8, name, "INSERT") or std.mem.eql(u8, name, "UPDATE")) {
+                const items = try alloc.alloc(types.MemberItem, 1);
+                items[0] = g.memberItem(j.get(ov, "item") orelse .null);
+                try ops.append(alloc, .{ .kind = if (name[0] == 'I') .insert else .update, .index = index, .items = items });
+            } else if (std.mem.eql(u8, name, "DELETE")) {
+                try ops.append(alloc, .{ .kind = .delete, .index = index });
+            } else if (std.mem.eql(u8, name, "INVALIDATE")) {
+                try ops.append(alloc, .{ .kind = .invalidate, .index = r0, .end = r1 });
+            }
+        }
+        var counts: std.ArrayList([2]u64) = .empty;
+        for (j.array(j.get(d, "groups"))) |gv| {
+            counts.append(alloc, .{ groupId(j.str(j.get(gv, "id")) orelse ""), @intCast(@max(0, j.int(j.get(gv, "count")) orelse 0)) }) catch {};
+        }
+        g.emit(.{ .member_list = .{
+            .counts = counts.toOwnedSlice(alloc) catch &.{},
+            .guild = gid,
+            .list_id = std.hash.Wyhash.hash(0, j.str(j.get(d, "id")) orelse ""),
+            .online = @intCast(std.math.clamp(j.int(j.get(d, "online_count")) orelse 0, 0, std.math.maxInt(u32))),
+            .total = @intCast(std.math.clamp(j.int(j.get(d, "member_count")) orelse 0, 0, std.math.maxInt(u32))),
+            .ops = try ops.toOwnedSlice(alloc),
+        } });
+    }
+
+    /// Pede a lista de membros de um servidor vista de um canal (op 14,
+    fn subscribe(g: *Gateway, guild: Id, channel: Id) void {
+        if (guild == 0 or channel == 0) return;
+        g.sub_guild = guild;
+        g.sub_channel = channel;
+        var buf: [320]u8 = undefined;
+        const payload = std.fmt.bufPrint(&buf, "{{\"op\":14,\"d\":{{\"guild_id\":\"{d}\",\"typing\":true,\"threads\":true,\"activities\":true,\"members\":[],\"channels\":{{\"{d}\":[[0,99]]}},\"thread_member_lists\":[]}}}}", .{ guild, channel }) catch return;
+        g.send(payload);
+    }
+
+    fn relationshipKind(v: ?Value) types.Relationship {
+        return switch (j.int(v) orelse 0) {
+            1 => .friend,
+            2 => .blocked,
+            3 => .incoming,
+            4 => .outgoing,
+            else => .none,
+        };
+    }
+
     fn roleFor(uid: Id) u8 {
         return @intCast((uid >> 22) % 8);
     }
@@ -490,6 +654,7 @@ pub const Gateway = struct {
         }
         if (std.mem.eql(u8, t, "MESSAGE_CREATE")) {
             g.upsertUsers(d);
+            if (j.get(d, "member")) |m| g.memberColor(j.id(j.get(d, "guild_id")) orelse 0, j.id(j.get(j.get(d, "author") orelse .null, "id")) orelse 0, m);
             if (try g.message(d)) |m| g.emit(.{ .message_create = m });
             return;
         }
@@ -526,12 +691,14 @@ pub const Gateway = struct {
             const gid = j.id(j.get(d, "id")) orelse return;
             const name = guildName(d);
             // Reaproveita o merge do GUILD_CREATE para atualizar o nome.
+            if (j.get(d, "roles")) |rl| g.ingestRoles(gid, j.array(rl));
             g.emit(.{ .guild_create = .{
                 .guild = .{
                     .id = gid,
                     .name = dupe(name),
                     .acronym = try j.acronym(alloc, name),
                     .color = @intCast((gid >> 22) % 8),
+                    .icon = guildIcon(d),
                 },
                 .channels = try alloc.alloc(types.Channel, 0),
                 .voice = try alloc.alloc([2]Id, 0),
@@ -549,7 +716,29 @@ pub const Gateway = struct {
         if (std.mem.eql(u8, t, "GUILD_MEMBER_UPDATE") or std.mem.eql(u8, t, "USER_UPDATE")) {
             const u = j.get(d, "user") orelse d;
             const uid = j.id(j.get(u, "id")) orelse return;
-            g.emit(.{ .user_update = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline } });
+            g.emit(.{ .user_update = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u) } });
+            if (j.id(j.get(d, "guild_id"))) |gid| g.memberColor(gid, uid, d);
+            return;
+        }
+        if (std.mem.eql(u8, t, "GUILD_ROLE_CREATE") or std.mem.eql(u8, t, "GUILD_ROLE_UPDATE")) {
+            const gid = j.id(j.get(d, "guild_id")) orelse return;
+            const role = j.get(d, "role") orelse return;
+            g.ingestRoles(gid, &.{role});
+            return;
+        }
+        if (std.mem.eql(u8, t, "GUILD_MEMBER_LIST_UPDATE")) {
+            try g.onMemberList(d);
+            return;
+        }
+        if (std.mem.eql(u8, t, "RELATIONSHIP_ADD") or std.mem.eql(u8, t, "RELATIONSHIP_UPDATE")) {
+            if (j.get(d, "user")) |u| g.upsert(u);
+            const uid = j.id(j.get(d, "id")) orelse return;
+            g.emit(.{ .relationship = .{ .user = uid, .kind = relationshipKind(j.get(d, "type")) } });
+            return;
+        }
+        if (std.mem.eql(u8, t, "RELATIONSHIP_REMOVE")) {
+            const uid = j.id(j.get(d, "id")) orelse return;
+            g.emit(.{ .relationship = .{ .user = uid, .kind = .none } });
             return;
         }
         if (std.mem.eql(u8, t, "CHANNEL_RECIPIENT_ADD")) {
@@ -607,7 +796,10 @@ pub const Gateway = struct {
         if (std.mem.eql(u8, t, "TYPING_START")) {
             const user = j.id(j.get(d, "user_id")) orelse return;
             if (user == g.me) return;
-            if (j.get(d, "member")) |m| if (j.get(m, "user")) |u| g.upsert(u);
+            if (j.get(d, "member")) |m| {
+                if (j.get(m, "user")) |u| g.upsert(u);
+                g.memberColor(j.id(j.get(d, "guild_id")) orelse 0, user, m);
+            }
             g.emit(.{ .typing_start = .{ .channel = j.id(j.get(d, "channel_id")) orelse return, .user = user } });
             return;
         }
@@ -644,7 +836,7 @@ pub const Gateway = struct {
 
     fn upsert(g: *Gateway, u: Value) void {
         const uid = j.id(j.get(u, "id")) orelse return;
-        g.emit(.{ .user_upsert = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline } });
+        g.emit(.{ .user_upsert = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u) } });
     }
 
     fn upsertUsers(g: *Gateway, m: Value) void {
@@ -736,15 +928,30 @@ pub const Gateway = struct {
 
         var name: []const u8 = j.str(j.get(cv, "name")) orelse "";
         var recipient: Id = 0;
+        var recipients: []Id = &.{};
+        var names: [96]u8 = undefined;
         if (kind_i == 1 or kind_i == 3) {
-            const ids = j.array(j.get(cv, "recipient_ids"));
-            if (ids.len > 0) recipient = j.id(ids[0]) orelse 0;
+            var list: std.ArrayList(Id) = .empty;
+            for (j.array(j.get(cv, "recipient_ids"))) |v| if (j.id(v)) |x| list.append(alloc, x) catch {};
+            var nn: usize = 0;
             for (j.array(j.get(cv, "recipients"))) |u| {
                 g.upsert(u);
-                if (recipient == 0) recipient = j.id(j.get(u, "id")) orelse 0;
-                if (name.len == 0) name = userName(u);
+                const uid = j.id(j.get(u, "id")) orelse continue;
+                if (std.mem.indexOfScalar(Id, list.items, uid) == null) list.append(alloc, uid) catch {};
+                // Grupo sem nome: "ana, bruno, kaique", como no Discord.
+                const un = userName(u);
+                if (nn + un.len + 2 < names.len) {
+                    if (nn > 0) {
+                        @memcpy(names[nn..][0..2], ", ");
+                        nn += 2;
+                    }
+                    @memcpy(names[nn..][0..un.len], un);
+                    nn += un.len;
+                }
             }
-            if (name.len == 0) name = if (kind_i == 3) i18n.tr("grupo", "group") else "?";
+            if (list.items.len > 0) recipient = list.items[0];
+            if (kind_i == 3) recipients = list.toOwnedSlice(alloc) catch &.{} else list.deinit(alloc);
+            if (name.len == 0) name = if (nn > 0) names[0..nn] else if (kind_i == 3) i18n.tr("grupo", "group") else "?";
         }
         if (name.len == 0) name = "?";
 
@@ -759,6 +966,9 @@ pub const Gateway = struct {
             .topic = dupe(j.str(j.get(cv, "topic")) orelse ""),
             .position = pos,
             .recipient = recipient,
+            .recipients = recipients,
+            .group = kind_i == 3,
+            .icon = optDupe(j.str(j.get(cv, "icon"))),
         };
     }
 
@@ -785,12 +995,14 @@ pub const Gateway = struct {
             try voice.append(alloc, .{ ch, uid });
         }
         g.ingestMembers(d);
+        g.ingestRoles(gid, j.array(j.get(d, "roles")));
         g.emit(.{ .guild_create = .{
             .guild = .{
                 .id = gid,
                 .name = dupe(name),
                 .acronym = try j.acronym(alloc, name),
                 .color = @intCast((gid >> 22) % 8),
+                .icon = guildIcon(d),
             },
             .channels = try channels.toOwnedSlice(alloc),
             .voice = try voice.toOwnedSlice(alloc),
@@ -870,12 +1082,18 @@ pub const Gateway = struct {
             const w = j.int(j.get(iv, "width")) orelse 0;
             const h = j.int(j.get(iv, "height")) orelse 0;
             if (w <= 0 or h <= 0) continue;
+            // GIF do Tenor/Giphy: o Discord manda MP4; o GIF vem do site deles,
+            // com a miniatura do proxy de reserva.
+            var gb: [512]u8 = undefined;
+            const gif: ?[]const u8 = if (std.mem.eql(u8, kind, "gifv")) if (j.get(e, "video")) |v| media_url.gifFromVideo(&gb, j.str(j.get(v, "url")) orelse "") else null else null;
             try list.append(alloc, .{
-                .url = try alloc.dupe(u8, url),
+                .url = try alloc.dupe(u8, gif orelse url),
                 .filename = try alloc.dupe(u8, j.str(j.get(e, "title")) orelse i18n.tr("imagem", "image")),
                 .width = @intCast(@min(w, 65535)),
                 .height = @intCast(@min(h, 65535)),
                 .animated = std.mem.eql(u8, kind, "gifv"),
+                .still = if (gif != null) try alloc.dupe(u8, url) else "",
+                .embed = true,
             });
         }
         return list.toOwnedSlice(alloc);
@@ -912,7 +1130,7 @@ pub const Gateway = struct {
                 const uid = j.id(j.get(u, "id")) orelse return;
                 if (set.contains(uid)) return;
                 set.put(alloc, uid, {}) catch return;
-                list.append(alloc, .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = status }) catch {};
+                list.append(alloc, .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = status, .avatar = avatarOf(u) }) catch {};
             }
         }.f;
         addUser(&users, &seen, me, .online);
@@ -932,7 +1150,8 @@ pub const Gateway = struct {
             const gid = j.id(j.get(gv, "id")) orelse continue;
             const props = j.get(gv, "properties");
             const name = j.str(j.get(gv, "name")) orelse (if (props) |p| j.str(j.get(p, "name")) else null) orelse i18n.tr("servidor", "server");
-            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8) });
+            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv) });
+            g.ingestRoles(gid, j.array(j.get(gv, "roles")));
             try appendChannels(&channels, gid, j.array(j.get(gv, "channels")));
             for (j.array(j.get(gv, "voice_states"))) |vs| {
                 const ch = j.id(j.get(vs, "channel_id")) orelse continue;
@@ -940,40 +1159,54 @@ pub const Gateway = struct {
                 try voice.append(alloc, .{ ch, uid });
             }
         }
-        // DMs e grupos.
+        // DMs e grupos (os participantes vêm em `users`, pelo ID).
         for (j.array(j.get(d, "private_channels")), 0..) |pc, pos| {
-            const cid = j.id(j.get(pc, "id")) orelse continue;
-            const kind = j.int(j.get(pc, "type")) orelse 1;
-            var recipient: Id = 0;
-            const ids = j.array(j.get(pc, "recipient_ids"));
-            if (ids.len > 0) recipient = j.id(ids[0]) orelse 0;
-            const recips = j.array(j.get(pc, "recipients"));
-            if (recipient == 0 and recips.len > 0) {
-                recipient = j.id(j.get(recips[0], "id")) orelse 0;
-                for (recips) |u| addUser(&users, &seen, u, .offline);
+            for (j.array(j.get(pc, "recipients"))) |u| addUser(&users, &seen, u, .offline);
+            var ch = (try g.channelValue(pc, 0)) orelse continue;
+            if (ch.recipient == 0 and !ch.group) {
+                alloc.free(ch.name);
+                alloc.free(ch.topic);
+                continue;
             }
-            if (recipient == 0) continue;
-            var name: []const u8 = j.str(j.get(pc, "name")) orelse "";
-            if (name.len == 0) {
-                for (users.items) |u| if (u.id == recipient) {
-                    name = u.name;
+            ch.position = @intCast(@min(pos, 65535));
+            // Sem nome e sem `recipients` completos: monta com os nomes conhecidos.
+            if (j.str(j.get(pc, "name")) == null or j.str(j.get(pc, "name")).?.len == 0) {
+                var nb: std.ArrayList(u8) = .empty;
+                const ids: []const Id = if (ch.recipients.len > 0) ch.recipients else &.{ch.recipient};
+                for (ids) |rid| for (users.items) |u| if (u.id == rid) {
+                    if (nb.items.len > 0) nb.appendSlice(alloc, ", ") catch {};
+                    nb.appendSlice(alloc, u.name) catch {};
+                    break;
                 };
+                if (nb.items.len > 0 and nb.items.len < 96) {
+                    alloc.free(ch.name);
+                    ch.name = nb.toOwnedSlice(alloc) catch dupe("?");
+                } else nb.deinit(alloc);
             }
-            const gname: []const u8 = j.str(j.get(pc, "name")) orelse "";
-            if (kind == 3 and gname.len == 0) name = i18n.tr("grupo", "group");
-            try channels.append(alloc, .{ .id = cid, .guild = 0, .name = dupe(name), .topic = dupe(""), .position = @intCast(@min(pos, 65535)), .recipient = recipient });
+            try channels.append(alloc, ch);
         }
         // DMs mais recentes primeiro (o id da última mensagem cresce com o tempo).
         sortDms(channels.items, j.array(j.get(d, "private_channels")));
 
+        for (j.array(j.get(d, "relationships"))) |rv| {
+            if (j.get(rv, "user")) |u| addUser(&users, &seen, u, .offline);
+        }
         g.emit(.{ .ready = .{
             .me = g.me,
             .users = try users.toOwnedSlice(alloc),
             .guilds = try guilds.toOwnedSlice(alloc),
             .channels = try channels.toOwnedSlice(alloc),
             .voice = try voice.toOwnedSlice(alloc),
+            .username = optDupe(j.str(j.get(me, "username"))),
+            .email = optDupe(j.str(j.get(me, "email"))),
         } });
+        for (j.array(j.get(d, "relationships"))) |rv| {
+            const uid = j.id(j.get(rv, "user_id")) orelse j.id(j.get(rv, "id")) orelse continue;
+            g.emit(.{ .relationship = .{ .user = uid, .kind = relationshipKind(j.get(rv, "type")) } });
+        }
         g.emit(.{ .status = .ready });
+        // Sessão nova: a lista de membros que estava aberta precisa ser pedida de novo.
+        if (g.sub_guild != 0) g.subscribe(g.sub_guild, g.sub_channel);
     }
 
     fn sortDms(chs: []types.Channel, pcs: []const Value) void {
@@ -1333,6 +1566,27 @@ pub const Gateway = struct {
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/typing", .{ch}) catch return;
                 var resp = g.request("POST", path, null) orelse return;
                 resp.body.deinit(alloc);
+            },
+            .subscribe_guild => |sg| {
+                if (sg.guild == g.sub_guild and sg.channel == g.sub_channel) return;
+                g.subscribe(sg.guild, sg.channel);
+            },
+            .relationship => |r| {
+                const path = std.fmt.bufPrint(&path_buf, "/users/@me/relationships/{d}", .{r.user}) catch return;
+                var resp = g.request(if (r.accept) "PUT" else "DELETE", path, if (r.accept) "{}" else null) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status >= 300) g.noticeHttp(i18n.tr("não deu para mudar a amizade", "couldn't update the friendship"), &resp);
+            },
+            .create_dm => |user| {
+                var b: [64]u8 = undefined;
+                const body = std.fmt.bufPrint(&b, "{{\"recipients\":[\"{d}\"]}}", .{user}) catch return;
+                var resp = g.request("POST", "/users/@me/channels", body) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status >= 300) return g.noticeHttp(i18n.tr("não deu para abrir a conversa", "couldn't open the conversation"), &resp);
+                var arena = std.heap.ArenaAllocator.init(alloc);
+                defer arena.deinit();
+                const v = std.json.parseFromSliceLeaky(Value, arena.allocator(), resp.body.items, .{}) catch return;
+                if (g.channelValue(v, 0) catch null) |ch| g.emit(.{ .channel_upsert = ch });
             },
             .join_voice => if (!g.voice_warned) {
                 g.voice_warned = true;

@@ -14,6 +14,54 @@ pub const User = struct {
     role: u8 = 0,
     status: Status = .offline,
     activity: ?[]const u8 = null,
+    /// Hash do avatar no CDN do Discord (null = sem foto).
+    /// Na demonstração: "demo:av:N" (gerado, não baixa nada).
+    avatar: ?[]const u8 = null,
+};
+
+/// Cargo de um servidor. `color` é 0xRRGGBB (0 = sem cor).
+pub const Role = struct {
+    id: Id,
+    guild: Id,
+    name: []const u8,
+    color: u32 = 0,
+    position: i32 = 0,
+};
+
+/// O que a pessoa é da gente (os números são os do Discord).
+pub const Relationship = enum(u8) { none = 0, friend = 1, blocked = 2, incoming = 3, outgoing = 4 };
+
+/// Grupos fixos da lista de membros; os outros grupos são cargos (pelo ID).
+pub const group_online: Id = 1;
+pub const group_offline: Id = 2;
+
+/// O que sabemos de alguém num servidor: cor do nome e cargos (do mais
+/// alto para o mais baixo, até 6).
+pub const MemberInfo = struct {
+    color: u32 = 0,
+    roles: [6]Id = @splat(0),
+    n_roles: u8 = 0,
+
+    pub fn roleSlice(m: *const MemberInfo) []const Id {
+        return m.roles[0..m.n_roles];
+    }
+};
+
+/// Uma linha da lista de membros, na ordem em que o Discord manda
+/// (GUILD_MEMBER_LIST_UPDATE): cabeçalho de grupo ou membro.
+pub const MemberItem = union(enum) {
+    none,
+    group: struct { id: Id, count: u32 },
+    member: struct { user: Id, info: MemberInfo = .{} },
+};
+
+pub const MemberOp = struct {
+    kind: enum { sync, insert, update, delete, invalidate },
+    /// SYNC/INVALIDATE: faixa [index, end]; INSERT/UPDATE/DELETE: a posição.
+    index: u32,
+    end: u32 = 0,
+    /// Alocado com o c_allocator (vazio em DELETE/INVALIDATE).
+    items: []const MemberItem = &.{},
 };
 
 pub const Guild = struct {
@@ -24,6 +72,8 @@ pub const Guild = struct {
     color: u8 = 0,
     unread: bool = false,
     mentions: u16 = 0,
+    /// Hash do ícone no CDN (null = mostra a sigla).
+    icon: ?[]const u8 = null,
 };
 
 pub const Channel = struct {
@@ -37,6 +87,13 @@ pub const Channel = struct {
     unread: bool = false,
     /// Em DMs (guild = 0): a outra pessoa da conversa.
     recipient: Id = 0,
+    /// Grupo (DM com várias pessoas): todos os participantes menos a gente.
+    /// Vazio numa DM comum. Alocado com o c_allocator.
+    recipients: []const Id = &.{},
+    /// Ícone do grupo (hash no CDN).
+    icon: ?[]const u8 = null,
+    /// DM em grupo (tipo 3 do Discord), mesmo que só reste uma pessoa.
+    group: bool = false,
 };
 
 /// Anexo de uma mensagem. `url` pode ser https:// (CDN do Discord),
@@ -50,6 +107,12 @@ pub const Attachment = struct {
     height: u16 = 0,
     size: u32 = 0,
     animated: bool = false,
+    /// Prévia parada (GIF do Tenor/Giphy: `url` é o GIF no site deles,
+    /// `still` é a miniatura pelo proxy do Discord). Vazio = não tem.
+    still: []const u8 = "",
+    /// Veio de um link (embed), não foi anexado: some com
+    /// Configurações → Chat → Mostrar imagens de links desligado.
+    embed: bool = false,
 
     pub fn isImage(a: *const Attachment) bool {
         return a.width > 0 and a.height > 0;
@@ -61,6 +124,7 @@ pub fn freeAttachments(gpa: std.mem.Allocator, list: []const Attachment) void {
     for (list) |a| {
         gpa.free(a.url);
         gpa.free(a.filename);
+        if (a.still.len > 0) gpa.free(a.still);
     }
     if (list.len > 0) gpa.free(list);
 }

@@ -74,6 +74,11 @@ pub const App = struct {
     images: images.Cache = undefined,
     /// Arquivos escolhidos no seletor (o SDL pode responder de outra thread).
     picked: Queue([:0]u8) = undefined,
+    /// Já tem um aviso da rede na fila do SDL: os próximos eventos só entram
+    /// na fila de eventos, sem acordar a janela de novo.
+    gw_signaled: std.atomic.Value(bool) = .init(false),
+    /// notify-send em andamento (recolhidos quando terminam).
+    notifiers: std.ArrayList(*c.SDL_Process) = .empty,
     paste_n: u32 = 0,
     curl_on: bool = false,
     /// Guardar o token quando o Discord aceitar (o "Lembrar" do login).
@@ -135,7 +140,8 @@ pub const App = struct {
         const qa_login = opts.qa and if (c.SDL_getenv("QA_SUITE")) |q| std.mem.eql(u8, std.mem.span(q), "login") else false;
         if (opts.login or qa_login) {
             app.login.begin(.form);
-        } else if (opts.demo or opts.shot != null or opts.qa) {
+        } else if (opts.demo or opts.qa or (opts.shot != null and c.SDL_getenv("LARPER_SHOT_REAL") == null)) {
+            // (LARPER_SHOT_REAL=1: print com a conta de verdade, para depurar.)
             try app.startDemo();
         } else if (discord.loadToken()) |t| {
             try app.startReal(t);
@@ -153,6 +159,8 @@ pub const App = struct {
 
     pub fn destroy(app: *App) void {
         _ = c.SDL_RemoveTimer(app.timer);
+        for (app.notifiers.items) |p| c.SDL_DestroyProcess(p);
+        app.notifiers.deinit(app.gpa);
         app.stopNet();
         if (app.curl_on) c.curl_global_cleanup();
         app.login.clearToken();
@@ -358,7 +366,7 @@ pub const App = struct {
     fn pushEvent(ctx: *anyopaque, e: ev.Event) void {
         const app: *App = @ptrCast(@alignCast(ctx));
         app.events.push(e);
-        platform.Window.wake(app.win.wake_type, .gateway);
+        if (!app.gw_signaled.swap(true, .acq_rel)) platform.Window.wake(app.win.wake_type, .gateway);
     }
 
     fn tick(data: ?*anyopaque, _: c.SDL_TimerID, interval: u32) callconv(.c) u32 {
@@ -509,6 +517,9 @@ pub const App = struct {
         const cs = app.store.channel(id) orelse return;
         if (cs.info.kind != .text) return;
         app.st.guild = cs.info.guild;
+        app.st.friends = false;
+        // Lista de membros do servidor, vista deste canal.
+        if (cs.info.guild != 0) app.cmd(.{ .subscribe_guild = .{ .guild = cs.info.guild, .channel = id } });
         app.st.last_channel.put(app.gpa, cs.info.guild, id) catch {};
         for (app.st.tabs.items, 0..) |t, i| if (t == id) {
             app.st.tab = i;
@@ -593,15 +604,24 @@ pub const App = struct {
         switch (a) {
             .select_guild => |g| {
                 st.guild = g;
-                const ch = st.last_channel.get(g) orelse app.firstTextChannel(g) orelse return;
+                // Mensagens diretas sem conversa aberta: começa pelos amigos.
+                const ch = st.last_channel.get(g) orelse app.firstTextChannel(g) orelse return app.handle(.open_friends);
+                if (g == 0 and st.last_channel.get(0) == null) return app.handle(.open_friends);
                 app.openChannel(ch, false);
             },
+            .open_friends => {
+                st.guild = 0;
+                st.friends = true;
+            },
+            .accept_friend => |u| app.cmd(.{ .relationship = .{ .user = u, .accept = true } }),
+            .remove_relationship => |u| app.cmd(.{ .relationship = .{ .user = u, .accept = false } }),
             .select_channel => |ch| {
                 if (app.opts.qa and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[ação] select_channel ctrl={}\n", .{app.io.*.KeyCtrl});
                 app.openChannel(ch, app.io.*.KeyCtrl);
             },
             .focus_tab => |i| if (i < st.tabs.items.len) {
                 st.tab = i;
+                st.friends = false;
                 if (app.store.channel(st.tabs.items[i])) |cs| {
                     st.guild = cs.info.guild;
                     app.afterOpen(cs);
@@ -677,16 +697,19 @@ pub const App = struct {
                 app.cmd(.{ .react = .{ .channel = f.cs.info.id, .id = r.id, .emoji = r.emoji, .add = !mine } });
             },
             .open_dm => |user| {
-                for (app.store.channelsOf(0)) |id| if (app.store.channel(id)) |cs| if (cs.info.recipient == user) {
+                for (app.store.channelsOf(0)) |id| if (app.store.channel(id)) |cs| if (!cs.info.group and cs.info.recipient == user) {
                     return app.openChannel(id, false);
                 };
-                st.showToast(now(), false, "ainda não existe uma DM com essa pessoa", "there's no DM with this person yet", .{});
+                // Ainda não tem conversa: pede ao Discord e abre quando chegar.
+                st.pending_dm = user;
+                app.cmd(.{ .create_dm = user });
             },
             .send_dm => |dm| {
                 defer app.gpa.free(dm.text);
                 app.handle(.{ .open_dm = dm.user });
                 const ch = st.activeChannel() orelse return;
-                if (app.store.channel(ch)) |cs| if (cs.info.recipient == dm.user) app.sendTo(ch, dm.text, 0);
+                if (app.store.channel(ch)) |cs| if (!cs.info.group and cs.info.recipient == dm.user) return app.sendTo(ch, dm.text, 0);
+                if (st.pending_dm == dm.user) st.showToast(now(), false, "abrindo a conversa… mande de novo quando ela abrir", "opening the conversation… send it again once it opens", .{});
             },
             .copy => |text| {
                 defer app.gpa.free(text);
@@ -792,6 +815,7 @@ pub const App = struct {
                 app.last_notice_len = n;
             }
             if (e == .status and e.status == .failed) failed = true;
+            if (e == .message_create and app.store.ready) app.notify(e.message_create);
             if (app.opts.stats) switch (e) {
                 .status => |st| std.log.info("conexão: {t}", .{st}),
                 .notice => |n| std.log.info("aviso: {s}", .{n}),
@@ -838,8 +862,67 @@ pub const App = struct {
         } else if (app.st.tab >= app.st.tabs.items.len) {
             app.st.tab = app.st.tabs.items.len - 1;
         }
+        // A DM que pedimos chegou: abre.
+        if (app.st.pending_dm != 0) {
+            for (app.store.channelsOf(0)) |id| if (app.store.channel(id)) |cs| if (!cs.info.group and cs.info.recipient == app.st.pending_dm) {
+                app.st.pending_dm = 0;
+                app.openChannel(id, false);
+                break;
+            };
+        }
         // Marca como lido o que chega no canal aberto.
         if (app.st.activeChannel()) |ch| app.store.markRead(ch);
+    }
+
+    /// DM ou menção chegando sem a pessoa olhando: a janela pisca na barra
+    /// de tarefas e sai uma notificação do sistema (notify-send).
+    fn notify(app: *App, m: types.Message) void {
+        if (app.opts.qa or app.store.demo or m.author == app.store.me) return;
+        const set = &app.st.settings;
+        const cs = app.store.channel(m.channel) orelse return;
+        if (app.st.muted_channels.contains(m.channel)) return;
+        if (cs.info.guild != 0 and !mentionsMe(m.content, app.store.me)) return;
+        const focused = (c.SDL_GetWindowFlags(app.win.window) & c.SDL_WINDOW_INPUT_FOCUS) != 0;
+        if (focused and app.st.activeChannel() == m.channel) return;
+        if (set.taskbar_flash and !focused) _ = c.SDL_FlashWindow(app.win.window, c.SDL_FLASH_UNTIL_FOCUSED);
+        if (!set.desktop_notifs or focused or app.notifiers.items.len >= 8) return;
+
+        const who = if (app.store.user(m.author)) |u| u.name else "?";
+        var tb: [160]u8 = undefined;
+        const title = if (cs.info.guild == 0 and !cs.info.group)
+            std.fmt.bufPrintSentinel(&tb, "{s}", .{who}, 0) catch return
+        else
+            std.fmt.bufPrintSentinel(&tb, "{s} ({s}{s})", .{ who, if (cs.info.guild == 0) "" else "#", cs.info.name }, 0) catch return;
+        // Texto curto, cortado sem quebrar um caractere no meio.
+        var body_src: []const u8 = m.content;
+        if (body_src.len == 0 and m.attachments.len > 0) body_src = i18n.tr("[anexo]", "[attachment]");
+        var cut = @min(body_src.len, 200);
+        while (cut > 0 and cut < body_src.len and (body_src[cut] & 0xC0) == 0x80) cut -= 1;
+        var bb: [208]u8 = undefined;
+        const body = std.fmt.bufPrintSentinel(&bb, "{s}{s}", .{ body_src[0..cut], if (cut < body_src.len) "…" else "" }, 0) catch return;
+        var args = [_:null]?[*:0]const u8{ "notify-send", "--app-name=larperCord", "--", title.ptr, body.ptr };
+        const proc = c.SDL_CreateProcess(@ptrCast(&args), false) orelse return;
+        app.notifiers.append(app.gpa, proc) catch c.SDL_DestroyProcess(proc);
+    }
+
+    fn mentionsMe(content: []const u8, me: types.Id) bool {
+        var b: [32]u8 = undefined;
+        const a = std.fmt.bufPrint(&b, "<@{d}>", .{me}) catch return false;
+        if (std.mem.indexOf(u8, content, a) != null) return true;
+        const n = std.fmt.bufPrint(&b, "<@!{d}>", .{me}) catch return false;
+        return std.mem.indexOf(u8, content, n) != null or std.mem.indexOf(u8, content, "@everyone") != null or std.mem.indexOf(u8, content, "@here") != null;
+    }
+
+    /// Recolhe os notify-send que já terminaram (sem deixar processo zumbi).
+    fn reapNotifiers(app: *App) void {
+        var i: usize = 0;
+        while (i < app.notifiers.items.len) {
+            const p = app.notifiers.items[i];
+            if (c.SDL_WaitProcess(p, false, null)) {
+                c.SDL_DestroyProcess(p);
+                _ = app.notifiers.swapRemove(i);
+            } else i += 1;
+        }
     }
 
     fn onReady(app: *App) void {
@@ -860,8 +943,21 @@ pub const App = struct {
 
     /// Monta uma cena para prints de documentação (LARPER_SCENE=…): abre
     /// popups e posiciona o mouse, já que o print não tem ninguém clicando.
-    fn scene(app: *App) void {
+    fn scene(app: *App, settled: bool) void {
         const which = std.mem.span(c.SDL_getenv("LARPER_SCENE") orelse return);
+        // "guild": abre o primeiro servidor (testa histórico e lista de membros).
+        if (std.mem.eql(u8, which, "guild")) {
+            const G = struct {
+                var done = false;
+            };
+            if (!G.done and app.store.guilds.items.len > 0) {
+                G.done = true;
+                app.handle(.{ .select_guild = app.store.guilds.items[0].id });
+            }
+            return;
+        }
+        // As outras cenas esperam a conversa carregar.
+        if (!settled) return;
         const ch = app.st.activeChannel() orelse return;
         const cs = app.store.channel(ch) orelse return;
         const items = cs.messages.items;
@@ -911,6 +1007,12 @@ pub const App = struct {
         var first_frame_logged = false;
         var login_result: ?login_mod.Result = null;
         var lang_setting: i16 = -1;
+        // O que chega da rede (presença, digitando, lista de membros) redesenha
+        // no máximo a cada `bg_frame_ms`; mouse e teclado redesenham na hora.
+        const bg_frame_ms: i64 = 50;
+        var bg_dirty = false;
+        var last_frame_ms: i64 = 0;
+        var was_active = false;
         // LARPER_RECORD=pasta: salva cada quadro da tela de login (a 30 qps fixos)
         // para montar o vídeo/GIF da documentação.
         const record_dir: ?[*:0]const u8 = c.SDL_getenv("LARPER_RECORD");
@@ -920,19 +1022,35 @@ pub const App = struct {
             var e: c.SDL_Event = undefined;
             const busy = pending > 0 or anim.active or app.opts.shot != null or app.opts.qa or
                 (app.login.visible() and !app.st.settings.reduce_motion);
-            var got = if (busy) c.SDL_PollEvent(&e) else c.SDL_WaitEvent(&e);
+            // Dorme até o próximo quadro de um GIF, de uma animação lenta ou
+            // do redesenho adiado da rede (o que vier primeiro).
+            var due = @min(app.images.next_frame_ms, anim.next_wake_ms);
+            if (bg_dirty) due = @min(due, last_frame_ms + bg_frame_ms);
+            const wait = due -| now();
+            var got = if (busy or wait <= 0)
+                c.SDL_PollEvent(&e)
+            else if (due != std.math.maxInt(i64))
+                c.SDL_WaitEventTimeout(&e, @intCast(@min(wait, 1000)))
+            else
+                c.SDL_WaitEvent(&e);
+            var input = false;
             while (got) {
                 if (e.type == app.win.wake_type) {
                     switch (@as(platform.Wake, @enumFromInt(e.user.code))) {
-                        .gateway => app.drainEvents(),
-                        .theme => if (app.themes.reload()) {
+                        .gateway => {
+                            app.gw_signaled.store(false, .release);
+                            app.drainEvents();
+                            bg_dirty = true;
+                        },
+                        .theme => if (!app.st.settings.hot_reload) {} else if (app.themes.reload()) {
                             app.applyThemeStyle();
                             app.st.showToast(now(), false, "tema recarregado: {s}", "theme reloaded: {s}", .{app.themes.name()});
                         } else app.st.showToast(now(), true, "{s}", "{s}", .{app.themes.last_error orelse i18n.tr("erro no tema", "theme error")}),
-                        .tick => {},
-                        .media => {},
+                        .tick => pending = @max(pending, 1),
+                        .media => bg_dirty = true,
                     }
                 } else {
+                    input = true;
                     _ = c.cImGui_ImplSDL3_ProcessEvent(&e);
                     if (e.type == c.SDL_EVENT_QUIT or e.type == c.SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
                         running = false;
@@ -943,13 +1061,14 @@ pub const App = struct {
                     if (e.type == c.SDL_EVENT_DROP_FILE and app.store.ready and app.st.activeChannel() != null)
                         if (e.drop.data) |p| app.attachFile(std.mem.span(p));
                 }
-                pending = 3;
                 got = c.SDL_PollEvent(&e);
             }
+            if (input) pending = 3;
             if (app.store.expireTyping(now())) pending = 2;
+            if (app.notifiers.items.len > 0) app.reapNotifiers();
 
             app.images.now_ms = now();
-            if (app.images.pump()) pending = 2;
+            if (app.images.pump()) bg_dirty = true;
             {
                 var picked: std.ArrayList([:0]u8) = .empty;
                 defer picked.deinit(std.heap.c_allocator);
@@ -960,6 +1079,15 @@ pub const App = struct {
                 }
                 if (picked.items.len > 0) pending = 3;
             }
+            // Só coisa da rede e o último quadro foi agora há pouco: espera.
+            const now_ms = now();
+            if (bg_dirty and pending == 0 and !was_active and app.opts.shot == null and !app.opts.qa and
+                !app.login.visible() and now_ms - last_frame_ms < bg_frame_ms and now_ms < @min(app.images.next_frame_ms, anim.next_wake_ms)) continue;
+            bg_dirty = false;
+            last_frame_ms = now_ms;
+            anim.now_ms = now_ms;
+            anim.next_wake_ms = std.math.maxInt(i64);
+            app.images.next_frame_ms = std.math.maxInt(i64);
             const t0 = c.SDL_GetTicksNS();
             anim.dt = std.math.clamp(@as(f32, @floatFromInt(t0 - last)) / 1e9, 0.001, 1.0 / 30.0);
             last = t0;
@@ -982,6 +1110,8 @@ pub const App = struct {
                 app.st.theme_gen +%= 1;
             }
             anim.instant = set.reduce_motion;
+            @import("net/media_url.zig").allow_gif_hosts = set.gif_hosts;
+            @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
             widgets.hour12 = !set.clock_24h;
             const key = set.layoutKey();
             if (key != app.layout_key) {
@@ -989,7 +1119,7 @@ pub const App = struct {
                 app.st.theme_gen +%= 1;
             }
 
-            if (app.opts.shot != null and settled_frames >= 3) app.scene();
+            if (app.store.ready and (app.opts.stats or app.opts.shot != null)) app.scene(settled_frames >= 3);
             c.ImGui_NewFrame();
             qa_mod.beginFrame();
             if (app.store.ready) {
@@ -1049,6 +1179,27 @@ pub const App = struct {
             app.actions.clearRetainingCapacity();
 
             frames += 1;
+            // --stats: quadros desenhados e custo médio/máximo a cada 2 s.
+            if (app.opts.stats) {
+                const S = struct {
+                    var since: u64 = 0;
+                    var n: u32 = 0;
+                    var sum: u64 = 0;
+                    var max: u32 = 0;
+                };
+                S.n += 1;
+                S.sum += app.stats.frame_us;
+                S.max = @max(S.max, app.stats.frame_us);
+                const t = c.SDL_GetTicksNS();
+                if (S.since == 0) S.since = t;
+                if (t - S.since >= 2_000_000_000) {
+                    std.log.info("{d} quadros em 2 s, média {d} µs, pior {d} µs", .{ S.n, S.sum / S.n, S.max });
+                    S.since = t;
+                    S.n = 0;
+                    S.sum = 0;
+                    S.max = 0;
+                }
+            }
             if (app.opts.stats and !first_frame_logged and app.store.ready) {
                 first_frame_logged = true;
                 std.log.info("primeiro quadro em {d} ms", .{(c.SDL_GetTicksNS() - app.started_ns) / 1_000_000});
@@ -1070,7 +1221,9 @@ pub const App = struct {
             } else {
                 const ready = app.store.ready and !app.images.busy() and if (app.st.activeChannel()) |ch| (app.store.channel(ch).?.history == .loaded) else false;
                 settled_frames = if (ready) settled_frames + 1 else 0;
-                if (settled_frames == 12 or c.SDL_GetTicksNS() - app.started_ns > 6 * std.time.ns_per_s) {
+                // Conta real: a rede pode demorar mais que a demonstração.
+                const limit: u64 = if (app.store.demo) 6 else 20;
+                if (settled_frames == 12 or c.SDL_GetTicksNS() - app.started_ns > limit * std.time.ns_per_s) {
                     if (!app.win.screenshot(path)) std.log.err("não consegui salvar {s}", .{path});
                     running = false;
                 }
@@ -1078,6 +1231,7 @@ pub const App = struct {
             if (app.opts.qa and (app.store.ready or app.login.visible()) and !runner.tick(app)) running = false;
             _ = c.SDL_RenderPresent(r);
             if (pending > 0) pending -= 1;
+            was_active = anim.active;
         }
         return runner.fail == 0;
     }

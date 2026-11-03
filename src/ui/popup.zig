@@ -21,8 +21,6 @@ pub const emojis = [_][]const u8{
 
 const quick = [_][]const u8{ "👍", "😂", "😭", "🔥" };
 
-const role_names = [_][]const u8{ "Admin", "Moderação", "Zig", "Rice", "Gamer", "Arte", "Música", "Membro" };
-const role_names_en = [_][]const u8{ "Admin", "Moderation", "Zig", "Rice", "Gamer", "Art", "Music", "Member" };
 
 fn close(ctx: *d.Ctx) void {
     if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[popup] fechou\n", .{});
@@ -120,7 +118,6 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "Adicionar reação", .en = "Add Reaction", .id = 3 });
             add(&items, &n, .{ .label = if (ctx.st.selection.empty()) "Copiar texto" else "Copiar seleção", .en = if (ctx.st.selection.empty()) "Copy Text" else "Copy Selection", .id = 4 });
             add(&items, &n, .{ .label = "Copiar link da mensagem", .en = "Copy Message Link", .id = 5 });
-            add(&items, &n, .{ .label = "Fixar mensagem", .en = "Pin Message", .id = 6 });
             add(&items, &n, .{ .label = "Marcar como não lida", .en = "Mark Unread", .id = 7 });
             if (dev) add(&items, &n, .{ .label = "Copiar ID da mensagem", .en = "Copy Message ID", .id = 8 });
             if (own) add(&items, &n, .{ .label = "Excluir mensagem", .en = "Delete Message", .id = 9, .danger = true, .sep = true });
@@ -129,7 +126,6 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "Perfil", .en = "Profile", .id = 20 });
             add(&items, &n, .{ .label = "Mencionar", .en = "Mention", .id = 21 });
             if (id != ctx.store.me) add(&items, &n, .{ .label = "Mensagem", .en = "Message", .id = 22 });
-            if (id != ctx.store.me) add(&items, &n, .{ .label = "Ligar", .en = "Call", .id = 23 });
             add(&items, &n, .{ .label = "Copiar nome de usuário", .en = "Copy Username", .id = 24, .sep = true });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do usuário", .en = "Copy User ID", .id = 25 });
         },
@@ -142,10 +138,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         },
         .guild => {
             add(&items, &n, .{ .label = "Marcar como lido", .en = "Mark As Read", .id = 60 });
-            add(&items, &n, .{ .label = "Convidar pessoas", .en = "Invite People", .id = 61 });
-            add(&items, &n, .{ .label = "Configurações do servidor", .en = "Server Settings", .id = 62 });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do servidor", .en = "Copy Server ID", .id = 63 });
-            add(&items, &n, .{ .label = "Sair do servidor", .en = "Leave Server", .id = 64, .danger = true, .sep = true });
         },
     }
 
@@ -207,6 +200,11 @@ fn copyFmt(ctx: *d.Ctx, comptime fmt: []const u8, args: anytype) void {
     ctx.act(.{ .copy = s });
 }
 
+/// Links de DM usam "@me" no lugar do servidor.
+fn guildPart(buf: []u8, guild: Id) []const u8 {
+    return if (guild == 0) "@me" else std.fmt.bufPrint(buf, "{d}", .{guild}) catch "@me";
+}
+
 fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
     _ = kind;
     const st = ctx.st;
@@ -218,8 +216,10 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         4 => if (!st.selection.empty()) {
             if (selectionText(ctx)) |s| ctx.act(.{ .copy = s });
         } else if (ctx.store.findAny(id)) |f| copyFmt(ctx, "{s}", .{f.m.msg.content}),
-        5 => if (ctx.store.findAny(id)) |f| copyFmt(ctx, "https://discord.com/channels/{d}/{d}/{d}", .{ f.cs.info.guild, f.cs.info.id, id }),
-        6 => st.showToast(ctx.now_ms, false, "📌 mensagem fixada", "📌 message pinned", .{}),
+        5 => if (ctx.store.findAny(id)) |f| {
+            var gb: [24]u8 = undefined;
+            copyFmt(ctx, "https://discord.com/channels/{s}/{d}/{d}", .{ guildPart(&gb, f.cs.info.guild), f.cs.info.id, id });
+        },
         7 => if (ctx.store.findAny(id)) |f| {
             f.cs.info.unread = true;
         },
@@ -230,7 +230,6 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             insertText(st, u.name, true);
         },
         22 => ctx.act(.{ .open_dm = id }),
-        23 => st.showToast(ctx.now_ms, false, "📞 voz ainda não está conectada", "📞 voice isn't connected yet", .{}),
         24 => if (ctx.store.user(id)) |u| copyFmt(ctx, "{s}", .{u.name}),
         40, 60 => ctx.act(.{ .mark_read = id }),
         41 => {
@@ -240,10 +239,10 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         42 => if (st.muted_channels.contains(id)) {
             _ = st.muted_channels.remove(id);
         } else st.muted_channels.put(st.gpa, id, {}) catch {},
-        43 => if (ctx.store.channel(id)) |cs| copyFmt(ctx, "https://discord.com/channels/{d}/{d}", .{ cs.info.guild, id }),
-        61 => copyFmt(ctx, "https://discord.gg/larper{d}", .{id % 10000}),
-        62 => st.showToast(ctx.now_ms, false, "configurações do servidor: em breve", "server settings: coming soon", .{}),
-        64 => st.showToast(ctx.now_ms, false, "calma, ninguém sai daqui 😄", "relax, nobody leaves here 😄", .{}),
+        43 => if (ctx.store.channel(id)) |cs| {
+            var gb: [24]u8 = undefined;
+            copyFmt(ctx, "https://discord.com/channels/{s}/{d}", .{ guildPart(&gb, cs.info.guild), id });
+        },
         else => {},
     }
 }
@@ -340,23 +339,29 @@ fn profile(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
         _ = d.textClipped(dl, fam.get(.medium), 14, inner.x + 12, iy, ctx.col(.text), a, inner.w - 24);
         iy += 28;
     }
-    d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), i18n.tr("MEMBRO DESDE", "MEMBER SINCE"));
+    d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), i18n.tr("NO DISCORD DESDE", "MEMBER SINCE"));
     iy += 18;
-    const since = w.dateLong(&buf, 1 + uid % 28, 1 + uid % 12, 2016 + uid % 9);
-    d.text(dl, fam.get(.regular), 14, inner.x + 12, iy, ctx.col(.text), since);
+    d.text(dl, fam.get(.regular), 14, inner.x + 12, iy, ctx.col(.text), w.since(&buf, uid));
     iy += 28;
-    d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), i18n.tr("CARGOS", "ROLES"));
-    iy += 20;
-    var rx = inner.x + 12;
-    for ([_]u8{ u.role, 7 }) |ri| {
-        const name = if (i18n.en()) role_names_en[ri % role_names_en.len] else role_names[ri % role_names.len];
-        const tw = d.width(fam.get(.medium), 12, name);
-        const cr: d.Rect = .{ .x = rx, .y = iy, .w = tw + 26, .h = 22 };
-        d.rect(dl, cr, ctx.col(.elevated), 5);
-        d.circle(dl, cr.x + 10, cr.y + 11, 4, ctx.th.role(ri));
-        d.text(dl, fam.get(.medium), 12, cr.x + 18, d.centerY(cr, 12), ctx.col(.text), name);
-        rx += cr.w + 6;
-    }
+    // Cargos no servidor aberto (os que o Discord mandou).
+    if (ctx.store.memberInfo(ctx.st.guild, uid)) |info| if (info.n_roles > 0) {
+        d.text(dl, fam.get(.bold), 11.5, inner.x + 12, iy, ctx.col(.muted), i18n.tr("CARGOS", "ROLES"));
+        iy += 20;
+        var rx = inner.x + 12;
+        for (info.roleSlice()) |rid| {
+            const rl = ctx.store.roles.get(rid) orelse continue;
+            const tw = d.width(fam.get(.medium), 12, rl.name);
+            if (rx + tw + 26 > inner.right() - 8) {
+                rx = inner.x + 12;
+                iy += 26;
+            }
+            const cr: d.Rect = .{ .x = rx, .y = iy, .w = tw + 26, .h = 22 };
+            d.rect(dl, cr, ctx.col(.elevated), 5);
+            d.circle(dl, cr.x + 10, cr.y + 11, 4, if (rl.color != 0) d.Rgba.hex(rl.color) else ctx.col(.faint));
+            _ = d.textClipped(dl, fam.get(.medium), 12, cr.x + 18, d.centerY(cr, 12), ctx.col(.text), rl.name, inner.w - 40);
+            rx += cr.w + 6;
+        }
+    };
 
     // "Mensagem @fulano"
     if (uid != ctx.store.me) {

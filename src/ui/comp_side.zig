@@ -14,70 +14,196 @@ const types = @import("../core/types.zig");
 const i18n = @import("i18n.zig");
 
 pub fn memberList(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
-    const fam = ctx.familyFor(n);
+    if (ctx.st.friends) return @import("comp_friends.zig").activeNow(ctx, n, r);
+    const ch_id = ctx.st.activeChannel() orelse return;
+    const cs = ctx.store.channel(ch_id) orelse return;
     const tty = d.is(n, "variant", "tty", "discord");
+    // DM com uma pessoa: o perfil dela, como no Discord.
+    if (cs.info.guild == 0 and !cs.info.group) return dmProfile(ctx, n, r, cs.info.recipient, tty);
+
+    const fam = ctx.familyFor(n);
     const dl = d.beginRegion(ctx, "##members", r, c.ImGuiWindowFlags_NoScrollbar);
     const o = c.ImGui_GetCursorScreenPos();
-    var y = o.y + (if (tty) @as(f32, 6) else 20);
-    const fs = ctx.th.font_size;
+    var rows: Rows = .{ .ctx = ctx, .dl = dl, .fam = fam, .tty = tty, .r = r, .y = o.y + (if (tty) @as(f32, 6) else 20), .guild = cs.info.guild };
 
-    var online: usize = 0;
-    var it = ctx.store.users.valueIterator();
-    while (it.next()) |u| {
-        if (u.status != .offline) online += 1;
-    }
-    var buf: [64]u8 = undefined;
-
-    for ([_]bool{ true, false }) |want_online| {
-        const count = if (want_online) online else ctx.store.users.count() - online;
-        const lbl = std.fmt.bufPrint(&buf, "{s} — {d}", .{ if (want_online) "ONLINE" else "OFFLINE", count }) catch "";
-        d.text(dl, fam.get(.semibold), if (tty) fs - 2 else 12, r.x + (if (tty) @as(f32, 10) else 16), y, ctx.col(.faint).mix(ctx.col(.muted), 0.3), lbl);
-        y += if (tty) @as(f32, 20) else 22;
-
-        // Ordem estável pelo ID.
-        var ids: [64]types.Id = undefined;
+    if (cs.info.group) {
+        // Grupo: a gente e os participantes, quem está online primeiro.
+        var ids: [16]types.Id = undefined;
         var nids: usize = 0;
-        var uit = ctx.store.users.valueIterator();
-        while (uit.next()) |u| {
-            if ((u.status != .offline) != want_online or nids >= ids.len) continue;
-            ids[nids] = u.id;
+        ids[0] = ctx.store.me;
+        nids = 1;
+        for (cs.info.recipients) |uid| if (nids < ids.len and uid != ctx.store.me) {
+            ids[nids] = uid;
             nids += 1;
-        }
-        std.mem.sort(types.Id, ids[0..nids], {}, std.sort.asc(types.Id));
-
-        for (ids[0..nids]) |uid| {
-            const u = ctx.store.user(uid).?;
-            const name_col = ctx.th.role(u.role).mix(ctx.col(.text), 0.25);
-            if (tty) {
-                const rr: d.Rect = .{ .x = r.x + 4, .y = y, .w = r.w - 8, .h = 20 };
-                const hb = d.hit(ctx, @intCast(uid), rr);
-                qa.mark(rr, "member:{d}", .{uid});
-                memberClick(ctx, hb, uid, rr);
-                if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
-                d.text(dl, fam.get(.regular), fs - 1, rr.x + 6, d.centerY(rr, fs - 1), w.statusColor(ctx, u.status), w.statusGlyph(u.status));
-                _ = d.textClipped(dl, fam.get(if (want_online) .bold else .regular), fs - 1, rr.x + 24, d.centerY(rr, fs - 1), if (want_online) name_col else ctx.col(.faint), u.name, rr.w - 30);
-                y += 20;
-                continue;
+        };
+        const Sort = struct {
+            ctx: *const d.Ctx,
+            fn lt(sx: @This(), a: types.Id, b: types.Id) bool {
+                const oa = if (sx.ctx.store.user(a)) |u| u.status != .offline else false;
+                const ob = if (sx.ctx.store.user(b)) |u| u.status != .offline else false;
+                if (oa != ob) return oa;
+                return a < b;
             }
-            const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = 42 };
-            const hb = d.hit(ctx, @intCast(uid), rr);
+        };
+        std.mem.sort(types.Id, ids[0..nids], Sort{ .ctx = ctx }, Sort.lt);
+        var buf: [48]u8 = undefined;
+        rows.heading(i18n.fmt(&buf, "MEMBROS — {d}", "MEMBERS — {d}", .{nids}));
+        for (ids[0..nids]) |uid| rows.member(uid, false);
+        return d.endRegion(ctx, rows.y, r.x);
+    }
+
+    const ml = ctx.store.memberList(cs.info.guild) orelse return loading(&rows);
+    if (!ml.synced) return loading(&rows);
+    var offline = false;
+    var buf: [96]u8 = undefined;
+    for (ml.items.items) |it| switch (it) {
+        .none => {},
+        .group => |gr| {
+            offline = gr.id == types.group_offline;
+            const name = if (gr.id == types.group_online) "ONLINE" else if (gr.id == types.group_offline) "OFFLINE" else if (ctx.store.roles.get(gr.id)) |role| role.name else "?";
+            var up: [64]u8 = undefined;
+            rows.heading(std.fmt.bufPrint(&buf, "{s} — {d}", .{ d.upper(&up, name), gr.count }) catch "");
+        },
+        .member => |m| rows.member(m.user, offline),
+    };
+    // A lista que o Discord manda para no 100º; o resto fica para quem rola.
+    if (ml.total > ml.items.items.len and ml.items.items.len >= 100) {
+        rows.y += 4;
+        d.text(dl, fam.get(.medium), 12, r.x + 16, rows.y, ctx.col(.faint), i18n.fmt(&buf, "{d} membros no total", "{d} members in total", .{ml.total}));
+        rows.y += 24;
+    }
+    d.endRegion(ctx, rows.y, r.x);
+}
+
+/// Desenha as linhas da lista de membros uma embaixo da outra.
+const Rows = struct {
+    ctx: *d.Ctx,
+    dl: *c.ImDrawList,
+    fam: *d.Family,
+    tty: bool,
+    r: d.Rect,
+    y: f32,
+    guild: types.Id,
+    first: bool = true,
+
+    fn heading(rw: *Rows, label: []const u8) void {
+        const ctx = rw.ctx;
+        if (!rw.first) rw.y += if (rw.tty) @as(f32, 8) else 14;
+        rw.first = false;
+        d.text(rw.dl, rw.fam.get(.semibold), if (rw.tty) ctx.th.font_size - 2 else 12, rw.r.x + (if (rw.tty) @as(f32, 10) else 16), rw.y, ctx.col(.faint).mix(ctx.col(.muted), 0.3), label);
+        rw.y += if (rw.tty) @as(f32, 20) else 22;
+    }
+
+    fn member(rw: *Rows, uid: types.Id, offline_group: bool) void {
+        const ctx = rw.ctx;
+        const dl = rw.dl;
+        const fam = rw.fam;
+        const r = rw.r;
+        const u = ctx.store.user(uid) orelse return;
+        const online = !offline_group and u.status != .offline;
+        const name_col = w.nameColor(ctx, rw.guild, uid);
+        if (rw.tty) {
+            const rr: d.Rect = .{ .x = r.x + 4, .y = rw.y, .w = r.w - 8, .h = 20 };
+            const hb = d.hit(ctx, @truncate(uid), rr);
             qa.mark(rr, "member:{d}", .{uid});
             memberClick(ctx, hb, uid, rr);
-            const k = anim.to(anim.id("member", uid), if (hb.hovered) 1 else 0, 24);
-            d.rect(dl, rr, ctx.col(.hover).alpha(k * 1.4), ctx.th.radius);
-            const alpha: f32 = if (want_online) 1 else 0.38 + 0.4 * k;
-            w.avatar(ctx, dl, rr.x + 24, rr.y + 21, 32, uid, .circle, if (want_online) ctx.col(.sidebar) else null, alpha);
-            if (u.activity != null and want_online) {
-                _ = d.textClipped(dl, fam.get(.medium), 15, rr.x + 48, rr.y + 3, name_col.alpha(alpha), u.name, rr.w - 56);
-                _ = d.textClipped(dl, fam.get(.regular), 12, rr.x + 48, rr.y + 22, ctx.col(.muted).alpha(alpha), u.activity.?, rr.w - 56);
-            } else {
-                _ = d.textClipped(dl, fam.get(.medium), 15, rr.x + 48, d.centerY(rr, 15), name_col.alpha(alpha), u.name, rr.w - 56);
-            }
-            y += 44;
+            if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
+            const fs = ctx.th.font_size;
+            d.text(dl, fam.get(.regular), fs - 1, rr.x + 6, d.centerY(rr, fs - 1), w.statusColor(ctx, if (online) u.status else .offline), w.statusGlyph(if (online) u.status else .offline));
+            _ = d.textClipped(dl, fam.get(if (online) .bold else .regular), fs - 1, rr.x + 24, d.centerY(rr, fs - 1), if (online) name_col else ctx.col(.faint), u.name, rr.w - 30);
+            rw.y += 20;
+            return;
         }
-        y += if (tty) @as(f32, 8) else 16;
+        const rr: d.Rect = .{ .x = r.x + 8, .y = rw.y, .w = r.w - 16, .h = 42 };
+        const hb = d.hit(ctx, @truncate(uid), rr);
+        qa.mark(rr, "member:{d}", .{uid});
+        memberClick(ctx, hb, uid, rr);
+        const k = anim.to(anim.id("member", uid), if (hb.hovered) 1 else 0, 24);
+        d.rect(dl, rr, ctx.col(.hover).alpha(k * 1.4), ctx.th.radius);
+        const alpha: f32 = if (online) 1 else 0.38 + 0.4 * k;
+        w.avatar(ctx, dl, rr.x + 24, rr.y + 21, 32, uid, .circle, if (online) ctx.col(.sidebar) else null, alpha);
+        if (u.activity != null and online) {
+            _ = d.textClipped(dl, fam.get(.medium), 15, rr.x + 48, rr.y + 3, name_col.alpha(alpha), u.name, rr.w - 56);
+            _ = d.textClipped(dl, fam.get(.regular), 12, rr.x + 48, rr.y + 22, ctx.col(.muted).alpha(alpha), u.activity.?, rr.w - 56);
+        } else {
+            _ = d.textClipped(dl, fam.get(.medium), 15, rr.x + 48, d.centerY(rr, 15), name_col.alpha(alpha), u.name, rr.w - 56);
+        }
+        rw.y += 44;
     }
-    d.endRegion(ctx, y, r.x);
+};
+
+/// Enquanto a lista do Discord não chega: linhas-esqueleto piscando.
+fn loading(rw: *Rows) void {
+    const ctx = rw.ctx;
+    rw.heading(i18n.tr("CARREGANDO MEMBROS…", "LOADING MEMBERS…"));
+    const ph = @as(f32, @floatFromInt(@mod(ctx.now_ms, 1600))) / 1600.0;
+    for (0..8) |i| {
+        const k = 0.5 + 0.5 * @sin((ph - @as(f32, @floatFromInt(i)) * 0.08) * std.math.tau);
+        const col = ctx.col(.text).alpha(0.04 + 0.04 * k);
+        if (rw.tty) {
+            d.rect(rw.dl, .{ .x = rw.r.x + 10, .y = rw.y + 5, .w = rw.r.w * 0.5, .h = 10 }, col, 0);
+            rw.y += 20;
+            continue;
+        }
+        d.circle(rw.dl, rw.r.x + 32, rw.y + 21, 16, col);
+        d.rect(rw.dl, .{ .x = rw.r.x + 56, .y = rw.y + 15, .w = 60 + @as(f32, @floatFromInt((i * 37) % 70)), .h = 12 }, col, 6);
+        rw.y += 44;
+    }
+    anim.every(60);
+    d.endRegion(ctx, rw.y, rw.r.x);
+}
+
+/// Painel de perfil numa DM com uma pessoa.
+fn dmProfile(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, uid: types.Id, tty: bool) void {
+    const u = ctx.store.user(uid) orelse return;
+    const fam = ctx.familyFor(n);
+    qa.mark(r, "dm-profile", .{});
+    const dl = d.beginRegion(ctx, "##dm-profile", r, c.ImGuiWindowFlags_NoScrollbar);
+    const o = c.ImGui_GetCursorScreenPos();
+    var buf: [96]u8 = undefined;
+    if (tty) {
+        var y = o.y + 6;
+        const fs = ctx.th.font_size - 1;
+        for ([_][]const u8{
+            std.fmt.bufPrint(buf[0..48], "@{s}", .{u.name}) catch "",
+            std.fmt.bufPrint(buf[48..], "{s} {s}", .{ w.statusGlyph(u.status), @tagName(u.status) }) catch "",
+        }) |t| {
+            d.text(dl, fam.get(.bold), fs, r.x + 10, y, ctx.col(.text), t);
+            y += 20;
+        }
+        if (u.activity) |a| _ = d.textClipped(dl, fam.get(.regular), fs, r.x + 10, y, ctx.col(.muted), a, r.w - 20);
+        return d.endRegion(ctx, y + 24, r.x);
+    }
+    // Faixa colorida, avatar grande, nome, status e atividade.
+    const band: d.Rect = .{ .x = r.x, .y = o.y, .w = r.w, .h = 110 };
+    const col = ctx.th.role(u.role);
+    c.ImDrawList_AddRectFilledMultiColor(dl, d.v(band.x, band.y), d.v(band.right(), band.bottom()), col.u(), col.mix(ctx.col(.accent), 0.5).u(), col.mix(ctx.col(.sidebar), 0.4).u(), col.mix(ctx.col(.sidebar), 0.4).u());
+    d.circle(dl, r.x + 56, band.bottom(), 46, ctx.col(.sidebar));
+    w.avatar(ctx, dl, r.x + 56, band.bottom(), 80, uid, .circle, ctx.col(.sidebar), 1);
+    var y = band.bottom() + 54;
+    _ = d.textClipped(dl, fam.get(.bold), 20, r.x + 16, y, ctx.col(.text), u.name, r.w - 32);
+    y += 30;
+    d.circle(dl, r.x + 21, y + 8, 5, w.statusColor(ctx, u.status));
+    d.text(dl, fam.get(.medium), 13, r.x + 32, y, ctx.col(.muted), switch (u.status) {
+        .online => "Online",
+        .idle => i18n.tr("Ausente", "Idle"),
+        .dnd => i18n.tr("Não perturbe", "Do Not Disturb"),
+        .offline => "Offline",
+    });
+    y += 30;
+    const card: d.Rect = .{ .x = r.x + 12, .y = y, .w = r.w - 24, .h = if (u.activity != null) 124 else 70 };
+    d.rect(dl, card, ctx.col(.rail).alpha(0.7), ctx.th.radius + 2);
+    var cy = card.y + 12;
+    if (u.activity) |a| {
+        d.text(dl, fam.get(.bold), 11.5, card.x + 12, cy, ctx.col(.muted), i18n.tr("ATIVIDADE", "ACTIVITY"));
+        cy += 18;
+        _ = d.textClipped(dl, fam.get(.medium), 14, card.x + 12, cy, ctx.col(.text), a, card.w - 24);
+        cy += 34;
+    }
+    d.text(dl, fam.get(.bold), 11.5, card.x + 12, cy, ctx.col(.muted), i18n.tr("NO DISCORD DESDE", "MEMBER SINCE"));
+    cy += 18;
+    d.text(dl, fam.get(.regular), 14, card.x + 12, cy, ctx.col(.text), w.since(&buf, uid));
+    d.endRegion(ctx, card.bottom() + 20, r.x);
 }
 
 fn memberClick(ctx: *d.Ctx, hb: d.Hit, uid: types.Id, rr: d.Rect) void {

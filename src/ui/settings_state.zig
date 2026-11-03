@@ -1,15 +1,13 @@
-//! Valores das configurações. Os que têm efeito real estão marcados com ✓;
-//! os demais por enquanto só guardam a escolha (ainda não há rede/voz).
+//! Valores das configurações. Todas têm efeito de verdade (o que ainda não
+//! existe, como a voz, não aparece aqui até existir).
 //! São salvos em ~/.config/larpercord/settings.kdl.
 const std = @import("std");
 
 pub const Page = enum {
     conta,
-    perfis,
     privacidade,
     aparencia,
     acessibilidade,
-    voz,
     chat,
     notificacoes,
     atalhos,
@@ -24,57 +22,39 @@ pub const Settings = struct {
     page: Page = .aparencia,
 
     // Aparência / acessibilidade
-    font_scale: f32 = 1.0, // ✓
-    compact: bool = false, // ✓
-    show_avatars: bool = true, // ✓
-    reduce_motion: bool = false, // ✓
-    clock_24h: bool = true, // ✓
-    show_member_list: bool = true, // ✓
-    show_status_bar: bool = true, // ✓
-    saturation: f32 = 1.0,
+    font_scale: f32 = 1.0,
+    compact: bool = false,
+    show_avatars: bool = true,
+    reduce_motion: bool = false,
+    clock_24h: bool = true,
+    show_member_list: bool = true,
+    show_status_bar: bool = true,
     underline_links: bool = true,
-    role_colors: bool = true, // ✓
+    role_colors: bool = true,
 
     // Chat
-    show_spoilers: bool = false, // ✓
-    animated_emoji: bool = true,
+    show_spoilers: bool = false,
     autoplay_gifs: bool = true,
-    link_previews: bool = true,
+    /// Imagens e GIFs que vêm de links (embeds).
     show_embeds: bool = true,
-    spellcheck: bool = true,
-    send_typing: bool = true,
-
-    // Notificações
-    desktop_notifs: bool = true,
-    unread_badge: bool = true,
-    taskbar_flash: bool = true,
-    notif_sounds: bool = true,
-    mention_only: bool = false,
 
     // Privacidade
-    dms_from_servers: bool = true,
-    message_requests: bool = true,
-    explicit_filter: u8 = 1,
-    activity_status: bool = true,
-    streamer_mode: bool = false, // ✓ (esconde o e-mail na conta)
+    send_typing: bool = true,
+    /// GIFs do Tenor/Giphy direto do site deles (eles veem o IP).
+    gif_hosts: bool = true,
+    /// Esconde o e-mail e o @usuário na conta.
+    streamer_mode: bool = false,
 
-    // Voz
-    input_device: u8 = 0,
-    output_device: u8 = 0,
-    input_volume: f32 = 0.8,
-    output_volume: f32 = 1.0,
-    sensitivity: f32 = 0.45,
-    auto_sensitivity: bool = true,
-    noise_suppression: bool = true,
-    echo_cancel: bool = true,
-    push_to_talk: bool = false,
+    // Notificações (DMs e menções)
+    desktop_notifs: bool = true,
+    taskbar_flash: bool = true,
 
     // Avançado
     developer_mode: bool = false,
-    hardware_accel: bool = true,
     hot_reload: bool = true,
+    /// 0 = seguir o sistema, 1 = português, 2 = inglês.
     language: u8 = 0,
-    /// 0 = escuro, 1 = claro, 2 = seguir o sistema. ✓
+    /// 0 = escuro, 1 = claro, 2 = seguir o sistema.
     color_mode: u8 = 0,
 
     /// Muda quando algo que afeta o layout das mensagens muda.
@@ -82,6 +62,7 @@ pub const Settings = struct {
         var h: u32 = @intFromFloat(s.font_scale * 100);
         h = h *% 31 +% @intFromBool(s.compact);
         h = h *% 31 +% @intFromBool(s.show_avatars);
+        h = h *% 31 +% @intFromBool(s.show_embeds);
         return h;
     }
 };
@@ -147,7 +128,7 @@ test "configurações vão e voltam pelo KDL" {
     var s: Settings = .{};
     s.compact = true;
     s.font_scale = 1.2;
-    s.explicit_filter = 2;
+    s.language = 2;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.testing.allocator);
     try write(&s, "vidro", &out, std.testing.allocator);
@@ -159,6 +140,6 @@ test "configurações vão e voltam pelo KDL" {
     apply(&back, &nodes[0]);
     try std.testing.expect(back.compact);
     try std.testing.expectApproxEqAbs(@as(f32, 1.2), back.font_scale, 0.001);
-    try std.testing.expectEqual(@as(u8, 2), back.explicit_filter);
+    try std.testing.expectEqual(@as(u8, 2), back.language);
     try std.testing.expectEqualStrings("vidro", nodes[0].str("theme").?);
 }

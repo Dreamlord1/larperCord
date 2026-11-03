@@ -141,7 +141,8 @@ fn unknown(ctx: *d.Ctx, p: layout.Placed) void {
 fn toast(ctx: *d.Ctx) void {
     const t = &ctx.st.toast;
     const k = anim.to(anim.id("toast", 0), if (ctx.now_ms < t.until_ms) 1 else 0, 14);
-    if (ctx.now_ms < t.until_ms) anim.active = true;
+    // Parado na tela não precisa de quadros; só acorda para sumir.
+    if (ctx.now_ms < t.until_ms) anim.at(t.until_ms);
     if (k < 0.01) return;
     const font = ctx.ui.get(.semibold);
     const fs: f32 = 14;

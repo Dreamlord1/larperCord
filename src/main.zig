@@ -1,5 +1,8 @@
 const std = @import("std");
 const c = @import("c");
+
+// Os avisos do app (--stats, conexão) usam info: valem também no build otimizado.
+pub const std_options: std.Options = .{ .log_level = .info };
 const builtin_themes = @import("builtin_themes");
 const App = @import("app.zig").App;
 const Options = @import("app.zig").Options;

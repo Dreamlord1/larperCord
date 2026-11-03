@@ -3,9 +3,11 @@
 # por tema em todos os temas, no escuro e no claro. Não abre janela. Prints em qa-out/.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-zig build || exit 1
+# Debug (com as checagens de segurança), instalado à parte para não trocar
+# o executável de zig-out/ (que é ReleaseFast).
+zig build -Doptimize=debug -p .zig-cache/qa || exit 1
 rm -rf qa-out && mkdir -p qa-out
-bin=./zig-out/bin/larpercord
+bin=./.zig-cache/qa/bin/larpercord
 total_fail=0
 run() {
     local label="$1"; shift

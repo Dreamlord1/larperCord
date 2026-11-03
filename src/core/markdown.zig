@@ -10,13 +10,16 @@ pub const Flags = packed struct(u8) {
     spoiler: bool = false,
     code: bool = false,
     link: bool = false,
-    _pad: u2 = 0,
+    /// Bloco de código (```): cada linha do texto é uma linha na tela.
+    block: bool = false,
+    _pad: u1 = 0,
 };
 
 pub const Mention = union(enum) {
     none,
     user: Id,
     channel: Id,
+    role: Id,
 };
 
 pub const Span = struct {
@@ -41,6 +44,25 @@ pub fn parse(gpa: std.mem.Allocator, s: []const u8) ![]Span {
 
     while (i < s.len) {
         const rest = s[i..];
+        // Bloco de código: ```linguagem\n…```. A linguagem não aparece.
+        if (std.mem.startsWith(u8, rest, "```")) {
+            if (std.mem.indexOfPos(u8, s, i + 3, "```")) |close| {
+                try Flush.run(&out, gpa, s, run_start, i, flags);
+                var start = i + 3;
+                if (std.mem.indexOfScalarPos(u8, s, start, '\n')) |nl| {
+                    const lang = s[start..nl];
+                    if (nl < close and lang.len <= 16 and std.mem.indexOfScalar(u8, lang, ' ') == null) start = nl + 1;
+                }
+                var end = close;
+                if (end > start and s[end - 1] == '\n') end -= 1;
+                if (end > start) try out.append(gpa, .{ .text = s[start..end], .flags = .{ .code = true, .block = true } });
+                i = close + 3;
+                // A quebra logo depois do ``` não vira linha em branco.
+                if (i < s.len and s[i] == '\n') i += 1;
+                run_start = i;
+                continue;
+            }
+        }
         // Código inline: nada dentro dele é interpretado.
         if (rest[0] == '`') {
             if (std.mem.indexOfScalarPos(u8, s, i + 1, '`')) |close| {
@@ -53,18 +75,20 @@ pub fn parse(gpa: std.mem.Allocator, s: []const u8) ![]Span {
                 continue;
             }
         }
-        // Menções: <@123>, <@!123>, <#123>.
+        // Menções: <@123>, <@!123>, <@&123> (cargo), <#123>.
         if (rest[0] == '<' and rest.len > 3 and (rest[1] == '@' or rest[1] == '#')) {
             if (std.mem.indexOfScalar(u8, rest, '>')) |close| {
                 const is_channel = rest[1] == '#';
                 var digits = rest[2..close];
                 if (digits.len > 0 and digits[0] == '!') digits = digits[1..];
+                const is_role = digits.len > 0 and digits[0] == '&';
+                if (is_role) digits = digits[1..];
                 if (std.fmt.parseInt(Id, digits, 10)) |id| {
                     try Flush.run(&out, gpa, s, run_start, i, flags);
                     try out.append(gpa, .{
                         .text = rest[0 .. close + 1],
                         .flags = flags,
-                        .mention = if (is_channel) .{ .channel = id } else .{ .user = id },
+                        .mention = if (is_channel) .{ .channel = id } else if (is_role) .{ .role = id } else .{ .user = id },
                     });
                     i += close + 1;
                     run_start = i;
@@ -131,6 +155,16 @@ test "estilos, código, menção e link" {
     try std.testing.expectEqual(@as(Id, 42), spans[5].mention.user);
     try std.testing.expect(spans[7].flags.link);
     try std.testing.expectEqualStrings(" snake_case", spans[8].text);
+}
+
+test "bloco de código e menção a cargo" {
+    const a = std.testing.allocator;
+    const spans = try parse(a, "regras:\n```md\n# um\n# dois\n```\n<@&7> **ok**");
+    defer a.free(spans);
+    try std.testing.expectEqualStrings("regras:\n", spans[0].text);
+    try std.testing.expect(spans[1].flags.block);
+    try std.testing.expectEqualStrings("# um\n# dois", spans[1].text);
+    try std.testing.expectEqual(@as(Id, 7), spans[2].mention.role);
 }
 
 test "spoiler e riscado" {

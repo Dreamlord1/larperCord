@@ -1,4 +1,4 @@
-//! Imagens dos anexos: uma thread baixa e decodifica (stb_image), a thread
+//! Imagens dos anexos: threads de mídia baixam e decodificam (stb_image), a thread
 //! principal só cria a textura. Pede ao proxy de mídia do Discord a imagem
 //! já no tamanho em que vai aparecer (menos rede e menos memória), guarda as
 //! texturas num cache com limite e solta o que não é visto há um tempo.
@@ -20,24 +20,47 @@ const budget_bytes: usize = 96 * 1024 * 1024;
 const idle_ms: i64 = 120_000;
 /// Maior arquivo que a gente baixa (o Discord aceita até 10 MB sem Nitro).
 const max_download: usize = 32 * 1024 * 1024;
+/// Limite de um GIF já reduzido: passando disso, pula quadros (o tempo
+/// total continua o mesmo, só fica menos fluido).
+const max_gif_bytes: usize = 48 * 1024 * 1024;
+const max_gif_frames: usize = 500;
+const workers = 4;
 
 pub const Tex = struct {
     ref: c.ImTextureRef,
     w: u16,
     h: u16,
+    /// Tem mais de um quadro (GIF animado).
+    animated: bool = false,
 };
 
 pub const Lookup = union(enum) { loading, ready: Tex, failed };
 
 const State = enum { loading, ready, failed };
 
+const Frame = struct {
+    tex: *c.SDL_Texture,
+    /// Fim deste quadro, em ms desde o começo da animação.
+    end_ms: u32,
+};
+
 const Entry = struct {
     state: State = .loading,
-    tex: ?*c.SDL_Texture = null,
+    frames: []Frame = &.{},
     w: u16 = 0,
     h: u16 = 0,
     bytes: usize = 0,
     used_ms: i64 = 0,
+
+    fn free(e: *Entry) void {
+        for (e.frames) |f| c.SDL_DestroyTexture(f.tex);
+        if (e.frames.len > 0) alloc.free(e.frames);
+        e.frames = &.{};
+    }
+
+    fn total(e: *const Entry) u32 {
+        return if (e.frames.len == 0) 0 else e.frames[e.frames.len - 1].end_ms;
+    }
 };
 
 const Job = struct {
@@ -47,11 +70,33 @@ const Job = struct {
     max_h: u16,
 };
 
-const Result = struct {
-    key: []u8,
-    pixels: ?[*]u8 = null,
+/// Quadros decodificados (RGBA, w×h cada), no c_allocator.
+const Pixels = struct {
+    frames: []PixFrame = &.{},
     w: u16 = 0,
     h: u16 = 0,
+
+    fn deinit(p: Pixels) void {
+        for (p.frames) |f| alloc.free(f.data);
+        if (p.frames.len > 0) alloc.free(p.frames);
+    }
+
+    /// Uma imagem só.
+    fn single(data: []u8, w: usize, h: usize) Pixels {
+        const fr = alloc.alloc(PixFrame, 1) catch {
+            alloc.free(data);
+            return .{};
+        };
+        fr[0] = .{ .data = data, .delay_ms = 0 };
+        return .{ .frames = fr, .w = @intCast(w), .h = @intCast(h) };
+    }
+};
+
+const PixFrame = struct { data: []u8, delay_ms: u32 };
+
+const Result = struct {
+    key: []u8,
+    px: Pixels = .{},
 };
 
 pub const Cache = struct {
@@ -60,10 +105,15 @@ pub const Cache = struct {
     map: std.StringHashMapUnmanaged(Entry) = .empty,
     jobs: Queue(Job),
     results: Queue(Result),
-    thread: ?*c.SDL_Thread = null,
+    /// Downloads em paralelo: com uma só, os avatares de uma lista de
+    /// membros enfileiram e os ícones dos servidores demoram a aparecer.
+    threads: [workers]?*c.SDL_Thread = @splat(null),
     stopping: std.atomic.Value(bool) = .init(false),
     bytes: usize = 0,
     now_ms: i64 = 0,
+    /// Quando o próximo quadro de um GIF na tela vence (o laço do app acorda
+    /// nessa hora em vez de redesenhar sem parar). Zerado a cada quadro.
+    next_frame_ms: i64 = std.math.maxInt(i64),
 
     pub fn init(renderer: *c.SDL_Renderer, wake_type: u32) !Cache {
         return .{
@@ -76,20 +126,23 @@ pub const Cache = struct {
 
     /// Começa a thread (depois de o Cache estar no lugar definitivo).
     pub fn start(cache: *Cache) !void {
-        cache.thread = c.SDL_CreateThread(worker, "media", cache) orelse return error.SdlThread;
+        if (curl_mutex == null) curl_mutex = c.SDL_CreateMutex() orelse return error.SdlMutex;
+        for (&cache.threads) |*t| t.* = c.SDL_CreateThread(worker, "media", cache) orelse return error.SdlThread;
     }
 
     pub fn deinit(cache: *Cache) void {
         cache.stopping.store(true, .release);
-        c.SDL_LockMutex(cache.jobs.mutex);
-        c.SDL_SignalCondition(cache.jobs.cond);
-        c.SDL_UnlockMutex(cache.jobs.mutex);
-        if (cache.thread) |t| c.SDL_WaitThread(t, null);
+        cache.jobs.wakeAll();
+        for (cache.threads) |th| if (th) |t| c.SDL_WaitThread(t, null);
+        if (curl_inited) {
+            c.curl_global_cleanup();
+            curl_inited = false;
+        }
         for (cache.jobs.items.items) |jb| freeJob(jb);
         _ = cache.pump();
         var it = cache.map.iterator();
         while (it.next()) |e| {
-            if (e.value_ptr.tex) |t| c.SDL_DestroyTexture(t);
+            e.value_ptr.free();
             alloc.free(e.key_ptr.*);
         }
         cache.map.deinit(alloc);
@@ -98,7 +151,16 @@ pub const Cache = struct {
     }
 
     /// A imagem de `url` cabendo em max_w×max_h. Pede se ainda não pediu.
+    /// GIFs tocam sozinhos; `getStill` mostra o primeiro quadro.
     pub fn get(cache: *Cache, url: []const u8, max_w: f32, max_h: f32) Lookup {
+        return cache.getEx(url, max_w, max_h, true);
+    }
+
+    pub fn getStill(cache: *Cache, url: []const u8, max_w: f32, max_h: f32) Lookup {
+        return cache.getEx(url, max_w, max_h, false);
+    }
+
+    pub fn getEx(cache: *Cache, url: []const u8, max_w: f32, max_h: f32, play: bool) Lookup {
         // Tamanhos arredondados: quem pede 301 ou 330 de largura usa a mesma.
         const bw = bucket(max_w);
         const bh = bucket(max_h);
@@ -109,7 +171,7 @@ pub const Cache = struct {
             return switch (e.state) {
                 .loading => .loading,
                 .failed => .failed,
-                .ready => .{ .ready = .{ .ref = .{ ._TexData = null, ._TexID = @intFromPtr(e.tex.?) }, .w = e.w, .h = e.h } },
+                .ready => .{ .ready = .{ .ref = .{ ._TexData = null, ._TexID = @intFromPtr(cache.frameOf(e, play)) }, .w = e.w, .h = e.h, .animated = e.frames.len > 1 } },
             };
         }
         const owned = alloc.dupe(u8, key) catch return .failed;
@@ -127,6 +189,19 @@ pub const Cache = struct {
         return .loading;
     }
 
+    /// O quadro de agora (todos os GIFs andam no mesmo relógio) e quando
+    /// o próximo vence.
+    fn frameOf(cache: *Cache, e: *const Entry, play: bool) *c.SDL_Texture {
+        if (e.frames.len == 1 or !play) return e.frames[0].tex;
+        const total = e.total();
+        const t: u32 = @intCast(@mod(cache.now_ms, @as(i64, total)));
+        for (e.frames) |f| if (t < f.end_ms) {
+            cache.next_frame_ms = @min(cache.next_frame_ms, cache.now_ms + (f.end_ms - t));
+            return f.tex;
+        };
+        return e.frames[0].tex;
+    }
+
     /// Alguma imagem ainda está baixando (os prints esperam por isso).
     pub fn busy(cache: *const Cache) bool {
         var it = cache.map.valueIterator();
@@ -141,25 +216,38 @@ pub const Cache = struct {
         defer batch.deinit(alloc);
         cache.results.drain(&batch);
         for (batch.items) |r| {
-            defer alloc.free(r.key);
-            const e = cache.map.getPtr(r.key) orelse {
-                if (r.pixels) |p| alloc.free(p[0 .. @as(usize, r.w) * r.h * 4]);
+            defer {
+                alloc.free(r.key);
+                r.px.deinit();
+            }
+            const e = cache.map.getPtr(r.key) orelse continue;
+            if (r.px.frames.len == 0) {
+                e.state = .failed;
                 continue;
-            };
-            const px = r.pixels orelse {
+            }
+            const frames = alloc.alloc(Frame, r.px.frames.len) catch {
                 e.state = .failed;
                 continue;
             };
-            defer alloc.free(px[0 .. @as(usize, r.w) * r.h * 4]);
-            const tex = c.SDL_CreateTexture(cache.renderer, c.SDL_PIXELFORMAT_RGBA32, c.SDL_TEXTUREACCESS_STATIC, r.w, r.h) orelse {
+            var n: usize = 0;
+            var end: u32 = 0;
+            for (r.px.frames) |pf| {
+                const tex = c.SDL_CreateTexture(cache.renderer, c.SDL_PIXELFORMAT_RGBA32, c.SDL_TEXTUREACCESS_STATIC, r.px.w, r.px.h) orelse break;
+                _ = c.SDL_UpdateTexture(tex, null, pf.data.ptr, @as(c_int, r.px.w) * 4);
+                _ = c.SDL_SetTextureScaleMode(tex, c.SDL_SCALEMODE_LINEAR);
+                _ = c.SDL_SetTextureBlendMode(tex, c.SDL_BLENDMODE_BLEND);
+                end += @max(pf.delay_ms, 1);
+                frames[n] = .{ .tex = tex, .end_ms = end };
+                n += 1;
+            }
+            if (n == 0) {
+                alloc.free(frames);
                 e.state = .failed;
                 continue;
-            };
-            _ = c.SDL_UpdateTexture(tex, null, px, @as(c_int, r.w) * 4);
-            _ = c.SDL_SetTextureScaleMode(tex, c.SDL_SCALEMODE_LINEAR);
-            _ = c.SDL_SetTextureBlendMode(tex, c.SDL_BLENDMODE_BLEND);
-            e.* = .{ .state = .ready, .tex = tex, .w = r.w, .h = r.h, .bytes = @as(usize, r.w) * r.h * 4, .used_ms = cache.now_ms };
-            cache.bytes += e.bytes;
+            }
+            const bytes = @as(usize, r.px.w) * r.px.h * 4 * n;
+            e.* = .{ .state = .ready, .frames = alloc.realloc(frames, n) catch frames[0..n], .w = r.px.w, .h = r.px.h, .bytes = bytes, .used_ms = cache.now_ms };
+            cache.bytes += bytes;
         }
         cache.evict();
         return batch.items.len > 0;
@@ -183,8 +271,8 @@ pub const Cache = struct {
                 }
             }
             const k = oldest orelse return;
-            const kv = cache.map.fetchRemove(k).?;
-            if (kv.value.tex) |t| c.SDL_DestroyTexture(t);
+            var kv = cache.map.fetchRemove(k).?;
+            kv.value.free();
             cache.bytes -= kv.value.bytes;
             alloc.free(kv.key);
         }
@@ -199,27 +287,18 @@ pub const Cache = struct {
 
     fn worker(data: ?*anyopaque) callconv(.c) c_int {
         const cache: *Cache = @ptrCast(@alignCast(data.?));
-        var pending: std.ArrayList(Job) = .empty;
-        defer {
-            for (pending.items) |jb| freeJob(jb);
-            pending.deinit(alloc);
-        }
-        var fresh: std.ArrayList(Job) = .empty;
-        defer fresh.deinit(alloc);
         var curl: ?*c.CURL = null;
-        defer if (curl) |h| {
-            c.curl_easy_cleanup(h);
-            c.curl_global_cleanup();
-        };
+        defer if (curl) |h| c.curl_easy_cleanup(h);
         while (!cache.stopping.load(.acquire)) {
-            cache.jobs.waitDrain(&fresh, if (pending.items.len == 0) 1000 else 0);
-            pending.appendSlice(alloc, fresh.items) catch {};
-            fresh.clearRetainingCapacity();
             // O pedido mais novo primeiro: é o que está na tela agora.
-            const jb = pending.pop() orelse continue;
+            const jb = cache.jobs.waitPop(1000) orelse continue;
             defer freeJob(jb);
             const res = load(&curl, jb, &cache.stopping);
-            cache.results.push(.{ .key = alloc.dupe(u8, jb.key) catch continue, .pixels = res.pixels, .w = res.w, .h = res.h });
+            const key = alloc.dupe(u8, jb.key) catch {
+                res.deinit();
+                continue;
+            };
+            cache.results.push(.{ .key = key, .px = res });
             platform.Window.wake(cache.wake_type, .media);
         }
         return 0;
@@ -231,8 +310,6 @@ fn bucket(v: f32) u16 {
     const x = @ceil(@max(v, 16) / step) * step;
     return @intFromFloat(@min(x, 4096));
 }
-
-const Pixels = struct { pixels: ?[*]u8 = null, w: u16 = 0, h: u16 = 0 };
 
 fn load(curl: *?*c.CURL, jb: Job, stop: *std.atomic.Value(bool)) Pixels {
     if (std.mem.startsWith(u8, jb.url, "demo:")) return demo(jb);
@@ -270,10 +347,23 @@ fn abortCb(ud: ?*anyopaque, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t, _
     return @intFromBool(stop.load(.acquire));
 }
 
+/// O libcurl só é iniciado quando a primeira imagem de verdade é pedida
+/// (a demonstração não usa rede). Várias threads chegam aqui ao mesmo tempo.
+var curl_mutex: ?*c.SDL_Mutex = null;
+var curl_inited = false;
+
+fn curlGlobalInit() void {
+    c.SDL_LockMutex(curl_mutex);
+    defer c.SDL_UnlockMutex(curl_mutex);
+    if (curl_inited) return;
+    _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
+    curl_inited = true;
+}
+
 fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8), stop: *std.atomic.Value(bool)) bool {
     if (!allowedHost(jb.url)) return false;
     if (curl.* == null) {
-        _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
+        curlGlobalInit();
         curl.* = c.curl_easy_init();
     }
     const h = curl.* orelse return false;
@@ -301,9 +391,22 @@ fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8), stop: *std.atomic
     return status == 200 and out.items.len > 0;
 }
 
+/// Tamanho final de uma imagem sw×sh cabendo em max_w×max_h (nunca aumenta).
+fn fit(sw: usize, sh: usize, max_w: u16, max_h: u16) [2]usize {
+    const scale = @min(1.0, @min(@as(f32, @floatFromInt(max_w)) / @as(f32, @floatFromInt(sw)), @as(f32, @floatFromInt(max_h)) / @as(f32, @floatFromInt(sh))));
+    return .{
+        @max(1, @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(sw)) * scale)))),
+        @max(1, @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(sh)) * scale)))),
+    };
+}
+
 /// Decodifica e reduz para caber em max_w×max_h. Os pixels voltam no
-/// c_allocator (RGBA, 4 bytes por pixel).
+/// c_allocator (RGBA, 4 bytes por pixel). GIF animado vira vários quadros.
 fn decode(data: []const u8, max_w: u16, max_h: u16) Pixels {
+    if (data.len > 6 and std.mem.startsWith(u8, data, "GIF8")) {
+        const anim_px = decodeGif(data, max_w, max_h);
+        if (anim_px.frames.len > 0) return anim_px;
+    }
     var w: c_int = 0;
     var h: c_int = 0;
     var comp: c_int = 0;
@@ -312,15 +415,88 @@ fn decode(data: []const u8, max_w: u16, max_h: u16) Pixels {
     if (w <= 0 or h <= 0 or w > 16384 or h > 16384) return .{};
     const sw: usize = @intCast(w);
     const sh: usize = @intCast(h);
-    const scale = @min(1.0, @min(@as(f32, @floatFromInt(max_w)) / @as(f32, @floatFromInt(sw)), @as(f32, @floatFromInt(max_h)) / @as(f32, @floatFromInt(sh))));
-    const dw: usize = @max(1, @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(sw)) * scale))));
-    const dh: usize = @max(1, @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(sh)) * scale))));
-    const out = alloc.alloc(u8, dw * dh * 4) catch return .{};
+    const dims = fit(sw, sh, max_w, max_h);
+    const out = alloc.alloc(u8, dims[0] * dims[1] * 4) catch return .{};
     const src = px[0 .. sw * sh * 4];
-    if (dw == sw and dh == sh) {
+    if (dims[0] == sw and dims[1] == sh) {
         @memcpy(out, src);
-    } else resize(src, sw, sh, out, dw, dh);
-    return .{ .pixels = out.ptr, .w = @intCast(dw), .h = @intCast(dh) };
+    } else resize(src, sw, sh, out, dims[0], dims[1]);
+    return Pixels.single(out, dims[0], dims[1]);
+}
+
+const GifSink = struct {
+    max_w: u16,
+    max_h: u16,
+    frames: std.ArrayList(PixFrame) = .empty,
+    w: usize = 0,
+    h: usize = 0,
+    /// Guarda 1 de cada `step` quadros (sobe quando passa do limite).
+    step: usize = 1,
+    seen: usize = 0,
+    failed: bool = false,
+
+    fn bytes(g: *const GifSink) usize {
+        return g.frames.items.len * g.w * g.h * 4;
+    }
+
+    /// Junta os quadros dois a dois (somando o tempo) para caber no limite.
+    fn halve(g: *GifSink) void {
+        var i: usize = 0;
+        var o: usize = 0;
+        while (i < g.frames.items.len) : (i += 2) {
+            var f = g.frames.items[i];
+            if (i + 1 < g.frames.items.len) {
+                f.delay_ms += g.frames.items[i + 1].delay_ms;
+                alloc.free(g.frames.items[i + 1].data);
+            }
+            g.frames.items[o] = f;
+            o += 1;
+        }
+        g.frames.shrinkRetainingCapacity(o);
+        g.step *= 2;
+    }
+
+    fn cb(ud: ?*anyopaque, rgba: [*c]const u8, w: c_int, h: c_int, delay: c_int) callconv(.c) c_int {
+        const g: *GifSink = @ptrCast(@alignCast(ud.?));
+        if (w <= 0 or h <= 0 or w > 4096 or h > 4096) return 0;
+        const sw: usize = @intCast(w);
+        const sh: usize = @intCast(h);
+        // Navegadores tratam atraso < 20 ms como 100 ms; fazemos igual.
+        const ms: u32 = if (delay < 20) 100 else @intCast(delay);
+        defer g.seen += 1;
+        if (g.seen % g.step != 0) {
+            if (g.frames.items.len > 0) g.frames.items[g.frames.items.len - 1].delay_ms += ms;
+            return 1;
+        }
+        const dims = fit(sw, sh, g.max_w, g.max_h);
+        g.w = dims[0];
+        g.h = dims[1];
+        const out = alloc.alloc(u8, dims[0] * dims[1] * 4) catch {
+            g.failed = true;
+            return 0;
+        };
+        const src = rgba[0 .. sw * sh * 4];
+        if (dims[0] == sw and dims[1] == sh) @memcpy(out, src) else resize(src, sw, sh, out, dims[0], dims[1]);
+        g.frames.append(alloc, .{ .data = out, .delay_ms = ms }) catch {
+            alloc.free(out);
+            g.failed = true;
+            return 0;
+        };
+        if (g.bytes() > max_gif_bytes or g.frames.items.len > max_gif_frames) g.halve();
+        return 1;
+    }
+};
+
+fn decodeGif(data: []const u8, max_w: u16, max_h: u16) Pixels {
+    var sink: GifSink = .{ .max_w = max_w, .max_h = max_h };
+    _ = c.larper_gif_frames(data.ptr, @intCast(data.len), GifSink.cb, &sink);
+    if (sink.frames.items.len == 0) return .{};
+    const frames = sink.frames.toOwnedSlice(alloc) catch {
+        for (sink.frames.items) |f| alloc.free(f.data);
+        sink.frames.deinit(alloc);
+        return .{};
+    };
+    return .{ .frames = frames, .w = @intCast(sink.w), .h = @intCast(sink.h) };
 }
 
 /// Redução por média de área (sem serrilhado), com alpha pré-multiplicado
@@ -361,7 +537,11 @@ fn resize(src: []const u8, sw: usize, sh: usize, dst: []u8, dw: usize, dh: usize
 // --- Imagens da demonstração (geradas, para não pesar no executável) -----------
 
 fn demo(jb: Job) Pixels {
-    const which = std.fmt.parseInt(u8, jb.url[5..], 10) catch 1;
+    const spec = jb.url[5..];
+    if (std.mem.startsWith(u8, spec, "av:")) return demoAvatar(std.fmt.parseInt(u64, spec[3..], 10) catch 0, jb, false);
+    if (std.mem.startsWith(u8, spec, "icon:")) return demoAvatar(std.fmt.parseInt(u64, spec[5..], 10) catch 0, jb, true);
+    if (std.mem.eql(u8, spec, "gif")) return demoGif(jb);
+    const which = std.fmt.parseInt(u8, spec, 10) catch 1;
     const full: [2]f32 = switch (which) {
         2 => .{ 720, 720 },
         3 => .{ 960, 540 },
@@ -383,7 +563,96 @@ fn demo(jb: Job) Pixels {
         for (0..3) |i| o[i] = @intFromFloat(std.math.clamp(col[i], 0, 1) * 255);
         o[3] = 255;
     };
-    return .{ .pixels = out.ptr, .w = @intCast(w), .h = @intCast(h) };
+    return Pixels.single(out, w, h);
+}
+
+fn hsv(h: f32, sat: f32, v: f32) [3]f32 {
+    const k = [3]f32{ 5, 3, 1 };
+    var out: [3]f32 = undefined;
+    for (0..3) |i| {
+        const t = @mod(k[i] + h * 6, 6);
+        out[i] = v - v * sat * std.math.clamp(@min(t, 4 - t), 0, 1);
+    }
+    return out;
+}
+
+fn put(o: []u8, col: [3]f32) void {
+    for (0..3) |i| o[i] = @intFromFloat(std.math.clamp(col[i], 0, 1) * 255);
+    o[3] = 255;
+}
+
+/// Avatar (ou ícone de servidor) da demonstração: degradê com uma forma,
+/// diferente para cada semente.
+fn demoAvatar(seed: u64, jb: Job, icon: bool) Pixels {
+    const size: usize = @min(@min(jb.max_w, jb.max_h), 128);
+    const out = alloc.alloc(u8, size * size * 4) catch return .{};
+    var prng = std.Random.DefaultPrng.init(seed *% 0x9E3779B97F4A7C15 +% @intFromBool(icon));
+    const r = prng.random();
+    const h0 = r.float(f32);
+    const h1 = h0 + 0.12 + r.float(f32) * 0.25;
+    // Ícone de servidor nunca é o rostinho.
+    const kind = if (icon) 1 + r.uintLessThan(u8, 2) else r.uintLessThan(u8, 3);
+    const fs: f32 = @floatFromInt(size);
+    for (0..size) |y| for (0..size) |x| {
+        const u = @as(f32, @floatFromInt(x)) / fs;
+        const v = @as(f32, @floatFromInt(y)) / fs;
+        var col = mix3(hsv(h0, 0.55, 0.95), hsv(h1, 0.75, 0.55), (u + v) / 2);
+        const dx = u - 0.5;
+        const dy = v - 0.5;
+        switch (kind) {
+            // Rosto simples: cabeça e ombros.
+            0 => {
+                const head = (dx * dx + (dy + 0.08) * (dy + 0.08)) < 0.035;
+                const body = ((dx * dx) / 0.09 + ((v - 0.95) * (v - 0.95)) / 0.06) < 1;
+                if (head or body) col = mix3(col, .{ 1, 1, 1 }, 0.82);
+            },
+            // Anéis.
+            1 => {
+                const d = @sqrt(dx * dx + dy * dy);
+                if (@mod(d * 9, 1) < 0.35) col = mix3(col, hsv(h1 + 0.4, 0.4, 1), 0.5);
+            },
+            // Losango.
+            else => if (@abs(dx) + @abs(dy) < 0.3) {
+                col = mix3(col, .{ 1, 1, 1 }, 0.75);
+            },
+        }
+        put(out[(y * size + x) * 4 ..][0..4], col);
+    };
+    return Pixels.single(out, size, size);
+}
+
+/// GIF da demonstração: uma bolinha dando a volta, 24 quadros.
+fn demoGif(jb: Job) Pixels {
+    const n = 24;
+    const dims = fit(480, 270, jb.max_w, jb.max_h);
+    const w = dims[0];
+    const h = dims[1];
+    const frames = alloc.alloc(PixFrame, n) catch return .{};
+    for (0..n) |f| {
+        const out = alloc.alloc(u8, w * h * 4) catch {
+            for (frames[0..f]) |fr| alloc.free(fr.data);
+            alloc.free(frames);
+            return .{};
+        };
+        const t = @as(f32, @floatFromInt(f)) / n * std.math.tau;
+        for (0..h) |y| for (0..w) |x| {
+            const u = @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(w));
+            const v = @as(f32, @floatFromInt(y)) / @as(f32, @floatFromInt(h));
+            var col = mix3(.{ 0.12, 0.05, 0.25 }, .{ 0.02, 0.15, 0.3 }, v);
+            for (0..5) |i| {
+                const ph = t - @as(f32, @floatFromInt(i)) * 0.35;
+                const bx = 0.5 + 0.28 * @cos(ph);
+                const by = 0.5 + 0.36 * @sin(ph);
+                const dx = (u - bx) * 1.78;
+                const dy = v - by;
+                const glow = @exp(-(dx * dx + dy * dy) * 260) * (1 - @as(f32, @floatFromInt(i)) * 0.18);
+                col = mix3(col, hsv(0.78 + 0.05 * @as(f32, @floatFromInt(i)), 0.6, 1), std.math.clamp(glow, 0, 1));
+            }
+            put(out[(y * w + x) * 4 ..][0..4], col);
+        };
+        frames[f] = .{ .data = out, .delay_ms = 50 };
+    }
+    return .{ .frames = frames, .w = @intCast(w), .h = @intCast(h) };
 }
 
 fn mix3(a: [3]f32, b: [3]f32, k: f32) [3]f32 {

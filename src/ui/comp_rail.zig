@@ -96,10 +96,21 @@ pub const IconStyle = enum { fill, soft, outline };
 
 var icon_style: IconStyle = .fill;
 
+/// Ícone do servidor (a imagem dele, se tiver e já tiver chegado).
+fn guildPicture(ctx: *d.Ctx, dl: *c.ImDrawList, g: *const types.Guild, r: d.Rect, radius: f32) bool {
+    const h = g.icon orelse return false;
+    var ub: [160]u8 = undefined;
+    return w.picture(ctx, dl, w.cdnUrl(&ub, .guild, g.id, h), r, radius, 1);
+}
+
 fn glyph(ctx: *d.Ctx, dl: *c.ImDrawList, g: *const types.Guild, cx: f32, cy: f32, size: f32, shape: w.Shape, active: bool) void {
     const color = ctx.th.role(g.color);
     const ir: d.Rect = .{ .x = cx - size / 2, .y = cy - size / 2, .w = size, .h = size };
     const radius = w.shapeRadius(shape, size);
+    if (guildPicture(ctx, dl, g, ir, radius)) {
+        if (icon_style == .outline) d.border(dl, ir, color.alpha(if (active) 1 else 0.45), radius, if (active) 2 else 1.2);
+        return;
+    }
     const fs = size * (if (g.acronym.len >= 3) @as(f32, 0.3) else 0.36);
     const font = ctx.ui.get(.semibold);
     const tw = d.width(font, fs, g.acronym);
@@ -143,22 +154,25 @@ fn icon(ctx: *d.Ctx, dl: *c.ImDrawList, ref: ?GuildRef, cx: f32, y: f32, size: f
         const fs = size * (if (g.acronym.len >= 3) @as(f32, 0.29) else 0.355);
         const font = ctx.ui.get(.semibold);
         const tw = d.width(font, fs, g.acronym);
-        const ink = switch (icon_style) {
-            .fill => blk: {
-                d.rect(dl, dr, ctx.col(.elevated).mix(color.mix(ctx.col(.elevated), 0.15), fill), radius);
-                break :blk ctx.col(.text).mix(d.Rgba.white, fill);
-            },
-            .soft => blk: {
-                d.rect(dl, dr, ctx.col(.elevated).mix(color.alpha(0.35), fill), radius);
-                break :blk ctx.col(.muted).mix(color.mix(ctx.col(.text), 0.3), fill);
-            },
-            .outline => blk: {
-                d.rect(dl, dr, ctx.col(.elevated), radius);
-                d.border(dl, dr, ctx.col(.border).mix(color, fill), radius, 1 + fill);
-                break :blk ctx.col(.muted).mix(color.mix(ctx.col(.text), 0.2), fill);
-            },
-        };
-        d.text(dl, font, fs, cx - tw / 2, y + size / 2 - fs * 0.62, ink, g.acronym);
+        const pic = guildPicture(ctx, dl, g, dr, radius);
+        if (!pic) {
+            const ink = switch (icon_style) {
+                .fill => blk: {
+                    d.rect(dl, dr, ctx.col(.elevated).mix(color.mix(ctx.col(.elevated), 0.15), fill), radius);
+                    break :blk ctx.col(.text).mix(d.Rgba.white, fill);
+                },
+                .soft => blk: {
+                    d.rect(dl, dr, ctx.col(.elevated).mix(color.alpha(0.35), fill), radius);
+                    break :blk ctx.col(.muted).mix(color.mix(ctx.col(.text), 0.3), fill);
+                },
+                .outline => blk: {
+                    d.rect(dl, dr, ctx.col(.elevated), radius);
+                    d.border(dl, dr, ctx.col(.border).mix(color, fill), radius, 1 + fill);
+                    break :blk ctx.col(.muted).mix(color.mix(ctx.col(.text), 0.2), fill);
+                },
+            };
+            d.text(dl, font, fs, cx - tw / 2, y + size / 2 - fs * 0.62, ink, g.acronym);
+        }
         if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.bottom() - 16, g.mentions);
 
         const target: f32 = if (selected) size * 0.83 else if (hb.hovered) size * 0.42 else if (g.unread) 8 else 0;

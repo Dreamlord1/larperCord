@@ -30,6 +30,12 @@ pub const Gateway = struct {
     next_latency_ms: i64 = 0,
     nonce_replies: std.ArrayList(struct { at_ms: i64, msg: types.Message }) = .empty,
     history_replies: std.ArrayList(struct { at_ms: i64, channel: Id }) = .empty,
+    /// Servidores cujos cargos já foram mandados.
+    roles_sent: u64 = 0,
+    /// LARPER_FLOOD=N: N trocas de presença por segundo (teste de carga,
+    /// como um servidor grande).
+    flood_per_s: u32 = 0,
+    next_flood_ms: i64 = std.math.maxInt(i64),
 
     pub fn start(g: *Gateway) !void {
         g.thread = c.SDL_CreateThread(threadMain, "gateway", g) orelse return error.SdlThread;
@@ -52,8 +58,13 @@ pub const Gateway = struct {
 
     fn run(g: *Gateway) !void {
         g.emit(.{ .ready = try buildReady() });
+        for (relations) |rel| g.emit(.{ .relationship = .{ .user = rel.user, .kind = rel.kind } });
         g.emit(.{ .status = .ready });
         g.next_live_ms = nowMs() + 6000;
+        if (c.SDL_getenv("LARPER_FLOOD")) |f| {
+            g.flood_per_s = std.fmt.parseInt(u32, std.mem.span(f), 10) catch 0;
+            if (g.flood_per_s > 0) g.next_flood_ms = nowMs() + 500;
+        }
         g.next_latency_ms = nowMs() + 1500;
 
         var cmds: std.ArrayList(ev.Command) = .empty;
@@ -88,6 +99,20 @@ pub const Gateway = struct {
                     try g.history_replies.append(alloc, .{ .at_ms = nowMs() + 140, .channel = ch });
                 },
                 .typing => {},
+                .subscribe_guild => |sg| try g.memberList(sg.guild),
+                .relationship => |r| g.emit(.{ .relationship = .{ .user = r.user, .kind = if (r.accept) .friend else .none } }),
+                .create_dm => |u| {
+                    const seed = for (users) |x| {
+                        if (x.id == u) break x;
+                    } else continue;
+                    g.emit(.{ .channel_upsert = .{
+                        .id = 900_100 + u,
+                        .guild = 0,
+                        .name = try alloc.dupe(u8, seed.name),
+                        .topic = try alloc.dupe(u8, ""),
+                        .recipient = u,
+                    } });
+                },
                 .join_voice => |ch| g.emit(.{ .voice_state = .{ .channel = ch, .user = me_id } }),
             };
             cmds.clearRetainingCapacity();
@@ -95,8 +120,72 @@ pub const Gateway = struct {
         }
     }
 
+    /// Lista de membros de um servidor da demonstração, no formato do
+    /// GUILD_MEMBER_LIST_UPDATE: online por cargo em destaque, depois offline.
+    fn memberList(g: *Gateway, gid: Id) !void {
+        if (gid < guildId(0)) return;
+        const gi: usize = @intCast((gid - guildId(0)) / 1000);
+        if (gi >= guilds.len) return;
+        const role_ids = [_]Id{ gid + 901, gid + 902, gid + 903 };
+        if (g.roles_sent & (@as(u64, 1) << @intCast(gi)) == 0) {
+            g.roles_sent |= @as(u64, 1) << @intCast(gi);
+            const rs = try alloc.alloc(types.Role, demo_roles.len);
+            for (demo_roles, 0..) |r, i| rs[i] = .{ .id = role_ids[i], .guild = gid, .name = try alloc.dupe(u8, pick(r.name, r.name_en)), .color = r.color, .position = @intCast(3 - i) };
+            g.emit(.{ .roles = .{ .guild = gid, .roles = rs } });
+        }
+        // Quem está neste servidor e em qual cargo (0 = fundação, 1 = moderação, 2 = membro).
+        var rank: [users.len]?u8 = @splat(null);
+        for (users, 0..) |u, i| {
+            if (u.id != me_id and (u.id * 7 + gi) % 5 == 0) continue;
+            rank[i] = if (u.id == 1001 or (u.id == me_id and gi == 0)) 0 else if ((u.id + gi) % 3 == 0) 1 else 2;
+        }
+        var items: std.ArrayList(types.MemberItem) = .empty;
+        defer items.deinit(alloc);
+        var online: u32 = 0;
+        var total: u32 = 0;
+        // Grupos online (cargos 0 e 1 em destaque; o 2 cai em "online").
+        for ([_]u8{ 0, 1, 2 }) |want| {
+            var count: u32 = 0;
+            for (users, 0..) |u, i| if (rank[i] == want and u.status != .offline) {
+                count += 1;
+            };
+            if (count == 0) continue;
+            try items.append(alloc, .{ .group = .{ .id = if (want == 2) types.group_online else role_ids[want], .count = count } });
+            for (users, 0..) |u, i| if (rank[i] == want and u.status != .offline) {
+                try items.append(alloc, .{ .member = .{ .user = u.id, .info = demoInfo(role_ids, want) } });
+            };
+            online += count;
+        }
+        var offline: u32 = 0;
+        for (users, 0..) |u, i| if (rank[i] != null and u.status == .offline) {
+            offline += 1;
+        };
+        if (offline > 0) {
+            try items.append(alloc, .{ .group = .{ .id = types.group_offline, .count = offline } });
+            for (users, 0..) |u, i| if (rank[i] != null and u.status == .offline) {
+                try items.append(alloc, .{ .member = .{ .user = u.id, .info = demoInfo(role_ids, rank[i].?) } });
+            };
+        }
+        total = online + offline;
+        const ops = try alloc.alloc(types.MemberOp, 1);
+        ops[0] = .{ .kind = .sync, .index = 0, .end = 99, .items = try alloc.dupe(types.MemberItem, items.items) };
+        g.emit(.{ .member_list = .{ .guild = gid, .list_id = gid, .online = online, .total = total, .ops = ops } });
+    }
+
+    fn demoInfo(role_ids: [3]Id, rank: u8) types.MemberInfo {
+        var info: types.MemberInfo = .{ .color = demo_roles[rank].color };
+        // Todo mundo tem "Membros"; quem está acima tem também o próprio cargo.
+        if (rank < 2) {
+            info.roles[0] = role_ids[rank];
+            info.n_roles = 1;
+        }
+        info.roles[info.n_roles] = role_ids[2];
+        info.n_roles += 1;
+        return info;
+    }
+
     fn nextDeadline(g: *Gateway) i64 {
-        var d = @min(g.next_live_ms, g.next_latency_ms);
+        var d = @min(@min(g.next_live_ms, g.next_latency_ms), g.next_flood_ms);
         if (g.pending_typing) |t| d = @min(d, t.at_ms);
         for (g.nonce_replies.items) |r| d = @min(d, r.at_ms);
         for (g.history_replies.items) |r| d = @min(d, r.at_ms);
@@ -130,6 +219,16 @@ pub const Gateway = struct {
                 }
                 _ = g.history_replies.orderedRemove(i);
             } else i += 1;
+        }
+        if (now >= g.next_flood_ms) {
+            // Em rajadas de 10 ms, como chegam do gateway de verdade.
+            const n = @max(1, g.flood_per_s / 100);
+            const r = g.rng.random();
+            for (0..n) |_| {
+                const who = users[1 + r.uintLessThan(usize, users.len - 1)].id;
+                g.emit(.{ .presence_update = .{ .user = who, .status = @enumFromInt(r.uintLessThan(u8, 3)) } });
+            }
+            g.next_flood_ms = now + 10;
         }
         if (now >= g.next_latency_ms) {
             g.emit(.{ .latency = 38 + g.rng.random().uintLessThan(u32, 24) });
@@ -189,33 +288,59 @@ fn pick(pt: []const u8, en: ?[]const u8) []const u8 {
 
 const me_id: Id = 1000;
 
-const UserSeed = struct { id: Id, name: []const u8, role: u8, status: types.Status, activity: ?[]const u8 = null, activity_en: ?[]const u8 = null };
+const UserSeed = struct { id: Id, name: []const u8, role: u8, status: types.Status, activity: ?[]const u8 = null, activity_en: ?[]const u8 = null, avatar: bool = false };
 
 const users = [_]UserSeed{
-    .{ .id = 1000, .name = "rsha", .role = 0, .status = .online, .activity = "Programando em Zig", .activity_en = "Coding in Zig" },
-    .{ .id = 1001, .name = "ana.exe", .role = 1, .status = .online, .activity = "Ouvindo Spotify", .activity_en = "Listening to Spotify" },
-    .{ .id = 1002, .name = "brunão", .role = 2, .status = .dnd, .activity = "Jogando Hollow Knight", .activity_en = "Playing Hollow Knight" },
+    .{ .id = 1000, .name = "rsha", .role = 0, .status = .online, .activity = "Programando em Zig", .activity_en = "Coding in Zig", .avatar = true },
+    .{ .id = 1001, .name = "ana.exe", .role = 1, .status = .online, .activity = "Ouvindo Spotify", .activity_en = "Listening to Spotify", .avatar = true },
+    .{ .id = 1002, .name = "brunão", .role = 2, .status = .dnd, .activity = "Jogando Hollow Knight", .activity_en = "Playing Hollow Knight", .avatar = true },
     .{ .id = 1003, .name = "kaique", .role = 3, .status = .online },
-    .{ .id = 1004, .name = "lulu", .role = 4, .status = .idle, .activity = "Assistindo YouTube", .activity_en = "Watching YouTube" },
-    .{ .id = 1005, .name = "duda", .role = 5, .status = .online, .activity = "No Hyprland 🌸", .activity_en = "On Hyprland 🌸" },
+    .{ .id = 1004, .name = "lulu", .role = 4, .status = .idle, .activity = "Assistindo YouTube", .activity_en = "Watching YouTube", .avatar = true },
+    .{ .id = 1005, .name = "duda", .role = 5, .status = .online, .activity = "No Hyprland 🌸", .activity_en = "On Hyprland 🌸", .avatar = true },
     .{ .id = 1006, .name = "thiaguinho", .role = 6, .status = .idle },
-    .{ .id = 1007, .name = "mari", .role = 7, .status = .online, .activity = "Jogando Minecraft", .activity_en = "Playing Minecraft" },
+    .{ .id = 1007, .name = "mari", .role = 7, .status = .online, .activity = "Jogando Minecraft", .activity_en = "Playing Minecraft", .avatar = true },
     .{ .id = 1008, .name = "gustavo", .role = 2, .status = .offline },
-    .{ .id = 1009, .name = "nanda", .role = 3, .status = .offline },
+    .{ .id = 1009, .name = "nanda", .role = 3, .status = .offline, .avatar = true },
     .{ .id = 1010, .name = "pedro", .role = 5, .status = .offline },
     .{ .id = 1011, .name = "joão vitor", .role = 1, .status = .offline },
 };
 
-const GuildSeed = struct { name: []const u8, acronym: []const u8, color: u8, unread: bool = false, mentions: u16 = 0, name_en: ?[]const u8 = null, acronym_en: ?[]const u8 = null };
+const GuildSeed = struct { name: []const u8, acronym: []const u8, color: u8, unread: bool = false, mentions: u16 = 0, name_en: ?[]const u8 = null, acronym_en: ?[]const u8 = null, icon: bool = false };
+
+/// Cargos de cada servidor da demonstração (cor 0 = sem cor).
+const demo_roles = [_]struct { name: []const u8, name_en: []const u8, color: u32 }{
+    .{ .name = "Fundação", .name_en = "Founders", .color = 0xF0B232 },
+    .{ .name = "Moderação", .name_en = "Moderators", .color = 0x3BA55C },
+    .{ .name = "Membros", .name_en = "Members", .color = 0 },
+};
+
+/// Amigos, pedidos e bloqueados da demonstração.
+const relations = [_]struct { user: Id, kind: types.Relationship }{
+    .{ .user = 1001, .kind = .friend },
+    .{ .user = 1002, .kind = .friend },
+    .{ .user = 1003, .kind = .friend },
+    .{ .user = 1004, .kind = .friend },
+    .{ .user = 1005, .kind = .friend },
+    .{ .user = 1007, .kind = .friend },
+    .{ .user = 1008, .kind = .friend },
+    .{ .user = 1010, .kind = .friend },
+    .{ .user = 1009, .kind = .incoming },
+    .{ .user = 1006, .kind = .outgoing },
+    .{ .user = 1011, .kind = .blocked },
+};
+
+/// Grupo da demonstração (canal 900_006): DM com três pessoas.
+const group_members = [_]Id{ 1001, 1003, 1005 };
+const group_id: Id = 900_006;
 
 const guilds = [_]GuildSeed{
     .{ .name = "larperCord dev", .acronym = "LC", .color = 0, .unread = true, .mentions = 3 },
-    .{ .name = "Rice do Hyprland", .acronym = "RH", .color = 4, .unread = true, .name_en = "Hyprland Rice", .acronym_en = "HR" },
-    .{ .name = "Zig Brasil", .acronym = "Z", .color = 1, .name_en = "Zig Brazil" },
+    .{ .name = "Rice do Hyprland", .acronym = "RH", .color = 4, .unread = true, .name_en = "Hyprland Rice", .acronym_en = "HR", .icon = true },
+    .{ .name = "Zig Brasil", .acronym = "Z", .color = 1, .name_en = "Zig Brazil", .icon = true },
     .{ .name = "os larpers", .acronym = "ol", .color = 3, .unread = true, .mentions = 12, .name_en = "the larpers", .acronym_en = "tl" },
-    .{ .name = "CTF da madrugada", .acronym = "CTF", .color = 6, .name_en = "Late-night CTF" },
+    .{ .name = "CTF da madrugada", .acronym = "CTF", .color = 6, .name_en = "Late-night CTF", .icon = true },
     .{ .name = "Faculdade 2026", .acronym = "F26", .color = 2, .unread = true, .name_en = "College 2026", .acronym_en = "C26" },
-    .{ .name = "Minecraft SMP", .acronym = "MC", .color = 7 },
+    .{ .name = "Minecraft SMP", .acronym = "MC", .color = 7, .icon = true },
     .{ .name = "Lo-fi & café", .acronym = "☕", .color = 5, .name_en = "Lo-fi & coffee" },
     .{ .name = "Arch Linux BR", .acronym = "A", .color = 4 },
     .{ .name = "Memes", .acronym = "😂", .color = 1, .unread = true },
@@ -270,6 +395,7 @@ fn buildReady() !ev.Ready {
         .role = u.role,
         .status = u.status,
         .activity = if (u.activity) |a| try alloc.dupe(u8, pick(a, u.activity_en)) else null,
+        .avatar = if (u.avatar) try std.fmt.allocPrint(alloc, "demo:av:{d}", .{u.id}) else null,
     };
     const gs = try alloc.alloc(types.Guild, guilds.len);
     for (guilds, 0..) |g, i| gs[i] = .{
@@ -279,8 +405,9 @@ fn buildReady() !ev.Ready {
         .color = g.color,
         .unread = g.unread,
         .mentions = g.mentions,
+        .icon = if (g.icon) try std.fmt.allocPrint(alloc, "demo:icon:{d}", .{i}) else null,
     };
-    const chs = try alloc.alloc(types.Channel, guilds.len * channel_tree.len + 6);
+    const chs = try alloc.alloc(types.Channel, guilds.len * channel_tree.len + 7);
     var n: usize = 0;
     for (0..guilds.len) |gi| {
         var parent: ?Id = null;
@@ -311,6 +438,21 @@ fn buildReady() !ev.Ready {
             .recipient = users[i + 1].id,
         };
         n += 1;
+        // O grupo entra em terceiro na lista de DMs.
+        if (i == 1) {
+            chs[n] = .{
+                .id = group_id,
+                .guild = 0,
+                .name = try alloc.dupe(u8, pick("rolê de sexta", "friday hangout")),
+                .topic = try alloc.dupe(u8, ""),
+                .position = 2,
+                .recipient = group_members[0],
+                .recipients = try alloc.dupe(Id, &group_members),
+                .group = true,
+                .unread = true,
+            };
+            n += 1;
+        }
     }
     const voice = try alloc.alloc([2]Id, 4 * guilds.len);
     var vn: usize = 0;
@@ -323,7 +465,7 @@ fn buildReady() !ev.Ready {
         voice[vn] = .{ channelId(gi, 14), 1002 };
         vn += 1;
     }
-    return .{ .me = me_id, .users = us, .guilds = gs, .channels = chs, .voice = voice };
+    return .{ .me = me_id, .users = us, .guilds = gs, .channels = chs, .voice = voice, .username = try alloc.dupe(u8, "rsha") };
 }
 
 fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
@@ -337,7 +479,7 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
     var i: usize = n;
     while (i > 0) {
         i -= 1;
-        if (i == n - 1 or r.uintLessThan(u8, 3) != 0) author = if (dmRecipient(channel)) |u| (if (r.boolean()) u else me_id) else users[r.uintLessThan(usize, 8)].id;
+        if (i == n - 1 or r.uintLessThan(u8, 3) != 0) author = if (dmRecipient(channel)) |u| (if (r.boolean()) u else me_id) else if (channel == group_id) (if (r.uintLessThan(u8, 4) == 0) me_id else group_members[r.uintLessThan(usize, group_members.len)]) else users[r.uintLessThan(usize, 8)].id;
         msgs[i] = .{
             .id = types.makeSnowflake(t * 1000, i),
             .channel = channel,
@@ -359,6 +501,8 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         .{ .back = 14, .text = "wallpaper novo, que acharam?", .url = "demo:2", .name = "synthwave.png", .w = 720, .h = 720, .text_en = "new wallpaper, thoughts?" },
         .{ .back = 23, .text = "", .url = "demo:3", .name = "aurora.png", .w = 960, .h = 540 },
         .{ .back = 31, .text = "o relatório que eu falei", .url = "demo:file", .name = "relatorio-de-ram.pdf", .w = 0, .h = 0, .text_en = "the report i mentioned", .name_en = "ram-report.pdf" },
+        // Um GIF de link (como os do Tenor): animado e marcado como embed.
+        .{ .back = 9, .text = "https://tenor.com/view/larper-loading", .url = "demo:gif", .name = "loading.gif", .w = 480, .h = 270 },
     };
     for (pics) |p| {
         const m = &msgs[n - p.back];
@@ -366,7 +510,8 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         m.content = try alloc.dupe(u8, pick(p.text, p.text_en));
         m.reply_to = 0;
         const list = try alloc.alloc(types.Attachment, 1);
-        list[0] = .{ .url = try alloc.dupe(u8, p.url), .filename = try alloc.dupe(u8, pick(p.name, p.name_en)), .width = p.w, .height = p.h, .size = if (p.w == 0) 482_133 else 0 };
+        const gif = std.mem.eql(u8, p.url, "demo:gif");
+        list[0] = .{ .url = try alloc.dupe(u8, p.url), .filename = try alloc.dupe(u8, pick(p.name, p.name_en)), .width = p.w, .height = p.h, .size = if (p.w == 0) 482_133 else 0, .animated = gif, .embed = gif };
         m.attachments = list;
     }
     return msgs;

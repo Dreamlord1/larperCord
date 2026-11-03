@@ -29,22 +29,65 @@ pub fn statusColor(ctx: *const d.Ctx, s: types.Status) d.Rgba {
     };
 }
 
-/// Avatar: imagem quando houver; por enquanto, a inicial sobre a cor do cargo.
+/// Onde fica cada imagem no CDN do Discord. Na demonstração o "hash" já é
+/// a URL (demo:…), gerada pelo cache sem rede.
+pub const Cdn = enum { avatar, guild, group };
+
+pub fn cdnUrl(buf: []u8, kind: Cdn, id: types.Id, hash: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, hash, "demo:")) return hash;
+    const dir = switch (kind) {
+        .avatar => "avatars",
+        .guild => "icons",
+        .group => "channel-icons",
+    };
+    // PNG mesmo para os animados (a_…): o primeiro quadro basta aqui.
+    return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/{s}/{d}/{s}.png?size=128", .{ dir, id, hash }) catch "";
+}
+
+/// Desenha uma imagem do cache recortada com cantos arredondados.
+/// Retorna false enquanto ela não chegou (quem chama desenha o substituto).
+pub fn picture(ctx: *d.Ctx, dl: *c.ImDrawList, url: []const u8, r: d.Rect, radius: f32, alpha: f32) bool {
+    if (url.len == 0) return false;
+    const scale = ctx.io.*.DisplayFramebufferScale.x;
+    switch (ctx.images.getStill(url, r.w * scale, r.h * scale)) {
+        .ready => |t| {
+            c.ImDrawList_AddImageRounded(dl, t.ref, d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(alpha), radius, 0);
+            return true;
+        },
+        else => return false,
+    }
+}
+
+/// Cor do nome de alguém: a do cargo no servidor (como no Discord), a do
+/// tema na demonstração, ou a do texto quando não tem cargo com cor.
+pub fn nameColor(ctx: *const d.Ctx, guild: types.Id, user_id: types.Id) d.Rgba {
+    if (!ctx.st.settings.role_colors) return ctx.col(.text);
+    const rgb = ctx.store.nameColor(guild, user_id);
+    if (rgb != 0) return d.Rgba.hex(rgb).mix(ctx.col(.text), 0.12);
+    if (ctx.store.demo) if (ctx.store.user(user_id)) |u| return ctx.th.role(u.role).mix(ctx.col(.text), 0.2);
+    return ctx.col(.text);
+}
+
+/// Avatar: a foto da pessoa; sem foto (ou enquanto baixa), a inicial
+/// sobre a cor do cargo.
 pub fn avatar(ctx: *d.Ctx, dl: *c.ImDrawList, cx: f32, cy: f32, size: f32, user_id: types.Id, shape: Shape, ring: ?d.Rgba, alpha: f32) void {
     const u = ctx.store.user(user_id);
     const role: u8 = if (u) |x| x.role else 0;
     const base = ctx.th.role(role);
     const r = size / 2;
     const rr: d.Rect = .{ .x = cx - r, .y = cy - r, .w = size, .h = size };
-    d.rect(dl, rr, base.mix(ctx.col(.surface), 0.28).alpha(alpha), shapeRadius(shape, size));
-
-    var up: [8]u8 = undefined;
-    const name = if (u) |x| x.name else "?";
-    const initial = d.upper(&up, d.firstGlyph(name));
-    const fs = size * 0.45;
-    const font = ctx.ui.get(.semibold);
-    const tw = d.width(font, fs, initial);
-    d.text(dl, font, fs, cx - tw / 2, cy - fs * 0.6, d.Rgba.white.alpha(0.92 * alpha), initial);
+    var ub: [160]u8 = undefined;
+    const url = if (u) |x| if (x.avatar) |h| cdnUrl(&ub, .avatar, x.id, h) else "" else "";
+    if (!picture(ctx, dl, url, rr, shapeRadius(shape, size), alpha)) {
+        d.rect(dl, rr, base.mix(ctx.col(.surface), 0.28).alpha(alpha), shapeRadius(shape, size));
+        var up: [8]u8 = undefined;
+        const name = if (u) |x| x.name else "?";
+        const initial = d.upper(&up, d.firstGlyph(name));
+        const fs = size * 0.45;
+        const font = ctx.ui.get(.semibold);
+        const tw = d.width(font, fs, initial);
+        d.text(dl, font, fs, cx - tw / 2, cy - fs * 0.6, d.Rgba.white.alpha(0.92 * alpha), initial);
+    }
 
     const ring_col = ring orelse return;
     const status = if (u) |x| x.status else .offline;
@@ -125,6 +168,15 @@ pub fn clock(buf: []u8, ts: i64) []const u8 {
     return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}", .{ t.hour, t.minute }) catch "";
 }
 
+/// Quando a conta foi criada (está no próprio ID), por extenso.
+/// Contas da demonstração têm IDs pequenos: aí mostra uma data fixa.
+pub fn since(buf: []u8, id: types.Id) []const u8 {
+    const ms = types.snowflakeTime(id);
+    const secs = if (id < 1 << 32) 1_600_000_000 + @as(i64, @intCast(id % 1000)) * 86400 * 30 else @divTrunc(ms, 1000);
+    const t = localTime(secs);
+    return dateLong(buf, t.day, t.month, t.year);
+}
+
 pub fn dayLabel(buf: []u8, ts: i64) []const u8 {
     const t = localTime(ts);
     return dateLong(buf, t.day, t.month, t.year);
@@ -132,7 +184,7 @@ pub fn dayLabel(buf: []u8, ts: i64) []const u8 {
 
 /// Três pontinhos animados ("digitando…").
 pub fn typingDots(dl: *c.ImDrawList, x: f32, cy: f32, color: d.Rgba, now_ms: i64) void {
-    anim.active = true; // mantém redesenhando enquanto aparece
+    anim.every(80); // ~12 quadros por segundo bastam para os pontinhos
     for (0..3) |i| {
         const phase = @as(f32, @floatFromInt(@mod(now_ms, 1200))) / 1200.0 * std.math.tau - @as(f32, @floatFromInt(i)) * 0.9;
         const k = (std.math.sin(phase) + 1) / 2;

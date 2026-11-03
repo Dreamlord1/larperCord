@@ -9,6 +9,22 @@ pub var dt: f32 = 1.0 / 60.0;
 pub var active: bool = false;
 /// "Reduzir movimento": tudo chega no alvo na hora.
 pub var instant: bool = false;
+/// Relógio do quadro (ms), atualizado pelo app.
+pub var now_ms: i64 = 0;
+/// Próximo redesenho pedido por algo que anda devagar (pontinhos de
+/// "digitando", esqueletos de carregamento): o app dorme até lá em vez de
+/// desenhar a 60 quadros por segundo. Zerado a cada quadro.
+pub var next_wake_ms: i64 = std.math.maxInt(i64);
+
+/// Redesenha a cada `period_ms` enquanto quem chama continuar na tela.
+pub fn every(period_ms: i64) void {
+    at(now_ms - @mod(now_ms, period_ms) + period_ms);
+}
+
+/// Redesenha em `t` (ms).
+pub fn at(t: i64) void {
+    next_wake_ms = @min(next_wake_ms, t);
+}
 
 pub fn id(comptime tag: []const u8, n: usize) u32 {
     return @truncate(std.hash.Wyhash.hash(n, tag));

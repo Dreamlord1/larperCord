@@ -16,13 +16,11 @@ const Section = struct { title: []const u8, title_en: []const u8, items: []const
 const sections = [_]Section{
     .{ .title = "CONFIGURAÇÕES DE USUÁRIO", .title_en = "USER SETTINGS", .items = &.{
         .{ .page = .conta, .label = "Minha conta", .label_en = "My Account" },
-        .{ .page = .perfis, .label = "Perfis", .label_en = "Profiles" },
-        .{ .page = .privacidade, .label = "Privacidade e segurança", .label_en = "Privacy & Safety" },
+        .{ .page = .privacidade, .label = "Privacidade", .label_en = "Privacy" },
     } },
     .{ .title = "CONFIGURAÇÕES DO APLICATIVO", .title_en = "APP SETTINGS", .items = &.{
         .{ .page = .aparencia, .label = "Aparência", .label_en = "Appearance" },
         .{ .page = .acessibilidade, .label = "Acessibilidade", .label_en = "Accessibility" },
-        .{ .page = .voz, .label = "Voz e vídeo", .label_en = "Voice & Video" },
         .{ .page = .chat, .label = "Chat", .label_en = "Chat" },
         .{ .page = .notificacoes, .label = "Notificações", .label_en = "Notifications" },
         .{ .page = .atalhos, .label = "Atalhos de teclado", .label_en = "Keybinds" },
@@ -279,7 +277,7 @@ pub fn draw(ctx: *d.Ctx, previews: []const Preview) void {
         qa.mark(r, "settings:{s}", .{label});
         if (hb.hovered) d.rect(dl, r, ctx.col(.hover), ctx.th.radius);
         d.text(dl, fam.get(.medium), 15, r.x + 10, d.centerY(r, 15), ctx.col(.danger), label);
-        if (hb.clicked) ctx.st.showToast(ctx.now_ms, false, "isso aqui é só um protótipo, você não sai daqui não 😄", "this is just a prototype, you're not going anywhere 😄", .{});
+        if (hb.clicked) ctx.act(.logout);
     }
 
     // Conteúdo com rolagem.
@@ -349,59 +347,31 @@ fn page(p: *Page, previews: []const Preview) void {
             p.title(i18n.tr("Acessibilidade", "Accessibility"));
             p.heading(i18n.tr("Movimento", "Motion"));
             p.toggle(i18n.tr("Reduzir movimento", "Reduce motion"), i18n.tr("Desliga as animações de hover, rolagem e transições.", "Turns off hover, scrolling and transition animations."), &s.reduce_motion);
-            p.heading(i18n.tr("Cores", "Colors"));
-            p.slider(i18n.tr("Saturação", "Saturation"), &s.saturation, 0, 1, "{d:.0}%", 100);
-            p.toggle(i18n.tr("Cores dos cargos", "Role colors"), i18n.tr("Pinta os nomes com a cor do cargo.", "Shows names in their role color."), &s.role_colors);
-            p.toggle(i18n.tr("Sublinhar links", "Underline links"), i18n.tr("Deixa os links sempre sublinhados.", "Keeps links underlined at all times."), &s.underline_links);
+            p.heading(i18n.tr("Texto", "Text"));
+            p.toggle(i18n.tr("Cores dos cargos", "Role colors"), i18n.tr("Pinta os nomes com a cor do cargo no servidor.", "Shows names in their server role color."), &s.role_colors);
+            p.toggle(i18n.tr("Sublinhar links", "Underline links"), i18n.tr("Desligado, o sublinhado só aparece com o mouse em cima.", "When off, links are only underlined on hover."), &s.underline_links);
         },
         .chat => {
             p.title("Chat");
-            p.heading(i18n.tr("Mídia", "Media"));
-            p.toggle(i18n.tr("Reproduzir GIFs automaticamente", "Automatically play GIFs"), "", &s.autoplay_gifs);
-            p.toggle(i18n.tr("Emojis animados", "Play animated emoji"), "", &s.animated_emoji);
-            p.toggle(i18n.tr("Pré-visualização de links", "Show link previews"), "", &s.link_previews);
-            p.toggle(i18n.tr("Mostrar embeds", "Show embeds"), "", &s.show_embeds);
+            p.heading(i18n.tr("Imagens", "Images"));
+            p.toggle(i18n.tr("Reproduzir GIFs automaticamente", "Automatically play GIFs"), i18n.tr("Desligado, o GIF anda quando o mouse passa por cima.", "When off, a GIF plays while you hover it."), &s.autoplay_gifs);
+            p.toggle(i18n.tr("Mostrar imagens de links", "Show images from links"), i18n.tr("Imagens e GIFs de links mandados na conversa.", "Images and GIFs from links posted in chat."), &s.show_embeds);
             p.heading(i18n.tr("Conteúdo", "Content"));
-            p.toggle(i18n.tr("Sempre mostrar spoilers", "Always show spoilers"), i18n.tr("Revela o texto ||escondido|| sem passar o mouse.", "Reveals ||hidden|| text without hovering."), &s.show_spoilers);
-            p.toggle(i18n.tr("Corretor ortográfico", "Spellcheck"), "", &s.spellcheck);
-            p.toggle(i18n.tr("Enviar indicador de digitação", "Send typing indicator"), i18n.tr("Os outros veem quando você está digitando.", "Others can see when you're typing."), &s.send_typing);
+            p.toggle(i18n.tr("Sempre mostrar spoilers", "Always show spoilers"), i18n.tr("Revela o texto ||escondido|| sem precisar clicar.", "Reveals ||hidden|| text without clicking."), &s.show_spoilers);
         },
         .notificacoes => {
             p.title(i18n.tr("Notificações", "Notifications"));
-            p.toggle(i18n.tr("Notificações na área de trabalho", "Desktop notifications"), i18n.tr("Via D-Bus, sem o Chromium no meio.", "Through D-Bus, no Chromium in the way."), &s.desktop_notifs);
-            p.toggle(i18n.tr("Contador de não lidas", "Unread message badge"), i18n.tr("Mostra o número de menções no ícone.", "Shows the mention count on the icon."), &s.unread_badge);
-            p.toggle(i18n.tr("Piscar na barra de tarefas", "Flash taskbar"), "", &s.taskbar_flash);
-            p.toggle(i18n.tr("Sons", "Sounds"), i18n.tr("Som ao receber mensagem e entrar em call.", "Plays a sound for new messages and when joining a call."), &s.notif_sounds);
-            p.toggle(i18n.tr("Só menções", "Mentions only"), i18n.tr("Ignora mensagens que não citam você.", "Ignores messages that don't mention you."), &s.mention_only);
+            p.note(i18n.tr("Para mensagens diretas e menções, quando você não está olhando a conversa.", "For direct messages and mentions, when you're not looking at the conversation."));
+            p.toggle(i18n.tr("Notificações na área de trabalho", "Desktop notifications"), i18n.tr("Só com a janela fora de foco (usa o notify-send do sistema).", "Only while the window is unfocused (uses the system's notify-send)."), &s.desktop_notifs);
+            p.toggle(i18n.tr("Piscar na barra de tarefas", "Flash taskbar"), i18n.tr("A janela chama atenção até você voltar para ela.", "The window asks for attention until you come back."), &s.taskbar_flash);
+            p.note(i18n.tr("Canais silenciados (botão direito → Silenciar) não notificam.", "Muted channels (right-click → Mute) never notify."));
         },
         .privacidade => {
-            p.title(i18n.tr("Privacidade e segurança", "Privacy & Safety"));
-            p.heading(i18n.tr("Filtro de conteúdo explícito", "Explicit content filter"));
-            if (i18n.en())
-                p.radio(&.{ "Keep me safe", "My friends are nice", "Do not scan" }, &.{ "Scan direct messages from everyone.", "Scan direct messages from anyone who isn't a friend.", "Don't scan anything." }, &s.explicit_filter)
-            else
-                p.radio(&.{ "Me proteja", "Amigos são legais", "Sem filtro" }, &.{ "Analisa mensagens diretas de todo mundo.", "Analisa só quem não é seu amigo.", "Não analisa nada." }, &s.explicit_filter);
-            p.heading(i18n.tr("Mensagens diretas", "Direct messages"));
-            p.toggle(i18n.tr("Permitir DMs de membros dos servidores", "Allow DMs from server members"), "", &s.dms_from_servers);
-            p.toggle(i18n.tr("Pedidos de mensagem", "Message requests"), i18n.tr("Filtra DMs de quem você talvez não conheça.", "Filters DMs from people you may not know."), &s.message_requests);
-            p.toggle(i18n.tr("Mostrar atividade atual", "Display current activity"), i18n.tr("\"Jogando…\", \"Ouvindo…\" no seu perfil.", "\"Playing…\", \"Listening to…\" on your profile."), &s.activity_status);
-        },
-        .voz => {
-            p.title(i18n.tr("Voz e vídeo", "Voice & Video"));
-            p.select(i18n.tr("DISPOSITIVO DE ENTRADA", "INPUT DEVICE"), if (i18n.en()) &.{ "System default (PipeWire)", "USB microphone", "Headset" } else &.{ "Padrão do sistema (PipeWire)", "Microfone USB", "Headset" }, &s.input_device);
-            p.select(i18n.tr("DISPOSITIVO DE SAÍDA", "OUTPUT DEVICE"), if (i18n.en()) &.{ "System default (PipeWire)", "Headphones", "HDMI speakers" } else &.{ "Padrão do sistema (PipeWire)", "Fones de ouvido", "Alto-falantes HDMI" }, &s.output_device);
-            p.slider(i18n.tr("Volume de entrada", "Input volume"), &s.input_volume, 0, 2, "{d:.0}%", 100);
-            p.slider(i18n.tr("Volume de saída", "Output volume"), &s.output_volume, 0, 2, "{d:.0}%", 100);
-            p.heading(i18n.tr("Modo de entrada", "Input mode"));
-            var mode: u8 = @intFromBool(s.push_to_talk);
-            p.radio(if (i18n.en()) &.{ "Voice Activity", "Push to Talk" } else &.{ "Detecção de voz", "Aperte para falar" }, &.{}, &mode);
-            s.push_to_talk = mode == 1;
-            p.toggle(i18n.tr("Sensibilidade automática", "Automatically determine input sensitivity"), "", &s.auto_sensitivity);
-            if (!s.auto_sensitivity) p.slider(i18n.tr("Sensibilidade", "Input sensitivity"), &s.sensitivity, 0, 1, "{d:.0}%", 100);
-            p.heading(i18n.tr("Processamento", "Voice processing"));
-            p.toggle(i18n.tr("Supressão de ruído (RNNoise)", "Noise suppression (RNNoise)"), "", &s.noise_suppression);
-            p.toggle(i18n.tr("Cancelamento de eco", "Echo cancellation"), "", &s.echo_cancel);
-            p.note(i18n.tr("A voz ainda não está conectada neste protótipo.", "Voice isn't hooked up yet in this prototype."));
+            p.title(i18n.tr("Privacidade", "Privacy"));
+            p.toggle(i18n.tr("Enviar indicador de digitação", "Send typing indicator"), i18n.tr("Os outros veem \"digitando…\" enquanto você escreve.", "Others see \"typing…\" while you write."), &s.send_typing);
+            p.toggle(i18n.tr("GIFs do Tenor e do Giphy", "Tenor and Giphy GIFs"), i18n.tr("Baixa o GIF direto do site deles, que vê o seu IP. Desligado: só a prévia.", "Downloads the GIF from their site, which sees your IP. Off: preview only."), &s.gif_hosts);
+            p.toggle(i18n.tr("Modo streamer", "Streamer Mode"), i18n.tr("Esconde o e-mail e o nome de usuário nas configurações.", "Hides your email and username in settings."), &s.streamer_mode);
+            p.note(i18n.tr("Fora isso, imagens e avatares só vêm dos servidores do Discord.", "Everything else (images, avatars) only comes from Discord's servers."));
         },
         .atalhos => {
             p.title(i18n.tr("Atalhos de teclado", "Keybinds"));
@@ -424,12 +394,10 @@ fn page(p: *Page, previews: []const Preview) void {
         },
         .avancado => {
             p.title(i18n.tr("Avançado", "Advanced"));
-            p.toggle(i18n.tr("Modo desenvolvedor", "Developer Mode"), i18n.tr("Mostra o ID das mensagens ao passar o mouse.", "Shows message IDs on hover."), &s.developer_mode);
-            p.toggle(i18n.tr("Aceleração por hardware", "Hardware acceleration"), i18n.tr("Desenha com a GPU (OpenGL). Precisa reiniciar.", "Draws with the GPU (OpenGL). Requires a restart."), &s.hardware_accel);
-            p.toggle(i18n.tr("Recarregar temas ao salvar", "Reload themes on save"), i18n.tr("Vigia themes/ e ~/.config/larpercord/themes com inotify.", "Watches themes/ and ~/.config/larpercord/themes with inotify."), &s.hot_reload);
+            p.toggle(i18n.tr("Modo desenvolvedor", "Developer Mode"), i18n.tr("Mostra o ID das mensagens e põe \"Copiar ID\" nos menus.", "Shows message IDs and adds \"Copy ID\" to menus."), &s.developer_mode);
+            p.toggle(i18n.tr("Recarregar temas ao salvar", "Reload themes on save"), i18n.tr("Salvar um .kdl em themes/ ou ~/.config/larpercord/themes aplica na hora.", "Saving a .kdl in themes/ or ~/.config/larpercord/themes applies it right away."), &s.hot_reload);
         },
         .conta => account(p),
-        .perfis => profile(p),
         .desempenho => performance(p),
         .sobre => about(p),
     }
@@ -561,50 +529,31 @@ fn account(p: *Page) void {
     const s = &ctx.st.settings;
     const me = ctx.store.user(ctx.store.me) orelse return;
     p.title(i18n.tr("Minha conta", "My Account"));
-    const card: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = 260 };
+    const card: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = 250 };
     d.rect(p.dl, card, ctx.col(.rail), 10);
     const banner: d.Rect = .{ .x = card.x, .y = card.y, .w = card.w, .h = 100 };
-    c.ImDrawList_AddRectFilledMultiColor(p.dl, d.v(banner.x, banner.y), d.v(banner.right(), banner.bottom()), ctx.col(.accent).u(), ctx.th.role(3).u(), ctx.th.role(3).mix(d.Rgba.black, 0.3).u(), ctx.col(.accent).mix(d.Rgba.black, 0.3).u());
-    d.rectFlags(p.dl, banner, ctx.col(.rail).alpha(0), 10, 0);
+    const col = ctx.th.role(me.role);
+    c.ImDrawList_AddRectFilledMultiColor(p.dl, d.v(banner.x, banner.y), d.v(banner.right(), banner.bottom()), col.u(), ctx.col(.accent).u(), ctx.col(.accent).mix(d.Rgba.black, 0.3).u(), col.mix(d.Rgba.black, 0.3).u());
     d.circle(p.dl, card.x + 64, banner.bottom(), 46, ctx.col(.rail));
     w.avatar(ctx, p.dl, card.x + 64, banner.bottom(), 80, me.id, .circle, ctx.col(.rail), 1);
     d.text(p.dl, p.font(.bold), 20, card.x + 120, banner.bottom() + 10, ctx.col(.text), me.name);
-    const er: d.Rect = .{ .x = card.x + 16, .y = banner.bottom() + 56, .w = card.w - 32, .h = 88 };
+    const er: d.Rect = .{ .x = card.x + 16, .y = banner.bottom() + 56, .w = card.w - 32, .h = 80 };
     d.rect(p.dl, er, ctx.col(.sidebar), 8);
+    const hidden = "••••••••";
+    var ub: [80]u8 = undefined;
+    const uname = if (ctx.store.me_username) |x| (if (s.streamer_mode) hidden else std.fmt.bufPrint(&ub, "@{s}", .{x}) catch x) else "—";
     d.text(p.dl, p.font(.bold), 12, er.x + 14, er.y + 12, ctx.col(.muted), i18n.tr("NOME DE USUÁRIO", "USERNAME"));
-    d.text(p.dl, p.font(.medium), 15, er.x + 14, er.y + 28, ctx.col(.text), me.name);
-    d.text(p.dl, p.font(.bold), 12, er.x + 14, er.y + 52, ctx.col(.muted), i18n.tr("E-MAIL", "EMAIL"));
-    d.text(p.dl, p.font(.medium), 15, er.x + 14, er.y + 66, ctx.col(.text), if (s.streamer_mode) "••••••••••@••••••.com" else i18n.tr("voce@exemplo.com", "you@example.com"));
+    d.text(p.dl, p.font(.medium), 15, er.x + 14, er.y + 28, ctx.col(.text), uname);
+    const ex = er.x + er.w / 2;
+    d.text(p.dl, p.font(.bold), 12, ex, er.y + 12, ctx.col(.muted), i18n.tr("E-MAIL", "EMAIL"));
+    const email = if (ctx.store.me_email) |x| (if (s.streamer_mode) "••••••••••@••••••" else x) else if (ctx.store.demo) i18n.tr("— (demonstração)", "— (demo)") else "—";
+    _ = d.textClipped(p.dl, p.font(.medium), 15, ex, er.y + 28, ctx.col(.text), email, er.w / 2 - 14);
+    d.text(p.dl, p.font(.regular), 12.5, er.x + 14, er.y + 54, ctx.col(.faint), i18n.tr("Nome, foto e senha se mudam pelo app oficial ou pelo site.", "Name, picture and password are changed in the official app or website."));
     p.y += card.h + 24;
-    p.toggle(i18n.tr("Modo streamer", "Streamer Mode"), i18n.tr("Esconde informações pessoais na tela.", "Hides personal information on screen."), &s.streamer_mode);
-    p.heading(i18n.tr("Senha e autenticação", "Password and Authentication"));
-    _ = p.button(i18n.tr("Alterar senha", "Change Password"), false);
-    p.y += 52;
     p.heading(i18n.tr("Sessão", "Session"));
-    p.note(if (ctx.store.demo) i18n.tr("Você está no modo demonstração.", "You're in demo mode.") else i18n.tr("Sair apaga o token guardado neste computador.", "Logging out deletes the token saved on this computer."));
+    p.note(if (ctx.store.demo) i18n.tr("Você está no modo demonstração. Sair leva à tela de login.", "You're in demo mode. Logging out takes you to the sign-in screen.") else i18n.tr("Sair desconecta e apaga o token guardado neste computador.", "Logging out disconnects and deletes the token saved on this computer."));
     if (p.button(i18n.tr("Sair", "Log Out"), true)) ctx.act(.logout);
     p.y += 52;
-    p.heading(i18n.tr("Remoção de conta", "Account Removal"));
-    if (p.button(i18n.tr("Excluir conta", "Delete Account"), true)) ctx.st.showToast(ctx.now_ms, false, "calma, ninguém vai excluir nada 😅", "relax, nobody's deleting anything 😅", .{});
-    p.y += 44;
-}
-
-fn profile(p: *Page) void {
-    const ctx = p.ctx;
-    p.title(i18n.tr("Perfis", "Profiles"));
-    p.note(i18n.tr("Como os outros veem você.", "How others see you."));
-    const me = ctx.store.user(ctx.store.me) orelse return;
-    const card: d.Rect = .{ .x = p.x, .y = p.y, .w = @min(340, p.w), .h = 300 };
-    d.shadow(p.dl, card, 12, 14, ctx.col(.shadow));
-    d.rect(p.dl, card, ctx.col(.sidebar), 12);
-    c.ImDrawList_AddRectFilledMultiColor(p.dl, d.v(card.x, card.y), d.v(card.right(), card.y + 90), ctx.th.role(1).u(), ctx.col(.accent).u(), ctx.col(.accent).u(), ctx.th.role(1).u());
-    w.avatar(ctx, p.dl, card.x + 52, card.y + 92, 72, me.id, .circle, ctx.col(.sidebar), 1);
-    d.text(p.dl, p.font(.bold), 20, card.x + 16, card.y + 140, ctx.col(.text), me.name);
-    d.text(p.dl, p.font(.regular), 14, card.x + 16, card.y + 166, ctx.col(.muted), me.activity orelse "");
-    d.line(p.dl, card.x + 16, card.y + 196, card.right() - 16, card.y + 196, ctx.col(.border), 1);
-    d.text(p.dl, p.font(.bold), 12, card.x + 16, card.y + 210, ctx.col(.text), i18n.tr("SOBRE MIM", "ABOUT ME"));
-    d.text(p.dl, p.font(.regular), 14, card.x + 16, card.y + 230, ctx.col(.muted), i18n.tr("fazendo um discord de 40 MB 🌸", "making a 40 MB discord 🌸"));
-    p.y += card.h + 20;
 }
 
 fn performance(p: *Page) void {
@@ -626,23 +575,6 @@ fn performance(p: *Page) void {
         d.text(p.dl, p.font(.bold), 18, r.right() - 16 - vw, d.centerY(r, 18), ctx.col(.accent).mix(ctx.col(.text), 0.3), st.value);
         p.y += 64;
     }
-    p.heading(i18n.tr("Comparação (medido no mesmo PC)", "Comparison (measured on the same PC)"));
-    bar(p, "Vesktop (Electron)", 1279, 1279);
-    bar(p, "larperCord", @as(f32, @floatFromInt(ctx.stats.ram_kb)) / 1024, 1279);
-}
-
-fn bar(p: *Page, label: []const u8, mb: f32, max: f32) void {
-    const ctx = p.ctx;
-    d.text(p.dl, p.font(.medium), 14, p.x, p.y, ctx.col(.text), label);
-    var buf: [32]u8 = undefined;
-    const t = std.fmt.bufPrint(&buf, "{d:.0} MB", .{mb}) catch "";
-    const tw = d.width(p.font(.semibold), 14, t);
-    d.text(p.dl, p.font(.semibold), 14, p.x + p.w - tw, p.y, ctx.col(.muted), t);
-    p.y += 24;
-    const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = 12 };
-    d.rect(p.dl, r, ctx.col(.rail), 6);
-    d.rect(p.dl, .{ .x = r.x, .y = r.y, .w = @max(12, r.w * mb / max), .h = r.h }, if (mb > max * 0.5) ctx.col(.danger) else ctx.col(.online), 6);
-    p.y += 30;
 }
 
 fn about(p: *Page) void {
@@ -652,8 +584,9 @@ fn about(p: *Page) void {
     p.y += 40;
     p.note(i18n.tr("Cliente de Discord nativo: Zig + SDL3 + Dear ImGui + FreeType.", "Native Discord client: Zig + SDL3 + Dear ImGui + FreeType."));
     p.note(i18n.tr("Temas em KDL que reorganizam a interface inteira, recarregados ao salvar.", "KDL themes that rearrange the whole interface, reloaded on save."));
-    p.note(i18n.tr("Versão 0.2.0 · protótipo (ainda sem conexão com o Discord).", "Version 0.2.0 · prototype (not connected to Discord yet)."));
+    p.note(i18n.tr("Versão 0.3.0 · ainda sem chamadas de voz.", "Version 0.3.0 · voice calls aren't in yet."));
+    p.note(i18n.tr("Cliente não oficial: usar contas de usuário fora do app oficial vai contra os termos do Discord.", "Unofficial client: using user accounts outside the official app is against Discord's terms."));
     p.divider();
     p.heading(i18n.tr("Feito com", "Built with"));
-    for ([_][]const u8{ "Zig 0.17", "SDL 3.4", "Dear ImGui 1.93 (dear_bindings)", "FreeType + fontconfig", "Inter, JetBrains Mono, Noto Color Emoji" }) |t| p.note(t);
+    for ([_][]const u8{ "Zig 0.17", "SDL 3.4", "Dear ImGui 1.93 (dear_bindings)", "FreeType + fontconfig", "libcurl + zlib", "stb_image", "Inter, JetBrains Mono, Noto Color Emoji" }) |t| p.note(t);
 }

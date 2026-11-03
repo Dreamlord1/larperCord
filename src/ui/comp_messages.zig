@@ -184,6 +184,7 @@ fn selectionRange(ctx: *d.Ctx, cs: *store_mod.ChannelState) ?SelRange {
 }
 
 pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
+    if (ctx.st.friends) return @import("comp_friends.zig").page(ctx, n, r_in);
     // A bandeja de arquivos fica entre a conversa e a caixa de texto.
     var r = r_in;
     r.h = @max(40, r.h - att.trayHeight(ctx));
@@ -369,7 +370,7 @@ fn selectWord(st: anytype, m: *const StoredMessage, off: u32) void {
 }
 
 fn skeleton(ctx: *d.Ctx, g: Geo, r: d.Rect) void {
-    anim.active = true;
+    anim.every(50);
     const phase = @as(f32, @floatFromInt(@mod(ctx.now_ms, 1400))) / 1400.0;
     var y = r.bottom() - 40;
     var k: usize = 0;
@@ -427,7 +428,7 @@ fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x:
             xx += 20;
         }
         const name = if (u) |uu| uu.name else "?";
-        const nc = if (on_accent) ctx.col(.bubble_self_text) else ctx.th.role(if (u) |uu| uu.role else 0).mix(ctx.col(.text), 0.2);
+        const nc = if (on_accent) ctx.col(.bubble_self_text) else w.nameColor(ctx, guildOf(ctx, f.m.msg.channel), f.m.msg.author);
         const nm = std.fmt.bufPrint(buf[0..40], "@{s}", .{name}) catch name;
         d.text(dl, fam.get(.semibold), 13, xx, y + 1, nc, nm);
         xx += d.width(fam.get(.semibold), 13, nm) + 6;
@@ -435,6 +436,15 @@ fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x:
     } else {
         d.text(dl, fam.get(.italic), 13, x, y + 1, muted, i18n.tr("mensagem original não carregada", "Original message could not be loaded"));
     }
+}
+
+fn isCustom(rc: *const types.Reaction) bool {
+    const t = rc.text();
+    return t.len > 2 and t[0] == ':' and t[t.len - 1] == ':';
+}
+
+fn emojiW(ctx: *d.Ctx, rc: *const types.Reaction) f32 {
+    return if (isCustom(rc)) d.width(ctx.ui.get(.medium), 12, rc.text()) else 16;
 }
 
 fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, show_add: bool, right_to_left: bool, right: f32) void {
@@ -445,7 +455,7 @@ fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, 
     var total: f32 = 0;
     for (m.reactionSlice(), 0..) |*rc, i| {
         const cnt = std.fmt.bufPrint(&buf, "{d}", .{rc.count}) catch "";
-        widths[i] = 22 + d.width(fam.get(.semibold), 13, cnt) + 18;
+        widths[i] = 6 + emojiW(ctx, rc) + 6 + d.width(fam.get(.semibold), 13, cnt) + 10;
         total += widths[i] + 4;
     }
     if (right_to_left) xx = right - total - (if (show_add) @as(f32, 36) else 0);
@@ -460,8 +470,11 @@ fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, 
         const cr_r = @min(8, ctx.th.radius + 2);
         d.rect(dl, cr, if (hb.hovered) bg.mix(ctx.col(.text), 0.06) else bg, cr_r);
         if (rc.me or hb.hovered) d.border(dl, cr, if (rc.me) ctx.col(.accent) else ctx.col(.border).mix(ctx.col(.text), 0.1), cr_r, 1);
-        d.text(dl, fam.get(.regular), 15, cr.x + 6, cr.y + 2, d.Rgba.white, rc.text());
-        d.text(dl, fam.get(.semibold), 13, cr.x + 28, d.centerY(cr, 13), if (rc.me) ctx.col(.accent).mix(ctx.col(.text), 0.3) else ctx.col(.muted), cnt);
+        // Emoji personalizado (ainda sem imagem) aparece como :nome:, menor.
+        if (isCustom(rc)) {
+            d.text(dl, fam.get(.medium), 12, cr.x + 6, d.centerY(cr, 12), ctx.col(.text).mix(ctx.col(.muted), 0.3), rc.text());
+        } else d.text(dl, fam.get(.regular), 15, cr.x + 6, cr.y + 2, d.Rgba.white, rc.text());
+        d.text(dl, fam.get(.semibold), 13, cr.x + 12 + emojiW(ctx, rc), d.centerY(cr, 13), if (rc.me) ctx.col(.accent).mix(ctx.col(.text), 0.3) else ctx.col(.muted), cnt);
         xx += cr.w + 4;
     }
     if (show_add) {
@@ -524,6 +537,10 @@ fn nameHit(ctx: *d.Ctx, uid: Id, msg_id: Id, r: d.Rect, salt: u64) void {
     if (hb.right) ctx.popup(.{ .menu = .{ .kind = .user, .id = uid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
 }
 
+fn guildOf(ctx: *const d.Ctx, channel: types.Id) types.Id {
+    return if (ctx.store.channel(channel)) |cs| cs.info.guild else 0;
+}
+
 fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags: u8, r: d.Rect, y_in: f32, under: bool, sel_from: u32, sel_to: u32, probe: ?*rich.Probe) void {
     var y = y_in;
     var buf: [96]u8 = undefined;
@@ -532,7 +549,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
     const reply = flags & flag_reply != 0;
     const u = ctx.store.user(m.msg.author);
     const name = if (u) |x| x.name else "?";
-    const role_col = if (ctx.st.settings.role_colors) ctx.th.role(if (u) |x| x.role else 0).mix(ctx.col(.text), 0.2) else ctx.col(.text);
+    const role_col = w.nameColor(ctx, guildOf(ctx, m.msg.channel), m.msg.author);
     const alpha: f32 = if (m.pending) 0.5 else 1;
     const fam = g.fam;
     const self = m.msg.author == ctx.store.me;
@@ -748,6 +765,7 @@ fn inputCallback(data: [*c]c.ImGuiInputTextCallbackData) callconv(.c) c_int {
 }
 
 pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
+    if (ctx.st.friends) return;
     const fam = ctx.familyFor(n);
     const variant = d.pstr(n, "variant", "box");
     const ch_id = ctx.st.activeChannel() orelse return;

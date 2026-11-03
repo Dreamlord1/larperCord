@@ -97,6 +97,12 @@ pub const State = struct {
     tab: usize = 0,
     /// Último canal aberto em cada servidor.
     last_channel: std.AutoHashMapUnmanaged(Id, Id) = .empty,
+    /// Tela de amigos aberta (no lugar da conversa, nas mensagens diretas).
+    friends: bool = false,
+    /// Aba da tela de amigos: 0 online, 1 todos, 2 pendentes, 3 bloqueados.
+    friends_tab: u8 = 0,
+    /// DM pedida ao Discord: abre quando o canal chegar.
+    pending_dm: Id = 0,
     voice: ?Id = null,
     muted: bool = false,
     deafened: bool = false,

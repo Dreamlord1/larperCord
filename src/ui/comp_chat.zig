@@ -18,6 +18,7 @@ const Id = types.Id;
 // --- header -----------------------------------------------------------------
 
 pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
+    if (ctx.st.friends) return @import("comp_friends.zig").header(ctx, n, r);
     const fam = ctx.familyFor(n);
     const ch_id = ctx.st.activeChannel() orelse return;
     const cs = ctx.store.channel(ch_id) orelse return;

@@ -36,18 +36,42 @@ const Word = struct {
     text: []const u8,
     span: *const md.Span,
     space_after: bool,
+    /// Quebras de linha (\n) antes desta palavra.
+    breaks: u8 = 0,
 };
 
-/// Itera palavras dentro dos trechos.
+/// Itera palavras dentro dos trechos, contando as quebras de linha entre elas.
 const Words = struct {
     spans: []const md.Span,
     si: usize = 0,
     pos: usize = 0,
+    breaks: u8 = 0,
+
+    fn take(it: *Words, w: Word) Word {
+        var out = w;
+        out.breaks = it.breaks;
+        it.breaks = 0;
+        return out;
+    }
 
     fn next(it: *Words) ?Word {
         while (it.si < it.spans.len) {
             const sp = &it.spans[it.si];
             const s = sp.text;
+            if (sp.flags.block) {
+                // Uma linha do bloco por vez, sempre numa linha nova.
+                if (it.pos >= s.len) {
+                    it.si += 1;
+                    it.pos = 0;
+                    it.breaks = 1;
+                    continue;
+                }
+                if (it.breaks == 0) it.breaks = 1;
+                const start = it.pos;
+                const nl = std.mem.indexOfScalarPos(u8, s, start, '\n') orelse s.len;
+                it.pos = nl + 1;
+                return it.take(.{ .text = s[start..nl], .span = sp, .space_after = false });
+            }
             if (sp.flags.code or sp.flags.link or sp.mention != .none) {
                 if (it.pos > 0) {
                     it.si += 1;
@@ -56,9 +80,12 @@ const Words = struct {
                 }
                 it.pos = s.len;
                 const space = it.si + 1 < it.spans.len and it.spans[it.si + 1].text.len > 0 and it.spans[it.si + 1].text[0] == ' ';
-                return .{ .text = s, .span = sp, .space_after = space };
+                return it.take(.{ .text = s, .span = sp, .space_after = space });
             }
-            while (it.pos < s.len and (s[it.pos] == ' ' or s[it.pos] == '\n')) it.pos += 1;
+            while (it.pos < s.len and (s[it.pos] == ' ' or s[it.pos] == '\n')) {
+                if (s[it.pos] == '\n') it.breaks +|= 1;
+                it.pos += 1;
+            }
             if (it.pos >= s.len) {
                 it.si += 1;
                 it.pos = 0;
@@ -66,8 +93,8 @@ const Words = struct {
             }
             const start = it.pos;
             while (it.pos < s.len and s[it.pos] != ' ' and s[it.pos] != '\n') it.pos += 1;
-            const space = it.pos < s.len or (it.si + 1 < it.spans.len and it.spans[it.si + 1].text.len > 0 and it.spans[it.si + 1].text[0] == ' ');
-            return .{ .text = s[start..it.pos], .span = sp, .space_after = space };
+            const space = (it.pos < s.len and s[it.pos] == ' ') or (it.pos >= s.len and it.si + 1 < it.spans.len and it.spans[it.si + 1].text.len > 0 and it.spans[it.si + 1].text[0] == ' ');
+            return it.take(.{ .text = s[start..it.pos], .span = sp, .space_after = space });
         }
         return null;
     }
@@ -87,6 +114,7 @@ fn label(store: *const Store, sp: *const md.Span, buf: []u8) []const u8 {
         .none => sp.text,
         .user => |id| std.fmt.bufPrint(buf, "@{s}", .{if (store.user(id)) |u| u.name else i18n.tr("desconhecido", "unknown-user")}) catch sp.text,
         .channel => |id| std.fmt.bufPrint(buf, "#{s}", .{if (store.channel(id)) |ch| ch.info.name else i18n.tr("canal", "unknown")}) catch sp.text,
+        .role => |id| std.fmt.bufPrint(buf, "@{s}", .{if (store.roles.get(id)) |r| r.name else i18n.tr("cargo", "unknown-role")}) catch sp.text,
     };
 }
 
@@ -105,8 +133,14 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
         const s = if (sp.mention != .none) label(store, sp, &buf) else word.text;
         const size = if (sp.flags.code) o.size - 1.5 else o.size;
         const pad: f32 = if (sp.flags.code) 5 else if (sp.mention != .none) 3 else 0;
-        const w = d.width(font, size, s) + pad * 2;
-        if (x > 0 and x + w > wrap) {
+        // Linha do bloco de código ocupa a largura toda (cortada se passar).
+        const w = if (sp.flags.block) wrap else d.width(font, size, s) + pad * 2;
+        if (word.breaks > 0 and !(x == 0 and y == 0 and line_start)) {
+            // Uma linha nova por \n (linhas em branco contam, até 3).
+            x = 0;
+            y += o.line_h * @as(f32, @floatFromInt(@min(word.breaks, 3)));
+            line_start = true;
+        } else if (x > 0 and x + w > wrap) {
             x = 0;
             y += o.line_h;
             line_start = true;
@@ -163,6 +197,14 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
     const r: d.Rect = .{ .x = x, .y = y + 1, .w = w, .h = lh - 2 };
     if (sp.flags.spoiler and !o.reveal_spoilers and !r.contains(mouse.x, mouse.y)) {
         d.rect(dl, r.inset(-1, 0), th.c(.code_bg).mix(th.c(.text), 0.08), 4);
+        return;
+    }
+    if (sp.flags.block) {
+        // Linhas encostadas formam a caixa do bloco.
+        d.rect(dl, .{ .x = x, .y = y, .w = w, .h = lh }, if (o.on_accent) d.Rgba.black.alpha(0.18) else th.c(.code_bg), 0);
+        c.ImDrawList_PushClipRect(dl, d.v(x, y), d.v(x + w - pad, y + lh), true);
+        d.text(dl, font, size, x + pad + 4, ty, if (o.on_accent) o.color else th.c(.text).mix(th.c(.accent), 0.15), s);
+        c.ImDrawList_PopClipRect(dl);
         return;
     }
     if (sp.flags.code) {

@@ -14,6 +14,9 @@ pub const Ready = struct {
     channels: []types.Channel,
     /// Pares (canal de voz, usuário).
     voice: []const [2]Id,
+    /// Da nossa conta: @usuário e e-mail (alocados; null = não veio).
+    username: ?[]const u8 = null,
+    email: ?[]const u8 = null,
 };
 
 pub const Event = union(enum) {
@@ -48,6 +51,17 @@ pub const Event = union(enum) {
     presence_update: struct { user: Id, status: types.Status, activity: ?[]const u8 = null },
     voice_state: struct { channel: ?Id, user: Id },
     latency: u32,
+    /// Cargos de um servidor (nomes alocados), para os grupos da lista de membros.
+    roles: struct { guild: Id, roles: []types.Role },
+    /// GUILD_MEMBER_LIST_UPDATE: a lista de membros do servidor como o
+    /// Discord monta (online por cargo, depois offline). `list_id` muda
+    /// quando a lista é de outro canal (permissões diferentes).
+    /// `counts`: (grupo, quantos) de todos os grupos, que o Discord manda à parte.
+    member_list: struct { guild: Id, list_id: u64, online: u32, total: u32, ops: []types.MemberOp, counts: []const [2]u64 = &.{} },
+    /// Cargos e cor do nome de alguém num servidor.
+    member_info: struct { guild: Id, user: Id, info: types.MemberInfo },
+    /// Amizade/pedido/bloqueio (`none` = deixou de existir).
+    relationship: struct { user: Id, kind: types.Relationship },
 };
 
 pub const Connection = enum { connecting, ready, reconnecting, failed, offline };
@@ -62,6 +76,12 @@ pub const Command = union(enum) {
     /// "fulano está digitando" (o Discord limita a um a cada ~8 s).
     typing: Id,
     join_voice: ?Id,
+    /// Pede a lista de membros de um servidor, vista do canal aberto (op 14).
+    subscribe_guild: struct { guild: Id, channel: Id },
+    /// Aceita um pedido de amizade (true) ou remove/recusa/cancela (false).
+    relationship: struct { user: Id, accept: bool },
+    /// Abre (ou acha) a DM com alguém; chega como CHANNEL_CREATE.
+    create_dm: Id,
     shutdown,
 };
 
@@ -104,4 +124,9 @@ pub const Action = union(enum) {
     remove_upload: usize,
     /// Ctrl+V com uma imagem na área de transferência.
     paste_image,
+    /// Tela de amigos (no lugar da conversa, dentro das mensagens diretas).
+    open_friends,
+    accept_friend: Id,
+    /// Recusa um pedido, cancela o nosso ou desbloqueia.
+    remove_relationship: Id,
 };

@@ -237,7 +237,12 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         d.rect(ctx.dl, card, ctx.col(.hover).alpha(anim.to(anim.id("me", 0), if (hb.hovered) 1 else 0, 24)), ctx.th.radius);
         w.avatar(ctx, ctx.dl, card.x + 20, card.y + 18, 32, me.id, .circle, ctx.col(.rail), 1);
         _ = d.textClipped(ctx.dl, fam.get(.semibold), 14, card.x + 44, card.y + 2, ctx.col(.text), me.name, card.w - 48);
-        _ = d.textClipped(ctx.dl, fam.get(.regular), 12, card.x + 44, card.y + 19, ctx.col(.muted), "Online", card.w - 48);
+        _ = d.textClipped(ctx.dl, fam.get(.regular), 12, card.x + 44, card.y + 19, ctx.col(.muted), switch (me.status) {
+            .online => "Online",
+            .idle => i18n.tr("Ausente", "Idle"),
+            .dnd => i18n.tr("Não perturbe", "Do Not Disturb"),
+            .offline => i18n.tr("Invisível", "Invisible"),
+        }, card.w - 48);
     }
 
     // Mudo, ensurdecer, configurações.
@@ -339,40 +344,103 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
     const dl = d.beginRegion(ctx, "##dms", r, c.ImGuiWindowFlags_NoScrollbar);
     const o = c.ImGui_GetCursorScreenPos();
     var y = o.y + 10;
+    // "Amigos": abre a lista de amigos no lugar da conversa.
+    {
+        const row_h: f32 = if (tree) 24 else 42;
+        const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
+        const hb = d.hit(ctx, 299, rr);
+        qa.mark(rr, "friends", .{});
+        if (hb.clicked) ctx.act(.open_friends);
+        const sel = ctx.st.friends;
+        const k = anim.to(anim.id("dm-friends", 0), if (sel) 1 else if (hb.hovered) 0.5 else 0, 24);
+        var pending: u16 = 0;
+        var rit = ctx.store.relationships.valueIterator();
+        while (rit.next()) |rk| if (rk.* == .incoming) {
+            pending += 1;
+        };
+        if (tree) {
+            if (sel) d.rect(dl, rr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
+            d.text(dl, fam.get(.bold), fs - 1, rr.x + 4, d.centerY(rr, fs - 1), if (sel) ctx.col(.accent_text) else ctx.col(.text), i18n.tr("├ ☺ amigos", "├ ☺ friends"));
+        } else {
+            const on = variant == .pills and sel;
+            if (k > 0.01) d.rect(dl, rr, if (on) ctx.col(.accent) else ctx.col(.selected).alpha(k), if (variant == .pills) rr.h / 2 else ctx.th.radius);
+            const ink = if (on) ctx.col(.accent_text) else if (sel) ctx.col(.text) else ctx.col(.muted).mix(ctx.col(.text), k);
+            icons.members(dl, rr.x + 21, rr.y + rr.h / 2 - 1, ink.u());
+            d.text(dl, fam.get(.semibold), fs, rr.x + 46, d.centerY(rr, fs), ink, i18n.tr("Amigos", "Friends"));
+        }
+        if (pending > 0) badgeAt(ctx, dl, fam, rr.right() - 10, rr.y + rr.h / 2, pending);
+        y += row_h + (if (tree) @as(f32, 2) else 6);
+    }
     if (!tree) {
         d.text(dl, fam.get(.semibold), 12, r.x + 18, y + 4, ctx.col(.faint).mix(ctx.col(.muted), 0.4), i18n.tr("MENSAGENS DIRETAS", "DIRECT MESSAGES"));
         y += 28;
     }
-    for (ctx.store.channelsOf(0), 0..) |id, idx| {
+    const dms = ctx.store.channelsOf(0);
+    for (dms, 0..) |id, idx| {
         const cs = ctx.store.channel(id) orelse continue;
-        const u = ctx.store.user(cs.info.recipient) orelse continue;
-        const selected = ctx.st.activeChannel() == id;
+        const group = cs.info.group;
+        const u = ctx.store.user(cs.info.recipient);
+        if (!group and u == null) continue;
+        const selected = ctx.st.activeChannel() == id and !ctx.st.friends;
         const row_h: f32 = if (tree) 24 else 44;
         const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
         const hb = d.hit(ctx, 300 + idx, rr);
         qa.mark(rr, "channel:{d}", .{id});
         if (hb.clicked or hb.middle) ctx.act(.{ .select_channel = id });
-        if (hb.right) ctx.popup(.{ .menu = .{ .kind = .user, .id = u.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+        if (hb.right) ctx.popup(.{ .menu = if (group)
+            .{ .kind = .channel, .id = id, .x = ctx.mouse.x, .y = ctx.mouse.y }
+        else
+            .{ .kind = .user, .id = u.?.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         const k = anim.to(anim.id("dm", id), if (selected) 1 else if (hb.hovered) 0.5 else 0, 24);
         const name_col = if (selected or cs.info.unread) ctx.col(.text) else ctx.col(.muted).mix(ctx.col(.text), k * 0.5);
+        const name = if (group) cs.info.name else u.?.name;
         if (tree) {
             if (selected) d.rect(dl, rr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
-            var buf: [80]u8 = undefined;
-            const t = std.fmt.bufPrint(&buf, "{s} {s} @{s}", .{ if (idx + 1 == ctx.store.channelsOf(0).len) "└" else "├", w.statusGlyph(u.status), u.name }) catch u.name;
+            var buf: [96]u8 = undefined;
+            const branch = if (idx + 1 == dms.len) "└" else "├";
+            const t = if (group)
+                std.fmt.bufPrint(&buf, "{s} ⁂ {s}", .{ branch, name }) catch name
+            else
+                std.fmt.bufPrint(&buf, "{s} {s} @{s}", .{ branch, w.statusGlyph(u.?.status), name }) catch name;
             d.text(dl, fam.get(if (cs.info.unread) .bold else .regular), fs - 1, rr.x + 4, d.centerY(rr, fs - 1), if (selected) ctx.col(.accent_text) else name_col, t);
         } else {
             const radius = if (variant == .pills) rr.h / 2 else ctx.th.radius;
             if (k > 0.01) d.rect(dl, rr, if (variant == .pills and selected) ctx.col(.accent) else ctx.col(.selected).alpha(k), radius);
             const on = variant == .pills and selected;
-            w.avatar(ctx, dl, rr.x + 22, rr.y + rr.h / 2, 32, u.id, .circle, if (on) ctx.col(.accent) else ctx.col(.sidebar), 1);
+            if (group) groupIcon(ctx, dl, &cs.info, rr.x + 22, rr.y + rr.h / 2, 32) else w.avatar(ctx, dl, rr.x + 22, rr.y + rr.h / 2, 32, u.?.id, .circle, if (on) ctx.col(.accent) else ctx.col(.sidebar), 1);
             const tc = if (on) ctx.col(.accent_text) else name_col;
-            if (u.activity) |a| {
-                _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, rr.y + 3, tc, u.name, rr.w - 60);
+            var sb: [48]u8 = undefined;
+            const sub: ?[]const u8 = if (group)
+                (if (cs.info.recipients.len == 0) i18n.tr("só você", "just you") else i18n.fmt(&sb, "{d} membros", "{d} members", .{cs.info.recipients.len + 1}))
+            else
+                u.?.activity;
+            if (sub) |a| {
+                _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, rr.y + 3, tc, name, rr.w - 60);
                 _ = d.textClipped(dl, fam.get(.regular), 12, rr.x + 46, rr.y + 22, if (on) tc.alpha(0.8) else ctx.col(.faint), a, rr.w - 60);
-            } else _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, d.centerY(rr, fs - 1), tc, u.name, rr.w - 60);
+            } else _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, d.centerY(rr, fs - 1), tc, name, rr.w - 60);
             if (cs.info.unread and !selected) d.circle(dl, rr.right() - 12, rr.y + rr.h / 2, 4, ctx.col(.danger));
         }
         y += row_h;
     }
     d.endRegion(ctx, y + 12, r.x);
+}
+
+/// Ícone de um grupo: a imagem dele ou um círculo com duas pessoas.
+pub fn groupIcon(ctx: *d.Ctx, dl: *c.ImDrawList, ch: *const types.Channel, cx: f32, cy: f32, size: f32) void {
+    const r: d.Rect = .{ .x = cx - size / 2, .y = cy - size / 2, .w = size, .h = size };
+    if (ch.icon) |h| {
+        var ub: [160]u8 = undefined;
+        if (w.picture(ctx, dl, w.cdnUrl(&ub, .group, ch.id, h), r, size / 2, 1)) return;
+    }
+    d.rect(dl, r, ctx.th.role(@intCast(ch.id % 8)).mix(ctx.col(.surface), 0.3), size / 2);
+    icons.members(dl, cx - 1, cy, d.Rgba.white.u());
+}
+
+fn badgeAt(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, right: f32, cy: f32, count: u16) void {
+    var buf: [8]u8 = undefined;
+    const t = std.fmt.bufPrint(&buf, "{d}", .{count}) catch "";
+    const tw = d.width(fam.get(.bold), 11, t);
+    const br: d.Rect = .{ .x = right - tw - 10, .y = cy - 9, .w = tw + 10, .h = 18 };
+    d.rect(dl, br, ctx.col(.danger), 9);
+    d.text(dl, fam.get(.bold), 11, br.x + 5, d.centerY(br, 11), d.Rgba.white, t);
 }

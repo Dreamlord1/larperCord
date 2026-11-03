@@ -159,6 +159,79 @@ fn onGuild1(app: *App) bool {
     const cs = active(app) orelse return false;
     return app.st.guild == gw.guildId(1) and cs.info.guild == gw.guildId(1);
 }
+fn friendsOpen(app: *App) bool {
+    return app.st.guild == 0 and app.st.friends and qa.find("friend:1001") != null;
+}
+fn pendingTab(app: *App) bool {
+    return app.st.friends_tab == 2 and qa.find("friend-accept:1009") != null;
+}
+fn accepted(app: *App) bool {
+    return app.store.relationship(1009) == .friend;
+}
+fn cancelled(app: *App) bool {
+    return app.store.relationship(1006) == .none;
+}
+fn dmWithAna(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return !app.st.friends and cs.info.guild == 0 and !cs.info.group and cs.info.recipient == 1001;
+}
+fn newDm(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return cs.info.guild == 0 and cs.info.recipient == 1008 and qa.find("dm-profile") != null;
+}
+fn groupOpen(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return cs.info.group and qa.find("member:1003") != null and qa.find("member:1005") != null and qa.find("member:1002") == null;
+}
+/// Lista do servidor 0: Fundação com ana.exe, e quem não está no servidor fica de fora.
+fn guildMembers(app: *App) bool {
+    const ml = app.store.memberList(gw.guildId(0)) orelse return false;
+    if (!ml.synced) return false;
+    var role_group = false;
+    for (ml.items.items) |it| if (it == .group and it.group.id == gw.guildId(0) + 901) {
+        role_group = true;
+    };
+    return role_group and qa.find("member:1001") != null;
+}
+/// Servidores diferentes, listas diferentes.
+fn otherGuildMembers(app: *App) bool {
+    const a = app.store.memberList(gw.guildId(0)) orelse return false;
+    const b = app.store.memberList(gw.guildId(1)) orelse return false;
+    if (!b.synced) return false;
+    // Alguém está numa lista e não na outra.
+    for (a.items.items) |x| if (x == .member) {
+        const found = for (b.items.items) |y| {
+            if (y == .member and y.member.user == x.member.user) break true;
+        } else false;
+        if (!found) return true;
+    };
+    return false;
+}
+fn avatarsLoaded(app: *App) bool {
+    var it = app.images.map.iterator();
+    while (it.next()) |e| if (std.mem.indexOf(u8, e.key_ptr.*, " demo:av:") != null and e.value_ptr.state == .ready) return true;
+    return false;
+}
+fn iconsLoaded(app: *App) bool {
+    var it = app.images.map.iterator();
+    while (it.next()) |e| if (std.mem.indexOf(u8, e.key_ptr.*, " demo:icon:") != null and e.value_ptr.state == .ready) return true;
+    return false;
+}
+fn gifAnimated(app: *App) bool {
+    var it = app.images.map.iterator();
+    while (it.next()) |e| if (std.mem.endsWith(u8, e.key_ptr.*, " demo:gif") and e.value_ptr.state == .ready and e.value_ptr.frames.len > 1) return true;
+    return false;
+}
+fn openFirstDm(app: *App) void {
+    app.actions.append(app.gpa, .{ .select_channel = gw.dmId(0) }) catch {};
+}
+fn scrollBottom(app: *App) void {
+    if (app.st.activeChannel()) |id| app.st.scrollOf(id).stick_bottom = true;
+}
+fn jumpToGif(app: *App) void {
+    const f = findAttachment(app, "demo:gif") orelse return;
+    app.st.jump = f.id;
+}
 fn onDms(app: *App) bool {
     const cs = active(app) orelse return false;
     return app.st.guild == 0 and cs.info.guild == 0;
@@ -377,6 +450,9 @@ fn tab1(app: *App) bool {
 fn noMembers(_: *App) bool {
     return qa.find("member:1001") == null;
 }
+fn dmProfileShown(_: *App) bool {
+    return qa.find("dm-profile") != null;
+}
 fn hasMembers(_: *App) bool {
     return qa.find("member:1001") != null;
 }
@@ -424,7 +500,7 @@ const ops = [_]Op{
     click("guild:501000"),
     expect("clicar no servidor abre um canal dele", onGuild1),
     click("guild:0"),
-    expect("o botão inicial abre as mensagens diretas", onDms),
+    expect("o botão inicial abre os amigos", friendsOpen),
     .{ .shot = "02-dms" },
     click("guild:500000"),
     expect("volta para o primeiro servidor", onGuild0),
@@ -546,7 +622,7 @@ const ops = [_]Op{
     expect("engrenagem abre as configurações", settingsOpen),
     click("settings:Minha conta"),
     .{ .shot = "10-conta" },
-    click("settings:Voz e vídeo"),
+    click("settings:Privacidade"),
     .{ .shot = "11-voz" },
     click("settings:Atalhos de teclado"),
     click("settings:Desempenho"),
@@ -635,6 +711,42 @@ const ops = [_]Op{
     click("composer"),
     key(c.ImGuiKey_Enter),
     .{ .expect = .{ .name = "só a imagem, sem texto", .check = sentImageOnly, .timeout_ms = 3000 } },
+
+    s("amigos, grupos e membros"),
+    expect("fotos de perfil carregam", avatarsLoaded),
+    expect("ícones dos servidores carregam", iconsLoaded),
+    expect("lista de membros vem do servidor, por cargo", guildMembers),
+    .{ .shot = "31-membros" },
+    click("guild:501000"),
+    .{ .expect = .{ .name = "outro servidor, outra lista de membros", .check = otherGuildMembers, .timeout_ms = 3000 } },
+    click("guild:500000"),
+    .{ .run = jumpToGif },
+    .{ .wait = 400 },
+    .{ .expect = .{ .name = "GIF animado tem vários quadros", .check = gifAnimated, .timeout_ms = 4000 } },
+    .{ .shot = "32-gif" },
+    .{ .run = scrollBottom },
+    click("guild:0"),
+    click("friends"),
+    expect("Mensagens diretas → Amigos", friendsOpen),
+    .{ .shot = "33-amigos" },
+    click("friends-tab:pending"),
+    expect("aba Pendentes mostra o pedido", pendingTab),
+    click("friend-accept:1009"),
+    expect("aceitar o pedido de amizade", accepted),
+    click("friend-remove:1006"),
+    expect("cancelar o pedido enviado", cancelled),
+    click("friends-tab:all"),
+    click("friend-message:1001"),
+    expect("Mensagem abre a DM existente", dmWithAna),
+    expect("DM mostra o perfil no lugar dos membros", dmProfileShown),
+    click("channel:900006"),
+    expect("grupo lista só os participantes", groupOpen),
+    .{ .shot = "34-grupo" },
+    click("friends"),
+    click("friends-tab:all"),
+    click("friend-message:1008"),
+    .{ .expect = .{ .name = "amigo sem DM: cria a conversa e abre", .check = newDm, .timeout_ms = 3000 } },
+    click("guild:500000"),
 
     s("janela pequena"),
     .{ .resize = .{ 820, 560 } },
@@ -783,6 +895,10 @@ const ops_theme = [_]Op{
     ctrl(c.ImGuiKey_A),
     key(c.ImGuiKey_Backspace),
     click("guild:0"),
+    expect("mensagens diretas começam pelos amigos", friendsOpen),
+    .{ .shot = "tema-amigos" },
+    // No zen não tem lista de canais: a DM abre direto.
+    .{ .run = openFirstDm },
     expect("chegar nas mensagens diretas", onDms),
     .{ .shot = "tema-dms" },
     click("guild:500000"),

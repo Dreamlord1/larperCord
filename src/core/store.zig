@@ -45,6 +45,17 @@ pub const ChannelState = struct {
     version: u32 = 0,
 };
 
+/// Lista de membros de um servidor, no formato do Discord: posições fixas
+/// (a faixa 0..99 que pedimos), com cabeçalhos de grupo no meio.
+pub const MemberList = struct {
+    list_id: u64 = 0,
+    online: u32 = 0,
+    total: u32 = 0,
+    items: std.ArrayList(types.MemberItem) = .empty,
+    /// Já chegou o primeiro SYNC (antes disso, "carregando").
+    synced: bool = false,
+};
+
 pub const Store = struct {
     gpa: std.mem.Allocator,
     me: Id = 0,
@@ -54,11 +65,20 @@ pub const Store = struct {
     connection: @import("event.zig").Connection = .connecting,
     /// Dados de demonstração (sem conta conectada).
     demo: bool = false,
+    /// Da nossa conta (Configurações → Minha conta).
+    me_username: ?[]const u8 = null,
+    me_email: ?[]const u8 = null,
     users: std.AutoHashMapUnmanaged(Id, types.User) = .empty,
     guilds: std.ArrayList(types.Guild) = .empty,
     channels: std.AutoHashMapUnmanaged(Id, *ChannelState) = .empty,
     /// Canais de cada servidor, na ordem de exibição (categorias incluídas).
     guild_channels: std.AutoHashMapUnmanaged(Id, std.ArrayList(Id)) = .empty,
+    /// Cargos de todos os servidores (o ID do cargo é único no Discord).
+    roles: std.AutoHashMapUnmanaged(Id, types.Role) = .empty,
+    member_lists: std.AutoHashMapUnmanaged(Id, MemberList) = .empty,
+    /// (servidor, usuário) -> cor do nome e cargos.
+    members: std.AutoHashMapUnmanaged([2]Id, types.MemberInfo) = .empty,
+    relationships: std.AutoHashMapUnmanaged(Id, types.Relationship) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) Store {
         return .{ .gpa = gpa };
@@ -71,25 +91,58 @@ pub const Store = struct {
             cs.*.messages.deinit(s.gpa);
             cs.*.typing.deinit(s.gpa);
             cs.*.voice_members.deinit(s.gpa);
-            ev_alloc.free(cs.*.info.name);
-            ev_alloc.free(cs.*.info.topic);
+            freeChannelInfo(&cs.*.info);
             s.gpa.destroy(cs.*);
         }
         s.channels.deinit(s.gpa);
+        var ri = s.roles.valueIterator();
+        while (ri.next()) |r| ev_alloc.free(r.name);
+        s.roles.deinit(s.gpa);
+        var mi = s.member_lists.valueIterator();
+        while (mi.next()) |ml| ml.items.deinit(s.gpa);
+        s.member_lists.deinit(s.gpa);
+        s.members.deinit(s.gpa);
+        s.relationships.deinit(s.gpa);
         var gc = s.guild_channels.valueIterator();
         while (gc.next()) |l| l.deinit(s.gpa);
         s.guild_channels.deinit(s.gpa);
-        for (s.guilds.items) |g| {
-            ev_alloc.free(g.name);
-            ev_alloc.free(g.acronym);
-        }
+        for (s.guilds.items) |g| freeGuildInfo(g);
         s.guilds.deinit(s.gpa);
         var ui = s.users.valueIterator();
-        while (ui.next()) |u| {
-            ev_alloc.free(u.name);
-            if (u.activity) |a| ev_alloc.free(a);
-        }
+        while (ui.next()) |u| freeUser(u.*);
         s.users.deinit(s.gpa);
+        if (s.me_username) |x| ev_alloc.free(x);
+        if (s.me_email) |x| ev_alloc.free(x);
+    }
+
+    fn freeUser(u: types.User) void {
+        ev_alloc.free(u.name);
+        if (u.activity) |a| ev_alloc.free(a);
+        if (u.avatar) |a| ev_alloc.free(a);
+    }
+
+    fn freeGuildInfo(g: types.Guild) void {
+        ev_alloc.free(g.name);
+        ev_alloc.free(g.acronym);
+        if (g.icon) |i| ev_alloc.free(i);
+    }
+
+    fn freeChannelInfo(ch: *const types.Channel) void {
+        ev_alloc.free(ch.name);
+        ev_alloc.free(ch.topic);
+        if (ch.recipients.len > 0) ev_alloc.free(ch.recipients);
+        if (ch.icon) |i| ev_alloc.free(i);
+    }
+
+    /// Troca o avatar guardado se o novo for diferente (fica com `fresh`
+    /// ou o libera).
+    fn takeAvatar(old: *types.User, fresh: ?[]const u8) void {
+        const f = fresh orelse return;
+        if (old.avatar) |a| {
+            if (std.mem.eql(u8, a, f)) return ev_alloc.free(f);
+            ev_alloc.free(a);
+        }
+        old.avatar = f;
     }
 
     fn freeMessage(s: *Store, m: *StoredMessage) void {
@@ -104,6 +157,7 @@ pub const Store = struct {
         if (s.users.getPtr(u.id)) |old| {
             ev_alloc.free(u.name);
             if (u.activity) |a| ev_alloc.free(a);
+            takeAvatar(old, u.avatar);
             if (old.status == .offline and u.status != .offline) old.status = u.status;
             return;
         }
@@ -116,8 +170,11 @@ pub const Store = struct {
         if (s.users.getPtr(u.id)) |old| {
             const old_status = old.status;
             const old_activity = old.activity;
+            const old_avatar = old.avatar;
             ev_alloc.free(old.name);
             old.* = u;
+            old.avatar = old_avatar;
+            takeAvatar(old, u.avatar);
             if (u.status == .offline) old.status = old_status;
             if (u.activity == null) {
                 old.activity = old_activity;
@@ -134,9 +191,11 @@ pub const Store = struct {
             if (old.id != g.id) continue;
             ev_alloc.free(old.name);
             ev_alloc.free(old.acronym);
+            if (old.icon) |i| ev_alloc.free(i);
             old.name = g.name;
             old.acronym = g.acronym;
             old.color = g.color;
+            old.icon = g.icon;
             return;
         }
         try s.guilds.append(s.gpa, g);
@@ -145,8 +204,7 @@ pub const Store = struct {
     fn mergeChannel(s: *Store, ch: types.Channel) !void {
         if (s.channels.get(ch.id)) |cs| {
             const unread = cs.info.unread or ch.unread;
-            ev_alloc.free(cs.info.name);
-            ev_alloc.free(cs.info.topic);
+            freeChannelInfo(&cs.info);
             cs.info = ch;
             cs.info.unread = unread;
         } else {
@@ -168,8 +226,7 @@ pub const Store = struct {
         cs.messages.deinit(s.gpa);
         cs.typing.deinit(s.gpa);
         cs.voice_members.deinit(s.gpa);
-        ev_alloc.free(cs.info.name);
-        ev_alloc.free(cs.info.topic);
+        freeChannelInfo(&cs.info);
         s.gpa.destroy(cs);
         var it = s.guild_channels.valueIterator();
         while (it.next()) |list| {
@@ -185,9 +242,12 @@ pub const Store = struct {
         }
         for (s.guilds.items, 0..) |g, i| {
             if (g.id != id) continue;
-            ev_alloc.free(g.name);
-            ev_alloc.free(g.acronym);
+            freeGuildInfo(g);
             _ = s.guilds.orderedRemove(i);
+            if (s.member_lists.fetchRemove(id)) |kv| {
+                var ml = kv.value;
+                ml.items.deinit(s.gpa);
+            }
             return;
         }
     }
@@ -214,6 +274,14 @@ pub const Store = struct {
         switch (ev) {
             .ready => |r| {
                 s.me = r.me;
+                if (r.username) |x| {
+                    if (s.me_username) |old| ev_alloc.free(old);
+                    s.me_username = x;
+                }
+                if (r.email) |x| {
+                    if (s.me_email) |old| ev_alloc.free(old);
+                    s.me_email = x;
+                }
                 for (r.users) |u| try s.mergeUser(u);
                 for (r.guilds) |g| try s.mergeGuild(g);
                 for (r.channels) |ch| try s.mergeChannel(ch);
@@ -304,9 +372,10 @@ pub const Store = struct {
                 }
             },
             .user_upsert => |u| {
-                if (s.users.contains(u.id)) {
+                if (s.users.getPtr(u.id)) |old| {
                     ev_alloc.free(u.name);
                     if (u.activity) |a| ev_alloc.free(a);
+                    takeAvatar(old, u.avatar);
                     return;
                 }
                 try s.users.put(s.gpa, u.id, u);
@@ -376,7 +445,99 @@ pub const Store = struct {
                 const m = s.find(cs, r.id) orelse return;
                 s.react(m, r.emoji.text(), r.user == s.me, r.add);
             },
+            .roles => |rs| {
+                defer ev_alloc.free(rs.roles);
+                for (rs.roles) |r| {
+                    const gop = try s.roles.getOrPut(s.gpa, r.id);
+                    if (gop.found_existing) ev_alloc.free(gop.value_ptr.name);
+                    gop.value_ptr.* = r;
+                }
+            },
+            .member_list => |ml| {
+                defer {
+                    for (ml.ops) |op| if (op.items.len > 0) ev_alloc.free(op.items);
+                    ev_alloc.free(ml.ops);
+                    if (ml.counts.len > 0) ev_alloc.free(ml.counts);
+                }
+                try s.applyMemberList(ml.guild, ml.list_id, ml.online, ml.total, ml.ops);
+                // Quantos em cada grupo (os cabeçalhos "CARGO — N").
+                if (s.member_lists.getPtr(ml.guild)) |list| for (list.items.items) |*it| if (it.* == .group) {
+                    for (ml.counts) |gc| if (gc[0] == it.group.id) {
+                        it.group.count = @intCast(@min(gc[1], std.math.maxInt(u32)));
+                    };
+                };
+            },
+            .member_info => |mi| try s.members.put(s.gpa, .{ mi.guild, mi.user }, mi.info),
+            .relationship => |r| {
+                if (r.kind == .none) {
+                    _ = s.relationships.remove(r.user);
+                } else try s.relationships.put(s.gpa, r.user, r.kind);
+            },
         }
+    }
+
+    fn applyMemberList(s: *Store, guild_id: Id, list_id: u64, online: u32, total: u32, ops: []const types.MemberOp) !void {
+        const gop = try s.member_lists.getOrPut(s.gpa, guild_id);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        const ml = gop.value_ptr;
+        // Lista de outro canal: só um SYNC novo vale (o resto é de antes).
+        if (ml.list_id != list_id) {
+            var has_sync = false;
+            for (ops) |op| if (op.kind == .sync) {
+                has_sync = true;
+            };
+            if (!has_sync and ml.synced) return;
+            ml.items.clearRetainingCapacity();
+            ml.list_id = list_id;
+        }
+        ml.online = online;
+        ml.total = total;
+        const items = &ml.items;
+        for (ops) |op| switch (op.kind) {
+            .sync => {
+                const end: usize = @as(usize, op.index) + op.items.len;
+                if (items.items.len < end) try items.appendNTimes(s.gpa, .none, end - items.items.len);
+                @memcpy(items.items[op.index..end], op.items);
+                ml.synced = true;
+            },
+            .invalidate => {
+                const end = @min(items.items.len, @as(usize, op.end) + 1);
+                if (op.index < end) @memset(items.items[op.index..end], .none);
+            },
+            .insert => if (op.items.len > 0) {
+                if (op.index >= items.items.len) {
+                    try items.appendNTimes(s.gpa, .none, op.index - items.items.len);
+                    try items.append(s.gpa, op.items[0]);
+                } else try items.insert(s.gpa, op.index, op.items[0]);
+            },
+            .update => if (op.items.len > 0 and op.index < items.items.len) {
+                items.items[op.index] = op.items[0];
+            },
+            .delete => if (op.index < items.items.len) {
+                _ = items.orderedRemove(op.index);
+            },
+        };
+        // Guarda cor e cargos de quem apareceu (nome nas mensagens, perfil).
+        for (items.items) |it| if (it == .member)
+            try s.members.put(s.gpa, .{ guild_id, it.member.user }, it.member.info);
+    }
+
+    pub fn memberList(s: *const Store, guild_id: Id) ?*MemberList {
+        return s.member_lists.getPtr(guild_id);
+    }
+
+    /// Cor do nome de alguém num servidor (0 = sem cor de cargo).
+    pub fn nameColor(s: *const Store, guild_id: Id, user_id: Id) u32 {
+        return if (s.memberInfo(guild_id, user_id)) |m| m.color else 0;
+    }
+
+    pub fn memberInfo(s: *const Store, guild_id: Id, user_id: Id) ?types.MemberInfo {
+        if (guild_id == 0) return null;
+        return s.members.get(.{ guild_id, user_id });
+    }
+
+    pub fn relationship(s: *const Store, user_id: Id) types.Relationship {
+        return s.relationships.get(user_id) orelse .none;
     }
 
     pub fn find(s: *const Store, cs: *ChannelState, id: Id) ?*StoredMessage {

@@ -5,7 +5,9 @@ const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "bolhas", "z
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // Padrão: ReleaseFast (o de debug desenha cada quadro ~4x mais devagar).
+    // O QA usa -Doptimize=debug, com as checagens de segurança.
+    const optimize = b.option(std.builtin.OptimizeMode, "optimize", "debug, safe, fast ou small (padrão: fast)") orelse .fast;
     const strip = b.option(bool, "strip", "Remove símbolos de debug do executável") orelse (optimize != .debug);
 
     const imgui_dir = b.path("third_party/imgui");

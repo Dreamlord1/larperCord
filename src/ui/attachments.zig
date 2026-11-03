@@ -18,6 +18,14 @@ const max_h: f32 = 320;
 const file_h: f32 = 58;
 const gap: f32 = 6;
 
+/// Configurações → Chat → Mostrar imagens de links (desligado = esconde os
+/// anexos que vieram de embeds). Atualizado a cada quadro pelo app.
+pub var hide_embeds = false;
+
+fn shown(a: *const Attachment) bool {
+    return !(hide_embeds and a.embed);
+}
+
 /// Tamanho em que a imagem aparece na conversa (nunca maior que o original).
 pub fn imageSize(a: *const Attachment, avail: f32) [2]f32 {
     const w: f32 = @floatFromInt(a.width);
@@ -32,19 +40,23 @@ fn fileWidth(avail: f32) f32 {
 
 /// Altura do bloco de anexos, contando o espaço acima dele.
 pub fn blockHeight(list: []const Attachment, avail: f32, has_text: bool) f32 {
-    if (list.len == 0) return 0;
     var h: f32 = if (has_text) gap else 2;
-    for (list, 0..) |*a, i| {
-        if (i > 0) h += gap;
+    var n: usize = 0;
+    for (list) |*a| {
+        if (!shown(a)) continue;
+        if (n > 0) h += gap;
+        n += 1;
         h += if (a.isImage()) imageSize(a, avail)[1] else file_h;
     }
-    return h;
+    return if (n == 0) 0 else h;
 }
 
 /// Largura mais larga do bloco (para o balão do tema de bolhas).
 pub fn blockWidth(list: []const Attachment, avail: f32) f32 {
     var w: f32 = 0;
-    for (list) |*a| w = @max(w, if (a.isImage()) imageSize(a, avail)[0] else fileWidth(avail));
+    for (list) |*a| if (shown(a)) {
+        w = @max(w, if (a.isImage()) imageSize(a, avail)[0] else fileWidth(avail));
+    };
     return w;
 }
 
@@ -61,8 +73,11 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, m: *const StoredMessage, x: f32, y_i
     if (list.len == 0) return;
     var y = y_in + (if (m.msg.content.len > 0) gap else 2);
     const scale = ctx.io.*.DisplayFramebufferScale.x;
+    var shown_n: usize = 0;
     for (list, 0..) |*a, i| {
-        if (i > 0) y += gap;
+        if (!shown(a)) continue;
+        if (shown_n > 0) y += gap;
+        shown_n += 1;
         const hid: usize = @truncate(m.msg.id ^ (0xA77A_C400 + i) ^ m.msg.nonce);
         if (a.isImage()) {
             const sz = imageSize(a, avail);
@@ -82,8 +97,20 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, m: *const StoredMessage, x: f32, y_i
 fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale: f32, alpha: f32, hid: usize, msg_id: types.Id) void {
     const radius: f32 = 8;
     const hb = d.hit(ctx, hid, r);
-    switch (ctx.images.get(a.url, r.w * scale, r.h * scale)) {
+    const set = &ctx.st.settings;
+    // GIF de fora (Tenor/Giphy) desligado nas configurações: fica a prévia.
+    var url = if (a.still.len > 0 and !set.gif_hosts) a.still else a.url;
+    // Sem tocar sozinho, o GIF anda com o mouse em cima (como no Discord).
+    const play = set.autoplay_gifs or hb.hovered;
+    var look = ctx.images.getEx(url, r.w * scale, r.h * scale, play);
+    if (look == .failed and a.still.len > 0 and url.ptr != a.still.ptr) {
+        url = a.still;
+        look = ctx.images.getEx(url, r.w * scale, r.h * scale, play);
+    }
+    var playing = false;
+    switch (look) {
         .ready => |t| {
+            playing = t.animated and play;
             c.ImDrawList_AddImageRounded(dl, t.ref, d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(alpha), radius, 0);
             if (hb.hovered) d.rect(dl, r, d.Rgba.white.alpha(0.06), radius);
         },
@@ -98,7 +125,7 @@ fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale:
             c.ImDrawList_AddRectFilledMultiColor(dl, d.v(sx + r.w * 0.2, r.y), d.v(sx + r.w * 0.4, r.bottom()), hl, 0, 0, hl);
             c.ImDrawList_PopClipRect(dl);
             pictureIcon(dl, r.x + r.w / 2, r.y + r.h / 2, ctx.col(.faint).alpha(alpha));
-            anim.active = true;
+            anim.every(50);
         },
         .failed => {
             d.rect(dl, r, ctx.col(.elevated).alpha(alpha), radius);
@@ -110,13 +137,13 @@ fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale:
             if (r.h > 60) d.text(dl, f, 13, r.x + (r.w - tw) / 2, r.y + r.h / 2 + 8, ctx.col(.faint), msg);
         },
     }
-    if (a.animated) {
+    if (a.animated and !playing) {
         const br: d.Rect = .{ .x = r.x + 8, .y = r.bottom() - 26, .w = 34, .h = 18 };
         d.rect(dl, br, d.Rgba.black.alpha(0.6 * alpha), 4);
         const f = ctx.ui.get(.bold);
         d.text(dl, f, 11, br.x + (br.w - d.width(f, 11, "GIF")) / 2, d.centerY(br, 11), d.Rgba.white.alpha(alpha), "GIF");
     }
-    if (hb.clicked) open(ctx, a);
+    if (hb.clicked) open(ctx, a, url);
     if (hb.right and msg_id != 0) ctx.popup(.{ .menu = .{ .kind = .message, .id = msg_id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
 }
 
@@ -144,10 +171,10 @@ fn openUrl(url: []const u8) void {
     _ = c.SDL_OpenURL(z.ptr);
 }
 
-fn open(ctx: *d.Ctx, a: *const Attachment) void {
+fn open(ctx: *d.Ctx, a: *const Attachment, url: []const u8) void {
     var v: state.Viewer = .{ .w = a.width, .h = a.height };
-    const n = @min(a.url.len, v.url.len);
-    @memcpy(v.url[0..n], a.url[0..n]);
+    const n = @min(url.len, v.url.len);
+    @memcpy(v.url[0..n], url[0..n]);
     v.url_len = @intCast(n);
     const fnl = @min(a.filename.len, v.name.len);
     @memcpy(v.name[0..fnl], a.filename[0..fnl]);
@@ -200,7 +227,7 @@ pub fn viewer(ctx: *d.Ctx) void {
             const t = @as(f32, @floatFromInt(@mod(ctx.now_ms, 100_000))) / 1000.0;
             c.ImDrawList_PathArcTo(dl, d.v(ir.x + ir.w / 2, ir.y + ir.h / 2), 18, t * 5, t * 5 + 4.2, 32);
             c.ImDrawList_PathStroke(dl, d.Rgba.white.col(0.8 * k), 2.5, 0);
-            anim.active = true;
+            anim.every(50);
         },
         .failed => {
             const f = ctx.ui.get(.medium);
