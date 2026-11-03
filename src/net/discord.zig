@@ -52,6 +52,9 @@ pub const Gateway = struct {
     me: Id = 0,
     frame: std.ArrayList(u8) = .empty,
     stopping: bool = false,
+    /// Pedido de encerrar visto também de dentro de uma transferência do
+    /// libcurl (que pode levar até 180 s): o app fecha sem esperar.
+    abort: std.atomic.Value(bool) = .init(false),
     voice_warned: bool = false,
     /// Sessão do gateway, para o RESUME (op 6).
     session_id: [64]u8 = @splat(0),
@@ -74,6 +77,7 @@ pub const Gateway = struct {
     }
 
     pub fn stop(g: *Gateway) void {
+        g.abort.store(true, .release);
         g.commands.push(.shutdown);
         if (g.thread) |t| c.SDL_WaitThread(t, null);
         std.crypto.secureZero(u8, g.token);
@@ -243,6 +247,7 @@ pub const Gateway = struct {
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECT_ONLY, @as(c_long, 2));
         _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, web_user_agent.ptr);
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECTTIMEOUT, @as(c_long, 15));
+        g.abortable(h);
         if (c.curl_easy_perform(h) != c.CURLE_OK) return .retry;
         var sock: c.curl_socket_t = -1;
         _ = c.curl_easy_getinfo(h, c.CURLINFO_ACTIVESOCKET, &sock);
@@ -1049,6 +1054,18 @@ pub const Gateway = struct {
         global: bool = false,
     };
 
+    /// Transferência que para assim que o app pede para encerrar.
+    fn abortable(g: *Gateway, h: *c.CURL) void {
+        _ = c.curl_easy_setopt(h, c.CURLOPT_NOPROGRESS, @as(c_long, 0));
+        _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFOFUNCTION, abortCb);
+        _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFODATA, g);
+    }
+
+    fn abortCb(ud: ?*anyopaque, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t) callconv(.c) c_int {
+        const g: *Gateway = @ptrCast(@alignCast(ud.?));
+        return @intFromBool(g.abort.load(.acquire));
+    }
+
     fn writeCb(ptr: [*c]u8, size: usize, n: usize, user: ?*anyopaque) callconv(.c) usize {
         const body: *std.ArrayList(u8) = @ptrCast(@alignCast(user.?));
         body.appendSlice(alloc, ptr[0 .. size * n]) catch return 0;
@@ -1163,6 +1180,7 @@ pub const Gateway = struct {
             _ = c.curl_easy_setopt(h, c.CURLOPT_HEADERDATA, &rate);
             _ = c.curl_easy_setopt(h, c.CURLOPT_TIMEOUT, @as(c_long, if (mime != null) 180 else 20));
             _ = c.curl_easy_setopt(h, c.CURLOPT_ACCEPT_ENCODING, "");
+            g.abortable(h);
             if (mime) |mp| {
                 _ = c.curl_easy_setopt(h, c.CURLOPT_MIMEPOST, mp);
             } else if (body) |b| {

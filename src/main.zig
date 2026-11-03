@@ -1,4 +1,5 @@
 const std = @import("std");
+const c = @import("c");
 const builtin_themes = @import("builtin_themes");
 const App = @import("app.zig").App;
 const Options = @import("app.zig").Options;
@@ -64,9 +65,18 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
 
     const app = try App.create(std.heap.c_allocator, opts);
-    defer app.destroy();
     const ok = app.run();
+    // Fechou a janela: o processo termina de qualquer jeito, mesmo que uma
+    // thread de rede demore a largar (nunca fica rodando escondido).
+    _ = c.SDL_DetachThread(c.SDL_CreateThread(watchdog, "quit", null));
+    app.destroy();
     if (!ok) std.process.exit(1);
+}
+
+fn watchdog(_: ?*anyopaque) callconv(.c) c_int {
+    c.SDL_Delay(3000);
+    std.log.warn("encerramento demorou mais de 3 s; saindo assim mesmo", .{});
+    std.c._exit(0);
 }
 
 fn fail(msg: []const u8) error{InvalidArgs} {

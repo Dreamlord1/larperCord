@@ -218,7 +218,7 @@ pub const Cache = struct {
             // O pedido mais novo primeiro: é o que está na tela agora.
             const jb = pending.pop() orelse continue;
             defer freeJob(jb);
-            const res = load(&curl, jb);
+            const res = load(&curl, jb, &cache.stopping);
             cache.results.push(.{ .key = alloc.dupe(u8, jb.key) catch continue, .pixels = res.pixels, .w = res.w, .h = res.h });
             platform.Window.wake(cache.wake_type, .media);
         }
@@ -234,7 +234,7 @@ fn bucket(v: f32) u16 {
 
 const Pixels = struct { pixels: ?[*]u8 = null, w: u16 = 0, h: u16 = 0 };
 
-fn load(curl: *?*c.CURL, jb: Job) Pixels {
+fn load(curl: *?*c.CURL, jb: Job, stop: *std.atomic.Value(bool)) Pixels {
     if (std.mem.startsWith(u8, jb.url, "demo:")) return demo(jb);
     var bytes: std.ArrayList(u8) = .empty;
     defer bytes.deinit(alloc);
@@ -247,7 +247,7 @@ fn load(curl: *?*c.CURL, jb: Job) Pixels {
         if (size > max_download) return .{};
         bytes.appendSlice(alloc, @as([*]const u8, @ptrCast(data))[0..size]) catch return .{};
     } else {
-        if (!download(curl, jb, &bytes)) return .{};
+        if (!download(curl, jb, &bytes, stop)) return .{};
     }
     return decode(bytes.items, jb.max_w, jb.max_h);
 }
@@ -265,7 +265,12 @@ fn writeCb(ptr: [*]const u8, size: usize, n: usize, ud: *anyopaque) callconv(.c)
     return len;
 }
 
-fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8)) bool {
+fn abortCb(ud: ?*anyopaque, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t) callconv(.c) c_int {
+    const stop: *std.atomic.Value(bool) = @ptrCast(@alignCast(ud.?));
+    return @intFromBool(stop.load(.acquire));
+}
+
+fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8), stop: *std.atomic.Value(bool)) bool {
     if (!allowedHost(jb.url)) return false;
     if (curl.* == null) {
         _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
@@ -286,6 +291,10 @@ fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8)) bool {
     _ = c.curl_easy_setopt(h, c.CURLOPT_PROTOCOLS_STR, "https");
     _ = c.curl_easy_setopt(h, c.CURLOPT_REDIR_PROTOCOLS_STR, "https");
     _ = c.curl_easy_setopt(h, c.CURLOPT_ACCEPT_ENCODING, "");
+    // Fechar o app interrompe o download na hora.
+    _ = c.curl_easy_setopt(h, c.CURLOPT_NOPROGRESS, @as(c_long, 0));
+    _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFOFUNCTION, abortCb);
+    _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFODATA, stop);
     if (c.curl_easy_perform(h) != c.CURLE_OK) return false;
     var status: c_long = 0;
     _ = c.curl_easy_getinfo(h, c.CURLINFO_RESPONSE_CODE, &status);

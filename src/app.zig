@@ -934,7 +934,11 @@ pub const App = struct {
                     }
                 } else {
                     _ = c.cImGui_ImplSDL3_ProcessEvent(&e);
-                    if (e.type == c.SDL_EVENT_QUIT or e.type == c.SDL_EVENT_WINDOW_CLOSE_REQUESTED) running = false;
+                    if (e.type == c.SDL_EVENT_QUIT or e.type == c.SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+                        running = false;
+                        // Some da tela na hora; o resto do encerramento é por trás.
+                        _ = c.SDL_HideWindow(app.win.window);
+                    }
                     // Arquivo arrastado para a janela: vai para a bandeja.
                     if (e.type == c.SDL_EVENT_DROP_FILE and app.store.ready and app.st.activeChannel() != null)
                         if (e.drop.data) |p| app.attachFile(std.mem.span(p));
