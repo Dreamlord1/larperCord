@@ -44,6 +44,9 @@ pub const Style = struct {
     glow: ?Rgba = null,
 };
 
+/// Cor sobrescrita num pedaço do layout (`c-text="#fff"` num nó).
+pub const Override = struct { tok: Token, color: Rgba };
+
 pub const Theme = struct {
     arena: std.heap.ArenaAllocator,
     name: []const u8 = "sem nome",
@@ -61,6 +64,8 @@ pub const Theme = struct {
     transparent: bool = false,
     styles: std.StringHashMapUnmanaged(Style) = .empty,
     layout: ?*const kdl.Node = null,
+    /// Sobrescritas efetivas de cada nó (já incluindo as dos pais).
+    node_colors: std.AutoHashMapUnmanaged(*const kdl.Node, []const Override) = .empty,
 
     pub fn deinit(t: *Theme) void {
         t.arena.deinit();
@@ -185,8 +190,25 @@ pub fn load(gpa: std.mem.Allocator, src: []const u8, wal: ?*const [16]Rgba, diag
         }
     }
     if (t.layout == null) return fail(diag, null, "o tema precisa de um nó `layout`");
+    try collectOverrides(&t, a, t.layout.?, &.{}, resolver, diag);
     t.transparent = t.transparent or t.colors.get(.bg).a < 0.999;
     return t;
+}
+
+/// Percorre o layout juntando `c-<token>=cor`, que valem para o nó e seus filhos.
+fn collectOverrides(t: *Theme, a: std.mem.Allocator, n: *const kdl.Node, inherited: []const Override, r: color.Resolver, diag: ?*Diagnostic) LoadError!void {
+    var list: std.ArrayList(Override) = .empty;
+    try list.appendSlice(a, inherited);
+    for (n.props) |p| {
+        if (!std.mem.startsWith(u8, p.key, "c-")) continue;
+        const tok = tokenFromName(p.key[2..]) orelse return fail(diag, n, "token de cor desconhecido em c-…");
+        const expr = p.value.asString() orelse return fail(diag, n, "a cor deve ser uma string");
+        const col = color.eval(expr, r) catch return fail(diag, n, "expressão de cor inválida");
+        try list.append(a, .{ .tok = tok, .color = col });
+    }
+    const effective = try list.toOwnedSlice(a);
+    if (effective.len > 0) try t.node_colors.put(a, n, effective);
+    for (n.children) |*ch| try collectOverrides(t, a, ch, effective, r, diag);
 }
 
 fn fail(diag: ?*Diagnostic, n: ?*const kdl.Node, msg: []const u8) LoadError {
@@ -261,4 +283,16 @@ test "erro de tema aponta a linha" {
     var d: Diagnostic = .{};
     try std.testing.expectError(error.InvalidTheme, load(std.testing.allocator, "colors {\n  nao-existe \"#fff\"\n}\nlayout { messages }", null, &d));
     try std.testing.expectEqual(@as(u32, 2), d.line);
+}
+
+test "cores sobrescritas valem para os filhos" {
+    var t = try load(std.testing.allocator,
+        \\layout { column c-text="#ff0000" { messages; row c-muted="#00ff00" { composer } } }
+    , null, null);
+    defer t.deinit();
+    const col = &t.layout.?.children[0];
+    const msgs = &col.children[0];
+    const comp = &col.children[1].children[0];
+    try std.testing.expectEqual(@as(usize, 1), t.node_colors.get(msgs).?.len);
+    try std.testing.expectEqual(@as(usize, 2), t.node_colors.get(comp).?.len);
 }

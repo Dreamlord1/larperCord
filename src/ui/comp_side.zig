@@ -49,6 +49,7 @@ pub fn memberList(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             if (tty) {
                 const rr: d.Rect = .{ .x = r.x + 4, .y = y, .w = r.w - 8, .h = 20 };
                 const hb = d.hit(ctx, @intCast(uid), rr);
+                memberClick(ctx, hb, uid, rr);
                 if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
                 d.text(dl, fam.get(.regular), fs - 1, rr.x + 6, d.centerY(rr, fs - 1), w.statusColor(ctx, u.status), w.statusGlyph(u.status));
                 _ = d.textClipped(dl, fam.get(if (want_online) .bold else .regular), fs - 1, rr.x + 24, d.centerY(rr, fs - 1), if (want_online) name_col else ctx.col(.faint), u.name, rr.w - 30);
@@ -57,6 +58,7 @@ pub fn memberList(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             }
             const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = 42 };
             const hb = d.hit(ctx, @intCast(uid), rr);
+            memberClick(ctx, hb, uid, rr);
             const k = anim.to(anim.id("member", uid), if (hb.hovered) 1 else 0, 24);
             d.rect(dl, rr, ctx.col(.hover).alpha(k * 1.4), ctx.th.radius);
             const alpha: f32 = if (want_online) 1 else 0.38 + 0.4 * k;
@@ -72,6 +74,11 @@ pub fn memberList(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         y += if (tty) @as(f32, 8) else 16;
     }
     d.endRegion(ctx, y, r.x);
+}
+
+fn memberClick(ctx: *d.Ctx, hb: d.Hit, uid: types.Id, rr: d.Rect) void {
+    if (hb.clicked) ctx.popup(.{ .profile = .{ .user = uid, .x = rr.x - 330, .y = rr.y } });
+    if (hb.right) ctx.popup(.{ .menu = .{ .kind = .user, .id = uid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
 }
 
 // --- Barra de status --------------------------------------------------------

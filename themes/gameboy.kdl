@@ -1,0 +1,57 @@
+// gameboy — quatro tons de verde, bordas grossas e uma tela de LCD.
+theme "gameboy" description="Quatro tons de verde, bordas grossas e cara de portátil de 1989." author="larperCord" preview=gameboy
+
+palette "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#8bac0f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230" "#9bbc0f"
+
+colors {
+    bg          "#8bac0f"
+    rail        "#9bbc0f"
+    sidebar     "#9bbc0f"
+    surface     "#9bbc0f"
+    elevated    "#8bac0f"
+    overlay     "#9bbc0f"
+    text        "#0f380f"
+    muted       "#306230"
+    faint       "#306230"
+    accent      "#0f380f"
+    accent-text "#9bbc0f"
+    border      "#0f380f"
+    hover       "alpha(#306230, 0.25)"
+    selected    "alpha(#0f380f, 0.25)"
+    online      "#0f380f"
+    idle        "#306230"
+    dnd         "#0f380f"
+    danger      "#0f380f"
+    mention     "#0f380f"
+    link        "#0f380f"
+    code-bg     "#8bac0f"
+    bubble-self "#306230"
+    bubble-self-text "#9bbc0f"
+    bubble-other "#8bac0f"
+    shadow      "alpha(#0f380f, 0.0)"
+}
+roles "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230" "#0f380f" "#306230"
+
+fonts ui="JetBrains Mono" mono="JetBrains Mono" size=14
+metrics radius=0
+
+styles {
+    style "lcd" bg="@surface" border="@border" border-width=3
+}
+
+layout {
+    column padding=14 gap=10 {
+        label height=24 text="DOT MATRIX WITH STEREO SOUND  ·  larperCord" size=12 weight=bold color=muted align=center
+        row flex=1 gap=10 {
+            channel-list width=226 style=lcd variant=tree inset-x=4 inset-y=4
+            column flex=1 style=lcd {
+                header height=30 variant=tty inset-x=4
+                messages flex=1 variant=irc avatar=none inset-x=4
+                spacer height=22
+                composer height=36 variant=prompt inset-x=4
+            }
+        }
+        guild-bar height=34 shape=text style=lcd inset-x=4
+        status-bar height=24 variant=tty items="conn theme ram spacer keys clock"
+    }
+}

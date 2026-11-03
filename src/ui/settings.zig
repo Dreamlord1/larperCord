@@ -469,6 +469,51 @@ fn miniature(dl: *c.ImDrawList, pv: Preview, m: d.Rect) void {
             d.rect(dl, .{ .x = m.right() - 40 * u, .y = m.y + 27 * u, .w = 32 * u, .h = 6 * u }, pv.bubble, 3 * u);
             d.rect(dl, .{ .x = cx + 4 * u, .y = m.y + 36 * u, .w = 22 * u, .h = 6 * u }, pv.elevated, 3 * u);
         },
+        .dock => {
+            d.rect(dl, .{ .x = m.x + 3 * u, .y = m.y + 3 * u, .w = 20 * u, .h = m.h - 20 * u }, pv.surface, 3 * u);
+            d.rect(dl, .{ .x = m.x + 26 * u, .y = m.y + 3 * u, .w = m.w - 29 * u, .h = m.h - 20 * u }, pv.surface, 3 * u);
+            d.border(dl, .{ .x = m.x + 26 * u, .y = m.y + 3 * u, .w = m.w - 29 * u, .h = m.h - 20 * u }, pv.accent.alpha(0.7), 3 * u, 1);
+            for (0..4) |i| d.rect(dl, .{ .x = m.x + 30 * u, .y = m.y + 10 * u + @as(f32, @floatFromInt(i)) * 7 * u, .w = (25 + @as(f32, @floatFromInt((i * 11) % 20))) * u, .h = 2 * u }, line_col, u);
+            const dw = 50 * u;
+            d.rect(dl, .{ .x = m.x + m.w / 2 - dw / 2, .y = m.bottom() - 13 * u, .w = dw, .h = 10 * u }, pv.elevated, 4 * u);
+            for (0..6) |i| {
+                const sz: f32 = if (i == 2) 7 else 5;
+                d.rect(dl, .{ .x = m.x + m.w / 2 - dw / 2 + 3 * u + @as(f32, @floatFromInt(i)) * 7.8 * u, .y = m.bottom() - 6 * u - sz * u, .w = sz * u, .h = sz * u }, pv.accent.alpha(if (i == 2) 1 else 0.55), 1.5 * u);
+            }
+        },
+        .mirror => {
+            d.rectFlags(dl, .{ .x = m.right() - 9 * u, .y = m.y, .w = 9 * u, .h = m.h }, pv.rail, radius, c.ImDrawFlags_RoundRight);
+            for (0..4) |i| d.rect(dl, .{ .x = m.right() - 7.5 * u, .y = m.y + 4 * u + @as(f32, @floatFromInt(i)) * 9 * u, .w = 6 * u, .h = 6 * u }, pv.accent.alpha(if (i == 0) 1 else 0.4), u);
+            d.rect(dl, .{ .x = m.right() - 31 * u, .y = m.y, .w = 22 * u, .h = m.h }, pv.sidebar, 0);
+            d.rect(dl, .{ .x = m.right() - 28 * u, .y = m.y + 4 * u, .w = 15 * u, .h = 2.5 * u }, pv.accent, u);
+            for (0..4) |i| d.rect(dl, .{ .x = m.right() - 28 * u, .y = m.y + 12 * u + @as(f32, @floatFromInt(i)) * 6 * u, .w = 14 * u, .h = 2 * u }, line_col, u);
+            for (0..5) |i| {
+                const yy = m.y + 8 * u + @as(f32, @floatFromInt(i)) * 10 * u;
+                d.rect(dl, .{ .x = m.x + 5 * u, .y = yy - 2.5 * u, .w = 5 * u, .h = 5 * u }, pv.accent.alpha(0.6), u);
+                d.rect(dl, .{ .x = m.x + 13 * u, .y = yy - 1 * u, .w = (28 + @as(f32, @floatFromInt((i * 13) % 22))) * u, .h = 2.2 * u }, line_col, u);
+            }
+        },
+        .gameboy => {
+            d.border(dl, .{ .x = m.x + 3 * u, .y = m.y + 6 * u, .w = 24 * u, .h = m.h - 22 * u }, pv.text, 0, 2);
+            d.border(dl, .{ .x = m.x + 30 * u, .y = m.y + 6 * u, .w = m.w - 33 * u, .h = m.h - 22 * u }, pv.text, 0, 2);
+            for (0..6) |i| d.rect(dl, .{ .x = m.x + 33 * u, .y = m.y + 10 * u + @as(f32, @floatFromInt(i)) * 5.5 * u, .w = (20 + @as(f32, @floatFromInt((i * 17) % 30))) * u, .h = 2 * u }, pv.text.alpha(0.7), 0);
+            d.border(dl, .{ .x = m.x + 3 * u, .y = m.bottom() - 13 * u, .w = m.w - 6 * u, .h = 6 * u }, pv.text, 0, 2);
+            d.rect(dl, .{ .x = m.x + 5 * u, .y = m.bottom() - 11.5 * u, .w = 10 * u, .h = 3 * u }, pv.text, 0);
+        },
+        .office => {
+            d.rectFlags(dl, .{ .x = m.x, .y = m.y, .w = 28 * u, .h = m.h }, pv.sidebar, radius, c.ImDrawFlags_RoundLeft);
+            for (0..3) |i| {
+                const yy = m.y + 5 * u + @as(f32, @floatFromInt(i)) * 6 * u;
+                d.rect(dl, .{ .x = m.x + 3 * u, .y = yy, .w = 4 * u, .h = 4 * u }, pv.accent.mix(d.Rgba.white, 0.3), u);
+                d.rect(dl, .{ .x = m.x + 9 * u, .y = yy + 1 * u, .w = 14 * u, .h = 2 * u }, d.Rgba.white.alpha(0.6), u);
+            }
+            for (0..5) |i| d.rect(dl, .{ .x = m.x + 3 * u, .y = m.y + 26 * u + @as(f32, @floatFromInt(i)) * 5.5 * u, .w = 22 * u, .h = 3.5 * u }, if (i == 1) pv.accent else d.Rgba.white.alpha(0.12), u);
+            for (0..5) |i| {
+                const yy = m.y + 8 * u + @as(f32, @floatFromInt(i)) * 10 * u;
+                d.rect(dl, .{ .x = m.x + 32 * u, .y = yy - 2.5 * u, .w = 5 * u, .h = 5 * u }, pv.accent.alpha(0.5), u);
+                d.rect(dl, .{ .x = m.x + 40 * u, .y = yy - 1 * u, .w = (28 + @as(f32, @floatFromInt((i * 13) % 22))) * u, .h = 2.2 * u }, pv.text.alpha(0.35), u);
+            }
+        },
         .zen => {
             const cx = m.x + m.w * 0.22;
             const cw = m.w * 0.56;

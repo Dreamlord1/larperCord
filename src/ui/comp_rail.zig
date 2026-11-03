@@ -16,6 +16,9 @@ pub fn draw(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const horizontal = if (n.str("orientation")) |o| std.mem.eql(u8, o, "horizontal") else r.w > r.h;
     const shape_s = d.pstr(n, "shape", "circle");
     if (std.mem.eql(u8, shape_s, "text")) return textTabs(ctx, n, r);
+    const variant = d.pstr(n, "variant", "bar");
+    if (std.mem.eql(u8, variant, "dock")) return dock(ctx, n, r, w.shapeOf(shape_s));
+    if (std.mem.eql(u8, variant, "list")) return list(ctx, n, r, w.shapeOf(shape_s));
     if (horizontal) horizontalBar(ctx, n, r, w.shapeOf(shape_s)) else verticalBar(ctx, n, r, w.shapeOf(shape_s));
 }
 
@@ -67,6 +70,7 @@ fn horizontalBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) voi
         const pr: d.Rect = .{ .x = x, .y = cy - size / 2 - 3, .w = pw, .h = size + 6 };
         const hb = d.hit(ctx, 1000 + i, pr);
         if (hb.clicked) ctx.act(.{ .select_guild = g.id });
+        if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         const sel = ctx.st.guild == g.id;
         const k = anim.to(anim.id("hpill", i), if (sel) 1 else if (hb.hovered) 0.45 else 0, 18);
         d.rect(dl, pr, ctx.col(.accent).alpha(0.16 * k), pr.h / 2);
@@ -97,9 +101,10 @@ fn icon(ctx: *d.Ctx, dl: *c.ImDrawList, ref: ?GuildRef, cx: f32, y: f32, size: f
     const n: usize = if (ref) |gr| gr.i + 1 else 0;
     const ir: d.Rect = .{ .x = cx - size / 2, .y = y, .w = size, .h = size };
     const hb = d.hit(ctx, n, ir);
-    const selected = if (ref) |gr| ctx.st.guild == gr.g.id else false;
+    const selected = if (ref) |gr| ctx.st.guild == gr.g.id else ctx.st.guild == 0;
     const active = selected or hb.hovered;
-    if (hb.clicked) if (ref) |gr| ctx.act(.{ .select_guild = gr.g.id }) else ctx.act(.open_palette);
+    if (hb.clicked) ctx.act(.{ .select_guild = if (ref) |gr| gr.g.id else 0 });
+    if (hb.right) if (ref) |gr| ctx.popup(.{ .menu = .{ .kind = .guild, .id = gr.g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
 
     const base_r = w.shapeRadius(shape, size);
     const radius = anim.to(anim.id("g-rad", n), if (active and shape == .circle) size * 0.31 else base_r, 20);
@@ -134,7 +139,8 @@ fn icon(ctx: *d.Ctx, dl: *c.ImDrawList, ref: ?GuildRef, cx: f32, y: f32, size: f
         d.rect(dl, .{ .x = cx - 12 * s, .y = cy - 9 * s, .w = 24 * s, .h = 17 * s }, ink, 8 * s);
         c.ImDrawList_AddTriangleFilled(dl, d.v(cx - 7 * s, cy + 6 * s), d.v(cx - 1 * s, cy + 6 * s), d.v(cx - 9 * s, cy + 13 * s), ink.u());
         for ([_]f32{ -6, 0, 6 }) |dx| d.circle(dl, cx + dx * s, cy - 0.5 * s, 2 * s, bg);
-        if (ind == .left) tooltip(ctx, n, ir.right() + 14, y + size / 2, "Paleta de comandos  (Ctrl+K)", hb.hovered);
+        if (selected and ind == .left) d.rectFlags(dl, .{ .x = bar.x, .y = y + size / 2 - size * 0.42, .w = 4, .h = size * 0.83 }, ctx.col(.text), 4, c.ImDrawFlags_RoundRight);
+        if (ind == .left) tooltip(ctx, n, ir.right() + 14, y + size / 2, "Mensagens diretas", hb.hovered);
     }
 }
 
@@ -185,4 +191,95 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         d.text(ctx.dl, if (sel) bold else font, fs, x, d.centerY(tr, fs), tc, lbl);
         x += tw + 2;
     }
+}
+
+/// Dock no estilo do macOS: os ícones crescem perto do mouse.
+fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
+    const base = @min(d.pnum(n, "size", 40), r.h - 12);
+    const count = ctx.store.guilds.items.len + 1;
+    const gap: f32 = 10;
+    const total = @as(f32, @floatFromInt(count)) * (base + gap) + gap;
+    const x0 = r.x + (r.w - total) / 2;
+    const near = ctx.mouse.y > r.y - 60 and ctx.mouse.y < r.bottom() and ctx.mouse.x > x0 - 40 and ctx.mouse.x < x0 + total + 40;
+    // Fundo de vidro do dock.
+    const bg: d.Rect = .{ .x = x0, .y = r.bottom() - base - 16, .w = total, .h = base + 14 };
+    d.shadow(ctx.dl, bg, 18, 14, ctx.col(.shadow));
+    d.rect(ctx.dl, bg, ctx.col(.elevated).alpha(0.85), 18);
+    d.border(ctx.dl, bg, ctx.col(.border).mix(ctx.col(.accent), 0.3), 18, 1);
+
+    const dl = ctx.fg;
+    var x = x0 + gap;
+    for (0..count) |i| {
+        const cx = x + base / 2;
+        const dist = @abs(ctx.mouse.x - cx);
+        const target: f32 = if (near) 1 + 0.65 * @max(0, 1 - dist / 140) else 1;
+        const k = anim.to(anim.id("dock", i), target, 22);
+        const size = base * k;
+        const by = bg.bottom() - 7;
+        const ir: d.Rect = .{ .x = cx - size / 2, .y = by - size, .w = size, .h = size };
+        const hb = d.hit(ctx, 3000 + i, ir);
+        const g: ?*types.Guild = if (i == 0) null else &ctx.store.guilds.items[i - 1];
+        const gid: types.Id = if (g) |x_| x_.id else 0;
+        if (hb.clicked) ctx.act(.{ .select_guild = gid });
+        if (hb.right) if (g) |gg| ctx.popup(.{ .menu = .{ .kind = .guild, .id = gg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+        if (g) |gg| {
+            glyph(ctx, dl, gg, cx, ir.y + size / 2, size, shape, true);
+            if (gg.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, gg.mentions);
+        } else {
+            d.rect(dl, ir, ctx.col(.accent), w.shapeRadius(shape, size));
+            const t = "DM";
+            const fs = size * 0.34;
+            const tw = d.width(ctx.ui.get(.bold), fs, t);
+            d.text(dl, ctx.ui.get(.bold), fs, cx - tw / 2, ir.y + size / 2 - fs * 0.62, ctx.col(.accent_text), t);
+        }
+        if (ctx.st.guild == gid) d.circle(dl, cx, bg.bottom() - 3, 2.5, ctx.col(.accent));
+        if (hb.hovered) {
+            const name = if (g) |gg| gg.name else "Mensagens diretas";
+            const fs: f32 = 13;
+            const tw = d.width(ctx.ui.get(.semibold), fs, name);
+            const tr: d.Rect = .{ .x = cx - tw / 2 - 10, .y = ir.y - 34, .w = tw + 20, .h = 26 };
+            d.rect(dl, tr, ctx.col(.overlay), 8);
+            d.text(dl, ctx.ui.get(.semibold), fs, tr.x + 10, d.centerY(tr, fs), ctx.col(.text), name);
+        }
+        x += base + gap;
+    }
+    if (near) anim.active = true;
+}
+
+/// Lista vertical com ícone + nome (estilo "workspaces" do Slack).
+fn list(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
+    const fam = ctx.familyFor(n);
+    const size = d.pnum(n, "size", 26);
+    const row_h = size + 10;
+    const dl = d.beginRegion(ctx, "##guildlist", r, c.ImGuiWindowFlags_NoScrollbar);
+    const o = c.ImGui_GetCursorScreenPos();
+    var y = o.y + 6;
+    for (0..ctx.store.guilds.items.len + 1) |i| {
+        const g: ?*types.Guild = if (i == 0) null else &ctx.store.guilds.items[i - 1];
+        const gid: types.Id = if (g) |x| x.id else 0;
+        const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
+        const hb = d.hit(ctx, 4000 + i, rr);
+        if (hb.clicked) ctx.act(.{ .select_guild = gid });
+        if (hb.right) if (g) |gg| ctx.popup(.{ .menu = .{ .kind = .guild, .id = gg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+        const sel = ctx.st.guild == gid;
+        const k = anim.to(anim.id("glist", i), if (sel) 1 else if (hb.hovered) 0.5 else 0, 22);
+        if (k > 0.01) d.rect(dl, rr, ctx.col(.selected).alpha(k), ctx.th.radius);
+        const cy = rr.y + rr.h / 2;
+        if (g) |gg| glyph(ctx, dl, gg, rr.x + 6 + size / 2, cy, size, shape, sel or hb.hovered) else {
+            d.rect(dl, .{ .x = rr.x + 6, .y = cy - size / 2, .w = size, .h = size }, ctx.col(.accent), w.shapeRadius(shape, size));
+        }
+        const name = if (g) |gg| gg.name else "Mensagens diretas";
+        const unread = if (g) |gg| gg.unread else false;
+        _ = d.textClipped(dl, fam.get(if (sel or unread) .semibold else .medium), 14, rr.x + size + 14, d.centerY(rr, 14), if (sel) ctx.col(.text) else ctx.col(.muted), name, rr.w - size - 40);
+        if (g) |gg| if (gg.mentions > 0) {
+            var buf: [8]u8 = undefined;
+            const t = std.fmt.bufPrint(&buf, "{d}", .{gg.mentions}) catch "";
+            const tw = d.width(fam.get(.bold), 11, t);
+            const br: d.Rect = .{ .x = rr.right() - tw - 16, .y = cy - 9, .w = tw + 10, .h = 18 };
+            d.rect(dl, br, ctx.col(.danger), 9);
+            d.text(dl, fam.get(.bold), 11, br.x + 5, d.centerY(br, 11), d.Rgba.white, t);
+        };
+        y += row_h;
+    }
+    d.endRegion(ctx, y + 6, r.x);
 }

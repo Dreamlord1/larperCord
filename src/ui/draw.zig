@@ -41,6 +41,8 @@ pub const Ctx = struct {
     actions: *std.ArrayList(Action),
     stats: *const Stats,
     win: Rect,
+    /// Algum elemento clicável está sob o mouse neste quadro.
+    hot: bool = false,
 
     pub fn act(ctx: *Ctx, a: Action) void {
         ctx.actions.append(ctx.st.gpa, a) catch {};
@@ -54,6 +56,11 @@ pub const Ctx = struct {
     pub fn familyFor(ctx: *const Ctx, n: *const kdl.Node) *Family {
         if (n.str("font")) |f| if (std.mem.eql(u8, f, "mono")) return ctx.mono;
         return ctx.ui;
+    }
+
+    /// Abre um popup (menu de contexto, perfil, emoji) na posição do mouse.
+    pub fn popup(ctx: *Ctx, p: @import("state.zig").Popup) void {
+        ctx.st.popup = p;
     }
 
     pub fn hovering(ctx: *const Ctx, r: Rect) bool {
@@ -204,19 +211,21 @@ pub fn firstGlyph(s: []const u8) []const u8 {
 
 // --- Interação --------------------------------------------------------------
 
-pub const Hit = struct { hovered: bool, clicked: bool, held: bool, middle: bool, ctrl: bool };
+pub const Hit = struct { hovered: bool, clicked: bool, held: bool, middle: bool, right: bool, ctrl: bool };
 
 /// Área clicável invisível. `id` precisa ser único dentro do componente.
 pub fn hit(ctx: *Ctx, id: usize, r: Rect) Hit {
     c.ImGui_SetCursorScreenPos(v(r.x, r.y));
     c.ImGui_PushIDInt(@truncate(@as(i64, @bitCast(id))));
-    const clicked = c.ImGui_InvisibleButton("##h", v(@max(r.w, 1), @max(r.h, 1)), c.ImGuiButtonFlags_MouseButtonLeft | c.ImGuiButtonFlags_MouseButtonMiddle);
+    const clicked = c.ImGui_InvisibleButton("##h", v(@max(r.w, 1), @max(r.h, 1)), c.ImGuiButtonFlags_MouseButtonLeft | c.ImGuiButtonFlags_MouseButtonMiddle | c.ImGuiButtonFlags_MouseButtonRight);
     const hovered = c.ImGui_IsItemHovered(0);
-    const held = c.ImGui_IsItemActive();
+    const held = c.ImGui_IsItemActive() and c.ImGui_IsMouseDown(0);
     const middle = c.ImGui_IsItemClickedEx(c.ImGuiMouseButton_Middle);
+    const right = c.ImGui_IsItemClickedEx(c.ImGuiMouseButton_Right);
     c.ImGui_PopID();
     if (hovered) c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_Hand);
-    return .{ .hovered = hovered, .clicked = clicked and !middle, .held = held, .middle = middle, .ctrl = ctx.io.*.KeyCtrl };
+    if (hovered) ctx.hot = true;
+    return .{ .hovered = hovered, .clicked = clicked and !middle and !right, .held = held, .middle = middle, .right = right, .ctrl = ctx.io.*.KeyCtrl };
 }
 
 /// Região com rolagem própria (lista de canais, membros, mensagens).

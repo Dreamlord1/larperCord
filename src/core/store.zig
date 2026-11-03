@@ -23,6 +23,12 @@ pub const StoredMessage = struct {
     height: f32 = 0,
     /// Largura da linha mais longa (usada pelas bolhas).
     natural_w: f32 = 0,
+    reactions: [8]types.Reaction = @splat(.{}),
+    n_reactions: u8 = 0,
+
+    pub fn reactionSlice(m: *const StoredMessage) []const types.Reaction {
+        return m.reactions[0..m.n_reactions];
+    }
 };
 
 pub const History = enum { none, loading, loaded };
@@ -45,6 +51,7 @@ pub const Store = struct {
     ready: bool = false,
     max_messages: usize = 400,
     latency_ms: u32 = 0,
+    connection: @import("event.zig").Connection = .connecting,
     users: std.AutoHashMapUnmanaged(Id, types.User) = .empty,
     guilds: std.ArrayList(types.Guild) = .empty,
     channels: std.AutoHashMapUnmanaged(Id, *ChannelState) = .empty,
@@ -170,7 +177,94 @@ pub const Store = struct {
                 if (v.channel) |id| if (s.channel(id)) |cs| try cs.voice_members.append(s.gpa, v.user);
             },
             .latency => |l| s.latency_ms = l,
+            .status => |st| s.connection = st,
+            .user_upsert => |u| {
+                if (s.users.contains(u.id)) {
+                    ev_alloc.free(u.name);
+                    if (u.activity) |a| ev_alloc.free(a);
+                    return;
+                }
+                try s.users.put(s.gpa, u.id, u);
+            },
+            .message_update => |up| {
+                const cs = s.channel(up.channel) orelse return ev_alloc.free(up.content);
+                const m = s.find(cs, up.id) orelse return ev_alloc.free(up.content);
+                const spans = markdown.parse(s.gpa, up.content) catch return ev_alloc.free(up.content);
+                ev_alloc.free(m.msg.content);
+                s.gpa.free(m.spans);
+                m.msg.content = up.content;
+                m.msg.edited = true;
+                m.spans = spans;
+                m.layout_w = -1;
+                cs.version +%= 1;
+            },
+            .message_delete => |del| {
+                const cs = s.channel(del.channel) orelse return;
+                for (cs.messages.items, 0..) |*m, i| if (m.msg.id == del.id) {
+                    s.freeMessage(m);
+                    _ = cs.messages.orderedRemove(i);
+                    cs.version +%= 1;
+                    return;
+                };
+            },
+            .reaction => |r| {
+                const cs = s.channel(r.channel) orelse return;
+                const m = s.find(cs, r.id) orelse return;
+                s.react(m, r.emoji.text(), r.user == s.me, r.add);
+            },
         }
+    }
+
+    pub fn find(s: *const Store, cs: *ChannelState, id: Id) ?*StoredMessage {
+        _ = s;
+        var i = cs.messages.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (cs.messages.items[i].msg.id == id) return &cs.messages.items[i];
+        }
+        return null;
+    }
+
+    /// Procura uma mensagem em qualquer canal carregado.
+    pub fn findAny(s: *const Store, id: Id) ?struct { cs: *ChannelState, m: *StoredMessage } {
+        var it = s.channels.valueIterator();
+        while (it.next()) |cs| if (s.find(cs.*, id)) |m| return .{ .cs = cs.*, .m = m };
+        return null;
+    }
+
+    /// Soma ou tira uma reação. `mine` indica se foi a gente.
+    pub fn react(s: *Store, m: *StoredMessage, emoji: []const u8, mine: bool, add: bool) void {
+        _ = s;
+        for (m.reactions[0..m.n_reactions], 0..) |*r, i| if (std.mem.eql(u8, r.text(), emoji)) {
+            if (add) {
+                if (mine and r.me) return;
+                r.count += 1;
+                if (mine) r.me = true;
+            } else {
+                if (mine and !r.me) return;
+                r.count -|= 1;
+                if (mine) r.me = false;
+                if (r.count == 0) {
+                    std.mem.copyForwards(types.Reaction, m.reactions[i .. m.n_reactions - 1], m.reactions[i + 1 .. m.n_reactions]);
+                    m.n_reactions -= 1;
+                }
+            }
+            m.layout_w = -1;
+            return;
+        };
+        if (!add or m.n_reactions >= m.reactions.len) return;
+        var r = types.Reaction.init(emoji);
+        r.count = 1;
+        r.me = mine;
+        m.reactions[m.n_reactions] = r;
+        m.n_reactions += 1;
+        m.layout_w = -1;
+    }
+
+    /// Edição local imediata (o servidor confirma depois).
+    pub fn editLocal(s: *Store, channel_id: Id, id: Id, content: []const u8) !void {
+        const owned = try ev_alloc.dupe(u8, content);
+        try s.apply(.{ .message_update = .{ .channel = channel_id, .id = id, .content = owned } }, 0);
     }
 
     fn addMessage(s: *Store, m: types.Message, now_ms: i64) !void {
@@ -201,12 +295,12 @@ pub const Store = struct {
     }
 
     /// Mostra na hora uma mensagem que acabamos de enviar.
-    pub fn addPending(s: *Store, channel_id: Id, content: []const u8, nonce: u64, now_ms: i64) !void {
+    pub fn addPending(s: *Store, channel_id: Id, content: []const u8, nonce: u64, reply_to: Id, now_ms: i64) !void {
         const cs = s.channel(channel_id) orelse return;
         const owned = try ev_alloc.dupe(u8, content);
         // As fatias dos trechos apontam para `owned`, que vira o conteúdo.
         try cs.messages.append(s.gpa, .{
-            .msg = .{ .id = 0, .channel = channel_id, .author = s.me, .timestamp = @divTrunc(now_ms, 1000), .content = owned, .nonce = nonce },
+            .msg = .{ .id = 0, .channel = channel_id, .author = s.me, .timestamp = @divTrunc(now_ms, 1000), .content = owned, .nonce = nonce, .reply_to = reply_to },
             .spans = try markdown.parse(s.gpa, owned),
             .pending = true,
         });
@@ -274,10 +368,34 @@ test "mensagem pendente é confirmada pelo nonce" {
     chans[0] = .{ .id = 10, .guild = 5, .name = try c_alloc.dupe(u8, "g"), .topic = try c_alloc.dupe(u8, "") };
     try s.apply(.{ .ready = .{ .me = 1, .users = try c_alloc.alloc(types.User, 0), .guilds = try c_alloc.alloc(types.Guild, 0), .channels = chans, .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
 
-    try s.addPending(10, "olá", 77, 0);
+    try s.addPending(10, "olá", 77, 0, 0);
     try std.testing.expect(s.channel(10).?.messages.items[0].pending);
     try s.apply(.{ .message_create = .{ .id = 5, .channel = 10, .author = 1, .timestamp = 0, .content = try c_alloc.dupe(u8, "olá"), .nonce = 77 } }, 0);
     const cs = s.channel(10).?;
     try std.testing.expectEqual(@as(usize, 1), cs.messages.items.len);
     try std.testing.expect(!cs.messages.items[0].pending);
+}
+
+test "reações, edição e exclusão" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    const chans = try c_alloc.alloc(types.Channel, 1);
+    chans[0] = .{ .id = 10, .guild = 5, .name = try c_alloc.dupe(u8, "g"), .topic = try c_alloc.dupe(u8, "") };
+    try s.apply(.{ .ready = .{ .me = 1, .users = try c_alloc.alloc(types.User, 0), .guilds = try c_alloc.alloc(types.Guild, 0), .channels = chans, .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
+    try s.apply(.{ .message_create = .{ .id = 7, .channel = 10, .author = 2, .timestamp = 0, .content = try c_alloc.dupe(u8, "oi") } }, 0);
+
+    const r = types.Reaction.init("👍");
+    try s.apply(.{ .reaction = .{ .channel = 10, .id = 7, .emoji = r, .user = 2, .add = true } }, 0);
+    try s.apply(.{ .reaction = .{ .channel = 10, .id = 7, .emoji = r, .user = 1, .add = true } }, 0);
+    const m = s.find(s.channel(10).?, 7).?;
+    try std.testing.expectEqual(@as(u16, 2), m.reactions[0].count);
+    try std.testing.expect(m.reactions[0].me);
+
+    try s.editLocal(10, 7, "editado **agora**");
+    try std.testing.expect(m.msg.edited);
+    try std.testing.expectEqualStrings("editado **agora**", m.msg.content);
+
+    try s.apply(.{ .message_delete = .{ .channel = 10, .id = 7 } }, 0);
+    try std.testing.expectEqual(@as(usize, 0), s.channel(10).?.messages.items.len);
 }

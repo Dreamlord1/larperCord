@@ -1,0 +1,54 @@
+// papel — papel e tinta: claro, serifado e com o layout espelhado
+// (conversa à esquerda, canais e servidores à direita).
+theme "papel" description="Papel e tinta: serifado, claro e com o layout espelhado." author="larperCord" preview=mirror
+
+colors {
+    bg          "#f3ead5"
+    rail        "#e6dbbf"
+    sidebar     "#ece2c9"
+    surface     "#f8f1de"
+    elevated    "#e6dbbf"
+    overlay     "#fbf6e8"
+    text        "#2a2017"
+    muted       "#6b5944"
+    faint       "#a08c70"
+    accent      "#a3361e"
+    accent-text "#fbf6e8"
+    border      "#d6c7a3"
+    hover       "alpha(#a3361e, 0.06)"
+    selected    "alpha(#a3361e, 0.13)"
+    online      "#4c7a34"
+    idle        "#b8860b"
+    dnd         "#a3361e"
+    danger      "#a3361e"
+    mention     "#a3361e"
+    link        "#1f5a8a"
+    code-bg     "#e8dcbc"
+    bubble-self "#a3361e"
+    bubble-other "#e6dbbf"
+    shadow      "alpha(#5a4320, 0.18)"
+}
+roles "#a3361e" "#1f5a8a" "#4c7a34" "#7a4c8a" "#b8860b" "#2b6b6b" "#8a3b5a" "#5a4320"
+
+fonts ui="DejaVu Serif" mono="JetBrains Mono" size=16
+metrics radius=3
+
+layout {
+    row {
+        column flex=1 bg=surface {
+            header height=70 variant=minimal inset-x=30
+            messages flex=1 avatar=square spacing=20 inset-x=14
+            column height=92 padding-x=30 {
+                spacer flex=1
+                composer height=46
+                spacer height=22
+            }
+        }
+        column width=252 bg=sidebar {
+            label height=58 text="✒  caderno de conversas" size=17 weight=bold color=accent
+            channel-list flex=1 header=#false
+            user-panel height=56
+        }
+        guild-bar width=66 bg=rail shape=square size=40
+    }
+}

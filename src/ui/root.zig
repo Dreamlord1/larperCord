@@ -11,6 +11,8 @@ const anim = @import("anim.zig");
 const rail = @import("comp_rail.zig");
 const channels = @import("comp_channels.zig");
 const chat = @import("comp_chat.zig");
+const msgs = @import("comp_messages.zig");
+const popup = @import("popup.zig");
 const side = @import("comp_side.zig");
 const palette = @import("palette.zig");
 const settings = @import("settings.zig");
@@ -24,8 +26,8 @@ const registry = std.StaticStringMap(Component).initComptime(.{
     .{ "user-panel", channels.userPanel },
     .{ "header", chat.header },
     .{ "tabs", chat.tabs },
-    .{ "messages", chat.messages },
-    .{ "composer", chat.composer },
+    .{ "messages", msgs.messages },
+    .{ "composer", msgs.composer },
     .{ "member-list", side.memberList },
     .{ "status-bar", side.statusBar },
     .{ "label", label },
@@ -71,7 +73,17 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
 
     if (ctx.th.layout) |root| {
         layout.solve(ctx.st.gpa, root, ctx.win, ctx.win.w, placed) catch {};
+        const base_theme = ctx.th;
+        defer ctx.th = base_theme;
+        var local: theme_mod.Theme = undefined;
         for (placed.items, 0..) |p, i| {
+            // Cores sobrescritas neste pedaço do layout.
+            ctx.th = base_theme;
+            if (base_theme.node_colors.get(p.node)) |ovs| {
+                local = base_theme.*;
+                for (ovs) |o| local.colors.set(o.tok, o.color);
+                ctx.th = &local;
+            }
             // Fundo rápido pelo próprio nó: bg=sidebar radius=12
             if (p.node.str("bg")) |bg| if (theme_mod.tokenFromName(bg)) |tok|
                 d.rect(ctx.dl, p.rect, ctx.col(tok), d.pnum(p.node, "radius", 0));
@@ -87,6 +99,7 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
     }
     c.ImGui_End();
 
+    popup.draw(ctx);
     settings.draw(ctx, previews);
     palette.draw(ctx);
     toast(ctx);
@@ -120,6 +133,7 @@ fn shortcuts(ctx: *d.Ctx) void {
     const io = ctx.io;
     const ctrl = io.*.KeyCtrl;
     const shift = io.*.KeyShift;
+    if (c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and ctx.st.popup == .none and !ctx.st.selection.empty()) ctx.st.selection = .{};
     if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_Comma)) ctx.act(if (ctx.st.settings.open) .close_settings else .open_settings);
     if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_K)) ctx.act(if (ctx.st.palette.open) .close_palette else .open_palette);
     if (c.ImGui_IsKeyPressed(c.ImGuiKey_F2) or (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_T)))

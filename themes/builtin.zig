@@ -7,4 +7,8 @@ pub const list = [_]Builtin{
     .{ .name = "terminal", .source = @embedFile("terminal.kdl") },
     .{ .name = "bolhas", .source = @embedFile("bolhas.kdl") },
     .{ .name = "zen", .source = @embedFile("zen.kdl") },
+    .{ .name = "neon", .source = @embedFile("neon.kdl") },
+    .{ .name = "papel", .source = @embedFile("papel.kdl") },
+    .{ .name = "gameboy", .source = @embedFile("gameboy.kdl") },
+    .{ .name = "escritorio", .source = @embedFile("escritorio.kdl") },
 };

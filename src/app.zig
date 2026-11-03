@@ -266,6 +266,35 @@ pub const App = struct {
         }
     }
 
+    /// Envia uma mensagem: aparece na hora como "pendente" e vai pra rede.
+    /// "@fulano" vira a menção de verdade (<@id>) quando o nome existe.
+    fn sendTo(app: *App, ch: types.Id, text: []const u8, reply_to: types.Id) void {
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(app.gpa);
+        var words = std.mem.splitScalar(u8, text, ' ');
+        var first = true;
+        while (words.next()) |word| {
+            if (!first) out.append(app.gpa, ' ') catch return;
+            first = false;
+            if (word.len > 1 and word[0] == '@') {
+                var it = app.store.users.valueIterator();
+                const found = while (it.next()) |u| {
+                    if (std.mem.eql(u8, u.name, word[1..])) break u.id;
+                } else null;
+                if (found) |id| {
+                    out.print(app.gpa, "<@{d}>", .{id}) catch return;
+                    continue;
+                }
+            }
+            out.appendSlice(app.gpa, word) catch return;
+        }
+        app.st.nonce += 1;
+        app.store.addPending(ch, out.items, app.st.nonce, reply_to, now()) catch return;
+        app.st.scrollOf(ch).stick_bottom = true;
+        const copy = std.heap.c_allocator.dupe(u8, out.items) catch return;
+        app.gateway.commands.push(.{ .send_message = .{ .channel = ch, .content = copy, .nonce = app.st.nonce, .reply_to = reply_to } });
+    }
+
     fn firstTextChannel(app: *App, guild: types.Id) ?types.Id {
         for (app.store.channelsOf(guild)) |id| {
             if (app.store.channel(id)) |cs| if (cs.info.kind == .text) return id;
@@ -301,11 +330,91 @@ pub const App = struct {
             .send_message => |text| {
                 defer app.gpa.free(text);
                 const ch = st.activeChannel() orelse return;
-                st.nonce += 1;
-                app.store.addPending(ch, text, st.nonce, now()) catch return;
-                st.scrollOf(ch).stick_bottom = true;
+                app.sendTo(ch, text, st.reply_to);
+                st.reply_to = 0;
+            },
+            .reply => |id| {
+                st.reply_to = id;
+                if (st.editing != 0) {
+                    st.editing = 0;
+                    @memset(&st.input, 0);
+                    st.input_sync = true;
+                }
+                st.focus_input = true;
+            },
+            .edit_message => |id| {
+                const f = app.store.findAny(id) orelse return;
+                const n = @min(f.m.msg.content.len, st.input.len - 1);
+                @memcpy(st.input[0..n], f.m.msg.content[0..n]);
+                st.input[n] = 0;
+                st.editing = id;
+                st.reply_to = 0;
+                st.input_sync = true;
+                st.focus_input = true;
+            },
+            .save_edit => |text| {
+                defer app.gpa.free(text);
+                const id = st.editing;
+                st.editing = 0;
+                const f = app.store.findAny(id) orelse return;
+                const ch = f.cs.info.id;
+                if (std.mem.eql(u8, f.m.msg.content, text)) return;
+                app.store.editLocal(ch, id, text) catch return;
                 const copy = std.heap.c_allocator.dupe(u8, text) catch return;
-                app.gateway.commands.push(.{ .send_message = .{ .channel = ch, .content = copy, .nonce = st.nonce } });
+                app.gateway.commands.push(.{ .edit_message = .{ .channel = ch, .id = id, .content = copy } });
+            },
+            .cancel_compose => {
+                if (st.editing != 0) {
+                    @memset(&st.input, 0);
+                    st.input_sync = true;
+                }
+                st.editing = 0;
+                st.reply_to = 0;
+            },
+            .delete_message => |id| {
+                const f = app.store.findAny(id) orelse return;
+                const ch = f.cs.info.id;
+                app.store.apply(.{ .message_delete = .{ .channel = ch, .id = id } }, now()) catch {};
+                app.gateway.commands.push(.{ .delete_message = .{ .channel = ch, .id = id } });
+                st.showToast(now(), false, "mensagem excluída", .{});
+            },
+            .react => |r| {
+                const f = app.store.findAny(r.id) orelse return;
+                var mine = false;
+                for (f.m.reactionSlice()) |*x| if (std.mem.eql(u8, x.text(), r.emoji.text())) {
+                    mine = x.me;
+                };
+                app.store.react(f.m, r.emoji.text(), true, !mine);
+                app.gateway.commands.push(.{ .react = .{ .channel = f.cs.info.id, .id = r.id, .emoji = r.emoji, .add = !mine } });
+            },
+            .open_dm => |user| {
+                for (app.store.channelsOf(0)) |id| if (app.store.channel(id)) |cs| if (cs.info.recipient == user) {
+                    return app.openChannel(id, false);
+                };
+                st.showToast(now(), false, "ainda não existe uma DM com essa pessoa", .{});
+            },
+            .send_dm => |dm| {
+                defer app.gpa.free(dm.text);
+                app.handle(.{ .open_dm = dm.user });
+                const ch = st.activeChannel() orelse return;
+                if (app.store.channel(ch)) |cs| if (cs.info.recipient == dm.user) app.sendTo(ch, dm.text, 0);
+            },
+            .copy => |text| {
+                defer app.gpa.free(text);
+                const z = app.gpa.dupeSentinel(u8, text, 0) catch return;
+                defer app.gpa.free(z);
+                _ = c.SDL_SetClipboardText(z.ptr);
+                st.showToast(now(), false, "copiado ✓", .{});
+            },
+            .jump_to => |id| st.jump = id,
+            .mark_read => |id| {
+                if (app.store.channel(id)) |cs| {
+                    cs.info.unread = false;
+                } else if (app.store.guild(id)) |g| {
+                    g.unread = false;
+                    g.mentions = 0;
+                    for (app.store.channelsOf(id)) |ch| app.store.markRead(ch);
+                }
             },
             .toggle_voice => |ch| {
                 st.voice = if (st.voice == ch) null else ch;
@@ -370,6 +479,40 @@ pub const App = struct {
         _ = call;
     }
 
+    /// Monta uma cena para prints de documentação (LARPER_SCENE=…): abre
+    /// popups e posiciona o mouse, já que o print não tem ninguém clicando.
+    fn scene(app: *App) void {
+        const which = std.mem.span(c.SDL_getenv("LARPER_SCENE") orelse return);
+        const ch = app.st.activeChannel() orelse return;
+        const cs = app.store.channel(ch) orelse return;
+        const items = cs.messages.items;
+        if (items.len < 4) return;
+        const last = &items[items.len - 1];
+        const prev = &items[items.len - 3];
+        const S = struct {
+            var done = false;
+        };
+        if (std.mem.eql(u8, which, "hover")) c.ImGuiIO_AddMousePosEvent(app.io, 700, 690);
+        if (S.done) return;
+        S.done = true;
+        if (std.mem.eql(u8, which, "menu")) {
+            app.st.popup = .{ .menu = .{ .kind = .message, .id = prev.msg.id, .x = 620, .y = 330 } };
+        } else if (std.mem.eql(u8, which, "profile")) {
+            app.st.popup = .{ .profile = .{ .user = 1001, .x = 700, .y = 200 } };
+        } else if (std.mem.eql(u8, which, "emoji")) {
+            app.st.popup = .{ .emoji = .{ .target = 0, .x = 1000, .y = 730 } };
+        } else if (std.mem.eql(u8, which, "reply")) {
+            app.handle(.{ .reply = prev.msg.id });
+            const t = "isso aqui tá **muito** bom 😍";
+            @memcpy(app.st.input[0..t.len], t);
+            app.st.input_sync = true;
+        } else if (std.mem.eql(u8, which, "select")) {
+            app.st.selection = .{ .channel = ch, .a_id = prev.msg.id, .a_off = 3, .b_id = last.msg.id, .b_off = @intCast(@min(last.msg.content.len, 12)) };
+        } else if (std.mem.eql(u8, which, "dm")) {
+            app.handle(.{ .select_guild = 0 });
+        }
+    }
+
     pub fn run(app: *App) void {
         var pending: u32 = 3;
         var running = true;
@@ -419,6 +562,7 @@ pub const App = struct {
                 app.st.theme_gen +%= 1;
             }
 
+            if (app.opts.shot != null and settled_frames >= 3) app.scene();
             c.ImGui_NewFrame();
             if (app.store.ready) {
                 const th = app.themes.theme_();

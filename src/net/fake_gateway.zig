@@ -23,6 +23,7 @@ pub const Gateway = struct {
     live: bool,
     rng: std.Random.DefaultPrng,
     hot_channel: Id = 0,
+    last_live: Id = 0,
     next_live_ms: i64 = 0,
     pending_typing: ?struct { channel: Id, user: Id, at_ms: i64 } = null,
     next_latency_ms: i64 = 0,
@@ -70,8 +71,12 @@ pub const Gateway = struct {
                         .timestamp = @divTrunc(nowMs(), 1000),
                         .content = m.content,
                         .nonce = m.nonce,
+                        .reply_to = m.reply_to,
                     } });
                 },
+                .edit_message => |m| g.emit(.{ .message_update = .{ .channel = m.channel, .id = m.id, .content = m.content } }),
+                .delete_message => |m| g.emit(.{ .message_delete = .{ .channel = m.channel, .id = m.id } }),
+                .react => |r| g.emit(.{ .reaction = .{ .channel = r.channel, .id = r.id, .emoji = r.emoji, .user = me_id, .add = r.add } }),
                 .fetch_history => |ch| {
                     g.hot_channel = ch;
                     try g.history_replies.append(alloc, .{ .at_ms = nowMs() + 140, .channel = ch });
@@ -104,7 +109,18 @@ pub const Gateway = struct {
         while (i < g.history_replies.items.len) {
             const r = g.history_replies.items[i];
             if (r.at_ms <= now) {
-                g.emit(.{ .history = .{ .channel = r.channel, .messages = try buildHistory(r.channel, now) } });
+                const msgs = try buildHistory(r.channel, now);
+                g.emit(.{ .history = .{ .channel = r.channel, .messages = msgs } });
+                // Algumas reações nas mensagens recentes.
+                var prng = std.Random.DefaultPrng.init(r.channel ^ 0xABCD);
+                const rr = prng.random();
+                var k: usize = 0;
+                while (k < 24) : (k += 1) {
+                    const mi = msgs.len - 1 - rr.uintLessThan(usize, @min(msgs.len, 60));
+                    const emoji = reaction_pool[rr.uintLessThan(usize, reaction_pool.len)];
+                    const n = 1 + rr.uintLessThan(usize, 4);
+                    for (0..n) |u| g.emit(.{ .reaction = .{ .channel = r.channel, .id = msgs[mi].id, .emoji = types.Reaction.init(emoji), .user = users[1 + (u + mi) % 7].id, .add = true } });
+                }
                 _ = g.history_replies.orderedRemove(i);
             } else i += 1;
         }
@@ -120,19 +136,22 @@ pub const Gateway = struct {
         if (g.pending_typing) |t| {
             if (now >= t.at_ms) {
                 const r = g.rng.random();
+                const id = types.makeSnowflake(now, r.int(u22));
                 g.emit(.{ .message_create = .{
-                    .id = types.makeSnowflake(now, r.int(u22)),
+                    .id = id,
                     .channel = t.channel,
                     .author = t.user,
                     .timestamp = @divTrunc(now, 1000),
                     .content = try alloc.dupe(u8, phrases[r.uintLessThan(usize, phrases.len)]),
+                    .reply_to = if (r.uintLessThan(u8, 3) == 0) g.last_live else 0,
                 } });
+                g.last_live = id;
                 g.pending_typing = null;
                 g.next_live_ms = now + r.intRangeLessThan(i64, 7000, 16000);
             }
         } else if (now >= g.next_live_ms and g.hot_channel != 0) {
             const r = g.rng.random();
-            const user = users[1 + r.uintLessThan(usize, 7)].id;
+            const user = if (dmRecipient(g.hot_channel)) |u| u else users[1 + r.uintLessThan(usize, 7)].id;
             g.emit(.{ .typing_start = .{ .channel = g.hot_channel, .user = user } });
             g.pending_typing = .{ .channel = g.hot_channel, .user = user, .at_ms = now + r.intRangeLessThan(i64, 2200, 4000) };
             if (r.uintLessThan(u8, 4) == 0) {
@@ -207,6 +226,18 @@ const channel_tree = [_]ChannelSeed{
     .{ .name = "AFK", .kind = .voice },
 };
 
+const reaction_pool = [_][]const u8{ "😂", "👍", "❤️", "🔥", "💀", "😭", "🎉", "👀" };
+
+/// DMs: canal 900_000 + i conversa com users[i + 1].
+pub fn dmId(i: usize) Id {
+    return 900_000 + @as(Id, i);
+}
+
+pub fn dmRecipient(ch: Id) ?Id {
+    if (ch < 900_000 or ch >= 900_000 + 6) return null;
+    return users[@intCast(ch - 900_000 + 1)].id;
+}
+
 pub fn guildId(i: usize) Id {
     return 500_000 + @as(Id, i) * 1000;
 }
@@ -233,7 +264,7 @@ fn buildReady() !ev.Ready {
         .unread = g.unread,
         .mentions = g.mentions,
     };
-    const chs = try alloc.alloc(types.Channel, guilds.len * channel_tree.len);
+    const chs = try alloc.alloc(types.Channel, guilds.len * channel_tree.len + 6);
     var n: usize = 0;
     for (0..guilds.len) |gi| {
         var parent: ?Id = null;
@@ -252,6 +283,18 @@ fn buildReady() !ev.Ready {
             };
             n += 1;
         }
+    }
+    for (0..6) |i| {
+        chs[n] = .{
+            .id = dmId(i),
+            .guild = 0,
+            .name = try alloc.dupe(u8, users[i + 1].name),
+            .topic = try alloc.dupe(u8, ""),
+            .position = @intCast(i),
+            .unread = i == 1 or i == 3,
+            .recipient = users[i + 1].id,
+        };
+        n += 1;
     }
     const voice = try alloc.alloc([2]Id, 4 * guilds.len);
     var vn: usize = 0;
@@ -278,16 +321,21 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
     var i: usize = n;
     while (i > 0) {
         i -= 1;
-        if (i == n - 1 or r.uintLessThan(u8, 3) != 0) author = users[r.uintLessThan(usize, 8)].id;
+        if (i == n - 1 or r.uintLessThan(u8, 3) != 0) author = if (dmRecipient(channel)) |u| (if (r.boolean()) u else me_id) else users[r.uintLessThan(usize, 8)].id;
         msgs[i] = .{
             .id = types.makeSnowflake(t * 1000, i),
             .channel = channel,
             .author = author,
             .timestamp = t,
             .content = try alloc.dupe(u8, phrases[r.uintLessThan(usize, phrases.len)]),
+            .edited = r.uintLessThan(u8, 25) == 0,
         };
         const gap: i64 = if (r.uintLessThan(u8, 10) == 0) r.intRangeLessThan(i64, 1800, 14000) else r.intRangeLessThan(i64, 5, 240);
         t -= gap;
+    }
+    // Algumas respostas a mensagens um pouco anteriores.
+    for (msgs, 0..) |*m, j| {
+        if (j > 3 and r.uintLessThan(u8, 9) == 0) m.reply_to = msgs[j - 1 - r.uintLessThan(usize, 3)].id;
     }
     return msgs;
 }

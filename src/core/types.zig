@@ -35,6 +35,8 @@ pub const Channel = struct {
     topic: []const u8 = "",
     position: u16 = 0,
     unread: bool = false,
+    /// Em DMs (guild = 0): a outra pessoa da conversa.
+    recipient: Id = 0,
 };
 
 pub const Message = struct {
@@ -47,6 +49,29 @@ pub const Message = struct {
     /// Identificador local de uma mensagem enviada por nós, para casar a
     /// confirmação do servidor com a cópia "pendente" já exibida.
     nonce: u64 = 0,
+    /// Mensagem que esta responde (0 = nenhuma).
+    reply_to: Id = 0,
+    edited: bool = false,
+};
+
+/// Uma reação: o emoji (UTF-8, até 15 bytes), quantas pessoas e se inclui a gente.
+pub const Reaction = struct {
+    emoji: [16]u8 = @splat(0),
+    len: u8 = 0,
+    count: u16 = 0,
+    me: bool = false,
+
+    pub fn text(r: *const Reaction) []const u8 {
+        return r.emoji[0..r.len];
+    }
+
+    pub fn init(e: []const u8) Reaction {
+        var r: Reaction = .{};
+        const n = @min(e.len, 15);
+        @memcpy(r.emoji[0..n], e[0..n]);
+        r.len = @intCast(n);
+        return r;
+    }
 };
 
 /// Timestamp embutido num snowflake do Discord (ms desde 2015-01-01).

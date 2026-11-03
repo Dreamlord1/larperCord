@@ -71,6 +71,7 @@ pub const Fonts = struct {
         cfg.FontNo = @intCast(index);
         cfg.PixelSnapH = true;
         cfg.FontDataOwnedByAtlas = false;
+        if (f.emoji != null) cfg.GlyphExcludeRanges = &emoji_ranges;
         const font = c.ImFontAtlas_AddFontFromMemoryTTF(f.atlas, data.ptr, @intCast(data.len), 16, &cfg, null) orelse return error.FontLoad;
         if (f.emoji) |e| {
             var ecfg = defaultConfig();
@@ -104,6 +105,10 @@ pub const Fonts = struct {
         return data;
     }
 };
+
+/// Faixas que o emoji colorido deve fornecer mesmo que a fonte do texto tenha
+/// uma versão em preto e branco (❤ ☀ ✨ …).
+const emoji_ranges = [_]c.ImWchar{ 0x2600, 0x27BF, 0x2B00, 0x2BFF, 0x1F000, 0x1FAFF, 0 };
 
 fn defaultConfig() c.ImFontConfig {
     var cfg = std.mem.zeroes(c.ImFontConfig);

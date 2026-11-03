@@ -21,6 +21,7 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const variant = std.meta.stringToEnum(Variant, d.pstr(n, "variant", "discord")) orelse .discord;
     const fam = ctx.familyFor(n);
     var r = r_in;
+    if (ctx.st.guild == 0) return dmList(ctx, n, fam, variant, r);
     const g = ctx.store.guild(ctx.st.guild) orelse return;
 
     if (d.pflag(n, "header", true)) {
@@ -105,6 +106,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
     const inset: f32 = if (variant == .pills) 10 else 8;
     const rr: d.Rect = .{ .x = r.x + inset, .y = y, .w = r.w - inset * 2, .h = row_h - 2 };
     const hb = d.hit(ctx, 200 + idx, rr);
+    if (hb.right) ctx.popup(.{ .menu = .{ .kind = .channel, .id = ch.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
     if (hb.clicked or hb.middle) switch (ch.kind) {
         .text => ctx.act(.{ .select_channel = ch.id }),
         .voice => ctx.act(.{ .toggle_voice = ch.id }),
@@ -112,8 +114,9 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
     };
 
     const k = anim.to(anim.id("chan", ch.id), if (selected) 1 else if (hb.hovered) 0.5 else 0, 24);
-    const bright = selected or hb.hovered or ch.unread or in_voice;
-    const name_col = if (selected) ctx.col(.text) else if (bright) ctx.col(.text).mix(ctx.col(.muted), 0.15) else ctx.col(.muted);
+    const muted_ch = ctx.st.muted_channels.contains(ch.id);
+    const bright = (selected or hb.hovered or ch.unread or in_voice) and !muted_ch;
+    const name_col = if (selected) ctx.col(.text) else if (bright) ctx.col(.text).mix(ctx.col(.muted), 0.15) else if (muted_ch) ctx.col(.faint) else ctx.col(.muted);
     const fs = ctx.th.font_size;
 
     switch (variant) {
@@ -206,6 +209,7 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     } else {
         const card: d.Rect = .{ .x = pr.x + 6, .y = pr.y + pr.h / 2 - 18, .w = pr.w - 108, .h = 36 };
         const hb = d.hit(ctx, 1, card);
+        if (hb.clicked) ctx.popup(.{ .profile = .{ .user = me.id, .x = card.x, .y = card.y - 380 } });
         d.rect(ctx.dl, card, ctx.col(.hover).alpha(anim.to(anim.id("me", 0), if (hb.hovered) 1 else 0, 24)), ctx.th.radius);
         w.avatar(ctx, ctx.dl, card.x + 20, card.y + 18, 32, me.id, .circle, ctx.col(.rail), 1);
         _ = d.textClipped(ctx.dl, fam.get(.semibold), 14, card.x + 44, card.y + 2, ctx.col(.text), me.name, card.w - 48);
@@ -274,4 +278,67 @@ fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     d.line(ctx.dl, cx - 5, cy - 5, cx + 5, cy + 5, ink, 2.2);
     d.line(ctx.dl, cx + 5, cy - 5, cx - 5, cy + 5, ink, 2.2);
     if (hb.clicked) ctx.act(.leave_voice);
+}
+
+// --- Mensagens diretas ------------------------------------------------------
+
+fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_in: d.Rect) void {
+    var r = r_in;
+    const tree = variant == .tree;
+    const fs = ctx.th.font_size;
+    if (d.pflag(n, "header", true)) {
+        const hh: f32 = if (tree) 30 else 48;
+        const hr: d.Rect = .{ .x = r.x, .y = r.y, .w = r.w, .h = hh };
+        if (tree) {
+            d.text(ctx.dl, fam.get(.bold), fs, r.x + 10, d.centerY(hr, fs), ctx.col(.accent), "┌ mensagens diretas");
+        } else {
+            // Caixa "Encontre ou comece uma conversa" (abre a paleta).
+            const sr = hr.inset(10, 10);
+            const hb = d.hit(ctx, 1, sr);
+            if (hb.clicked) ctx.act(.open_palette);
+            d.rect(ctx.dl, sr, ctx.col(.rail).mix(ctx.col(.sidebar), if (hb.hovered) 0.1 else 0.4), @max(ctx.th.radius - 2, 2));
+            d.text(ctx.dl, fam.get(.medium), 13, sr.x + 8, d.centerY(sr, 13), ctx.col(.faint), "Encontre ou comece uma conversa");
+            if (variant == .discord) d.line(ctx.dl, r.x, hr.bottom() - 0.5, r.right(), hr.bottom() - 0.5, ctx.col(.border), 1);
+        }
+        r.y += hh;
+        r.h -= hh;
+    }
+    const dl = d.beginRegion(ctx, "##dms", r, c.ImGuiWindowFlags_NoScrollbar);
+    const o = c.ImGui_GetCursorScreenPos();
+    var y = o.y + 10;
+    if (!tree) {
+        d.text(dl, fam.get(.semibold), 12, r.x + 18, y + 4, ctx.col(.faint).mix(ctx.col(.muted), 0.4), "MENSAGENS DIRETAS");
+        y += 28;
+    }
+    for (ctx.store.channelsOf(0), 0..) |id, idx| {
+        const cs = ctx.store.channel(id) orelse continue;
+        const u = ctx.store.user(cs.info.recipient) orelse continue;
+        const selected = ctx.st.activeChannel() == id;
+        const row_h: f32 = if (tree) 24 else 44;
+        const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
+        const hb = d.hit(ctx, 300 + idx, rr);
+        if (hb.clicked or hb.middle) ctx.act(.{ .select_channel = id });
+        if (hb.right) ctx.popup(.{ .menu = .{ .kind = .user, .id = u.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+        const k = anim.to(anim.id("dm", id), if (selected) 1 else if (hb.hovered) 0.5 else 0, 24);
+        const name_col = if (selected or cs.info.unread) ctx.col(.text) else ctx.col(.muted).mix(ctx.col(.text), k * 0.5);
+        if (tree) {
+            if (selected) d.rect(dl, rr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
+            var buf: [80]u8 = undefined;
+            const t = std.fmt.bufPrint(&buf, "{s} {s} @{s}", .{ if (idx + 1 == ctx.store.channelsOf(0).len) "└" else "├", w.statusGlyph(u.status), u.name }) catch u.name;
+            d.text(dl, fam.get(if (cs.info.unread) .bold else .regular), fs - 1, rr.x + 4, d.centerY(rr, fs - 1), if (selected) ctx.col(.accent_text) else name_col, t);
+        } else {
+            const radius = if (variant == .pills) rr.h / 2 else ctx.th.radius;
+            if (k > 0.01) d.rect(dl, rr, if (variant == .pills and selected) ctx.col(.accent) else ctx.col(.selected).alpha(k), radius);
+            const on = variant == .pills and selected;
+            w.avatar(ctx, dl, rr.x + 22, rr.y + rr.h / 2, 32, u.id, .circle, if (on) ctx.col(.accent) else ctx.col(.sidebar), 1);
+            const tc = if (on) ctx.col(.accent_text) else name_col;
+            if (u.activity) |a| {
+                _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, rr.y + 3, tc, u.name, rr.w - 60);
+                _ = d.textClipped(dl, fam.get(.regular), 12, rr.x + 46, rr.y + 22, if (on) tc.alpha(0.8) else ctx.col(.faint), a, rr.w - 60);
+            } else _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, d.centerY(rr, fs - 1), tc, u.name, rr.w - 60);
+            if (cs.info.unread and !selected) d.circle(dl, rr.right() - 12, rr.y + rr.h / 2, 4, ctx.col(.danger));
+        }
+        y += row_h;
+    }
+    d.endRegion(ctx, y + 12, r.x);
 }

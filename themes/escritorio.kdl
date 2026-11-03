@@ -1,0 +1,54 @@
+// escritorio — barra lateral berinjela com servidores em lista, conversa no
+// branco: cara de ferramenta de trabalho. Mostra as cores sobrescritas por
+// pedaço do layout (c-text, c-muted… valem para o nó e seus filhos).
+theme "escritorio" description="Barra lateral escura com os servidores em lista, estilo ferramenta de trabalho." author="larperCord" preview=office
+
+colors {
+    bg          "#ffffff"
+    rail        "#3f0e40"
+    sidebar     "#3f0e40"
+    surface     "#ffffff"
+    elevated    "#f4f4f6"
+    overlay     "#ffffff"
+    text        "#1d1c1d"
+    muted       "#616061"
+    faint       "#9e9ea6"
+    accent      "#1164a3"
+    accent-text "#ffffff"
+    border      "#e2e2e4"
+    hover       "alpha(#1d1c1d, 0.05)"
+    selected    "alpha(#1164a3, 0.12)"
+    online      "#2bac76"
+    danger      "#e01e5a"
+    mention     "#1164a3"
+    link        "#1264a3"
+    code-bg     "#f1f1f3"
+    bubble-self "#1164a3"
+    bubble-other "#f4f4f6"
+    shadow      "alpha(black, 0.12)"
+}
+roles "#1164a3" "#e01e5a" "#2bac76" "#ecb22e" "#7c3085" "#e8912d" "#36c5f0" "#4a154b"
+
+fonts ui="Inter" mono="JetBrains Mono" size=15
+metrics radius=6
+
+layout {
+    row {
+        column width=264 bg=sidebar c-text="#ffffff" c-muted="#cdbdcd" c-faint="#9f8aa0" c-selected="#1164a3" c-hover="alpha(#ffffff, 0.08)" c-elevated="#5a2a5c" c-rail="#350d36" c-border="alpha(#ffffff, 0.12)" {
+            label height=46 text="larperCord · trabalho" size=16 weight=bold color=text
+            guild-bar height=214 variant=list shape=squircle size=24
+            channel-list flex=1 header=#false
+            user-panel height=58 bg=rail
+        }
+        column flex=1 bg=surface {
+            header height=52
+            messages flex=1 avatar=square avatar-size=36
+            column height=90 padding-x=18 {
+                spacer flex=1
+                composer height=46
+                spacer height=22
+            }
+        }
+        member-list width=232 bg=elevated hide-below=1150
+    }
+}

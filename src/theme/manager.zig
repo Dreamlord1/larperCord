@@ -15,7 +15,7 @@ const Rgba = theme.Rgba;
 pub const Preview = struct {
     name: []const u8,
     description: []const u8,
-    kind: enum { classic, glass, terminal, bubbles, zen },
+    kind: enum { classic, glass, terminal, bubbles, zen, dock, mirror, gameboy, office },
     bg: Rgba,
     rail: Rgba,
     sidebar: Rgba,

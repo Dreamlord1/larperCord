@@ -4,6 +4,30 @@ const std = @import("std");
 const Id = @import("../core/types.zig").Id;
 pub const Settings = @import("settings_state.zig").Settings;
 
+pub const MenuKind = enum { message, user, channel, guild };
+
+pub const Popup = union(enum) {
+    none,
+    menu: struct { kind: MenuKind, id: Id, x: f32, y: f32 },
+    profile: struct { user: Id, x: f32, y: f32 },
+    /// `target` = mensagem que vai receber a reação (0 = caixa de texto).
+    emoji: struct { target: Id, x: f32, y: f32 },
+};
+
+/// Seleção de texto entre mensagens: âncora e cabeça (mensagem + byte).
+pub const Selection = struct {
+    channel: Id = 0,
+    a_id: Id = 0,
+    a_off: u32 = 0,
+    b_id: Id = 0,
+    b_off: u32 = 0,
+    dragging: bool = false,
+
+    pub fn empty(s: *const Selection) bool {
+        return s.channel == 0 or (s.a_id == s.b_id and s.a_off == s.b_off);
+    }
+};
+
 pub const Scroll = struct {
     pos: f32 = -1,
     target: f32 = 0,
@@ -57,6 +81,18 @@ pub const State = struct {
     scroll: std.AutoHashMapUnmanaged(Id, Scroll) = .empty,
     palette: Palette = .{},
     settings: Settings = .{},
+    popup: Popup = .none,
+    /// Caixa de texto do cartão de perfil ("Mensagem @fulano").
+    popup_input: [256]u8 = @splat(0),
+    reply_to: Id = 0,
+    editing: Id = 0,
+    /// O conteúdo de `input` mudou por fora: a caixa de texto deve recarregar.
+    input_sync: bool = false,
+    edit_last: bool = false,
+    selection: Selection = .{},
+    jump: Id = 0,
+    jump_until_ms: i64 = 0,
+    muted_channels: std.AutoHashMapUnmanaged(Id, void) = .empty,
     toast: Toast = .{},
     /// Contador de "geração" do tema (invalida caches de layout).
     theme_gen: u8 = 0,

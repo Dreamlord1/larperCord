@@ -1,0 +1,59 @@
+// neon — synthwave: roxo profundo, bordas que acendem no hover e os
+// servidores num dock que cresce perto do mouse.
+theme "neon" description="Synthwave: roxo profundo, brilho neon e um dock que cresce no mouse." author="larperCord" preview=dock
+
+colors {
+    bg          "#0d0221"
+    rail        "#120330"
+    sidebar     "#160440"
+    surface     "#1a0548"
+    elevated    "#26095e"
+    overlay     "#1d0650"
+    text        "#f7ecff"
+    muted       "#bba0e6"
+    faint       "#7c62ad"
+    accent      "#ff2bd6"
+    accent-text "#0d0221"
+    border      "alpha(#00f0ff, 0.28)"
+    hover       "alpha(#00f0ff, 0.08)"
+    selected    "alpha(#ff2bd6, 0.20)"
+    online      "#00ffa3"
+    idle        "#ffd400"
+    dnd         "#ff3864"
+    danger      "#ff3864"
+    mention     "#00f0ff"
+    link        "#00f0ff"
+    code-bg     "#2c0a6e"
+    bubble-self "#ff2bd6"
+    bubble-self-text "#0d0221"
+    bubble-other "#26095e"
+    shadow      "alpha(#ff2bd6, 0.32)"
+}
+roles "#ff2bd6" "#00f0ff" "#ffd400" "#b16cff" "#00ffa3" "#ff7a45" "#f72585" "#4cc9f0"
+
+fonts ui="Inter" mono="JetBrains Mono" size=15
+metrics radius=10
+
+styles {
+    style "neon" bg="@surface" radius=16 border="@border" glow="@accent" border-width=1.5 shadow=20
+}
+
+layout {
+    column padding=14 gap=8 {
+        row flex=1 gap=14 {
+            channel-list width=244 style=neon inset-y=4
+            column flex=1 style=neon {
+                tabs height=46 variant=underline
+                header height=46 divider=#false
+                messages flex=1 avatar=squircle
+                column height=94 padding-x=16 {
+                    spacer flex=1
+                    composer height=48 variant=pill
+                    spacer height=18
+                }
+            }
+            member-list width=224 style=neon hide-below=1150 inset-y=4
+        }
+        guild-bar height=86 variant=dock shape=squircle size=42
+    }
+}

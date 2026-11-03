@@ -15,9 +15,21 @@ pub const Opts = struct {
     on_accent: bool = false,
     reveal_spoilers: bool = false,
     underline_links: bool = true,
+    /// Para seleção: início do conteúdo (os trechos são fatias dele).
+    base: ?[*]const u8 = null,
+    sel_from: u32 = 1,
+    sel_to: u32 = 0,
+    probe: ?*Probe = null,
 };
 
-pub const Measure = struct { h: f32, w: f32 };
+/// Pergunta "qual byte do texto está sob este ponto?".
+pub const Probe = struct {
+    x: f32,
+    y: f32,
+    out: ?u32 = null,
+};
+
+pub const Measure = struct { h: f32, w: f32, last_x: f32 };
 
 const Word = struct {
     text: []const u8,
@@ -85,6 +97,7 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
     var max_w: f32 = 0;
     var it: Words = .{ .spans = spans };
     var buf: [96]u8 = undefined;
+    var line_start = true;
     while (it.next()) |word| {
         const sp = word.span;
         const font = fontFor(o, sp);
@@ -95,13 +108,52 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
         if (x > 0 and x + w > wrap) {
             x = 0;
             y += o.line_h;
+            line_start = true;
         }
-        if (dl) |l| drawWord(l, th_col, sp, font, size, s, x0 + x, y0 + y, w, pad, o, mouse);
+        if (dl) |l| {
+            if (o.base) |base| select(l, th_col, base, word, sp, font, size, pad, x0 + x, y0 + y, w, space_w, o, line_start);
+            drawWord(l, th_col, sp, font, size, s, x0 + x, y0 + y, w, pad, o, mouse);
+        }
+        line_start = false;
         x += w;
         max_w = @max(max_w, x);
         if (word.space_after) x += space_w;
     }
-    return .{ .h = y + o.line_h, .w = max_w };
+    return .{ .h = y + o.line_h, .w = max_w, .last_x = x };
+}
+
+/// Byte do texto dentro da palavra que fica na coordenada `px`.
+fn offsetAt(font: *c.ImFont, size: f32, t: []const u8, px: f32) u32 {
+    var i: usize = 0;
+    while (i < t.len) {
+        const n = std.unicode.utf8ByteSequenceLength(t[i]) catch 1;
+        const mid = d.width(font, size, t[0..i]) + d.width(font, size, t[i..@min(t.len, i + n)]) / 2;
+        if (px < mid) return @intCast(i);
+        i += n;
+    }
+    return @intCast(t.len);
+}
+
+/// Desenha o fundo da seleção e responde à sonda do mouse.
+fn select(dl: *c.ImDrawList, th: anytype, base: [*]const u8, word: Word, sp: *const md.Span, font: *c.ImFont, size: f32, pad: f32, x: f32, y: f32, w: f32, space_w: f32, o: Opts, line_start: bool) void {
+    const start: u32 = @intCast(@intFromPtr(word.text.ptr) - @intFromPtr(base));
+    const end: u32 = start + @as(u32, @intCast(word.text.len));
+    const atomic = sp.mention != .none;
+    if (o.sel_from < o.sel_to and start < o.sel_to and end > o.sel_from) {
+        var hx0 = x;
+        var hx1 = x + w;
+        if (!atomic) {
+            if (o.sel_from > start) hx0 = x + pad + d.width(font, size, word.text[0 .. o.sel_from - start]);
+            if (o.sel_to < end) hx1 = x + pad + d.width(font, size, word.text[0 .. o.sel_to - start]);
+        }
+        if (word.space_after and o.sel_to > end) hx1 += space_w;
+        d.rect(dl, .{ .x = hx0, .y = y, .w = hx1 - hx0, .h = o.line_h }, th.c(.accent).alpha(0.32), 0);
+    }
+    if (o.probe) |pr| if (pr.y >= y and pr.y < y + o.line_h) {
+        if (pr.x >= x) {
+            pr.out = if (pr.x >= x + w) end else if (atomic) (if (pr.x < x + w / 2) start else end) else start + offsetAt(font, size, word.text, pr.x - x - pad);
+        } else if (line_start) pr.out = start;
+    };
 }
 
 fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont, size: f32, s: []const u8, x: f32, y: f32, w: f32, pad: f32, o: Opts, mouse: c.ImVec2) void {
