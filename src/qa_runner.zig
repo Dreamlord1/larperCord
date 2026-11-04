@@ -2404,6 +2404,12 @@ const ops = [_]Op{
 };
 
 /// Cenários curtos para isolar um problema: QA_SCENE=ctrl|nome|card
+/// Só a leitura, as fixadas e os links, no tema que estiver (QA_SUITE=leitura).
+const ops_leitura = [_]Op{
+    s("início"),
+    expect("app conecta e carrega o histórico", ready),
+} ++ @import("qa_leitura.zig").startup ++ @import("qa_leitura.zig").ops;
+
 const ops_voice = [_]Op{
     s("voz"),
     click("channel:500014"),
@@ -2706,6 +2712,7 @@ fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "tema")) return &ops_theme;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "login")) return &ops_login;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "voice")) return &ops_voice;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "leitura")) return &ops_leitura;
     const scene = std.mem.span(c.SDL_getenv("QA_SCENE") orelse return &ops);
     if (std.mem.eql(u8, scene, "ctrl")) return &ops_ctrl;
     if (std.mem.eql(u8, scene, "nome")) return &ops_nome;

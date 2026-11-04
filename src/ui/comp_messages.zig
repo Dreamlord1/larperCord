@@ -447,6 +447,24 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     }
 
     topOfChannel(ctx, dl, g, cs, r, base + 8, top_h);
+    // Os botões flutuantes pedem o mouse antes das mensagens: o que estiver
+    // embaixo (uma imagem, a barra de ações) não pega o mesmo clique.
+    var show_bar = divider_after != 0 and !cs.divider_seen and !cs.cached and !cs.pos_unread and n_new > 0;
+    if (show_bar) if (first_new) |k| {
+        const fy = st.offsets.items[k] - new_line_h;
+        if (@abs(sc.pos - sc.target) < 2 and fy >= sc.pos and fy < sc.pos + r.h) {
+            cs.divider_seen = true;
+            show_bar = false;
+        }
+    };
+    const none: d.Hit = .{ .hovered = false, .clicked = false, .held = false, .middle = false, .right = false, .ctrl = false };
+    const bar = barRects(g, r);
+    const first_hit = if (show_bar) d.hit(ctx, 0xF10A7_01, bar.first) else none;
+    const read_hit = if (show_bar) d.hit(ctx, 0xF10A7_02, bar.read) else none;
+    const present_hit = if (cs.detached) d.hit(ctx, 0xF10A7_03, presentRect(r)) else none;
+    const bottom_r: d.Rect = .{ .x = r.right() - 52, .y = r.bottom() - 52, .w = 36, .h = 36 };
+    const bottom_hit = if (!sc.stick_bottom) d.hit(ctx, 0xF10A7_04, bottom_r) else none;
+    const over_float = first_hit.hovered or read_hit.hovered or present_hit.hovered or bottom_hit.hovered;
     if (first_new) |k| newLine(ctx, dl, g, r, base + st.offsets.items[k] - new_line_h);
 
     const sel = selectionRange(ctx, cs);
@@ -462,7 +480,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
             qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = msgs[i].height }, "msg:{d}", .{msgs[i].msg.id});
             continue;
         }
-        const under = hovered and ctx.mouse.y >= y and ctx.mouse.y < y + msgs[i].height;
+        const under = hovered and !over_float and ctx.mouse.y >= y and ctx.mouse.y < y + msgs[i].height;
         if (under) probe_idx = i;
         var from: u32 = 1;
         var to: u32 = 0;
@@ -487,15 +505,9 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     }
 
     // Botão fixo do topo enquanto a primeira não lida não apareceu na tela.
-    if (divider_after != 0 and !cs.divider_seen and !cs.cached and !cs.pos_unread and n_new > 0) {
-        const on_screen = if (first_new) |k| blk: {
-            const fy = st.offsets.items[k] - new_line_h;
-            break :blk @abs(sc.pos - sc.target) < 2 and fy >= sc.pos and fy < sc.pos + r.h;
-        } else false;
-        if (on_screen) cs.divider_seen = true else unreadBar(ctx, dl, g, r, ch_id, n_new, first_new == null);
-    }
+    if (show_bar) unreadBar(ctx, dl, g, bar, ch_id, n_new, first_new == null, first_hit, read_hit);
     if (cs.around == .loading) loadingPill(ctx, dl, g, r);
-    if (cs.detached) presentBar(ctx, dl, g, r, ch_id);
+    if (cs.detached) presentBar(ctx, dl, g, r, ch_id, present_hit);
 
     // Seleção de texto e botão direito.
     if (probe_idx) |pi| {
@@ -522,8 +534,8 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     // Voltar para o fim: desenhado dentro da própria região (fica por baixo
     // das configurações e de menus) e com o clique direto pelo mouse.
     if (!sc.stick_bottom) {
-        const br: d.Rect = .{ .x = r.right() - 52, .y = r.bottom() - 52, .w = 36, .h = 36 };
-        const hb = d.hitRaw(ctx, br);
+        const br = bottom_r;
+        const hb = bottom_hit;
         qa.mark(br, "jump-bottom", .{});
         d.shadow(dl, br, 18, 8, ctx.col(.shadow));
         d.circle(dl, br.x + 18, br.y + 18, 18, if (hb.hovered) ctx.col(.accent) else ctx.col(.elevated));
@@ -560,17 +572,26 @@ fn newLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, r: d.Rect, y: f32) void {
     qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = new_line_h }, "new-line", .{});
 }
 
-/// "N novas mensagens · ir para a primeira" e "marcar como lida", fixo no topo.
-fn unreadBar(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, r: d.Rect, ch: Id, n: u32, more: bool) void {
+const BarRects = struct { bar: d.Rect, first: d.Rect, read: d.Rect };
+
+fn barRects(g: Geo, r: d.Rect) BarRects {
     const bar: d.Rect = .{ .x = r.x + 12, .y = r.y + 6, .w = r.w - 36, .h = unread_bar_h };
+    const read_w = d.width(g.fam.get(.semibold), 13, i18n.tr("marcar como lida", "mark as read")) + 24;
+    return .{
+        .bar = bar,
+        .first = .{ .x = bar.x, .y = bar.y, .w = bar.w - read_w, .h = bar.h },
+        .read = .{ .x = bar.right() - read_w, .y = bar.y, .w = read_w, .h = bar.h },
+    };
+}
+
+/// "N novas mensagens · ir para a primeira" e "marcar como lida", fixo no topo.
+fn unreadBar(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, rects: BarRects, ch: Id, n: u32, more: bool, fh: d.Hit, rh: d.Hit) void {
+    const bar = rects.bar;
+    const first = rects.first;
+    const read = rects.read;
     const font = g.fam.get(.semibold);
     const fs: f32 = 13;
     const read_lbl = i18n.tr("marcar como lida", "mark as read");
-    const read_w = d.width(font, fs, read_lbl) + 24;
-    const first: d.Rect = .{ .x = bar.x, .y = bar.y, .w = bar.w - read_w, .h = bar.h };
-    const read: d.Rect = .{ .x = first.right(), .y = bar.y, .w = read_w, .h = bar.h };
-    const fh = d.hitRaw(ctx, first);
-    const rh = d.hitRaw(ctx, read);
     qa.mark(first, "unread-bar-first", .{});
     qa.mark(read, "unread-bar-read", .{});
     const radius = @min(8, ctx.th.radius + 2);
@@ -604,12 +625,15 @@ fn loadingPill(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, r: d.Rect) void {
     qa.mark(p, "around-loading", .{});
 }
 
+fn presentRect(r: d.Rect) d.Rect {
+    return .{ .x = r.x + 12, .y = r.bottom() - 42, .w = @max(120, r.w - 80), .h = 30 };
+}
+
 /// Fora do presente: as mensagens de agora não estão aqui.
-fn presentBar(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, r: d.Rect, ch: Id) void {
+fn presentBar(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, r: d.Rect, ch: Id, hb: d.Hit) void {
     const font = g.fam.get(.semibold);
     const fs: f32 = 13;
-    const bar: d.Rect = .{ .x = r.x + 12, .y = r.bottom() - 42, .w = @max(120, r.w - 80), .h = 30 };
-    const hb = d.hitRaw(ctx, bar);
+    const bar = presentRect(r);
     qa.mark(bar, "present-bar", .{});
     const radius = @min(8, ctx.th.radius + 2);
     d.shadow(dl, bar, radius, 8, ctx.col(.shadow).alpha(0.5));
