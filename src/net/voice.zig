@@ -24,6 +24,7 @@
 //! LARPER_VOICE_DEBUG=1 mostra no terminal o que acontece na call (opcodes,
 //! códigos de fechamento, DAVE). Nunca imprime token nem chaves.
 const std = @import("std");
+const sys = @import("../platform/sys.zig");
 const c = @import("c");
 const types = @import("../core/types.zig");
 const ev = @import("../core/event.zig");
@@ -191,9 +192,9 @@ const End = enum { stop, fatal, moved, resume_ws };
 const Worker = struct {
     v: *Voice,
     ws: ?*c.CURL = null,
-    ws_sock: c.curl_socket_t = -1,
-    udp: c_int = -1,
-    server: std.posix.sockaddr.in = undefined,
+    ws_sock: sys.Socket = sys.no_socket,
+    udp: sys.Socket = sys.no_socket,
+    server: sys.SockAddrIn = undefined,
     ssrc: u32 = 0,
     secret: [32]u8 = @splat(0),
     have_secret: bool = false,
@@ -344,9 +345,9 @@ const Worker = struct {
             w.closeWs();
             return false;
         }
-        var sock: c.curl_socket_t = -1;
+        var sock: sys.Socket = sys.no_socket;
         _ = c.curl_easy_getinfo(h, c.CURLINFO_ACTIVESOCKET, &sock);
-        if (sock < 0) {
+        if (!sys.valid(sock)) {
             w.closeWs();
             return false;
         }
@@ -358,7 +359,7 @@ const Worker = struct {
     fn closeWs(w: *Worker) void {
         if (w.ws) |h| c.curl_easy_cleanup(h);
         w.ws = null;
-        w.ws_sock = -1;
+        w.ws_sock = sys.no_socket;
         w.ws_in.clearRetainingCapacity();
     }
 
@@ -371,7 +372,7 @@ const Worker = struct {
         if (w.audio_on) voz_audio.release();
         if (w.encoder) |e| c.opus_encoder_destroy(e);
         if (w.dave) |*d| d.deinit();
-        if (w.udp >= 0) _ = c.close(w.udp);
+        if (sys.valid(w.udp)) sys.closeSocket(w.udp);
         w.closeWs();
         std.crypto.secureZero(u8, &w.secret);
         w.ws_in.deinit(alloc);
@@ -399,13 +400,13 @@ const Worker = struct {
     }
 
     fn waitSockets(w: *Worker, timeout_ms: c_int) void {
-        var fds: [2]c.struct_pollfd = undefined;
+        var fds: [2]sys.PollFd = undefined;
         var n: usize = 0;
-        if (w.ws_sock >= 0) {
-            fds[n] = .{ .fd = @intCast(w.ws_sock), .events = c.POLLIN, .revents = 0 };
+        if (sys.valid(w.ws_sock)) {
+            fds[n] = .{ .fd = w.ws_sock, .events = c.POLLIN, .revents = 0 };
             n += 1;
         }
-        if (w.udp >= 0) {
+        if (sys.valid(w.udp)) {
             fds[n] = .{ .fd = w.udp, .events = c.POLLIN, .revents = 0 };
             n += 1;
         }
@@ -413,7 +414,7 @@ const Worker = struct {
             c.SDL_Delay(@intCast(timeout_ms));
             return;
         }
-        _ = c.poll(&fds, @intCast(n), timeout_ms);
+        sys.poll(&fds, n, timeout_ms);
     }
 
     fn tick(w: *Worker, now: i64) void {
@@ -432,7 +433,7 @@ const Worker = struct {
         if (!w.connected) return;
         if (now >= w.next_keepalive) {
             const keep = [_]u8{ 0x13, 0x37 };
-            _ = c.sendto(w.udp, &keep, keep.len, 0, @ptrCast(&w.server), @sizeOf(std.posix.sockaddr.in));
+            _ = sys.sendTo(w.udp, &keep, &w.server);
             w.next_keepalive = now + 5000;
         }
         if (now >= w.next_frame) {
@@ -713,13 +714,11 @@ const Worker = struct {
         _ = w.sendText(p);
     }
 
-    fn parseIp4(ip: []const u8, port: u16) !std.posix.sockaddr.in {
+    fn parseIp4(ip: []const u8, port: u16) !sys.SockAddrIn {
         var z: [64]u8 = @splat(0);
         if (ip.len == 0 or ip.len >= z.len) return error.InvalidAddress;
         @memcpy(z[0..ip.len], ip);
-        var sa: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
-        if (c.inet_pton(c.AF_INET, &z, &sa.addr) != 1) return error.InvalidAddress;
-        return sa;
+        return sys.ipv4(@ptrCast(&z), port) orelse error.InvalidAddress;
     }
 
     fn onReady(w: *Worker, d: std.json.Value) void {
@@ -732,16 +731,14 @@ const Worker = struct {
             w.end = .fatal;
             return;
         };
-        if (w.udp >= 0) _ = c.close(w.udp);
-        const fd = c.socket(c.AF_INET, c.SOCK_DGRAM | c.SOCK_CLOEXEC, 0);
-        if (fd < 0) {
+        if (sys.valid(w.udp)) sys.closeSocket(w.udp);
+        const fd = sys.udpSocket() orelse {
             w.v.notice("não consegui abrir o UDP da call", "couldn't open the call UDP", .{});
             w.end = .fatal;
             return;
-        }
+        };
         w.udp = fd;
-        const local: std.posix.sockaddr.in = .{ .port = 0, .addr = 0 };
-        if (c.bind(w.udp, @ptrCast(&local), @sizeOf(std.posix.sockaddr.in)) != 0) {
+        if (!sys.bindAny(w.udp)) {
             w.v.notice("não consegui abrir o UDP da call", "couldn't open the call UDP", .{});
             w.end = .fatal;
             return;
@@ -752,12 +749,12 @@ const Worker = struct {
         std.mem.writeInt(u16, pkt[2..4], 70, .big);
         std.mem.writeInt(u32, pkt[4..8], w.ssrc, .big);
         for (0..5) |_| {
-            _ = c.sendto(w.udp, &pkt, pkt.len, 0, @ptrCast(&w.server), @sizeOf(std.posix.sockaddr.in));
+            _ = sys.sendTo(w.udp, &pkt, &w.server);
             const deadline = nowMs() + 1000;
             while (nowMs() < deadline and !w.v.stopping.load(.acquire)) {
                 w.waitSockets(100);
                 var resp: [256]u8 = undefined;
-                const nr = c.recv(w.udp, &resp, resp.len, c.MSG_DONTWAIT);
+                const nr = sys.recvNow(w.udp, &resp);
                 if (nr < 74) continue;
                 if (std.mem.readInt(u16, resp[0..2], .big) != 2) continue;
                 const iplen = std.mem.indexOfScalar(u8, resp[8..72], 0) orelse 64;
@@ -839,11 +836,11 @@ const Worker = struct {
     // --- UDP / mídia -------------------------------------------------------
 
     fn readUdp(w: *Worker) void {
-        if (w.udp < 0) return;
+        if (!sys.valid(w.udp)) return;
         // No máximo 64 pacotes por volta: o resto fica para a próxima.
         for (0..64) |_| {
             var buf: [2048]u8 = undefined;
-            const nr = c.recv(w.udp, &buf, buf.len, c.MSG_DONTWAIT);
+            const nr = sys.recvNow(w.udp, &buf);
             if (nr <= 0) return;
             w.onRtp(buf[0..@intCast(nr)]);
         }
@@ -937,7 +934,7 @@ const Worker = struct {
     }
 
     fn sendRtp(w: *Worker, payload: []const u8) void {
-        if (w.udp < 0 or payload.len == 0 or !w.have_secret) return;
+        if (!sys.valid(w.udp) or payload.len == 0 or !w.have_secret) return;
         var buf: [12 + 2048 + 16 + 4]u8 = undefined;
         const off = 12;
         if (payload.len + off + 16 + 4 > buf.len) return;
@@ -957,7 +954,7 @@ const Worker = struct {
         @memcpy(buf[off + payload.len ..][0..16], &tag);
         @memcpy(buf[off + payload.len + 16 ..][0..4], nonce[0..4]);
         const total = off + payload.len + 16 + 4;
-        const rc = c.sendto(w.udp, &buf, total, 0, @ptrCast(&w.server), @sizeOf(std.posix.sockaddr.in));
+        const rc = sys.sendTo(w.udp, buf[0..total], &w.server);
         if (rc < 0) dbg("sendto falhou", .{}) else w.sent_frames += 1;
         w.rtp_seq +%= 1;
     }

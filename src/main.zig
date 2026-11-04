@@ -1,4 +1,5 @@
 const std = @import("std");
+const sys = @import("platform/sys.zig");
 const builtin = @import("builtin");
 const c = @import("c");
 
@@ -42,10 +43,9 @@ const usage =
 ;
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    // Um filho (secret-tool) ou pipe fechado vira erro de write, não a morte do app.
-    _ = c.signal(c.SIGPIPE, c.SIG_IGN);
+    sys.init();
     var opts: Options = .{};
-    var it = std.process.Args.Iterator.init(init.args);
+    var it = if (sys.windows) try std.process.Args.Iterator.initAllocator(init.args, std.heap.c_allocator) else std.process.Args.Iterator.init(init.args);
     _ = it.skip();
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--theme")) {
@@ -80,7 +80,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             const gid = std.fmt.parseInt(u64, g, 10) catch return fail("servidor inválido");
             const cid = std.fmt.parseInt(u64, ch, 10) catch return fail("canal inválido");
             return voiceTest(gid, cid);
-        } else if (@import("builtin").mode == .debug and std.mem.eql(u8, arg, "--qa-lsp-server")) {
+        } else if (@import("builtin").mode == .debug and !sys.windows and std.mem.eql(u8, arg, "--qa-lsp-server")) {
             // O servidor de linguagem de mentira do QA (src/qa_lsp_server.zig), só em debug.
             @import("qa_lsp_server.zig").run(it.next() orelse return fail("--qa-lsp-server precisa de um modo"));
         } else if (std.mem.eql(u8, arg, "--list-themes")) {

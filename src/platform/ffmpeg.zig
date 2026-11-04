@@ -144,13 +144,19 @@ fn loadAll() bool {
     return false;
 }
 
+/// Prefixos de cada biblioteca e o fim do nome do arquivo em cada sistema.
+const lib_name = if (@import("builtin").os.tag == .windows)
+    [_][]const u8{ "avutil-", ".dll", "swscale-", "avcodec-", "avformat-" }
+else
+    [_][]const u8{ "libavutil.so.", "", "libswscale.so.", "libavcodec.so.", "libavformat.so." };
+
 fn loadSet(s: Set) bool {
     var names: [4][40]u8 = undefined;
     const files = [_][]const u8{
-        std.fmt.bufPrint(&names[0], "libavutil.so.{d}\x00", .{s.lavu}) catch return false,
-        std.fmt.bufPrint(&names[1], "libswscale.so.{d}\x00", .{s.sws}) catch return false,
-        std.fmt.bufPrint(&names[2], "libavcodec.so.{d}\x00", .{s.lavc}) catch return false,
-        std.fmt.bufPrint(&names[3], "libavformat.so.{d}\x00", .{s.lavf}) catch return false,
+        std.fmt.bufPrint(&names[0], lib_name[0] ++ "{d}" ++ lib_name[1] ++ "\x00", .{s.lavu}) catch return false,
+        std.fmt.bufPrint(&names[1], lib_name[2] ++ "{d}" ++ lib_name[1] ++ "\x00", .{s.sws}) catch return false,
+        std.fmt.bufPrint(&names[2], lib_name[3] ++ "{d}" ++ lib_name[1] ++ "\x00", .{s.lavc}) catch return false,
+        std.fmt.bufPrint(&names[3], lib_name[4] ++ "{d}" ++ lib_name[1] ++ "\x00", .{s.lavf}) catch return false,
     };
     var libs: [4]*c.SDL_SharedObject = undefined;
     var n: usize = 0;

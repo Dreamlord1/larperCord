@@ -1,0 +1,266 @@
+//! O que muda entre Linux e Windows: sockets, pasta de dados, chaveiro, RAM e
+//! mapear arquivos. O resto do app fala com estas funções.
+const std = @import("std");
+const builtin = @import("builtin");
+const c = @import("c");
+
+pub const windows = builtin.os.tag == .windows;
+
+pub const Socket = c.curl_socket_t;
+pub const no_socket: Socket = if (windows) std.math.maxInt(Socket) else -1;
+pub const PollFd = c.struct_pollfd;
+pub const SockAddrIn = c.struct_sockaddr_in;
+
+pub fn valid(s: Socket) bool {
+    return s != no_socket;
+}
+
+/// Uma vez, antes de qualquer outra coisa.
+pub fn init() void {
+    if (windows) {
+        var data: c.WSADATA = undefined;
+        _ = c.WSAStartup(0x0202, &data);
+    } else {
+        // Um filho (secret-tool) ou pipe fechado vira erro de write, não a morte do app.
+        _ = c.signal(c.SIGPIPE, c.SIG_IGN);
+    }
+}
+
+pub fn poll(fds: [*]PollFd, n: usize, timeout_ms: c_int) void {
+    if (windows) _ = c.WSAPoll(fds, @intCast(n), timeout_ms) else _ = c.poll(fds, @intCast(n), timeout_ms);
+}
+
+pub fn closeSocket(s: Socket) void {
+    if (windows) _ = c.closesocket(s) else _ = c.close(s);
+}
+
+/// UDP que nunca bloqueia (`recvNow` volta na hora).
+pub fn udpSocket() ?Socket {
+    if (windows) {
+        const s = c.socket(c.AF_INET, c.SOCK_DGRAM, 0);
+        if (s == no_socket) return null;
+        var on: c_ulong = 1;
+        // FIONBIO (a macro não passa pelo translate-c).
+        _ = c.ioctlsocket(s, @bitCast(@as(u32, 0x8004667E)), &on);
+        return s;
+    }
+    const s = c.socket(c.AF_INET, c.SOCK_DGRAM | c.SOCK_CLOEXEC, 0);
+    return if (s < 0) null else s;
+}
+
+pub fn recvNow(s: Socket, buf: []u8) isize {
+    if (windows) return c.recv(s, buf.ptr, @intCast(buf.len), 0);
+    return c.recv(s, buf.ptr, buf.len, c.MSG_DONTWAIT);
+}
+
+pub fn sendTo(s: Socket, data: []const u8, to: *const SockAddrIn) isize {
+    if (windows) return c.sendto(s, data.ptr, @intCast(data.len), 0, @ptrCast(to), @sizeOf(SockAddrIn));
+    return c.sendto(s, data.ptr, data.len, 0, @ptrCast(to), @sizeOf(SockAddrIn));
+}
+
+pub fn bindAny(s: Socket) bool {
+    var local = std.mem.zeroes(SockAddrIn);
+    local.sin_family = c.AF_INET;
+    return c.bind(s, @ptrCast(&local), @sizeOf(SockAddrIn)) == 0;
+}
+
+/// IP e porta -> endereço (porta em ordem de rede).
+pub fn ipv4(ip: [*:0]const u8, port: u16) ?SockAddrIn {
+    var sa = std.mem.zeroes(SockAddrIn);
+    sa.sin_family = c.AF_INET;
+    sa.sin_port = std.mem.nativeToBig(u16, port);
+    if (c.inet_pton(c.AF_INET, ip, &sa.sin_addr) != 1) return null;
+    return sa;
+}
+
+/// Acorda quem está em `poll`. Linux: um pipe. Windows: o poll só aceita
+/// sockets, então é um par UDP em 127.0.0.1.
+pub const Wake = struct {
+    read: Socket = no_socket,
+    write: Socket = no_socket,
+
+    pub fn open() Wake {
+        if (windows) {
+            const r = udpSocket() orelse return .{};
+            const w = udpSocket() orelse {
+                closeSocket(r);
+                return .{};
+            };
+            var addr = ipv4("127.0.0.1", 0) orelse return .{ .read = r, .write = w };
+            var len: c_int = @sizeOf(SockAddrIn);
+            if (c.bind(r, @ptrCast(&addr), len) != 0 or c.getsockname(r, @ptrCast(&addr), &len) != 0 or c.connect(w, @ptrCast(&addr), len) != 0) {
+                closeSocket(r);
+                closeSocket(w);
+                return .{};
+            }
+            return .{ .read = r, .write = w };
+        }
+        var fds: [2]c_int = undefined;
+        if (c.pipe(&fds) != 0) return .{};
+        for (fds) |fd| {
+            _ = c.fcntl(fd, c.F_SETFL, c.O_NONBLOCK);
+            _ = c.fcntl(fd, c.F_SETFD, c.FD_CLOEXEC);
+        }
+        return .{ .read = fds[0], .write = fds[1] };
+    }
+
+    pub fn close(w: *Wake) void {
+        for ([_]Socket{ w.read, w.write }) |s| if (valid(s)) closeSocket(s);
+        w.* = .{};
+    }
+
+    pub fn drain(w: *const Wake) void {
+        var junk: [64]u8 = undefined;
+        if (windows) _ = c.recv(w.read, &junk, junk.len, 0) else _ = c.read(w.read, &junk, junk.len);
+    }
+};
+
+pub fn wakeSignal(write_end: Socket) void {
+    if (windows) _ = c.send(write_end, "x", 1, 0) else _ = c.write(write_end, "x", 1);
+}
+
+// --- Pastas ---------------------------------------------------------------------
+
+fn env(name: [*:0]const u8) ?[]const u8 {
+    const v = c.SDL_getenv(name) orelse return null;
+    const s = std.mem.span(v);
+    return if (s.len > 0) s else null;
+}
+
+/// Onde ficam as configurações (sem o "larpercord"): $XDG_CONFIG_HOME,
+/// %APPDATA% ou ~/.config.
+pub fn configHome(buf: []u8) ?[]const u8 {
+    if (env("XDG_CONFIG_HOME")) |x| return x;
+    if (windows) return env("APPDATA");
+    const home = env("HOME") orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/.config", .{home}) catch null;
+}
+
+/// Onde fica o cache: $XDG_CACHE_HOME, %LOCALAPPDATA% ou ~/.cache.
+pub fn cacheHome(buf: []u8) ?[]const u8 {
+    if (env("XDG_CACHE_HOME")) |x| return x;
+    if (windows) return env("LOCALAPPDATA");
+    const home = env("HOME") orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/.cache", .{home}) catch null;
+}
+
+pub fn tempDir() []const u8 {
+    if (env("XDG_RUNTIME_DIR")) |x| return x;
+    if (windows) return env("TEMP") orelse ".";
+    return "/tmp";
+}
+
+// --- Arquivos -------------------------------------------------------------------
+
+pub fn mkdirPrivate(path: [*:0]const u8) void {
+    if (windows) {
+        _ = c.CreateDirectoryA(path, null);
+    } else _ = c.mkdir(path, 0o700);
+}
+
+/// Tamanho do arquivo, ou null se ele não existe.
+pub fn fileSize(path: [*:0]const u8) ?u64 {
+    var info: c.SDL_PathInfo = undefined;
+    if (!c.SDL_GetPathInfo(path, &info)) return null;
+    return info.size;
+}
+
+pub fn exists(path: [*:0]const u8) bool {
+    return fileSize(path) != null;
+}
+
+/// O arquivo só é legível pelo dono? (No Windows, a pasta do perfil já é.)
+pub fn ownerOnly(path: [*:0]const u8) bool {
+    if (windows) return exists(path);
+    var st: c.struct_stat = undefined;
+    return c.stat(path, &st) == 0 and st.st_mode & 0o077 == 0;
+}
+
+/// Grava `bytes` num arquivo novo só do dono. O chamador renomeia depois.
+pub fn writeNew(path: [*:0]const u8, bytes: []const u8, durable: bool) bool {
+    const flags = if (windows) c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_BINARY else c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_CLOEXEC;
+    const fd = c.open(path, flags, @as(c_uint, 0o600));
+    if (fd < 0) return false;
+    if (!windows) _ = c.fchmod(fd, 0o600);
+    var off: usize = 0;
+    var ok = true;
+    while (off < bytes.len) {
+        const left = bytes.len - off;
+        const n = if (windows) c.write(fd, bytes[off..].ptr, @intCast(@min(left, 1 << 30))) else c.write(fd, bytes[off..].ptr, left);
+        if (n <= 0) {
+            ok = false;
+            break;
+        }
+        off += @intCast(n);
+    }
+    if (ok and durable) ok = (if (windows) c._commit(fd) else c.fsync(fd)) == 0;
+    if (c.close(fd) != 0) ok = false;
+    return ok;
+}
+
+/// Troca um arquivo por outro de uma vez só, mesmo se o destino existe.
+pub fn replaceFile(from: [*:0]const u8, to: [*:0]const u8) bool {
+    if (windows) return c.MoveFileExA(from, to, c.MOVEFILE_REPLACE_EXISTING | c.MOVEFILE_WRITE_THROUGH) != 0;
+    return c.rename(from, to) == 0;
+}
+
+/// Mapeia o arquivo (somente leitura); só as páginas lidas ficam na RAM.
+pub fn mapFile(path: [*:0]const u8) ?[]u8 {
+    if (windows) {
+        const f = c.CreateFileA(path, c.GENERIC_READ, c.FILE_SHARE_READ, null, c.OPEN_EXISTING, c.FILE_ATTRIBUTE_NORMAL, null);
+        if (f == c.INVALID_HANDLE_VALUE) return null;
+        defer _ = c.CloseHandle(f);
+        var size: c.LARGE_INTEGER = undefined;
+        if (c.GetFileSizeEx(f, &size) == 0 or size.QuadPart <= 0) return null;
+        const m = c.CreateFileMappingA(f, null, c.PAGE_READONLY, 0, 0, null) orelse return null;
+        defer _ = c.CloseHandle(m);
+        const view = c.MapViewOfFile(m, c.FILE_MAP_READ, 0, 0, 0) orelse return null;
+        return @as([*]u8, @ptrCast(view))[0..@intCast(size.QuadPart)];
+    }
+    const fd = c.open(path, c.O_RDONLY);
+    if (fd < 0) return null;
+    defer _ = c.close(fd);
+    const size = c.lseek(fd, 0, c.SEEK_END);
+    if (size <= 0) return null;
+    const p = c.mmap(null, @intCast(size), c.PROT_READ, c.MAP_PRIVATE, fd, 0);
+    if (p == null or @intFromPtr(p) == std.math.maxInt(usize)) return null;
+    return @as([*]u8, @ptrCast(p))[0..@intCast(size)];
+}
+
+// --- Chaveiro do Windows (Gerenciador de Credenciais) ---------------------------
+
+pub fn credRead(target: [*:0]const u8, buf: []u8) ?[]u8 {
+    if (!windows) return null;
+    var cred: c.PCREDENTIALA = null;
+    if (c.CredReadA(target, c.CRED_TYPE_GENERIC, 0, &cred) == 0) return null;
+    defer c.CredFree(cred);
+    const n: usize = cred.*.CredentialBlobSize;
+    if (n > buf.len) return null;
+    @memcpy(buf[0..n], cred.*.CredentialBlob[0..n]);
+    return buf[0..n];
+}
+
+pub fn credWrite(target: [*:0]const u8, label: [*:0]const u8, secret: []const u8) bool {
+    if (!windows) return false;
+    var cred = std.mem.zeroes(c.CREDENTIALA);
+    cred.Type = c.CRED_TYPE_GENERIC;
+    cred.TargetName = @constCast(target);
+    cred.Comment = @constCast(label);
+    cred.CredentialBlobSize = @intCast(secret.len);
+    cred.CredentialBlob = @constCast(secret.ptr);
+    cred.Persist = c.CRED_PERSIST_LOCAL_MACHINE;
+    return c.CredWriteA(&cred, 0) != 0;
+}
+
+pub fn credDelete(target: [*:0]const u8) void {
+    if (windows) _ = c.CredDeleteA(target, c.CRED_TYPE_GENERIC, 0);
+}
+
+/// Memória própria do processo, em KB.
+pub fn privateKb() u32 {
+    if (!windows) return 0;
+    var pm = std.mem.zeroes(c.PROCESS_MEMORY_COUNTERS_EX);
+    pm.cb = @sizeOf(c.PROCESS_MEMORY_COUNTERS_EX);
+    if (c.K32GetProcessMemoryInfo(c.GetCurrentProcess(), @ptrCast(&pm), pm.cb) == 0) return 0;
+    return @intCast(pm.PrivateUsage / 1024);
+}

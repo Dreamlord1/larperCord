@@ -13,6 +13,7 @@
 //!  - uma requisição REST por vez, respeitando os cabeçalhos de rate limit;
 //!  - reconexão com espera crescente; erros de autenticação não reconectam.
 const std = @import("std");
+const sys = @import("../platform/sys.zig");
 const c = @import("c");
 const types = @import("../core/types.zig");
 const ev = @import("../core/event.zig");
@@ -131,16 +132,11 @@ pub const Gateway = struct {
     frame_t2: u64 = 0,
     frame_len: usize = 0,
     /// Acorda o poll do gateway quando chega comando (leitura, escrita).
-    wake_pipe: [2]c_int = .{ -1, -1 },
+    wake: sys.Wake = .{},
 
     pub fn start(g: *Gateway) !void {
-        if (c.pipe(&g.wake_pipe) == 0) {
-            for (g.wake_pipe) |fd| {
-                _ = c.fcntl(fd, c.F_SETFL, c.O_NONBLOCK);
-                _ = c.fcntl(fd, c.F_SETFD, c.FD_CLOEXEC);
-            }
-        } else g.wake_pipe = .{ -1, -1 };
-        g.commands.wake_fd = g.wake_pipe[1];
+        g.wake = sys.Wake.open();
+        g.commands.wake_fd = g.wake.write;
         g.thread = c.SDL_CreateThread(threadMain, "discord", g) orelse {
             g.closeWakePipe();
             return error.SdlThread;
@@ -148,11 +144,8 @@ pub const Gateway = struct {
     }
 
     fn closeWakePipe(g: *Gateway) void {
-        g.commands.wake_fd = -1;
-        for (g.wake_pipe) |fd| if (fd >= 0) {
-            _ = c.close(fd);
-        };
-        g.wake_pipe = .{ -1, -1 };
+        g.commands.wake_fd = sys.no_socket;
+        g.wake.close();
     }
 
     pub fn stop(g: *Gateway) void {
@@ -418,7 +411,7 @@ pub const Gateway = struct {
         g.abortable(h);
         if (c.curl_easy_perform(h) != c.CURLE_OK) return .retry;
         timeline.mark(.websocket);
-        var sock: c.curl_socket_t = -1;
+        var sock: sys.Socket = sys.no_socket;
         _ = c.curl_easy_getinfo(h, c.CURLINFO_ACTIVESOCKET, &sock);
         // `seq` e `session_id` sobrevivem à queda: é isso que permite o RESUME.
         g.acked = true;
@@ -459,18 +452,15 @@ pub const Gateway = struct {
             // heartbeat. Em call, a thread de voz é conferida 20x por segundo.
             const now = nowMs();
             const voice_busy = g.voice != null or g.voice_wait_until != 0;
-            const cap: i64 = if (voice_busy or g.wake_pipe[0] < 0) 50 else 1000;
+            const cap: i64 = if (voice_busy or !sys.valid(g.wake.read)) 50 else 1000;
             const due = @min(if (g.next_hb == std.math.maxInt(i64)) g.hello_until else g.next_hb, g.acks.nextDue());
             const wait: c_int = @intCast(std.math.clamp(due - now, 0, cap));
-            var pfd = [2]c.struct_pollfd{
+            var pfd = [2]sys.PollFd{
                 .{ .fd = sock, .events = c.POLLIN, .revents = 0 },
-                .{ .fd = g.wake_pipe[0], .events = c.POLLIN, .revents = 0 },
+                .{ .fd = g.wake.read, .events = c.POLLIN, .revents = 0 },
             };
-            _ = c.poll(&pfd, 2, wait);
-            if (pfd[1].revents & c.POLLIN != 0) {
-                var junk: [64]u8 = undefined;
-                _ = c.read(g.wake_pipe[0], &junk, junk.len);
-            }
+            sys.poll(&pfd, if (sys.valid(g.wake.read)) 2 else 1, wait);
+            if (sys.valid(g.wake.read) and pfd[1].revents & c.POLLIN != 0) g.wake.drain();
 
             g.serviceWs();
             if (g.ws_end) |e| return e;
@@ -555,10 +545,10 @@ pub const Gateway = struct {
             if (rc == c.CURLE_AGAIN) {
                 waited += 1;
                 if (waited > 50) break;
-                var sock: c.curl_socket_t = -1;
+                var sock: sys.Socket = sys.no_socket;
                 _ = c.curl_easy_getinfo(h, c.CURLINFO_ACTIVESOCKET, &sock);
-                var pfd: c.struct_pollfd = .{ .fd = sock, .events = c.POLLOUT, .revents = 0 };
-                _ = c.poll(&pfd, 1, 20);
+                var pfd: sys.PollFd = .{ .fd = sock, .events = c.POLLOUT, .revents = 0 };
+                sys.poll(@ptrCast(&pfd), 1, 20);
                 continue;
             }
             if (rc != c.CURLE_OK or sent == 0) break;
@@ -1666,8 +1656,8 @@ pub const Gateway = struct {
         const embeds = try embedsOf(m);
         errdefer types.freeEmbeds(alloc, embeds);
         // Mensagens de sistema vêm sem texto: monta o que o Discord mostra.
-        const sys = try systemText(m, author);
-        if (sys.text) |t| {
+        const sys_msg = try systemText(m, author);
+        if (sys_msg.text) |t| {
             alloc.free(content);
             content = t;
         }
@@ -1694,7 +1684,7 @@ pub const Gateway = struct {
             .edited = !j.isNull(j.get(m, "edited_timestamp")),
             .attachments = atts,
             .embeds = embeds,
-            .system = sys.kind,
+            .system = sys_msg.kind,
             .pinned = if (j.get(m, "pinned")) |p| p == .bool and p.bool else false,
             .mention_everyone = if (j.get(m, "mention_everyone")) |me| me == .bool and me.bool else false,
             .mentions_me = for (j.array(j.get(m, "mentions"))) |u| {
@@ -3364,6 +3354,7 @@ pub fn envToken() ?[:0]u8 {
 
 /// Só o token guardado na entrada antiga (chaveiro, depois o arquivo).
 pub fn loadSavedToken() ?[:0]u8 {
+    if (sys.windows) return null; // A entrada antiga só existe no Linux.
     if (c.popen("secret-tool lookup service larpercord 2>/dev/null", "r")) |f| {
         var buf: [256]u8 = undefined;
         const n = c.fread(&buf, 1, buf.len, f);
@@ -3372,12 +3363,10 @@ pub fn loadSavedToken() ?[:0]u8 {
         const s = std.mem.trim(u8, buf[0..n], " \n\r\t");
         if (s.len > 20) return alloc.dupeSentinel(u8, s, 0) catch null;
     }
-    const home = c.SDL_getenv("HOME") orelse return null;
     var pbuf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintSentinel(&pbuf, "{s}/.config/larpercord/token", .{std.mem.span(home)}, 0) catch return null;
-    var st: c.struct_stat = undefined;
-    if (c.stat(path.ptr, &st) != 0) return null;
-    if (st.st_mode & 0o077 != 0) {
+    const path = tokenFilePath(&pbuf) orelse return null;
+    if (!sys.exists(path.ptr)) return null;
+    if (!sys.ownerOnly(path.ptr)) {
         std.log.warn("~/.config/larpercord/token está legível por outros usuários; rode: chmod 600 ~/.config/larpercord/token", .{});
         return null;
     }
@@ -3399,6 +3388,7 @@ fn tokenFilePath(buf: []u8) ?[:0]const u8 {
 
 /// "Sair": apaga o token do chaveiro e do arquivo.
 pub fn forgetToken() void {
+    if (sys.windows) return;
     if (c.popen("secret-tool clear service larpercord 2>/dev/null", "r")) |f| _ = c.pclose(f);
     var pbuf: [512]u8 = undefined;
     if (tokenFilePath(&pbuf)) |p| _ = c.unlink(p.ptr);

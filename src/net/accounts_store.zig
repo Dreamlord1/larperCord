@@ -15,6 +15,7 @@
 //! O token nunca vai para a linha de comando (vai pela entrada padrão do
 //! secret-tool) e o comando só leva o ID, que é um número.
 const std = @import("std");
+const sys = @import("../platform/sys.zig");
 const c = @import("c");
 const accounts = @import("../core/accounts.zig");
 const discord = @import("discord.zig");
@@ -69,18 +70,24 @@ pub fn tokenFor(acc: *const accounts.Account) ?[:0]u8 {
     if (memory_only) return null;
     if (acc.legacy) return discord.loadSavedToken();
     var cbuf: [160]u8 = undefined;
-    const cmd = std.fmt.bufPrintSentinel(&cbuf, "secret-tool lookup service larpercord-account account {d} 2>/dev/null", .{acc.id}, 0) catch return null;
-    if (c.popen(cmd.ptr, "r")) |f| {
+    if (sys.windows) {
+        const target = credTarget(&cbuf, acc.id) orelse return null;
         var buf: [256]u8 = undefined;
-        const n = c.fread(&buf, 1, buf.len, f);
-        _ = c.pclose(f);
         defer std.crypto.secureZero(u8, &buf);
-        if (trimmed(buf[0..n])) |t| return t;
+        if (sys.credRead(target.ptr, &buf)) |s| if (trimmed(s)) |t| return t;
+    } else {
+        const cmd = std.fmt.bufPrintSentinel(&cbuf, "secret-tool lookup service larpercord-account account {d} 2>/dev/null", .{acc.id}, 0) catch return null;
+        if (c.popen(cmd.ptr, "r")) |f| {
+            var buf: [256]u8 = undefined;
+            const n = c.fread(&buf, 1, buf.len, f);
+            _ = c.pclose(f);
+            defer std.crypto.secureZero(u8, &buf);
+            if (trimmed(buf[0..n])) |t| return t;
+        }
     }
     var pbuf: [512]u8 = undefined;
     const path = tokenPath(&pbuf, acc.id) orelse return null;
-    var st: c.struct_stat = undefined;
-    if (c.stat(path.ptr, &st) != 0 or st.st_mode & 0o077 != 0) return null;
+    if (!sys.ownerOnly(path.ptr)) return null;
     var size: usize = 0;
     const data = c.SDL_LoadFile(path.ptr, &size) orelse return null;
     defer {
@@ -92,19 +99,32 @@ pub fn tokenFor(acc: *const accounts.Account) ?[:0]u8 {
 
 pub const Saved = enum { keyring, file, failed };
 
+/// Nome da entrada no Gerenciador de Credenciais do Windows.
+fn credTarget(buf: []u8, id: Id) ?[:0]const u8 {
+    return std.fmt.bufPrintSentinel(buf, "larperCord/account/{d}", .{id}, 0) catch null;
+}
+
 /// Guarda o token de uma conta (no chaveiro; sem ele, num arquivo 600).
 pub fn storeToken(id: Id, token: []const u8) Saved {
     if (memory_only) return .failed;
     var cbuf: [200]u8 = undefined;
-    const cmd = std.fmt.bufPrintSentinel(&cbuf, "secret-tool store --label='larperCord (conta {d})' service larpercord-account account {d} 2>/dev/null", .{ id, id }, 0) catch return .failed;
     var pbuf: [512]u8 = undefined;
     const path = tokenPath(&pbuf, id);
-    if (c.popen(cmd.ptr, "w")) |f| {
-        const wrote = c.fwrite(token.ptr, 1, token.len, f);
-        if (c.pclose(f) == 0 and wrote == token.len) {
-            // Não deixa cópia velha em arquivo.
+    if (sys.windows) {
+        const target = credTarget(&cbuf, id) orelse return .failed;
+        if (sys.credWrite(target.ptr, "larperCord", token)) {
             if (path) |p| _ = c.unlink(p.ptr);
             return .keyring;
+        }
+    } else {
+        const cmd = std.fmt.bufPrintSentinel(&cbuf, "secret-tool store --label='larperCord (conta {d})' service larpercord-account account {d} 2>/dev/null", .{ id, id }, 0) catch return .failed;
+        if (c.popen(cmd.ptr, "w")) |f| {
+            const wrote = c.fwrite(token.ptr, 1, token.len, f);
+            if (c.pclose(f) == 0 and wrote == token.len) {
+                // Não deixa cópia velha em arquivo.
+                if (path) |p| _ = c.unlink(p.ptr);
+                return .keyring;
+            }
         }
     }
     const p = path orelse return .failed;
@@ -116,7 +136,9 @@ pub fn forgetToken(acc: *const accounts.Account) void {
     if (memory_only) return;
     if (acc.legacy) return discord.forgetToken();
     var cbuf: [160]u8 = undefined;
-    if (std.fmt.bufPrintSentinel(&cbuf, "secret-tool clear service larpercord-account account {d} 2>/dev/null", .{acc.id}, 0)) |cmd| {
+    if (sys.windows) {
+        if (credTarget(&cbuf, acc.id)) |target| sys.credDelete(target.ptr);
+    } else if (std.fmt.bufPrintSentinel(&cbuf, "secret-tool clear service larpercord-account account {d} 2>/dev/null", .{acc.id}, 0)) |cmd| {
         if (c.popen(cmd.ptr, "r")) |f| _ = c.pclose(f);
     } else |_| {}
     var pbuf: [512]u8 = undefined;

@@ -3,6 +3,7 @@
 //! colorido em todas. Famílias novas podem ser carregadas a qualquer momento
 //! (troca de tema), fora do intervalo NewFrame/Render.
 const std = @import("std");
+const sys = @import("../platform/sys.zig");
 const c = @import("c");
 
 pub const Weight = enum(u3) { regular, medium, semibold, bold, italic };
@@ -116,14 +117,7 @@ pub const Fonts = struct {
     /// Mapeia o arquivo (somente leitura); só as páginas lidas ficam na RAM.
     fn mapPath(f: *Fonts, path: [:0]const u8) ![]u8 {
         if (f.maps.get(path)) |m| return m;
-        const fd = c.open(path.ptr, c.O_RDONLY);
-        if (fd < 0) return error.FontLoad;
-        defer _ = c.close(fd);
-        const size = c.lseek(fd, 0, c.SEEK_END);
-        if (size <= 0) return error.FontLoad;
-        const p = c.mmap(null, @intCast(size), c.PROT_READ, c.MAP_PRIVATE, fd, 0);
-        if (p == null or @intFromPtr(p) == std.math.maxInt(usize)) return error.FontLoad;
-        const data = @as([*]u8, @ptrCast(p))[0..@intCast(size)];
+        const data = sys.mapFile(path.ptr) orelse return error.FontLoad;
         try f.maps.put(f.gpa, try f.gpa.dupe(u8, path), data);
         return data;
     }
@@ -145,8 +139,46 @@ fn defaultConfig() c.ImFontConfig {
 
 const Match = struct { path: [:0]u8, index: c_int };
 
+/// Sem fontconfig: procura em C:\\Windows\\Fonts. Primeiro um arquivo com o nome
+/// da família; senão a fonte do sistema do mesmo tipo (Segoe UI, Georgia, Consolas).
+fn resolveWindows(name: []const u8, weight: c_int, slant: c_int) ?Match {
+    const windir = if (c.SDL_getenv("WINDIR")) |w| std.mem.span(w) else "C:/Windows";
+    const italic = slant != 0;
+    const bold = weight >= 200;
+    const semi = weight >= 180 and !bold;
+    var lower: [64]u8 = undefined;
+    var n: usize = 0;
+    for (name) |ch| {
+        if (ch == ' ' or n == lower.len) continue;
+        lower[n] = std.ascii.toLower(ch);
+        n += 1;
+    }
+    const low = lower[0..n];
+    const has = struct {
+        fn f(s: []const u8, words: []const []const u8) bool {
+            for (words) |w| if (std.mem.indexOf(u8, s, w) != null) return true;
+            return false;
+        }
+    }.f;
+    const emoji: []const []const u8 = &.{ "seguiemj", "seguisym" };
+    const symbols: []const []const u8 = &.{ "seguisym", "arial" };
+    const mono: []const []const u8 = if (bold) &.{ "consolab", "courbd" } else if (italic) &.{ "consolai", "couri" } else &.{ "consola", "cour" };
+    const serif: []const []const u8 = if (bold) &.{ "georgiab", "timesbd" } else if (italic) &.{ "georgiai", "timesi" } else &.{ "georgia", "times" };
+    const sans: []const []const u8 = if (bold) &.{ "segoeuib", "arialbd", "tahomabd", "tahoma" } else if (semi) &.{ "seguisb", "segoeuib", "arialbd", "tahoma" } else if (italic) &.{ "segoeuii", "ariali", "tahoma" } else &.{ "segoeui", "arial", "tahoma" };
+    const family = if (std.mem.eql(u8, low, "emoji")) emoji else if (has(low, &.{"dejavusans"})) symbols else if (has(low, &.{ "mono", "code", "consol", "courier", "term" })) mono else if (has(low, &.{ "serif", "georgia", "times", "garamond", "playfair" }) and !has(low, &.{"sans"})) serif else sans;
+    var pb: [300]u8 = undefined;
+    const exact = std.fmt.bufPrintSentinel(&pb, "{s}/Fonts/{s}.ttf", .{ windir, low }, 0) catch return null;
+    if (sys.exists(exact.ptr)) return .{ .path = std.heap.c_allocator.dupeSentinel(u8, exact, 0) catch return null, .index = 0 };
+    for (family) |file| {
+        const p = std.fmt.bufPrintSentinel(&pb, "{s}/Fonts/{s}.ttf", .{ windir, file }, 0) catch continue;
+        if (sys.exists(p.ptr)) return .{ .path = std.heap.c_allocator.dupeSentinel(u8, p, 0) catch return null, .index = 0 };
+    }
+    return null;
+}
+
 /// Pergunta ao fontconfig qual arquivo atende família + peso + inclinação.
 fn resolve(name: []const u8, weight: c_int, slant: c_int) ?Match {
+    if (sys.windows) return resolveWindows(name, weight, slant);
     var buf: [128]u8 = undefined;
     const zname = std.fmt.bufPrintSentinel(&buf, "{s}", .{name}, 0) catch return null;
     const pat = c.FcPatternCreate() orelse return null;

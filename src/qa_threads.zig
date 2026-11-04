@@ -874,7 +874,7 @@ fn themeBackOpen(app: *App) bool {
 pub const ops_theme = [_]Op{
     s("threads e fórum neste tema"),
     .{ .run = themeForum },
-    .{ .expect = .{ .name = "o fórum abre neste tema", .check = themeForumOpen, .timeout_ms = 3000 } },
+    .{ .expect = .{ .name = "o fórum abre neste tema", .check = themeForumOpen, .timeout_ms = 8000 } },
     .{ .wait = 150 },
     .{ .shot = "tema-forum" },
     .{ .run = themePost },

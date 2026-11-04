@@ -11,12 +11,13 @@ const lua_sources = [_][]const u8{
 };
 
 fn addLua(b: *std.Build, m: *std.Build.Module) void {
+    const windows = m.resolved_target.?.result.os.tag == .windows;
     m.addCSourceFiles(.{
         .root = b.path("third_party/lua"),
         .files = &lua_sources,
         // Sem o sanitizador de UB do Zig: o Lua conta com aritmética de C
         // que ele marcaria (e o QA roda em debug).
-        .flags = &.{ "-std=gnu99", "-O2", "-DLUA_USE_POSIX", "-fno-sanitize=undefined" },
+        .flags = if (windows) &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined" } else &.{ "-std=gnu99", "-O2", "-DLUA_USE_POSIX", "-fno-sanitize=undefined" },
     });
 }
 
@@ -35,6 +36,14 @@ fn addRnnoise(b: *std.Build, m: *std.Build.Module) void {
         .flags = &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined", "-Wno-cpp" },
     });
 }
+
+/// Windows: FreeType compilado junto (o baixado por tools/windows_deps.sh).
+const freetype_sources = [_][]const u8{
+    "base/ftsystem.c", "base/ftinit.c",    "base/ftdebug.c",     "base/ftbase.c",  "base/ftbbox.c",  "base/ftbitmap.c",
+    "base/ftglyph.c",  "base/ftsynth.c",   "base/ftmm.c",        "base/ftgasp.c",  "sfnt/sfnt.c",    "truetype/truetype.c",
+    "cff/cff.c",       "psaux/psaux.c",    "pshinter/pshinter.c", "psnames/psnames.c", "smooth/smooth.c", "raster/raster.c",
+    "autofit/autofit.c", "gzip/ftgzip.c",  "lzw/ftlzw.c",
+};
 
 const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "subsolo", "orbital", "editorial", "bolhas", "zen", "papel", "escritorio", "cupertino" };
 
@@ -68,13 +77,20 @@ pub fn build(b: *std.Build) void {
     translate.addIncludePath(b.path("third_party/stb"));
     translate.addIncludePath(b.path("third_party/libdave/includes"));
     translate.defineCMacro("IMGUI_USE_WCHAR32", "1");
-    translate.linkSystemLibrary("sdl3", .{});
-    translate.linkSystemLibrary("fontconfig", .{});
-    translate.linkSystemLibrary("libcurl", .{});
-    translate.linkSystemLibrary("zlib", .{});
-    translate.linkSystemLibrary("libwebp", .{});
-    translate.linkSystemLibrary("libwebpdemux", .{});
-    translate.linkSystemLibrary("opus", .{});
+    const windows = target.result.os.tag == .windows;
+    // Sem pkg-config: as bibliotecas vêm de tools/windows_deps.sh.
+    const win_deps = b.path(".deps/windows");
+    if (windows) {
+        translate.addIncludePath(win_deps.path(b, "include"));
+    } else {
+        translate.linkSystemLibrary("sdl3", .{});
+        translate.linkSystemLibrary("fontconfig", .{});
+        translate.linkSystemLibrary("libcurl", .{});
+        translate.linkSystemLibrary("zlib", .{});
+        translate.linkSystemLibrary("libwebp", .{});
+        translate.linkSystemLibrary("libwebpdemux", .{});
+        translate.linkSystemLibrary("opus", .{});
+    }
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -84,7 +100,7 @@ pub fn build(b: *std.Build) void {
         .link_libcpp = true,
         .strip = strip,
         // Só o C++ da voz usa exceções, e ele gera as tabelas que precisa.
-        .unwind_tables = if (release) .none else null,
+        .unwind_tables = if (release and target.result.os.tag != .windows) .none else null,
     });
     mod.addOptions("build_options", build_options);
     mod.addImport("c", translate.createModule());
@@ -107,7 +123,7 @@ pub fn build(b: *std.Build) void {
     mod.addCMacro("IMGUI_USE_WCHAR32", "1"); // emojis fora do plano básico (😂, 🌸...)
     // Janela de métricas e log de depuração: ninguém abre (dcimgui ainda cita
     // duas funções deles, então só onde o ligador joga fora o que não é usado).
-    if (release) mod.addCMacro("IMGUI_DISABLE_DEBUG_TOOLS", "1");
+    if (release and !windows) mod.addCMacro("IMGUI_DISABLE_DEBUG_TOOLS", "1");
     mod.addCMacro("WITH_OPENSSL3", "1");
     mod.addCMacro("DISABLE_GREASE", "1");
     mod.addCSourceFiles(.{
@@ -193,21 +209,40 @@ pub fn build(b: *std.Build) void {
     });
     addLua(b, mod);
     addRnnoise(b, mod);
-    mod.linkSystemLibrary("sdl3", .{});
-    mod.linkSystemLibrary("freetype2", .{});
-    mod.linkSystemLibrary("fontconfig", .{});
-    mod.linkSystemLibrary("libcurl", .{});
-    mod.linkSystemLibrary("zlib", .{});
-    mod.linkSystemLibrary("libwebp", .{});
-    mod.linkSystemLibrary("libwebpdemux", .{});
-    mod.linkSystemLibrary("opus", .{});
-    mod.linkSystemLibrary("crypto", .{});
+    if (windows) {
+        const ft = win_deps.path(b, "src/freetype");
+        mod.addIncludePath(ft.path(b, "include"));
+        translate.addIncludePath(ft.path(b, "include"));
+        mod.addIncludePath(win_deps.path(b, "include"));
+        mod.addCSourceFiles(.{ .root = ft.path(b, "src"), .files = &freetype_sources, .flags = &.{ "-DFT2_BUILD_LIBRARY", "-DFT_CONFIG_MODULES_H=\"ftmodule.h\"", "-O2", "-fno-sanitize=undefined" } });
+        mod.addIncludePath(b.path("src/platform/win"));
+        mod.addLibraryPath(win_deps.path(b, "lib"));
+        for ([_][]const u8{ "SDL3.dll", "curl.dll", "crypto.dll" }) |l| mod.linkSystemLibrary(l, .{ .use_pkg_config = .no });
+        for ([_][]const u8{ "opus", "z", "webp", "webpdemux", "sharpyuv" }) |l| mod.linkSystemLibrary(l, .{ .use_pkg_config = .no, .preferred_link_mode = .static });
+        for ([_][]const u8{ "ws2_32", "advapi32", "crypt32", "shell32", "ole32", "bcrypt", "user32" }) |l| mod.linkSystemLibrary(l, .{ .use_pkg_config = .no });
+        for ([_][]const u8{ "SDL3.dll", "libcurl-x64.dll", "libcrypto-3-x64.dll" }) |dll| b.getInstallStep().dependOn(&b.addInstallBinFile(win_deps.path(b, b.pathJoin(&.{ "bin", dll })), dll).step);
+    } else {
+        mod.linkSystemLibrary("sdl3", .{});
+        mod.linkSystemLibrary("freetype2", .{});
+        mod.linkSystemLibrary("fontconfig", .{});
+        mod.linkSystemLibrary("libcurl", .{});
+        mod.linkSystemLibrary("zlib", .{});
+        mod.linkSystemLibrary("libwebp", .{});
+        mod.linkSystemLibrary("libwebpdemux", .{});
+        mod.linkSystemLibrary("opus", .{});
+        mod.linkSystemLibrary("crypto", .{});
+    }
 
     const exe = b.addExecutable(.{ .name = "larpercord", .root_module = mod });
     // Com uma seção por função, o ligador joga fora o que ninguém chama.
     exe.link_function_sections = release;
     exe.link_data_sections = release;
     exe.link_gc_sections = release;
+    if (windows) {
+        exe.win32_manifest = b.path("assets/larpercord.manifest");
+        // Sem janela de console no build final.
+        if (release) exe.subsystem = .windows;
+    }
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);

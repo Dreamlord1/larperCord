@@ -1,5 +1,6 @@
 //! Fila protegida por mutex para trocar mensagens entre threads.
 const std = @import("std");
+const sys = @import("../platform/sys.zig");
 const c = @import("c");
 
 pub fn Queue(comptime T: type) type {
@@ -11,7 +12,7 @@ pub fn Queue(comptime T: type) type {
         items: std.ArrayList(T) = .empty,
         gpa: std.mem.Allocator,
         /// Se >= 0, cada push escreve um byte aqui (acorda quem dorme num poll).
-        wake_fd: c_int = -1,
+        wake_fd: sys.Socket = sys.no_socket,
 
         pub fn init(gpa: std.mem.Allocator) !Self {
             return .{
@@ -32,7 +33,7 @@ pub fn Queue(comptime T: type) type {
             defer c.SDL_UnlockMutex(q.mutex);
             q.items.append(q.gpa, item) catch return;
             c.SDL_SignalCondition(q.cond);
-            if (q.wake_fd >= 0) _ = c.write(q.wake_fd, "x", 1);
+            if (sys.valid(q.wake_fd)) sys.wakeSignal(q.wake_fd);
         }
 
         /// Move tudo que está na fila para `out` (que deve estar vazio).

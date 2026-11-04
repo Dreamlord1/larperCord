@@ -12,6 +12,17 @@ jobs:
       # temas embutidos, protobuf, APNG, URLs de mídia) e não precisam de SDL.
       - run: zig build test
 
+  # O build para Windows sai do Linux (as bibliotecas vêm de tools/windows_deps.sh).
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - run: tools/windows_deps.sh
+      - run: zig build -Dtarget=x86_64-windows-gnu
+
   # O app inteiro (UI, rede, imagens) só compila com as bibliotecas do
   # sistema: roda num Arch, que tem SDL3, libwebp e companhia nos pacotes.
   # Depois, o QA completo fora da tela, com os dados de demonstração.

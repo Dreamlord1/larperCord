@@ -3,6 +3,19 @@
 #include "dcimgui.h"
 #include "dcimgui_impl_sdl3.h"
 #include "dcimgui_impl_sdlrenderer3.h"
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <wincred.h>
+#include <shlobj.h>
+#include <psapi.h>
+#include <fcntl.h>
+#include <io.h>
+#include <direct.h>
+#include <process.h>
+#include <dirent.h>
+#else
 #include <fontconfig/fontconfig.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -13,6 +26,7 @@
 #include <malloc.h>
 #include <poll.h>
 #include <signal.h>
+#endif
 #include <stdio.h>
 #include <sys/stat.h>
 #include <zlib.h>

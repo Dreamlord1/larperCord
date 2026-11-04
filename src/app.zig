@@ -2,6 +2,7 @@
 //! O laço dorme em `SDL_WaitEvent` e só acorda com input, rede, mudança de
 //! tema ou o tique do relógio/RAM; parado, a CPU fica em 0%.
 const std = @import("std");
+const sys = @import("platform/sys.zig");
 const c = @import("c");
 const platform = @import("platform/window.zig");
 const timeline = @import("platform/timeline.zig");
@@ -74,14 +75,11 @@ fn setupLsp(qa_mode: bool) void {
     var buf: [512]u8 = undefined;
     const dir = if (qa_mode)
         "qa-out/lsp-scratch"
-    else if (c.SDL_getenv("XDG_CACHE_HOME")) |x|
-        std.fmt.bufPrint(&buf, "{s}/larpercord/lsp-scratch", .{std.mem.span(x)}) catch ""
-    else if (c.SDL_getenv("HOME")) |h|
-        std.fmt.bufPrint(&buf, "{s}/.cache/larpercord/lsp-scratch", .{std.mem.span(h)}) catch ""
-    else if (c.SDL_getenv("LOCALAPPDATA")) |w|
-        std.fmt.bufPrint(&buf, "{s}/larpercord/lsp-scratch", .{std.mem.span(w)}) catch ""
-    else
-        "";
+    else blk: {
+        var hb: [400]u8 = undefined;
+        const base = sys.cacheHome(&hb) orelse break :blk "";
+        break :blk std.fmt.bufPrint(&buf, "{s}/larpercord/lsp-scratch", .{base}) catch "";
+    };
     lsp_net.setup(&lspWake, dir);
 }
 
@@ -412,7 +410,7 @@ pub const App = struct {
         var size: usize = 0;
         const data = c.SDL_GetClipboardData("image/png", &size) orelse return;
         defer c.SDL_free(data);
-        const dir: []const u8 = if (c.SDL_getenv("XDG_RUNTIME_DIR")) |x| std.mem.span(x) else "/tmp";
+        const dir = sys.tempDir();
         var pbuf: [512]u8 = undefined;
         app.paste_n += 1;
         // O nome do arquivo aparece na bandeja e vai junto para o Discord.
@@ -591,7 +589,7 @@ pub const App = struct {
         if (th.layout) |lay| app.loadNodeFonts(lay);
         // O fontconfig guarda o cache de todas as fontes do sistema (~MBs);
         // ele se reinicia sozinho se outro tema pedir uma família nova.
-        c.FcFini();
+        if (!sys.windows) c.FcFini();
         // Na abertura o tique faz isso depois (e junto com o que vier a seguir).
         app.trim_wanted.store(true, .release);
         app.st.theme_gen +%= 1;

@@ -17,7 +17,7 @@ const Key = []const u8;
 
 // O QA roda em debug (tools/qa.sh). O servidor de mentira e o roteiro do LSP são
 // pesados para o pouco que a função pesa, e ficam fora do executável de quem usa.
-const has_lsp_qa = @import("builtin").mode == .debug;
+const has_lsp_qa = @import("builtin").mode == .debug and @import("builtin").os.tag != .windows;
 const lsp_ops = if (has_lsp_qa) @import("qa_lsp.zig").ops else [_]Op{};
 const lsp_ops_quit = if (has_lsp_qa) @import("qa_lsp.zig").ops_quit else [_]Op{};
 const lsp_ops_real = if (has_lsp_qa) @import("qa_lsp.zig").ops_real else [_]Op{};
@@ -1424,6 +1424,8 @@ fn privateWrite(_: *App) bool {
     const fsutil = @import("platform/fsutil.zig");
     const p = "qa-out/privado/larpercord/sub/x.kdl";
     if (!fsutil.writePrivate(p, "um") or !fsutil.writePrivate(p, "dois")) return false;
+    // No Windows quem protege é a pasta do perfil: não há modo de arquivo.
+    if (@import("builtin").os.tag == .windows) return @import("platform/sys.zig").fileSize(p) == 4 and !@import("platform/sys.zig").exists(p ++ ".tmp");
     var st: c.struct_stat = undefined;
     if (c.stat(p, &st) != 0 or st.st_mode & 0o777 != 0o600 or st.st_size != 4) return false;
     if (c.stat("qa-out/privado/larpercord/sub", &st) != 0 or st.st_mode & 0o777 != 0o700) return false;

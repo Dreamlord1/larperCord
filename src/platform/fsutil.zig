@@ -4,15 +4,16 @@
 //! continua de onde parou), `fsync` e depois troca de nome; uma queda no meio
 //! nunca deixa o arquivo pela metade nem com a permissão padrão.
 const std = @import("std");
+const sys = @import("sys.zig");
 const c = @import("c");
 
 /// $XDG_CONFIG_HOME/larpercord/<nome> (ou ~/.config/larpercord/<nome>);
 /// `nome` vazio dá a própria pasta.
 pub fn configPath(buf: []u8, name: []const u8) ?[:0]const u8 {
     const sep: []const u8 = if (name.len > 0) "/" else "";
-    if (c.SDL_getenv("XDG_CONFIG_HOME")) |x| return std.fmt.bufPrintSentinel(buf, "{s}/larpercord{s}{s}", .{ std.mem.span(x), sep, name }, 0) catch null;
-    const home = c.SDL_getenv("HOME") orelse return null;
-    return std.fmt.bufPrintSentinel(buf, "{s}/.config/larpercord{s}{s}", .{ std.mem.span(home), sep, name }, 0) catch null;
+    var hb: [512]u8 = undefined;
+    const base = sys.configHome(&hb) orelse return null;
+    return std.fmt.bufPrintSentinel(buf, "{s}/larpercord{s}{s}", .{ base, sep, name }, 0) catch null;
 }
 
 /// Cria a pasta (e as de cima que faltarem) só para o dono. As nossas
@@ -34,12 +35,11 @@ pub fn ensureDir(dir: []const u8) bool {
         const keep = buf[i];
         buf[i] = 0;
         const p: [*:0]const u8 = @ptrCast(&buf);
-        _ = c.mkdir(p, 0o700);
-        if (ours) _ = c.chmod(p, 0o700);
+        sys.mkdirPrivate(p);
+        if (ours and !sys.windows) _ = c.chmod(p, 0o700);
         buf[i] = keep;
     }
-    var st: c.struct_stat = undefined;
-    return c.stat(@ptrCast(&buf), &st) == 0;
+    return sys.exists(@ptrCast(&buf));
 }
 
 /// Grava `bytes` em `path` (só o dono lê), criando a pasta se faltar.
@@ -61,34 +61,15 @@ pub fn replacePrivate(path: [:0]const u8, bytes: []const u8) bool {
 pub fn keepBroken(path: [:0]const u8) void {
     var buf: [528]u8 = undefined;
     const bad = std.fmt.bufPrintSentinel(&buf, "{s}.bad", .{path}, 0) catch return;
-    if (c.rename(path.ptr, bad.ptr) == 0) std.log.warn("{s} estava ilegível; guardei uma cópia em {s}", .{ path, bad });
+    if (sys.replaceFile(path.ptr, bad.ptr)) std.log.warn("{s} estava ilegível; guardei uma cópia em {s}", .{ path, bad });
 }
 
 fn replace(path: [:0]const u8, bytes: []const u8, durable: bool) bool {
     var tbuf: [528]u8 = undefined;
     // Com o PID: duas instâncias abertas não escrevem no mesmo temporário.
     const tmp = std.fmt.bufPrintSentinel(&tbuf, "{s}.{d}.tmp", .{ path, c.getpid() }, 0) catch return false;
-    const fd = c.open(tmp.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_CLOEXEC, @as(c_uint, 0o600));
-    if (fd < 0) return false;
-    // Um .tmp que sobrou de antes pode ter outra permissão.
-    _ = c.fchmod(fd, 0o600);
-    var off: usize = 0;
-    while (off < bytes.len) {
-        const n = c.write(fd, bytes[off..].ptr, bytes.len - off);
-        if (n <= 0) {
-            _ = c.close(fd);
-            _ = c.unlink(tmp.ptr);
-            return false;
-        }
-        off += @intCast(n);
-    }
-    // Sem isto, uma queda de energia logo depois pode deixar o arquivo vazio.
-    if (durable and c.fsync(fd) != 0) {
-        _ = c.close(fd);
-        _ = c.unlink(tmp.ptr);
-        return false;
-    }
-    if (c.close(fd) != 0 or c.rename(tmp.ptr, path.ptr) != 0) {
+    // Sem `durable`, uma queda de energia logo depois pode deixar o arquivo vazio.
+    if (!sys.writeNew(tmp.ptr, bytes, durable) or !sys.replaceFile(tmp.ptr, path.ptr)) {
         _ = c.unlink(tmp.ptr);
         return false;
     }

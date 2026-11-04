@@ -2,6 +2,7 @@
 //! É a única parte que conhece o SDL e o backend gráfico; um backend por
 //! software (wl_shm, sem GPU) entraria aqui sem mexer no resto.
 const std = @import("std");
+const sys = @import("sys.zig");
 const c = @import("c");
 
 pub const Wake = enum(i32) { gateway = 1, theme = 2, tick = 3, media = 4, token = 5 };
@@ -73,6 +74,7 @@ fn preferNvidiaEgl() void {
 
 /// Memória proporcional (PSS) do próprio processo, em KB.
 pub fn selfPssKb() u32 {
+    if (sys.windows) return sys.privateKb();
     // Arquivos do /proc não informam o tamanho, então lê direto.
     const fd = c.open("/proc/self/smaps_rollup", c.O_RDONLY);
     if (fd < 0) return 0;

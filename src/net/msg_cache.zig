@@ -14,6 +14,7 @@
 //! enxuta: a pasta é criada uma vez por conta, o tamanho de cada arquivo
 //! fica guardado e o total só é somado do disco uma vez.
 const std = @import("std");
+const sys = @import("../platform/sys.zig");
 const c = @import("c");
 const types = @import("../core/types.zig");
 const format = @import("../core/cache_format.zig");
@@ -59,12 +60,11 @@ pub var restored: u32 = 0;
 pub fn init(qa: bool) void {
     const r: []const u8 = if (qa)
         std.fmt.bufPrint(&root_buf, "qa-out/cache", .{}) catch ""
-    else if (c.SDL_getenv("XDG_CACHE_HOME")) |x|
-        std.fmt.bufPrint(&root_buf, "{s}/larpercord/messages", .{std.mem.span(x)}) catch ""
-    else if (c.SDL_getenv("HOME")) |h|
-        std.fmt.bufPrint(&root_buf, "{s}/.cache/larpercord/messages", .{std.mem.span(h)}) catch ""
-    else
-        "";
+    else blk: {
+        var hb: [400]u8 = undefined;
+        const base = sys.cacheHome(&hb) orelse break :blk "";
+        break :blk std.fmt.bufPrint(&root_buf, "{s}/larpercord/messages", .{base}) catch "";
+    };
     root_len = r.len;
 }
 
@@ -116,9 +116,7 @@ fn ensureDirs() bool {
 }
 
 fn fileSize(path: [*:0]const u8) u64 {
-    var st: c.struct_stat = undefined;
-    if (c.stat(path, &st) != 0) return 0;
-    return @intCast(@max(st.st_size, 0));
+    return sys.fileSize(path) orelse 0;
 }
 
 // --- Leitura: a conversa aparece na hora ------------------------------------------
@@ -373,9 +371,9 @@ fn walk(cb: anytype) void {
             if (!std.mem.endsWith(u8, name, ext) and !std.mem.endsWith(u8, name, ".tmp")) continue;
             var fbuf: [560]u8 = undefined;
             const fp = std.fmt.bufPrintSentinel(&fbuf, "{s}/{s}", .{ sp, name }, 0) catch continue;
-            var st: c.struct_stat = undefined;
-            if (c.stat(fp.ptr, &st) != 0) continue;
-            cb.file(fp, @intCast(@max(st.st_size, 0)), st.st_mtim.tv_sec);
+            var info: c.SDL_PathInfo = undefined;
+            if (!c.SDL_GetPathInfo(fp.ptr, &info)) continue;
+            cb.file(fp, info.size, @divTrunc(info.modify_time, std.time.ns_per_s));
         }
     }
 }
@@ -492,9 +490,9 @@ pub fn stamp(ch: Id) ?Stamp {
     if (!usable()) return null;
     var pbuf: [512]u8 = undefined;
     const path = channelPath(&pbuf, ch, "") orelse return null;
-    var st: c.struct_stat = undefined;
-    if (c.stat(path.ptr, &st) != 0) return null;
-    return .{ .mtime_ns = @as(i64, st.st_mtim.tv_sec) * std.time.ns_per_s + st.st_mtim.tv_nsec, .size = @intCast(@max(st.st_size, 0)) };
+    var info: c.SDL_PathInfo = undefined;
+    if (!c.SDL_GetPathInfo(path.ptr, &info)) return null;
+    return .{ .mtime_ns = info.modify_time, .size = info.size };
 }
 
 /// Pasta da conta atual ("" sem conta): a busca esquece o índice se mudar.
