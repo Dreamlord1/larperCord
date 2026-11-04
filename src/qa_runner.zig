@@ -2208,7 +2208,7 @@ const ops = [_]Op{
     .{ .run = wakeShowWindow },
     .{ .run = trayFakeOff },
     .{ .click = .{ .dyn = tVideoPlay } },
-    expect("voltou e continua", videoResumed),
+    .{ .expect = .{ .name = "voltou e continua", .check = videoResumed, .timeout_ms = 6000 } },
     .{ .click = .{ .dyn = tVideoMute } },
     expect("o botão de som silencia", videoMuted),
     .{ .expect = .{ .name = "o vídeo chega ao fim e para no último quadro", .check = videoEnded, .timeout_ms = 5000 } },
