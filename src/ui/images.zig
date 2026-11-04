@@ -14,6 +14,8 @@ const media_url = @import("../net/media_url.zig");
 const allowedHost = media_url.allowedHost;
 const proxiedUrl = media_url.proxiedUrl;
 const apng = @import("apng.zig");
+const ffmpeg = @import("../platform/ffmpeg.zig");
+const proxy = @import("../net/proxy.zig");
 
 const alloc = std.heap.c_allocator;
 
@@ -355,8 +357,19 @@ fn load(curl: *?*c.CURL, jb: Job, stop: *std.atomic.Value(bool)) Pixels {
             logFail(pj.url, "página do Tenor sem og:video", .{});
             return .{};
         };
-        pj.url = @constCast(media_url.gifFromVideo(&ub, video) orelse return .{});
-        if (!download(curl, pj, &bytes, stop)) return .{};
+        var got = false;
+        if (media_url.gifFromVideo(&ub, video)) |webp| {
+            pj.url = @constCast(webp);
+            got = download(curl, pj, &bytes, stop);
+        }
+        // Sem o WebP (os GIFs mais antigos só existem em MP4): o próprio MP4,
+        // decodificado pelo FFmpeg do sistema, se tiver.
+        if (!got) {
+            if (ffmpeg.get() == null) return .{};
+            bytes.clearRetainingCapacity();
+            pj.url = @constCast(video);
+            if (!download(curl, pj, &bytes, stop)) return .{};
+        }
     } else {
         if (!download(curl, jb, &bytes, stop)) return .{};
     }
@@ -375,18 +388,50 @@ fn logFail(url: []const u8, comptime fmt: []const u8, args: anytype) void {
     std.log.info("mídia {s}: " ++ fmt, .{media_url.logPart(url)} ++ args);
 }
 
-const Sink = struct { list: *std.ArrayList(u8), too_big: bool = false };
+/// Para onde vão os bytes de um `fetch`: `write(ctx, pedaço, tamanho total
+/// ou -1)`; false interrompe. Só recebe o corpo de uma resposta 200.
+pub const Sink = struct {
+    ctx: *anyopaque,
+    write: *const fn (*anyopaque, []const u8, i64) bool,
+};
+
+const Transfer = struct { sink: Sink, h: *c.CURL, stopped: bool = false };
 
 fn writeCb(ptr: [*]const u8, size: usize, n: usize, ud: *anyopaque) callconv(.c) usize {
-    const s: *Sink = @ptrCast(@alignCast(ud));
+    const t: *Transfer = @ptrCast(@alignCast(ud));
     const len = size * n;
-    if (s.list.items.len + len > max_download) {
-        s.too_big = true;
+    var status: c_long = 0;
+    _ = c.curl_easy_getinfo(t.h, c.CURLINFO_RESPONSE_CODE, &status);
+    // O corpo de um redirecionamento (ou de um erro) não é a mídia.
+    if (status != 200) return len;
+    var total: c.curl_off_t = -1;
+    _ = c.curl_easy_getinfo(t.h, c.CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &total);
+    if (!t.sink.write(t.sink.ctx, ptr[0..len], total)) {
+        t.stopped = true;
         return 0;
     }
-    s.list.appendSlice(alloc, ptr[0..len]) catch return 0;
     return len;
 }
+
+/// Tudo num ArrayList, até `max_download`.
+const ListSink = struct {
+    list: *std.ArrayList(u8),
+    too_big: bool = false,
+
+    fn sink(s: *ListSink) Sink {
+        return .{ .ctx = s, .write = write };
+    }
+
+    fn write(ud: *anyopaque, chunk: []const u8, total: i64) bool {
+        const s: *ListSink = @ptrCast(@alignCast(ud));
+        if (s.list.items.len + chunk.len > max_download or total > @as(i64, max_download)) {
+            s.too_big = true;
+            return false;
+        }
+        s.list.appendSlice(alloc, chunk) catch return false;
+        return true;
+    }
+};
 
 fn abortCb(ud: ?*anyopaque, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t) callconv(.c) c_int {
     const stop: *std.atomic.Value(bool) = @ptrCast(@alignCast(ud.?));
@@ -398,7 +443,7 @@ fn abortCb(ud: ?*anyopaque, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t, _
 var curl_mutex: ?*c.SDL_Mutex = null;
 var curl_inited = false;
 
-fn curlGlobalInit() void {
+pub fn curlGlobalInit() void {
     c.SDL_LockMutex(curl_mutex);
     defer c.SDL_UnlockMutex(curl_mutex);
     if (curl_inited) return;
@@ -407,8 +452,27 @@ fn curlGlobalInit() void {
 }
 
 fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8), stop: *std.atomic.Value(bool)) bool {
-    if (!allowedHost(jb.url)) {
-        logFail(jb.url, "domínio não permitido", .{});
+    var ubuf: [2048]u8 = undefined;
+    const url = proxiedUrl(&ubuf, jb.url, jb.max_w, jb.max_h) orelse return false;
+    var ls: ListSink = .{ .list = out };
+    if (!fetch(curl, url, ls.sink(), stop, 25)) {
+        if (ls.too_big) logFail(jb.url, "grande demais (mais de {d} MB)", .{max_download / (1024 * 1024)});
+        return false;
+    }
+    if (out.items.len == 0) {
+        logFail(jb.url, "resposta vazia", .{});
+        return false;
+    }
+    return true;
+}
+
+/// Baixa `url` como está (sem pedir tamanho ao proxy de mídia) para `sink`.
+/// Só de domínios permitidos, redirecionamentos conferidos um a um e com o
+/// proxy das configurações. `timeout_s` = 0: sem limite total (vídeo), mas
+/// desiste se ficar 20 s quase parado.
+pub fn fetch(curl: *?*c.CURL, url: [:0]const u8, sink: Sink, stop: *std.atomic.Value(bool), timeout_s: c_long) bool {
+    if (!allowedHost(url)) {
+        logFail(url, "domínio não permitido", .{});
         return false;
     }
     if (curl.* == null) {
@@ -416,33 +480,38 @@ fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8), stop: *std.atomic
         curl.* = c.curl_easy_init();
     }
     const h = curl.* orelse return false;
-    var ubuf: [2048]u8 = undefined;
-    const url = proxiedUrl(&ubuf, jb.url, jb.max_w, jb.max_h) orelse return false;
     // Redirecionamentos seguidos à mão: cada destino passa pelo allowedHost
     // (o curl seguiria qualquer um e o app se conectaria a outro servidor).
     var cur: [2048]u8 = undefined;
     var cur_url: [:0]const u8 = url;
     var hops: u8 = 0;
     while (true) : (hops += 1) {
-        var sink: Sink = .{ .list = out };
+        var t: Transfer = .{ .sink = sink, .h = h };
         c.curl_easy_reset(h);
         _ = c.curl_easy_setopt(h, c.CURLOPT_URL, cur_url.ptr);
         _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, "Mozilla/5.0 (X11; Linux x86_64) larperCord/0.1");
         _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEFUNCTION, writeCb);
-        _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEDATA, &sink);
-        _ = c.curl_easy_setopt(h, c.CURLOPT_TIMEOUT, @as(c_long, 25));
+        _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEDATA, &t);
+        if (timeout_s > 0) {
+            _ = c.curl_easy_setopt(h, c.CURLOPT_TIMEOUT, timeout_s);
+        } else {
+            _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECTTIMEOUT, @as(c_long, 20));
+            _ = c.curl_easy_setopt(h, c.CURLOPT_LOW_SPEED_LIMIT, @as(c_long, 1024));
+            _ = c.curl_easy_setopt(h, c.CURLOPT_LOW_SPEED_TIME, @as(c_long, 20));
+        }
         _ = c.curl_easy_setopt(h, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 0));
         _ = c.curl_easy_setopt(h, c.CURLOPT_PROTOCOLS_STR, "https");
         _ = c.curl_easy_setopt(h, c.CURLOPT_ACCEPT_ENCODING, "");
+        // Proxy das configurações (mídia de fora, ou tudo).
+        var pbuf: proxy.Buf = undefined;
+        if (proxy.forUrl(&pbuf, cur_url)) |p| _ = c.curl_easy_setopt(h, c.CURLOPT_PROXY, p.ptr);
         // Fechar o app interrompe o download na hora.
         _ = c.curl_easy_setopt(h, c.CURLOPT_NOPROGRESS, @as(c_long, 0));
         _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFOFUNCTION, abortCb);
         _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFODATA, stop);
         const rc = c.curl_easy_perform(h);
         if (rc != c.CURLE_OK) {
-            if (sink.too_big) {
-                logFail(jb.url, "grande demais (mais de {d} MB)", .{max_download / (1024 * 1024)});
-            } else if (!stop.load(.acquire)) logFail(jb.url, "erro do curl: {s}", .{std.mem.span(c.curl_easy_strerror(rc))});
+            if (!t.stopped and !stop.load(.acquire)) logFail(url, "erro do curl: {s}", .{std.mem.span(c.curl_easy_strerror(rc))});
             return false;
         }
         var status: c_long = 0;
@@ -451,29 +520,23 @@ fn download(curl: *?*c.CURL, jb: Job, out: *std.ArrayList(u8), stop: *std.atomic
             var loc: [*c]u8 = null;
             _ = c.curl_easy_getinfo(h, c.CURLINFO_REDIRECT_URL, &loc);
             if (loc == null or hops >= 3) {
-                logFail(jb.url, "redirecionamento sem destino ou demais", .{});
+                logFail(url, "redirecionamento sem destino ou demais", .{});
                 return false;
             }
             const next = std.mem.span(loc);
             if (!allowedHost(next)) {
-                logFail(jb.url, "redirecionou para um domínio não permitido", .{});
+                logFail(url, "redirecionou para um domínio não permitido", .{});
                 return false;
             }
             cur_url = std.fmt.bufPrintSentinel(&cur, "{s}", .{next}, 0) catch return false;
-            out.clearRetainingCapacity();
             continue;
         }
         if (status != 200) {
-            logFail(jb.url, "HTTP {d}", .{status});
+            logFail(url, "HTTP {d}", .{status});
             return false;
         }
-        break;
+        return true;
     }
-    if (out.items.len == 0) {
-        logFail(jb.url, "resposta vazia", .{});
-        return false;
-    }
-    return true;
 }
 
 /// Tamanho final de uma imagem sw×sh cabendo em max_w×max_h (nunca aumenta).
@@ -490,6 +553,8 @@ fn fit(sw: usize, sh: usize, max_w: u16, max_h: u16) [2]usize {
 /// vários quadros. O formato vem dos primeiros bytes, não da URL.
 fn decode(data: []const u8, max_w: u16, max_h: u16) Pixels {
     if (isWebp(data)) return decodeWebp(data, max_w, max_h);
+    // GIF que só existe em MP4 (Tenor antigo): pelo FFmpeg, se tiver.
+    if (ffmpeg.looksLikeVideo(data)) return decodeVideo(data, max_w, max_h);
     if (data.len > 6 and std.mem.startsWith(u8, data, "GIF8")) {
         const anim_px = decodeGif(data, max_w, max_h);
         if (anim_px.frames.len > 0) return anim_px;
@@ -648,6 +713,66 @@ fn decodeWebp(data: []const u8, max_w: u16, max_h: u16) Pixels {
     return sink.finish();
 }
 
+/// Um vídeo curto virando animação (como um GIF): até 30 qps, 60 s e o
+/// mesmo limite de memória das outras animações. O tempo de cada quadro é
+/// a distância até o próximo.
+fn decodeVideo(data: []const u8, max_w: u16, max_h: u16) Pixels {
+    const a = ffmpeg.get() orelse return .{};
+    var rd: ffmpeg.MemReader = .{ .data = data };
+    var m = ffmpeg.Media.open(a, rd.io(), false, 1) catch return .{};
+    defer m.close();
+    var sink: FrameSink = .{ .max_w = max_w, .max_h = max_h };
+    var prev: []u8 = &.{};
+    defer if (prev.len > 0) alloc.free(prev);
+    var dims: [2]usize = .{ 0, 0 };
+    var prev_t: i64 = 0;
+    var have = false;
+    var done = false;
+    var eof = false;
+    while (!done) {
+        if (!eof) switch (m.read()) {
+            .video => {
+                _ = m.sendVideo(m.pkt.?);
+                m.unref(m.pkt.?);
+            },
+            .eof => {
+                _ = m.sendVideo(null);
+                eof = true;
+            },
+            else => continue,
+        };
+        while (m.receiveVideo() == 0) {
+            const t = m.framePtsMs(m.vtb) orelse prev_t + 33;
+            if (have and t < prev_t + 30) continue;
+            if (t > 60_000) {
+                done = true;
+                break;
+            }
+            const src = m.frameSize();
+            if (src[0] == 0 or src[1] == 0 or src[0] > 4096 or src[1] > 4096) continue;
+            if (!have) {
+                dims = fit(src[0], src[1], max_w, max_h);
+                prev = alloc.alloc(u8, ffmpeg.rgbaSize(@intCast(dims[0]), @intCast(dims[1]))) catch return sink.finish();
+            } else if (!sink.add(prev, dims[0], dims[1], @intCast(@max(t - prev_t, 1)))) {
+                done = true;
+                break;
+            }
+            if (!m.toRgba(prev, @intCast(dims[0]), @intCast(dims[1]))) {
+                done = true;
+                break;
+            }
+            prev_t = t;
+            have = true;
+        }
+        if (eof) done = true;
+    }
+    if (have) {
+        const end = if (m.duration_ms > prev_t) m.duration_ms else prev_t + 33;
+        _ = sink.add(prev, dims[0], dims[1], @intCast(@max(end - prev_t, 20)));
+    }
+    return sink.finish();
+}
+
 /// Cada quadro do APNG chega como um PNG avulso, que o stb_image decodifica.
 const ApngCtx = struct {
     sink: *FrameSink,
@@ -719,6 +844,12 @@ fn demo(jb: Job) Pixels {
     if (std.mem.startsWith(u8, spec, "av:")) return demoAvatar(std.fmt.parseInt(u64, spec[3..], 10) catch 0, jb, false);
     if (std.mem.startsWith(u8, spec, "icon:")) return demoAvatar(std.fmt.parseInt(u64, spec[5..], 10) catch 0, jb, true);
     if (std.mem.eql(u8, spec, "gif")) return demoGif(jb);
+    // "GIF em MP4" da demonstração: o vídeo embutido, pelo FFmpeg.
+    if (std.mem.eql(u8, spec, "mp4")) {
+        c.SDL_WaitSemaphore(decode_slots);
+        defer c.SDL_SignalSemaphore(decode_slots);
+        return decodeVideo(@import("video.zig").demo_mp4, jb.max_w, jb.max_h);
+    }
     const which = std.fmt.parseInt(u8, spec, 10) catch 1;
     const full: [2]f32 = switch (which) {
         2 => .{ 720, 720 },

@@ -179,6 +179,7 @@ pub const App = struct {
         app.events.deinit();
         app.clearUploads();
         app.picked.deinit();
+        @import("ui/video.zig").shutdown();
         app.images.deinit();
         app.store.deinit();
         app.themes.deinit();
@@ -1273,6 +1274,7 @@ pub const App = struct {
             }
             anim.instant = set.reduce_motion;
             @import("net/media_url.zig").allow_gif_hosts.store(set.gif_hosts, .release);
+            @import("net/proxy.zig").set(set.proxy.slice(), set.proxy_all);
             @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
             app.store.keep_log = set.message_log;
             widgets.hour12 = !set.clock_24h;
@@ -1323,6 +1325,8 @@ pub const App = struct {
                 _ = th;
                 if (result) |r| login_result = r;
             }
+            // Vídeo que não foi desenhado neste quadro pausa.
+            @import("ui/video.zig").endFrame(now());
             const tr0 = c.SDL_GetTicksNS();
             c.ImGui_Render();
             if (app.opts.stats) prof_render += (c.SDL_GetTicksNS() - tr0) / 1000;

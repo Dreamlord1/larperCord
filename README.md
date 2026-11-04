@@ -61,6 +61,12 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   `~/.config/larpercord/settings.kdl`.
 - **Markdown do Discord**: **negrito**, *itálico*, ~~riscado~~, `código`, ||spoiler||, menções
   `<@id>`/`<#id>`, links e emoji colorido.
+- **Vídeos tocando na conversa** (anexos e links diretos para .mp4/.webm) com o **FFmpeg do
+  sistema, se tiver** (carregado só no primeiro play, sem dependência de build): play/pausa,
+  barra de progresso, som; até 480p e ~30 qps. Sem FFmpeg, o vídeo abre no navegador. Também
+  anima os GIFs antigos do Tenor que só existem em MP4.
+- **Proxy** (http, https, socks5, socks5h; Tor em `socks5h://127.0.0.1:9050`) para a mídia de
+  fora do Discord ou para tudo (Configurações → Privacidade → Rede).
 - Mensagens agrupadas, separadores de dia, envio "pendente" confirmado pelo servidor,
   indicador de digitação, rolagem suave com lista virtualizada.
 
@@ -127,6 +133,8 @@ Nada de mágica, só muitas decisões pequenas:
 
 Precisa de **Zig 0.17**, **SDL3**, **FreeType**, **fontconfig** e **libcurl** (com WebSocket, 7.86+). Fontes recomendadas: Inter,
 JetBrains Mono e Noto Color Emoji (o fontconfig escolhe substitutas se faltar alguma).
+Opcional: **FFmpeg 7, 8 ou 9** (libavformat 61–63) para tocar vídeo dentro do app; outra versão
+é ignorada e o vídeo abre no navegador.
 
 ```bash
 # Arch

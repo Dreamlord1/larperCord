@@ -190,6 +190,9 @@ pub const Embed = struct {
     thumb: []const u8 = "",
     /// Tem vídeo (YouTube…): a imagem ganha um botão de play que abre `url`.
     video: bool = false,
+    /// O arquivo do vídeo pelo proxy de mídia do Discord (link direto para
+    /// um .mp4…): esse toca aqui dentro. Vazio = só no navegador (YouTube).
+    video_url: []const u8 = "",
 };
 
 pub const EmbedField = struct { name: []const u8, value: []const u8 };
@@ -201,7 +204,7 @@ pub fn freeEmbeds(gpa: std.mem.Allocator, list: []const Embed) void {
 
 /// Só os textos de um embed (a lista em que ele está não).
 pub fn freeEmbed(gpa: std.mem.Allocator, e: Embed) void {
-    for ([_][]const u8{ e.provider, e.author, e.title, e.url, e.description, e.footer, e.image, e.thumb }) |t| if (t.len > 0) gpa.free(t);
+    for ([_][]const u8{ e.provider, e.author, e.title, e.url, e.description, e.footer, e.image, e.thumb, e.video_url }) |t| if (t.len > 0) gpa.free(t);
     for (e.fields) |f| {
         gpa.free(f.name);
         gpa.free(f.value);

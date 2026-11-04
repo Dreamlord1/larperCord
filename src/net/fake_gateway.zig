@@ -585,6 +585,27 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         list[0] = .{ .url = try alloc.dupe(u8, p.url), .filename = try alloc.dupe(u8, pick(p.name, p.name_en)), .width = p.w, .height = p.h, .size = if (p.w == 0) 482_133 else 0, .animated = gif, .embed = gif };
         m.attachments = list;
     }
+    // Um vídeo anexado (toca aqui com o FFmpeg do sistema; a prévia é um
+    // quadro qualquer) e um GIF que só existe em MP4, como os antigos do
+    // Tenor (anima pelo FFmpeg; sem ele, fica a prévia parada).
+    {
+        const m = &msgs[n - 12];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, pick("gravei a tela rapidinho", "quick screen recording"));
+        m.reply_to = 0;
+        const list = try alloc.alloc(types.Attachment, 1);
+        list[0] = .{ .url = try alloc.dupe(u8, "demo:3"), .filename = try alloc.dupe(u8, "gravacao.mp4"), .width = 426, .height = 240, .size = 48_435, .video = true, .link = try alloc.dupe(u8, "demo:video") };
+        m.attachments = list;
+    }
+    {
+        const m = &msgs[n - 20];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, "https://tenor.com/view/larper-antigo");
+        m.reply_to = 0;
+        const list = try alloc.alloc(types.Attachment, 1);
+        list[0] = .{ .url = try alloc.dupe(u8, "demo:mp4"), .filename = try alloc.dupe(u8, "antigo.gif"), .width = 426, .height = 240, .animated = true, .still = try alloc.dupe(u8, "demo:2"), .embed = true };
+        m.attachments = list;
+    }
     // Embeds: prévia de link, cartão de bot com campos e um vídeo.
     {
         const m = &msgs[n - 3];
