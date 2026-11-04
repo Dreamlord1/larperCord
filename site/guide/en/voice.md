@@ -21,6 +21,7 @@ Channels where you lack the permission to connect are shown with a padlock, and 
 - **Voice activity**: an adjustable threshold on the meter, or **Automatic sensitivity**, which learns your background noise.
 - **Push to talk**: a key or mouse button. It only works while the window is focused, and sending continues for a moment after you release, so the last word isn't cut.
 - **Filters**: a high-pass that removes rumble below 90 Hz and a noise gate. Each one can be turned off.
+- **Noise suppression**: Off or RNNoise, on by default and switchable mid-call. It runs on your computer, delays your mic by 20 ms and costs 2% to 5% of a core while the mic is open. Off, muted or with the push-to-talk key released, it costs nothing.
 - **Call sounds**: short beeps when you join, leave, mute and unmute, which can be turned off.
 
 ![The voice settings page](shot:f-vozcfg)
@@ -46,7 +47,7 @@ A few details that took work to get right:
 ## Limits today
 
 - Push-to-talk only works while the window is focused, because SDL has no portable global shortcut.
-- The filters are a high-pass and a noise gate. There's no machine-learning noise suppression.
+- Noise suppression targets steady noise. Typing and bangs may get through, and other voices stay.
 - No screen sharing, camera or streaming.
 - No automated test for a real call. QA covers the UI and the settings, with a fake audio device.
 
@@ -64,3 +65,4 @@ To test only the connection, `--voice-test` joins a channel for 25 seconds, **al
 LARPER_TOKEN=... larpercord --voice-test GUILD_ID CHANNEL_ID
 ```
 
+The protocol follows Discord's voice documentation and the [DAVE protocol documentation](https://daveprotocol.com).

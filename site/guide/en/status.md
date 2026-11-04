@@ -15,7 +15,7 @@ larperCord is a young project: version 0.4.0, with its first commit on November 
 | Custom emoji, stickers, autocomplete | **works** | Animated too. The picker warns when an emoji needs Nitro |
 | Read state, pins, Discord links | **works** | Synced with your other devices |
 | Themes | **works** | 11 built-in, each light and dark, reload on save |
-| Voice | partial | E2EE (DAVE), mixer, mute, device picker, push-to-talk, high-pass filter and noise gate work. Push-to-talk needs the window focused, there's no machine-learning noise suppression, and no automated test covers a real call |
+| Voice | partial | E2EE (DAVE), mixer, mute, device picker, push-to-talk, high-pass filter, noise gate and RNNoise noise suppression work. Push-to-talk needs the window focused, and no automated test covers a real call |
 | Permissions | partial | Channels without access get a padlock, voice without permission is blocked, and threads and forums check whether you can post. Those channels still appear, and the composer in regular channels, reactions and the member list don't check permissions |
 | Notifications | partial | Through `notify-send`. Clicking doesn't open the channel, and there's no system tray |
 | Accessibility | partial | Font scale, reduced motion, palette and vim navigation. No visible focus and no high contrast |
@@ -44,7 +44,7 @@ larperCord is a young project: version 0.4.0, with its first commit on November 
 - [ ] Real permissions: hide what you can't see, disable composer and reactions, filter members
 - [ ] Join a server by invite
 - [ ] Native D-Bus notifications with "open conversation", and a system tray
-- [ ] Voice: machine-learning noise suppression, a global push-to-talk and an automated call test
+- [ ] Voice: a global push-to-talk and an automated call test
 - [ ] Accessibility and first run: visible focus, high contrast, a welcome screen
 
 **Themes**

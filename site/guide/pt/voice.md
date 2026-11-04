@@ -21,6 +21,7 @@ Os canais em que você não tem permissão para conectar aparecem com cadeado, e
 - **Detecção de voz**: limiar ajustável sobre o medidor, ou **Sensibilidade automática**, que aprende o ruído de fundo.
 - **Aperte para falar**: uma tecla ou um botão do mouse. Só funciona com a janela em foco, e o envio segue por um instante depois de soltar, para não cortar a última palavra.
 - **Filtros**: um passa-altas que tira o ronco abaixo de 90 Hz e uma porta de ruído. Cada um pode ser desligado.
+- **Supressão de ruído**: Desligada ou RNNoise, ligada por padrão e trocável em plena call. Roda no seu computador, atrasa o microfone em 20 ms e custa de 2% a 5% de um núcleo com o microfone aberto. Desligada, no mudo ou com a tecla do aperte para falar solta, não custa nada.
 - **Sons da call**: bipes curtos ao entrar, sair, mutar e desmutar, que podem ser desligados.
 
 ![A página de configurações de voz](shot:f-vozcfg)
@@ -46,7 +47,7 @@ Alguns detalhes que deram trabalho para acertar:
 ## Limites hoje
 
 - O aperte para falar só funciona com a janela em foco, porque o SDL não tem atalho global portável.
-- Os filtros são um passa-altas e uma porta de ruído. Não há supressão de ruído por aprendizado de máquina.
+- A supressão de ruído cuida de ruído constante. Teclado e pancadas podem passar, e outras vozes continuam.
 - Sem compartilhamento de tela, câmera nem transmissão.
 - Sem teste automático para uma call de verdade. O QA cobre a interface e as configurações, com um dispositivo de áudio falso.
 
@@ -64,3 +65,4 @@ Para testar só a conexão, o `--voice-test` entra num canal por 25 segundos, **
 LARPER_TOKEN=... larpercord --voice-test GUILD_ID CHANNEL_ID
 ```
 
+O protocolo segue a documentação de voz do Discord e a [documentação do protocolo DAVE](https://daveprotocol.com).

@@ -15,7 +15,7 @@ O larperCord é um projeto jovem: versão 0.4.0, com o primeiro commit em 2 de n
 | Emoji personalizado, figurinhas, autocompletar | **funciona** | Animados inclusive. O seletor avisa quando um emoji precisa de Nitro |
 | Leitura, fixadas, links do Discord | **funciona** | Sincronizada com os seus outros aparelhos |
 | Temas | **funciona** | 11 embutidos, cada um em claro e escuro, recarregam ao salvar |
-| Voz | parcial | E2EE (DAVE), mixer, mudo, seletor de dispositivo, aperte para falar, filtro passa-altas e porta de ruído funcionam. O aperte para falar precisa da janela em foco, não há supressão de ruído por aprendizado de máquina, e nenhum teste automático cobre uma call de verdade |
+| Voz | parcial | E2EE (DAVE), mixer, mudo, seletor de dispositivo, aperte para falar, filtro passa-altas, porta de ruído e supressão de ruído com RNNoise funcionam. O aperte para falar precisa da janela em foco, e nenhum teste automático cobre uma call de verdade |
 | Permissões | parcial | Canais sem acesso ganham cadeado, voz sem permissão é bloqueada, e threads e fóruns conferem se você pode postar. Esses canais ainda aparecem, e a caixa de texto nos canais comuns, as reações e a lista de membros não consultam a permissão |
 | Notificações | parcial | Pelo `notify-send`. Clicar não abre o canal, e não há bandeja do sistema |
 | Acessibilidade | parcial | Escala da fonte, reduzir movimento, paleta e navegação estilo vim. Sem foco visível e sem alto contraste |
@@ -44,7 +44,7 @@ O larperCord é um projeto jovem: versão 0.4.0, com o primeiro commit em 2 de n
 - [ ] Permissões de verdade: esconder o que você não pode ver, desabilitar a caixa de texto e as reações, filtrar os membros
 - [ ] Entrar em servidor por convite
 - [ ] Notificações nativas via D-Bus com "abrir conversa", e bandeja do sistema
-- [ ] Voz: supressão de ruído por aprendizado de máquina, aperte para falar global e teste automático de call
+- [ ] Voz: aperte para falar global e teste automático de call
 - [ ] Acessibilidade e primeiro uso: foco visível, alto contraste, uma tela de boas-vindas
 
 **Temas**

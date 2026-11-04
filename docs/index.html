@@ -100,9 +100,9 @@
   <table class="facts">
     <thead><tr><th></th><th>Vesktop (Electron)</th><th>larperCord</th></tr></thead>
     <tbody>
-      <tr><th>RAM (PSS)</th><td>1,279 MB</td><td class="us">46–56 MB</td></tr>
+      <tr><th>RAM (PSS)</th><td>1,279 MB</td><td class="us">44–47 MB</td></tr>
       <tr><th>CPU when idle</th><td>12–47%</td><td class="us">0–0.4%</td></tr>
-      <tr><th>Binary on disk</th><td>287 MB</td><td class="us">~7 MB</td></tr>
+      <tr><th>Binary on disk</th><td>287 MB</td><td class="us">~6 MB</td></tr>
     </tbody>
   </table>
   </div>
@@ -271,8 +271,8 @@
     <ul class="ticks">
       <li><strong>A mixer with one volume per person.</strong> Each person is their own audio stream on the same output device.</li>
       <li><strong>No call, no cost.</strong> The voice thread is only created when you join. Before that, audio only starts if you open the voice settings.</li>
-      <li><strong>Your mic, your rules.</strong> Pick your devices, even mid-call. Voice activity with an automatic threshold or push-to-talk, a high-pass filter and a noise gate, a live meter and a mic test.</li>
-      <li><strong>Honest limits.</strong> Push-to-talk only works while the window is focused, and there's no machine-learning noise suppression. No screen sharing or camera. <a href="guide/voice.html">Voice guide →</a></li>
+      <li><strong>Your mic, your rules.</strong> Pick your devices, even mid-call. Voice activity with an automatic threshold or push-to-talk, a high-pass filter, a noise gate and RNNoise noise suppression, a live meter and a mic test.</li>
+      <li><strong>Honest limits.</strong> Push-to-talk only works while the window is focused. No screen sharing or camera. <a href="guide/voice.html">Voice guide →</a></li>
     </ul>
   </div>
   <span class="close">}</span>
@@ -344,7 +344,7 @@
       <tr><th>Custom emoji, stickers, autocomplete</th><td><span class="chip ok">works</span></td><td>Animated too. The picker warns when an emoji needs Nitro</td></tr>
       <tr><th>Read state, pins, Discord links</th><td><span class="chip ok">works</span></td><td>Synced with your other devices</td></tr>
       <tr><th>Themes</th><td><span class="chip ok">works</span></td><td>11 built-in, light and dark, reload on save</td></tr>
-      <tr><th>Voice</th><td><span class="chip part">partial</span></td><td>E2EE, mixer, device picker, push-to-talk and filters work. Push-to-talk needs the window focused, and there's no machine-learning noise suppression</td></tr>
+      <tr><th>Voice</th><td><span class="chip part">partial</span></td><td>E2EE, mixer, device picker, push-to-talk and filters work. Push-to-talk needs the window focused</td></tr>
       <tr><th>Permissions</th><td><span class="chip part">partial</span></td><td>Locked channels, voice, threads and forums are enforced. The composer in regular channels, reactions and the member list don't check yet</td></tr>
       <tr><th>Notifications</th><td><span class="chip part">partial</span></td><td>Through <code>notify-send</code>. Clicking doesn't open the channel, no system tray</td></tr>
       <tr><th>Accessibility</th><td><span class="chip part">partial</span></td><td>Font scale, reduced motion, keyboard palette. No visible focus or high contrast</td></tr>

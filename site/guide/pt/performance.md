@@ -5,7 +5,7 @@
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | 1.279 MB | 12–47% ¹ | 287 MB |
-| **larperCord** ² | **46–56 MB** | **0–0,4%** | **~7 MB** |
+| **larperCord** ² | **44–47 MB** | **0–0,4%** | **~6 MB** |
 
 ¹ Média desde a abertura, medida com `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
 
@@ -14,7 +14,6 @@
 Leia esses números com as ressalvas certas:
 
 - **Uma conta real usa mais** do que os dados de demonstração. Mais servidores, mais membros, mais imagens.
-- **`terminal` e `subsolo` variam.** Costumam ficar na mesma faixa, mas algumas rodadas medem 60–74 MB, e a causa ainda não foi encontrada.
 - **Parado quer dizer que nada está se mexendo.** Um GIF animado na tela custa cerca de 2,5% de CPU. O primeiro canal da demonstração tem um, então a medição desliga a reprodução automática.
 - **Boa parte do PSS não é do app.** É o driver da NVIDIA e bibliotecas do sistema como libcurl e OpenSSL. Numa medição entre os temas, a memória anônima ficou em cerca de 25 MB.
 - **O binário não inclui as bibliotecas compartilhadas**, como SDL3 e libcurl.

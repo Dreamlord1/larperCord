@@ -61,9 +61,9 @@
   <table class="facts">
     <thead><tr><th></th><th>Vesktop (Electron)</th><th>larperCord</th></tr></thead>
     <tbody>
-      <tr><th>{{RAM (PSS)||RAM (PSS)}}</th><td>1,279 MB</td><td class="us">46–56 MB</td></tr>
+      <tr><th>{{RAM (PSS)||RAM (PSS)}}</th><td>1,279 MB</td><td class="us">44–47 MB</td></tr>
       <tr><th>{{CPU when idle||CPU parado}}</th><td>12–47%</td><td class="us">0–0.4%</td></tr>
-      <tr><th>{{Binary on disk||Binário em disco}}</th><td>287 MB</td><td class="us">~7 MB</td></tr>
+      <tr><th>{{Binary on disk||Binário em disco}}</th><td>287 MB</td><td class="us">~6 MB</td></tr>
     </tbody>
   </table>
   </div>
@@ -145,8 +145,8 @@
     <ul class="ticks">
       <li><strong>{{A mixer with one volume per person.||Mixer com um volume para cada pessoa.}}</strong> {{Each person is their own audio stream on the same output device.||Cada pessoa é um stream de áudio próprio no mesmo dispositivo de saída.}}</li>
       <li><strong>{{No call, no cost.||Sem call, sem custo.}}</strong> {{The voice thread is only created when you join. Before that, audio only starts if you open the voice settings.||A thread de voz só nasce quando você entra. Antes disso, o áudio só abre se você entrar nas configurações de voz.}}</li>
-      <li><strong>{{Your mic, your rules.||Seu microfone, suas regras.}}</strong> {{Pick your devices, even mid-call. Voice activity with an automatic threshold or push-to-talk, a high-pass filter and a noise gate, a live meter and a mic test.||Escolha os dispositivos, mesmo no meio da call. Detecção de voz com limiar automático ou aperte para falar, filtro passa-altas e porta de ruído, medidor ao vivo e teste de microfone.}}</li>
-      <li><strong>{{Honest limits.||Limites sinceros.}}</strong> {{Push-to-talk only works while the window is focused, and there's no machine-learning noise suppression. No screen sharing or camera.||O aperte para falar só funciona com a janela em foco, e não há supressão de ruído por aprendizado de máquina. Sem compartilhamento de tela nem câmera.}} <a href="%GUIDE%voice.html">{{Voice guide →||Guia de voz →}}</a></li>
+      <li><strong>{{Your mic, your rules.||Seu microfone, suas regras.}}</strong> {{Pick your devices, even mid-call. Voice activity with an automatic threshold or push-to-talk, a high-pass filter, a noise gate and RNNoise noise suppression, a live meter and a mic test.||Escolha os dispositivos, mesmo no meio da call. Detecção de voz com limiar automático ou aperte para falar, filtro passa-altas, porta de ruído e supressão de ruído com RNNoise, medidor ao vivo e teste de microfone.}}</li>
+      <li><strong>{{Honest limits.||Limites sinceros.}}</strong> {{Push-to-talk only works while the window is focused. No screen sharing or camera.||O aperte para falar só funciona com a janela em foco. Sem compartilhamento de tela nem câmera.}} <a href="%GUIDE%voice.html">{{Voice guide →||Guia de voz →}}</a></li>
     </ul>
   </div>
   <span class="close">}</span>
@@ -218,7 +218,7 @@ end)</code-block>
       <tr><th>{{Custom emoji, stickers, autocomplete||Emoji personalizado, figurinhas, autocompletar}}</th><td><span class="chip ok">{{works||funciona}}</span></td><td>{{Animated too. The picker warns when an emoji needs Nitro||Animados inclusive. O seletor avisa quando um emoji precisa de Nitro}}</td></tr>
       <tr><th>{{Read state, pins, Discord links||Leitura, fixadas, links do Discord}}</th><td><span class="chip ok">{{works||funciona}}</span></td><td>{{Synced with your other devices||Sincronizada com os seus outros aparelhos}}</td></tr>
       <tr><th>{{Themes||Temas}}</th><td><span class="chip ok">{{works||funciona}}</span></td><td>{{11 built-in, light and dark, reload on save||11 embutidos, claro e escuro, recarregam ao salvar}}</td></tr>
-      <tr><th>{{Voice||Voz}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{E2EE, mixer, device picker, push-to-talk and filters work. Push-to-talk needs the window focused, and there's no machine-learning noise suppression||E2EE, mixer, seletor de dispositivo, aperte para falar e filtros funcionam. O aperte para falar precisa da janela em foco, e não há supressão de ruído por aprendizado de máquina}}</td></tr>
+      <tr><th>{{Voice||Voz}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{E2EE, mixer, device picker, push-to-talk and filters work. Push-to-talk needs the window focused||E2EE, mixer, seletor de dispositivo, aperte para falar e filtros funcionam. O aperte para falar precisa da janela em foco}}</td></tr>
       <tr><th>{{Permissions||Permissões}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{Locked channels, voice, threads and forums are enforced. The composer in regular channels, reactions and the member list don't check yet||Canais trancados, voz, threads e fóruns são respeitados. A caixa de texto nos canais comuns, as reações e a lista de membros ainda não consultam}}</td></tr>
       <tr><th>{{Notifications||Notificações}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{Through <code>notify-send</code>. Clicking doesn't open the channel, no system tray||Pelo <code>notify-send</code>. Clicar não abre o canal, sem bandeja do sistema}}</td></tr>
       <tr><th>{{Accessibility||Acessibilidade}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{Font scale, reduced motion, keyboard palette. No visible focus or high contrast||Escala de fonte, reduzir movimento, paleta por teclado. Sem foco visível nem alto contraste}}</td></tr>

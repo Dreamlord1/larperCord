@@ -100,9 +100,9 @@
   <table class="facts">
     <thead><tr><th></th><th>Vesktop (Electron)</th><th>larperCord</th></tr></thead>
     <tbody>
-      <tr><th>RAM (PSS)</th><td>1,279 MB</td><td class="us">46–56 MB</td></tr>
+      <tr><th>RAM (PSS)</th><td>1,279 MB</td><td class="us">44–47 MB</td></tr>
       <tr><th>CPU parado</th><td>12–47%</td><td class="us">0–0.4%</td></tr>
-      <tr><th>Binário em disco</th><td>287 MB</td><td class="us">~7 MB</td></tr>
+      <tr><th>Binário em disco</th><td>287 MB</td><td class="us">~6 MB</td></tr>
     </tbody>
   </table>
   </div>
@@ -271,8 +271,8 @@
     <ul class="ticks">
       <li><strong>Mixer com um volume para cada pessoa.</strong> Cada pessoa é um stream de áudio próprio no mesmo dispositivo de saída.</li>
       <li><strong>Sem call, sem custo.</strong> A thread de voz só nasce quando você entra. Antes disso, o áudio só abre se você entrar nas configurações de voz.</li>
-      <li><strong>Seu microfone, suas regras.</strong> Escolha os dispositivos, mesmo no meio da call. Detecção de voz com limiar automático ou aperte para falar, filtro passa-altas e porta de ruído, medidor ao vivo e teste de microfone.</li>
-      <li><strong>Limites sinceros.</strong> O aperte para falar só funciona com a janela em foco, e não há supressão de ruído por aprendizado de máquina. Sem compartilhamento de tela nem câmera. <a href="../pt/guide/voice.html">Guia de voz →</a></li>
+      <li><strong>Seu microfone, suas regras.</strong> Escolha os dispositivos, mesmo no meio da call. Detecção de voz com limiar automático ou aperte para falar, filtro passa-altas, porta de ruído e supressão de ruído com RNNoise, medidor ao vivo e teste de microfone.</li>
+      <li><strong>Limites sinceros.</strong> O aperte para falar só funciona com a janela em foco. Sem compartilhamento de tela nem câmera. <a href="../pt/guide/voice.html">Guia de voz →</a></li>
     </ul>
   </div>
   <span class="close">}</span>
@@ -344,7 +344,7 @@
       <tr><th>Emoji personalizado, figurinhas, autocompletar</th><td><span class="chip ok">funciona</span></td><td>Animados inclusive. O seletor avisa quando um emoji precisa de Nitro</td></tr>
       <tr><th>Leitura, fixadas, links do Discord</th><td><span class="chip ok">funciona</span></td><td>Sincronizada com os seus outros aparelhos</td></tr>
       <tr><th>Temas</th><td><span class="chip ok">funciona</span></td><td>11 embutidos, claro e escuro, recarregam ao salvar</td></tr>
-      <tr><th>Voz</th><td><span class="chip part">parcial</span></td><td>E2EE, mixer, seletor de dispositivo, aperte para falar e filtros funcionam. O aperte para falar precisa da janela em foco, e não há supressão de ruído por aprendizado de máquina</td></tr>
+      <tr><th>Voz</th><td><span class="chip part">parcial</span></td><td>E2EE, mixer, seletor de dispositivo, aperte para falar e filtros funcionam. O aperte para falar precisa da janela em foco</td></tr>
       <tr><th>Permissões</th><td><span class="chip part">parcial</span></td><td>Canais trancados, voz, threads e fóruns são respeitados. A caixa de texto nos canais comuns, as reações e a lista de membros ainda não consultam</td></tr>
       <tr><th>Notificações</th><td><span class="chip part">parcial</span></td><td>Pelo <code>notify-send</code>. Clicar não abre o canal, sem bandeja do sistema</td></tr>
       <tr><th>Acessibilidade</th><td><span class="chip part">parcial</span></td><td>Escala de fonte, reduzir movimento, paleta por teclado. Sem foco visível nem alto contraste</td></tr>

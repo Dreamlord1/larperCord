@@ -27,10 +27,10 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord** | **46–56 MB**² | **0–0,4%** | **~7 MB** |
+| **larperCord** | **44–47 MB**² | **0–0,4%** | **~6 MB** |
 
 <sub>¹ média desde a abertura, medida pelo `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
-² Dados de demonstração, janela de verdade, reprodução automática de GIFs desligada, medido com `tools/membench.sh`. `terminal` e `subsolo` às vezes medem 60–74 MB, e um GIF animado na tela custa cerca de 2,5% de CPU. Cerca de metade do total é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL). Uma conta real usa mais.</sub>
+² Dados de demonstração, janela de verdade, reprodução automática de GIFs desligada, medido com `tools/membench.sh`. Um GIF animado na tela custa cerca de 2,5% de CPU. Cerca de metade do total é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL). Uma conta real usa mais.</sub>
 
 ## O que tem
 
@@ -44,6 +44,7 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   aplica o blur, sem custo pro app.
 - **Conecta no Discord de verdade**: gateway por WebSocket com heartbeat, **RESUME de sessão**,
   **zlib-stream** e reconexão; IDENTIFY e cabeçalhos no formato do cliente web (a mesma
+  abordagem do cliente web). REST pra histórico, envio, edição, exclusão, reações e "digitando",
   uma requisição por vez e respeitando o rate limit.
 - **Chamadas de voz** de verdade: gateway de voz v8, UDP/RTP, Opus 48 kHz estéreo, **DAVE (E2EE)** via
   libdave/MLS, mic e saída pelo SDL3, mudo/ensurdecer, anel de "falando" e **mixer com volume
@@ -60,6 +61,11 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   criam comandos locais (`/shrug`) e atalhos, num sandbox com limite de instruções; liga/desliga,
   erros e plugins de exemplo em Configurações → Plugins. [Guia e API →](docs/plugins.pt-BR.md)
 - **Voz:** em Configurações → Voz você escolhe microfone e saída (lembrados pelo nome, voltam ao padrão se sumirem, trocam em plena call), ajusta os volumes, vê o nível do microfone ao vivo e usa "Testar microfone" para ouvir a si mesmo. A detecção de voz tem limiar ajustável sobre a barra ou modo automático que aprende o ruído de fundo. O modo "aperte para falar" aceita tecla ou botão do mouse e funciona com a janela em foco (atalho global não é portável pelo SDL). Há passa-altas contra ronco, porta de ruído e bipes de entrar, sair, mutar e desmutar, tudo desligável. O painel de voz mostra ping, qualidade por cor, quando você está transmitindo e avisa se o microfone não abrir ou se o servidor te mutou ou ensurdeceu; mudo e surdo dos outros aparecem na lista da call.
+- **Supressão de ruído no microfone.** Configurações → Voz → Supressão de ruído (Desligada / RNNoise), ligada por padrão e trocável em plena call. Usa o [RNNoise](https://github.com/xiph/rnnoise) 0.2 (BSD), embutido no executável e rodando neste computador, sem internet. Reduz ruído constante como ventilador, chiado e ar-condicionado; teclado e pancadas podem passar, outras vozes continuam e a sua pode abafar um pouco. Atrasa o microfone em 20 ms e custa de 2% a 5% de um núcleo com o microfone aberto; desligada, no mudo ou com a tecla do aperte para falar solta, não custa nada.
+- **Mensagens de bot completas.** As mensagens com componentes novos do Discord (Components V2) mostram texto, miniaturas, separadores, galerias, arquivos e botões de link. Encaminhadas e enquetes aparecem como cartões. Botões que falam com o bot ainda não são suportados, então não aparecem.
+- **Markdown do Discord.** Títulos, texto pequeno com `-#`, citações, listas e links `[texto](url)`, que mostram o endereço real ao passar o mouse. Blocos de código têm número de linha, e o texto de embeds pode ser selecionado e copiado.
+- **Cuide do que é seu.** Edite um servidor (nome, descrição, ícone, banner) ou um grupo de DM (nome, ícone) e exclua threads quando tiver permissão. O banner do servidor aparece no topo da lista de canais e nos cartões de convite.
+- **Erros no código (opcional).** Veja erros enquanto digita um bloco de código, com o servidor de linguagem que você escolher. Desligado por padrão, nada embutido nem baixado. [Guia →](docs/lsp.pt-BR.md)
 - **Threads e fóruns.** Threads ativas aninhadas abaixo do canal pai (recolhíveis, com não lidas), abrindo como conversa normal, com abas, tela dividida, rascunho, cache e busca; cartão "N mensagens · última há X" na mensagem que abriu; criar thread, entrar, sair e ver as arquivadas pelo menu. Fóruns e canais de mídia mostram a lista de posts no lugar da conversa, com busca local, ordem por atividade, páginas sob demanda e "Novo post" com título, tags e texto. Permissões herdadas do canal pai; a lista de membros mostra quem está na thread.
 - **Emoji e autocompletar.** Emoji personalizado aparece como imagem (animado inclusive), grande quando a mensagem é só emoji, e nas reações. Figurinhas PNG, APNG e GIF viram imagem. O seletor tem a lista Unicode inteira, busca em português e inglês, recentes e os emojis dos seus servidores, e avisa quando um emoji precisa de Nitro. Na caixa de texto, `@`, `#`, `:ab` e `/` abrem uma lista (setas, Tab/Enter, Esc ou clique); nomes com espaço viram menção de verdade ao enviar. No modo economia, emoji personalizado vira `:nome:`, sem baixar nada. Para regenerar a tabela: `tools/gen_emoji.py`.
 - **Leitura sincronizada com o Discord**: não lidos e menções corretos ao abrir, `MESSAGE_ACK` de outro aparelho limpa aqui, confirmação como o cliente oficial (no máximo uma por canal a cada 3 s; nada com a janela sem foco ou no modo invisível), "marcar como lido" por canal e por servidor, "marcar como não lida" a partir de uma mensagem.
@@ -161,7 +167,7 @@ Nada de mágica, só muitas decisões pequenas:
 7. **Memória com teto**: 1.500 mensagens por canal e 3.000 no total, e as antigas são liberadas.
 8. **fontconfig liberado** depois de resolver as fontes (`FcFini` + `malloc_trim`).
 9. **Sem cursor piscando**: o cursor piscando sozinho manteria a CPU acordada.
-10. **Binário enxuto**: build release sem símbolos de debug, cerca de 7 MB.
+10. **Binário enxuto**: build release sem símbolos de debug, cerca de 6 MB.
 
 ## Compilando
 
@@ -182,7 +188,7 @@ zig build -Doptimize=ReleaseFast
 |---|---|
 | `zig build test` | testes (KDL, cores, layout, markdown, Store, temas embutidos, configurações) |
 | `tools/snapshots.sh` | gera os prints de `docs/` sem abrir janela |
-| `tools/membench.sh 60` | mede RAM e CPU de cada tema e falha se passar de 60 MB (o `terminal` às vezes passa) |
+| `tools/membench.sh 60` | mede RAM e CPU de cada tema e falha se passar de 60 MB |
 
 ```
 larpercord [--theme NOME] [--demo] [--settings] [--list-themes] [--no-live] [--shot ARQ.png] [--stats]
@@ -221,11 +227,7 @@ gateway falso pelo real não toca na interface.
 - [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB
 - [ ] Componentes de tema escritos em Lua (sandbox)
 
-## Créditos
-
-A camada de conexão foi reescrita em Zig a partir do comportamento do
-
 ## Licença
 
-A definir. Dear ImGui e dear_bindings são MIT. O arquivo
+A definir. O código de terceiros mantém a própria licença, em cada pasta de `third_party/`: Dear ImGui e dear_bindings são MIT, RNNoise é BSD. O arquivo
 `third_party/imgui/misc/freetype/imgui_freetype.cpp` tem alterações marcadas com `[larperCord]`.

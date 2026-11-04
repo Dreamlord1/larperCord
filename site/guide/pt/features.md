@@ -51,6 +51,12 @@ Tudo aqui funciona no modo demonstração, exceto onde precisa da rede de verdad
 
 **Negrito**, *itálico*, ~~riscado~~, `código`, spoilers, menções `<@id>` e `<#id>`, links e emoji colorido. Os blocos de código ganham realce nas cores do tema a partir da etiqueta do bloco (zig, c/cpp, js/ts, py, rust, go, sh, json, lua, java/kotlin, c#, diff) e um botão **Copiar**. Opcionalmente, uma prévia ao vivo fica acima da caixa de texto enquanto você digita.
 
+Também: títulos com `#`, `##` e `###`, texto pequeno com `-#`, citações com `>` e `>>>`, listas e links `[texto](url)`, que mostram o endereço real ao passar o mouse. Blocos de código com mais de uma linha têm número de linha (que fica fora do que você copia). Enquanto você digita um bloco, um [servidor de linguagem à sua escolha](page:lsp) pode apontar erros.
+
+## Bots e cartões
+
+Embeds e as mensagens com componentes novos do Discord mostram texto, miniaturas, separadores, galerias, arquivos e botões de link. O texto deles pode ser selecionado e copiado com Ctrl+C. Encaminhadas e enquetes aparecem como cartões; para votar, use o Discord. Botões que falam com um bot ainda não são suportados, então não aparecem.
+
 ## Mídia
 
 - **Imagens** e **GIFs**, com cache de tamanho fixo, visualização em tela cheia e envio pelo seletor, arrastando e soltando ou com `Ctrl+V`. WebP e APNG animado também são decodificados.
@@ -103,6 +109,10 @@ A busca ignora maiúsculas e acentos, então `nao` encontra `não`.
 ## Canais que você não pode abrir
 
 O app calcula as exceções de permissão de cada canal do jeito que o Discord faz (`@everyone`, seus cargos, você). Um canal sem acesso aparece apagado, com cadeado e uma dica, e clicar só avisa isso, em vez de perguntar ao servidor. Canais de voz em que você não pode entrar têm o mesmo tratamento.
+
+## Servidores e grupos
+
+Com a permissão de gerenciar o servidor, clique com o botão direito nele para editar nome, descrição, ícone e banner. Qualquer membro pode renomear um grupo de DM e trocar o ícone. Excluir uma thread pede confirmação e exige a permissão de gerenciar threads. O banner do servidor aparece no topo da lista de canais e nos cartões de convite.
 
 ## Calls
 

@@ -43,7 +43,7 @@ tools/        QA, benchmark de memória, capturas de tela, geradores de logo e d
 
 ## Conversando com o Discord
 
-O gateway usa WebSocket (`v=10`, JSON, `zlib-stream`) com heartbeat, RESUME de sessão e reconexão. O comportamento foi portado para Zig a partir do que também conecta como cliente de usuário. O REST cuida de histórico, envio, edição, exclusão, reações e "digitando", uma requisição por vez e respeitando o rate limit.
+O gateway usa WebSocket (`v=10`, JSON, `zlib-stream`) com heartbeat, RESUME de sessão e reconexão. Ele conecta do jeito que o cliente web conecta. O REST cuida de histórico, envio, edição, exclusão, reações e "digitando", uma requisição por vez e respeitando o rate limit.
 
 ## A renderização
 

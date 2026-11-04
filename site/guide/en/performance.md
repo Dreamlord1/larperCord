@@ -5,7 +5,7 @@
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | 1,279 MB | 12–47% ¹ | 287 MB |
-| **larperCord** ² | **46–56 MB** | **0–0.4%** | **~7 MB** |
+| **larperCord** ² | **44–47 MB** | **0–0.4%** | **~6 MB** |
 
 ¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, a 1280×800 window, `ReleaseFast` build.
 
@@ -14,7 +14,6 @@
 Read these with the right caveats:
 
 - **A real account uses more** than demo data. More servers, more members, more images.
-- **`terminal` and `subsolo` vary.** They usually land in the same range, but some runs read 60–74 MB, and the cause hasn't been found yet.
 - **Idle means nothing is moving.** An animated GIF on screen costs about 2.5% CPU. The demo's first channel has one, so the measurement turns autoplay off.
 - **A good part of PSS isn't the app.** It's the NVIDIA driver and system libraries such as libcurl and OpenSSL. In one measurement across the themes, anonymous memory was about 25 MB.
 - **The binary doesn't include shared libraries**, such as SDL3 and libcurl.

@@ -649,6 +649,7 @@ GUIDE = [
         ("themes", "Writing themes", "Escrevendo temas"),
         ("theme-gallery", "Built-in themes", "Temas embutidos"),
         ("plugins", "Lua plugins", "Plugins em Lua"),
+        ("lsp", "Code diagnostics", "Erros no código"),
     ]),
     ("Internals", "Por dentro", [
         ("architecture", "Architecture", "Arquitetura"),
@@ -752,6 +753,8 @@ def external_sources(slug, lang):
     """Guias que moram fora de site/: o .md de lá é a fonte."""
     if slug == "plugins":
         return ROOT / "docs" / ("plugins.md" if lang == "en" else "plugins.pt-BR.md")
+    if slug == "lsp":
+        return ROOT / "docs" / ("lsp.md" if lang == "en" else "lsp.pt-BR.md")
     if slug == "themes":
         return ROOT / "themes" / ("README.md" if lang == "en" else "README.pt-BR.md")
     return None

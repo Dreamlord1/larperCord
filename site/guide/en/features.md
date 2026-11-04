@@ -51,6 +51,12 @@ Everything here works in demo mode, except where it needs the real network. For 
 
 **Bold**, *italic*, ~~strikethrough~~, `code`, spoilers, `<@id>` and `<#id>` mentions, links and color emoji. Code blocks get highlighting in the theme's colors from the block's label (zig, c/cpp, js/ts, py, rust, go, sh, json, lua, java/kotlin, c#, diff) and a **Copy** button. Optionally, a live preview sits above the composer while you type.
 
+Also: `#`, `##` and `###` headings, `-#` small text, `>` and `>>>` quotes, lists, and `[text](url)` links that show the real address on hover. Code blocks with more than one line have line numbers (they stay out of what you copy). While you type a block, a [language server you choose](page:lsp) can point out errors.
+
+## Bots and cards
+
+Embeds and Discord's newer component messages show text, thumbnails, separators, galleries, files and link buttons. Text in them can be selected and copied with Ctrl+C. Forwarded messages and polls appear as cards; to vote, use Discord. Buttons that talk to a bot aren't supported yet, so they aren't shown.
+
 ## Media
 
 - **Images** and **GIFs**, with a fixed-size cache, full-screen view, and upload by picker, drag and drop or `Ctrl+V`. WebP and animated PNG are decoded too.
@@ -103,6 +109,10 @@ Search ignores case and accents, so `nao` finds `não`.
 ## Channels you can't open
 
 The app computes permission overwrites per channel the way Discord does (`@everyone`, your roles, you). A channel without access appears dimmed with a padlock and a hint, and clicking only tells you so, instead of asking the server. Voice channels you can't join get the same treatment.
+
+## Servers and groups
+
+With the Manage Server permission, right-click the server to edit its name, description, icon and banner. Any member can rename a group DM and change its icon. Deleting a thread asks for confirmation and needs Manage Threads. A server's banner appears at the top of the channel list and on invite cards.
 
 ## Calls
 
