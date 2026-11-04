@@ -203,6 +203,8 @@ pub const Manager = struct {
 
     /// Carrega o tema `i`. Se falhar, mantém o anterior e guarda o erro.
     pub fn load(m: *Manager, i: usize) bool {
+        // A lista recarrega sozinha: um índice guardado pode ter ficado velho.
+        if (i >= m.entries.items.len) return false;
         const e = m.entries.items[i];
         var owned: ?[]u8 = null;
         defer if (owned) |o| c.SDL_free(o.ptr);

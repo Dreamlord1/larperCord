@@ -29,7 +29,11 @@ pub const Event = union(enum) {
     /// `content` null = não mudou. `embeds`/`attachments` não nulos trocam os
     /// anteriores (a prévia de um link chega assim, segundos depois).
     /// `local`: edição nossa, aplicada na hora (não vai para o registro).
-    message_update: struct { channel: Id, id: Id, content: ?[]const u8, embeds: ?[]types.Embed = null, attachments: ?[]types.Attachment = null, local: bool = false },
+    /// `raw`: o texto como o Discord guarda, quando difere de `content`
+    /// (emoji personalizado); passa a pertencer ao Store.
+    message_update: struct { channel: Id, id: Id, content: ?[]const u8, raw: ?[]const u8 = null, embeds: ?[]types.Embed = null, attachments: ?[]types.Attachment = null, local: bool = false },
+    /// O Discord não aceitou (ou não recebeu) uma mensagem nossa.
+    send_failed: struct { channel: Id, nonce: u64 },
     /// `local`: apagada por nós (some de vez, mesmo com o registro ligado).
     message_delete: struct { channel: Id, id: Id, local: bool = false },
     reaction: struct { channel: Id, id: Id, emoji: types.Reaction, user: Id, add: bool },
@@ -186,6 +190,11 @@ pub const Action = union(enum) {
     open_friends,
     /// Chegou perto do topo da conversa: busca as mais antigas.
     load_older: Id,
+    /// A conversa não carregou: pede de novo.
+    retry_history: Id,
+    /// Mensagem que não foi: manda de novo ou joga fora.
+    resend_message: struct { channel: Id, nonce: u64 },
+    discard_message: struct { channel: Id, nonce: u64 },
     /// O cartão de perfil abriu: busca o perfil completo (uma vez por pessoa).
     want_profile: Id,
     /// Online, ausente, não perturbe ou invisível (offline).

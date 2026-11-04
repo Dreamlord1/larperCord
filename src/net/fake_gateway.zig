@@ -284,7 +284,7 @@ pub const Gateway = struct {
             const r = g.history_replies.items[i];
             if (r.at_ms <= now) {
                 const msgs = try buildHistory(r.channel, g.epoch_ms);
-                g.emit(.{ .history = .{ .channel = r.channel, .messages = msgs } });
+                g.emit(.{ .history = .{ .channel = r.channel, .messages = msgs, .more = msgs.len > 0 } });
                 // Algumas reações nas mensagens recentes.
                 var prng = std.Random.DefaultPrng.init(r.channel ^ 0xABCD);
                 const rr = prng.random();

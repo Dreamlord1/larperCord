@@ -372,7 +372,7 @@ pub const Engine = struct {
 
     fn stop(p: *Plugin) void {
         if (p.L) |L| {
-            // Finalizadores (__gc) também têm o limite de instruções.
+            // __gc não existe aqui (ver lSetmetatable): fechar não roda código do plugin.
             p.steps = 0;
             p.timed_out = false;
             lua.lua_close(L);
@@ -415,7 +415,8 @@ pub const Engine = struct {
     /// O erro está no topo da pilha do plugin.
     fn afterError(e: *Engine, p: *Plugin) void {
         const L = p.L.?;
-        const raw = lua.toSlice(L, -1) orelse tr("erro sem mensagem", "error without a message");
+        // Só texto: converter um número aloca, e sem pcall um erro de memória aqui derruba o app.
+        const raw = (if (lua.lua_type(L, -1) == lua.TSTRING) lua.toSlice(L, -1) else null) orelse tr("erro sem mensagem", "error without a message");
         var buf: [300]u8 = undefined;
         if (p.timed_out) {
             const msg = std.fmt.bufPrint(&buf, "{s} {s}", .{ tr("parado:", "stopped:"), raw }) catch raw;
@@ -596,6 +597,7 @@ fn setup(L: ?*lua.State) void {
         .{ .name = "print", .f = &lPrint },
         .{ .name = "pcall", .f = &lPcall },
         .{ .name = "xpcall", .f = &lXpcall },
+        .{ .name = "setmetatable", .f = &lSetmetatable },
     };
     for (base) |b| {
         lua.pushcfunction(L, b.f);
@@ -626,6 +628,30 @@ fn setup(L: ?*lua.State) void {
 }
 
 // --- Funções do Lua ----------------------------------------------------------
+
+/// setmetatable sem `__gc`: o finalizador roda com o gancho de instruções
+/// desligado, então um `while true do end` nele travaria o app para sempre.
+/// O Lua só registra finalizador nesta chamada; criar o campo depois não vale.
+fn lSetmetatable(L: ?*lua.State) callconv(.c) c_int {
+    lua.luaL_checktype(L, 1, lua.TTABLE);
+    const kind = lua.lua_type(L, 2);
+    if (kind != lua.TNIL and kind != lua.TTABLE) raise(L, tr("setmetatable: a metatabela precisa ser uma tabela ou nil", "setmetatable: the metatable must be a table or nil"));
+    if (kind == lua.TTABLE) {
+        _ = lua.lua_pushstring(L, "__gc");
+        const has_gc = lua.lua_rawget(L, 2) != lua.TNIL;
+        lua.pop(L, 1);
+        if (has_gc) raise(L, tr("setmetatable: __gc não é permitido em plugins", "setmetatable: __gc isn't allowed in plugins"));
+    }
+    if (lua.lua_getmetatable(L, 1) != 0) {
+        _ = lua.lua_pushstring(L, "__metatable");
+        const protected_mt = lua.lua_rawget(L, -2) != lua.TNIL;
+        lua.pop(L, 2);
+        if (protected_mt) raise(L, tr("setmetatable: metatabela protegida", "setmetatable: protected metatable"));
+    }
+    lua.lua_settop(L, 2);
+    _ = lua.lua_setmetatable(L, 1);
+    return 1;
+}
 
 fn lPrint(L: ?*lua.State) callconv(.c) c_int {
     const p = plug(L);
@@ -762,6 +788,9 @@ pub fn parseKeys(spec: []const u8, key_name: *[16]u8, key_len: *usize) ?Keybind 
     const name = key_name[0..key_len.*];
     const fkey = name.len >= 2 and name[0] == 'f' and std.ascii.isDigit(name[1]);
     if (!kb.ctrl and !kb.alt and !kb.super and !fkey) return null;
+    // Ctrl+V e cia. acontecem o tempo todo digitando: um atalho aí seria um
+    // "a pessoa pediu" que ela nunca pediu (e libera larper.send).
+    if (kb.ctrl and !kb.shift and !kb.alt and !kb.super and name.len == 1 and std.mem.indexOfScalar(u8, "acvxyz", name[0]) != null) return null;
     var n: usize = 0;
     for ([_]struct { on: bool, s: []const u8 }{
         .{ .on = kb.ctrl, .s = "Ctrl+" },
@@ -1068,4 +1097,49 @@ test "plugins: desligar, religar e ready" {
     e.setEnabled(e.list.items[1], true);
     try std.testing.expect(e.command("/b"));
     try std.testing.expectEqualStrings("b", T.note(T.n_notes - 1));
+}
+
+test "plugins: nada trava o app dentro de C (__gc, string.rep, padrões, table)" {
+    var e = T.engine();
+    defer e.deinit();
+    // __gc roda com o gancho desligado: nem chega a ser aceito.
+    const gc = testOne(&e,
+        \\local ok, err = pcall(setmetatable, {}, {__gc = function() while true do end end})
+        \\larper.notify(tostring(ok) .. " " .. tostring(err))
+    );
+    try std.testing.expectEqual(Status.running, gc.status());
+    try std.testing.expect(std.mem.startsWith(u8, T.note(0), "false"));
+    T.reset();
+    _ = testOne(&e,
+        \\local t = setmetatable({}, {__index = function() return 1 end})
+        \\larper.notify(tostring(t.x))
+        \\local p = setmetatable({}, {__metatable = "não"})
+        \\larper.notify(tostring(pcall(setmetatable, p, {})))
+        \\larper.notify(tostring(pcall(setmetatable, 1, {})))
+        \\larper.notify(#string.rep("", 1000000000000000000) .. "")
+        \\local s = string.rep("a", 100000)
+        \\larper.notify(tostring(pcall(string.find, s, ".-.-.-.-.-.-.-.-b")))
+        \\larper.notify(tostring(pcall(table.move, {}, 1, 1000000000000000, 2)))
+        \\local big = setmetatable({}, {__len = function() return 1000000000000000 end})
+        \\larper.notify(tostring(pcall(table.insert, big, 1, "x")))
+        \\larper.notify(tostring(pcall(table.remove, big, 1)))
+    );
+    try std.testing.expectEqualStrings("1", T.note(0));
+    try std.testing.expectEqualStrings("false", T.note(1));
+    try std.testing.expectEqualStrings("false", T.note(2));
+    try std.testing.expectEqualStrings("0", T.note(3));
+    for (4..8) |i| try std.testing.expectEqualStrings("false", T.note(i));
+}
+
+test "plugins: erro que não é texto e atalhos do dia a dia" {
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, "error(123)");
+    try std.testing.expect(p.err() != null);
+
+    var name: [16]u8 = undefined;
+    var len: usize = 0;
+    for ([_][]const u8{ "ctrl+v", "ctrl+c", "ctrl+a", "ctrl+x", "ctrl+z", "ctrl+y" }) |k| try std.testing.expect(parseKeys(k, &name, &len) == null);
+    try std.testing.expect(parseKeys("ctrl+shift+v", &name, &len) != null);
+    try std.testing.expect(parseKeys("alt+v", &name, &len) != null);
 }

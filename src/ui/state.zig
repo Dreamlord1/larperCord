@@ -65,9 +65,11 @@ pub const Scroll = struct {
     pos: f32 = -1,
     target: f32 = 0,
     stick_bottom: bool = true,
-    /// Primeira mensagem da última vez: se mudou (chegaram mais antigas em
-    /// cima), a rolagem anda junto para a tela não pular.
-    first_id: Id = 0,
+    /// Primeira mensagem visível da última vez e onde ela estava: se algo em
+    /// cima mudou de altura (antigas chegaram, uma prévia abriu, cortou), a
+    /// rolagem anda junto e o que a pessoa está lendo não pula.
+    anchor_id: Id = 0,
+    anchor_off: f32 = 0,
 };
 
 pub const Toast = struct {
@@ -140,7 +142,8 @@ pub const State = struct {
     profile_tab: u8 = 0,
     /// Editando a nota do perfil (texto em `note_input`).
     note_editing: bool = false,
-    note_input: [256]u8 = @splat(0),
+    /// Até 256 caracteres (4 bytes cada, no pior caso): editar não corta o fim.
+    note_input: [1025]u8 = @splat(0),
     /// Caixa de texto do cartão de perfil ("Mensagem @fulano").
     popup_input: [256]u8 = @splat(0),
     reply_to: Id = 0,

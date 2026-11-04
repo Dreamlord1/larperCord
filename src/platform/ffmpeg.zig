@@ -379,7 +379,9 @@ pub const Media = struct {
     /// Volta (ou avança) para perto de `ms`: o quadro-chave antes dele.
     pub fn seek(m: *Media, ms: i64) void {
         const a = m.api;
-        const ts = @divTrunc((ms + m.start_ms) * m.vtb.den, 1000 * @as(i64, m.vtb.num));
+        // A base de tempo vem do arquivo: pode ser 0 ou absurda.
+        if (m.vtb.num <= 0) return;
+        const ts: i64 = @intCast(std.math.clamp(@divTrunc(@as(i128, ms + m.start_ms) * m.vtb.den, 1000 * @as(i128, m.vtb.num)), std.math.minInt(i64), std.math.maxInt(i64)));
         _ = a.av_seek_frame(m.fmt.?, m.vi, ts, 1); // AVSEEK_FLAG_BACKWARD
         if (m.vctx) |v| a.avcodec_flush_buffers(v);
         if (m.actx) |v| a.avcodec_flush_buffers(v);

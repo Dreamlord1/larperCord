@@ -22,7 +22,7 @@ pub fn int(v: ?Value) ?i64 {
     const x = v orelse return null;
     return switch (x) {
         .integer => |i| i,
-        .float => |f| @intFromFloat(f),
+        .float => |f| std.math.lossyCast(i64, f),
         .number_string, .string => |s| std.fmt.parseInt(i64, s, 10) catch null,
         else => null,
     };
@@ -93,20 +93,40 @@ pub fn writeString(out: *std.ArrayList(u8), gpa: std.mem.Allocator, s: []const u
     try out.append(gpa, '"');
 }
 
+/// Fim de um emoji personalizado que começa em `s[i]` (`<:nome:123>` ou
+/// `<a:nome:123>`): o índice do '>' e onde o nome está. Só nomes e números
+/// válidos: `Vec<a::B>` é texto.
+fn customEmoji(s: []const u8, i: usize) ?struct { name: []const u8, close: usize } {
+    var k = i + 1;
+    if (k < s.len and s[k] == 'a') k += 1;
+    if (k >= s.len or s[k] != ':') return null;
+    k += 1;
+    const start = k;
+    while (k < s.len and (std.ascii.isAlphanumeric(s[k]) or s[k] == '_')) k += 1;
+    if (k == start or k >= s.len or s[k] != ':') return null;
+    const name = s[start..k];
+    k += 1;
+    const digits = k;
+    while (k < s.len and std.ascii.isDigit(s[k])) k += 1;
+    if (k == digits or k >= s.len or s[k] != '>') return null;
+    return .{ .name = name, .close = k };
+}
+
 /// Emoji personalizado `<:nome:123>` / `<a:nome:123>` vira `:nome:`.
 pub fn simplifyContent(gpa: std.mem.Allocator, s: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.ensureTotalCapacity(gpa, s.len);
     var i: usize = 0;
     while (i < s.len) {
-        if (s[i] == '<' and i + 2 < s.len and (s[i + 1] == ':' or (s[i + 1] == 'a' and s[i + 2] == ':'))) {
-            const start = i + (if (s[i + 1] == 'a') @as(usize, 3) else 2);
-            if (std.mem.indexOfScalarPos(u8, s, start, ':')) |colon| if (std.mem.indexOfScalarPos(u8, s, colon, '>')) |close| {
-                try out.print(gpa, ":{s}:", .{s[start..colon]});
-                i = close + 1;
-                continue;
-            };
-        }
-        try out.append(gpa, s[i]);
+        if (s[i] == '<') if (customEmoji(s, i)) |e| {
+            out.appendAssumeCapacity(':');
+            out.appendSliceAssumeCapacity(e.name);
+            out.appendAssumeCapacity(':');
+            i = e.close + 1;
+            continue;
+        };
+        out.appendAssumeCapacity(s[i]);
         i += 1;
     }
     return out.toOwnedSlice(gpa);
@@ -168,4 +188,24 @@ test "conteúdo, strings e URLs" {
     const ac = try acronym(a, "Zig Brasil");
     defer a.free(ac);
     try std.testing.expectEqualStrings("ZB", ac);
+}
+
+test "emoji personalizado: só o formato de verdade" {
+    const a = std.testing.allocator;
+    for ([_][2][]const u8{
+        .{ "Vec<a::B> e Vec<a:b>", "Vec<a::B> e Vec<a:b>" },
+        .{ "<:x:12> <a:y_1:34>", ":x: :y_1:" },
+        .{ "<:semfim:12", "<:semfim:12" },
+        .{ "<:x:>", "<:x:>" },
+        .{ "<", "<" },
+    }) |t| {
+        const s = try simplifyContent(a, t[0]);
+        defer a.free(s);
+        try std.testing.expectEqualStrings(t[1], s);
+    }
+}
+
+test "número fora do alcance não derruba" {
+    try std.testing.expectEqual(std.math.maxInt(i64), int(.{ .float = 1e30 }).?);
+    try std.testing.expectEqual(std.math.minInt(i64), int(.{ .float = -1e30 }).?);
 }

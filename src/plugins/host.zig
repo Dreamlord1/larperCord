@@ -152,7 +152,7 @@ fn send(ctx: *anyopaque, channel: u64, text: []const u8) bool {
     const ch = if (channel != 0) channel else app.st.activeChannel() orelse return false;
     const cs = app.store.channel(ch) orelse return false;
     if (cs.info.kind != .text) return false;
-    app.sendTo(ch, text, 0);
+    app.sendWith(ch, text, 0, false);
     return true;
 }
 

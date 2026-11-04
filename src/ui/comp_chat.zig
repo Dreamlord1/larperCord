@@ -40,7 +40,7 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         var buf: [128]u8 = undefined;
         const t = std.fmt.bufPrint(&buf, "{s}", .{ch.name}) catch "";
         d.text(dl, fam.get(.bold), 22, r.x + 4, r.y + r.h / 2 - 22, ctx.col(.text), t);
-        const sub = if (ch.guild == 0) i18n.tr("mensagem direta", "direct message") else std.fmt.bufPrint(&buf, "{s}  ·  {s}", .{ if (g) |x| x.name else "", ch.topic }) catch "";
+        const sub = if (ch.guild == 0) i18n.tr("mensagem direta", "direct message") else d.printClip(&buf, "{s}  ·  {s}", .{ if (g) |x| x.name else "", ch.topic });
         _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - 84);
         inboxButtons(ctx, dl, r.right() - 32, r.y + r.h / 2 - 14);
         return;
@@ -132,9 +132,9 @@ pub fn tabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const g = ctx.store.guild(cs.info.guild);
         const active = i == ctx.st.tab;
         const lbl = if (tty)
-            std.fmt.bufPrint(&buf, " {d}:{s}{s} ", .{ i + 1, sigil(&cs.info), cs.info.name }) catch continue
+            d.printClip(&buf, " {d}:{s}{s} ", .{ i + 1, sigil(&cs.info), cs.info.name })
         else
-            std.fmt.bufPrint(&buf, "{s}{s}", .{ sigil(&cs.info), cs.info.name }) catch continue;
+            d.printClip(&buf, "{s}{s}", .{ sigil(&cs.info), cs.info.name });
         const font = fam.get(if (active) .semibold else .medium);
         const tw = d.width(font, fs, lbl);
         const acr = if (g) |x_| x_.acronym else "DM";

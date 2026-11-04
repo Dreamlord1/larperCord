@@ -101,7 +101,7 @@ pub fn topbar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
 /// Linhas de varredura e cantos escurecidos, desenhados por cima de tudo.
 pub fn crt(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const fg = ctx.fg;
-    const gap = d.pnum(n, "spacing", 3);
+    const gap = @max(d.pnum(n, "spacing", 3), 1);
     const strength = d.pnum(n, "strength", 0.08);
     var y = r.y;
     const lc = d.Rgba.black.alpha(strength);

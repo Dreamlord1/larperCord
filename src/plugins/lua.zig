@@ -53,6 +53,8 @@ pub extern fn lua_getglobal(L: ?*State, name: [*:0]const u8) c_int;
 pub extern fn lua_getfield(L: ?*State, idx: c_int, k: [*:0]const u8) c_int;
 pub extern fn lua_rawgeti(L: ?*State, idx: c_int, n: Integer) c_int;
 pub extern fn lua_rawget(L: ?*State, idx: c_int) c_int;
+pub extern fn lua_getmetatable(L: ?*State, idx: c_int) c_int;
+pub extern fn lua_setmetatable(L: ?*State, idx: c_int) c_int;
 pub extern fn lua_rawset(L: ?*State, idx: c_int) void;
 pub extern fn lua_createtable(L: ?*State, narr: c_int, nrec: c_int) void;
 pub extern fn lua_setglobal(L: ?*State, name: [*:0]const u8) void;

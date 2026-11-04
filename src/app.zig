@@ -32,6 +32,7 @@ const plugin_host = @import("plugins/host.zig");
 const inbox_core = @import("core/inbox.zig");
 const saved_ui = @import("ui/saved.zig");
 const msg_cache = @import("net/msg_cache.zig");
+const jsonx = @import("net/jsonx.zig");
 const fsutil = @import("platform/fsutil.zig");
 const accounts_store = @import("net/accounts_store.zig");
 const app_accounts = @import("app_accounts.zig");
@@ -89,6 +90,7 @@ pub const App = struct {
     gw_signaled: std.atomic.Value(bool) = .init(false),
     /// Perfis já pedidos nesta sessão (um pedido por pessoa).
     asked_profiles: std.AutoHashMapUnmanaged(types.Id, void) = .empty,
+    profiles_gen: u32 = 0,
     /// Cópia do tema com a cor de destaque e os cantos das configurações.
     th_custom: @import("theme/theme.zig").Theme = undefined,
     /// Cores escolhidas por tema e por modo (persistidas em settings.kdl).
@@ -207,13 +209,14 @@ pub const App = struct {
         app.stopNet();
         msg_cache.flushDirty(&app.store);
         msg_cache.deinit();
-        if (app.curl_on) c.curl_global_cleanup();
         app.login.clearToken();
         app.events.deinit();
         app.clearUploads();
         app.picked.deinit();
         @import("ui/video.zig").shutdown();
         app.images.deinit();
+        // Por último: as threads de mídia e de vídeo também usam o libcurl.
+        if (app.curl_on) c.curl_global_cleanup();
         app.st.saved.deinit(app.gpa);
         app.store.deinit();
         app.themes.deinit();
@@ -243,7 +246,12 @@ pub const App = struct {
             .sink = .{ .ctx = app, .push = pushEvent },
             .token = token,
         } };
-        try app.net.real.start();
+        // Falhou: o token volta para quem chamou (nada de liberar de novo no stop).
+        app.net.real.start() catch |err| {
+            app.net.real.commands.deinit();
+            app.net = .none;
+            return err;
+        };
     }
 
     pub fn startDemo(app: *App) !void {
@@ -283,8 +291,14 @@ pub const App = struct {
     const max_upload: u64 = 10 * 1024 * 1024;
 
     fn clearUploads(app: *App) void {
-        for (app.st.uploads.items) |u| std.heap.c_allocator.free(u.path);
+        for (app.st.uploads.items) |u| dropUpload(u.path);
         app.st.uploads.clearRetainingCapacity();
+    }
+
+    /// Tira um arquivo da bandeja. O de imagem colada era só nosso: apaga.
+    fn dropUpload(path: [:0]u8) void {
+        if (types.isPastedFile(path)) _ = c.unlink(path.ptr);
+        std.heap.c_allocator.free(path);
     }
 
     /// Coloca um arquivo na bandeja da próxima mensagem.
@@ -380,6 +394,7 @@ pub const App = struct {
         st.settings.open = false;
         st.reply_to = 0;
         st.editing = 0;
+        st.pending_dm = 0;
         st.selection = .{};
         @memset(&st.input, 0);
         st.input_sync = true;
@@ -532,7 +547,10 @@ pub const App = struct {
         const data = c.SDL_LoadFile(path.ptr, &size) orelse return null;
         defer c.SDL_free(data);
         const src = arena.dupe(u8, @as([*]const u8, @ptrCast(data))[0..size]) catch return null;
-        const nodes = kdl.parse(arena, src, null) catch return null;
+        const nodes = kdl.parse(arena, src, null) catch {
+            fsutil.keepBroken(path);
+            return null;
+        };
         var theme_name: ?[]const u8 = null;
         for (nodes) |*n| {
             if (std.mem.eql(u8, n.name, "settings")) {
@@ -686,7 +704,7 @@ pub const App = struct {
         app.st.focus_input = true;
         // Trocou de conversa: a que ficou para trás vai para o disco.
         msg_cache.leaving(&app.store, cs.info.id);
-        if (cs.history == .none) {
+        if (cs.history == .none or cs.history == .failed) {
             cs.history = .loading;
             // O cache do disco aparece na hora; o histórico chega por cima.
             msg_cache.restore(&app.store, cs);
@@ -697,6 +715,12 @@ pub const App = struct {
     /// Envia uma mensagem: aparece na hora como "pendente" e vai pra rede.
     /// "@fulano" vira a menção de verdade (<@id>) quando o nome existe.
     pub fn sendTo(app: *App, ch: types.Id, text: []const u8, reply_to: types.Id) void {
+        app.sendWith(ch, text, reply_to, true);
+    }
+
+    /// `with_uploads`: leva os arquivos da bandeja junto. Só o que a própria
+    /// pessoa enviou pela caixa de texto; um plugin nunca leva os arquivos dela.
+    pub fn sendWith(app: *App, ch: types.Id, text: []const u8, reply_to: types.Id, with_uploads: bool) void {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(app.gpa);
         var words = std.mem.splitScalar(u8, text, ' ');
@@ -719,7 +743,7 @@ pub const App = struct {
         app.st.nonce += 1;
         // Os arquivos da bandeja vão junto: aparecem na hora na cópia pendente.
         const ca = std.heap.c_allocator;
-        const ups = app.st.uploads.items;
+        const ups = if (with_uploads) app.st.uploads.items else &.{};
         var atts: []types.Attachment = &.{};
         var files: [][:0]const u8 = &.{};
         if (ups.len > 0) {
@@ -793,6 +817,11 @@ pub const App = struct {
             .want_profile => |user| {
                 // Por servidor também: "no servidor desde" muda com ele.
                 const key = user ^ (st.guild *% 0x9E3779B97F4A7C15);
+                // O Store esvaziou os perfis: dá para pedir de novo.
+                if (app.profiles_gen != app.store.profiles_gen) {
+                    app.profiles_gen = app.store.profiles_gen;
+                    app.asked_profiles.clearRetainingCapacity();
+                }
                 if (app.asked_profiles.contains(key)) return;
                 app.asked_profiles.put(app.gpa, key, {}) catch return;
                 app.cmd(.{ .fetch_profile = .{ .user = user, .guild = st.guild } });
@@ -822,7 +851,7 @@ pub const App = struct {
             .load_older => |id| {
                 const cs = app.store.channel(id) orelse return;
                 // (Ainda no cache do disco: espera o histórico de verdade.)
-                if (cs.older != .idle or cs.history != .loaded or cs.cached) return;
+                if (cs.older != .idle or cs.history != .loaded or cs.cached or now() < cs.older_retry_ms) return;
                 // A mais antiga que já veio do servidor (a pendente não tem ID).
                 const before = for (cs.messages.items) |m| {
                     if (m.msg.id != 0) break m.msg.id;
@@ -830,6 +859,38 @@ pub const App = struct {
                 cs.older = .loading;
                 app.cmd(.{ .fetch_older = .{ .channel = id, .before = before } });
             },
+            .retry_history => |id| {
+                const cs = app.store.channel(id) orelse return;
+                if (cs.history != .failed and cs.history != .none) return;
+                cs.history = .loading;
+                msg_cache.restore(&app.store, cs);
+                app.cmd(.{ .fetch_history = id });
+            },
+            .resend_message => |r| {
+                const m = app.store.pendingByNonce(r.channel, r.nonce) orelse return;
+                if (!m.failed) return;
+                const ca = std.heap.c_allocator;
+                const copy = ca.dupe(u8, m.msg.content) catch return;
+                // Os anexos locais continuam na cópia pendente (file://caminho).
+                var files: [][:0]const u8 = &.{};
+                var n: usize = 0;
+                if (m.msg.attachments.len > 0) {
+                    files = ca.alloc([:0]const u8, m.msg.attachments.len) catch {
+                        ca.free(copy);
+                        return;
+                    };
+                    for (m.msg.attachments) |att| {
+                        if (!std.mem.startsWith(u8, att.url, "file://")) continue;
+                        files[n] = ca.dupeSentinel(u8, att.url[7..], 0) catch continue;
+                        n += 1;
+                    }
+                    files = ca.realloc(files, n) catch files[0..n];
+                }
+                m.failed = false;
+                m.layout_w = -1;
+                app.cmd(.{ .send_message = .{ .channel = r.channel, .content = copy, .nonce = r.nonce, .reply_to = m.msg.reply_to, .files = files } });
+            },
+            .discard_message => |r| app.store.discardPending(r.channel, r.nonce),
             .open_friends => {
                 st.guild = 0;
                 st.friends = true;
@@ -880,11 +941,13 @@ pub const App = struct {
             },
             .edit_message => |id| {
                 const f = app.store.findAny(id) orelse return;
+                const text = f.m.msg.editable();
+                // Não cabe na caixa: editar cortaria o fim da mensagem para sempre.
+                if (text.len >= st.input.len) return st.showToast(now(), true, "mensagem longa demais para editar aqui", "message too long to edit here", .{});
                 // O que estava sendo escrito fica guardado durante a edição.
                 if (st.editing == 0) if (st.activeChannel()) |ch| st.drafts.put(app.gpa, ch, std.mem.sliceTo(&st.input, 0));
-                const n = @min(f.m.msg.content.len, st.input.len - 1);
-                @memcpy(st.input[0..n], f.m.msg.content[0..n]);
-                st.input[n] = 0;
+                @memcpy(st.input[0..text.len], text);
+                st.input[text.len] = 0;
                 st.editing = id;
                 st.reply_to = 0;
                 st.input_sync = true;
@@ -897,8 +960,11 @@ pub const App = struct {
                 app.restoreDraft();
                 const f = app.store.findAny(id) orelse return;
                 const ch = f.cs.info.id;
-                if (std.mem.eql(u8, f.m.msg.content, text)) return;
-                app.store.editLocal(ch, id, text) catch return;
+                if (std.mem.eql(u8, f.m.msg.editable(), text)) return;
+                // Na tela o emoji personalizado continua como `:nome:`.
+                const shown = jsonx.simplifyContent(app.gpa, text) catch return;
+                defer app.gpa.free(shown);
+                app.store.editLocal(ch, id, shown, if (shown.len != text.len) text else null) catch return;
                 const copy = std.heap.c_allocator.dupe(u8, text) catch return;
                 app.cmd(.{ .edit_message = .{ .channel = ch, .id = id, .content = copy } });
             },
@@ -1058,7 +1124,7 @@ pub const App = struct {
             },
             .pick_files => app.pickFiles(),
             .remove_upload => |i| if (i < st.uploads.items.len) {
-                std.heap.c_allocator.free(st.uploads.items[i].path);
+                dropUpload(st.uploads.items[i].path);
                 _ = st.uploads.orderedRemove(i);
             },
             .paste_image => app.pasteImage(),
@@ -1117,8 +1183,10 @@ pub const App = struct {
         const was_ready = app.store.ready;
         var failed = false;
         var reconnected = false;
+        var new_session = false;
         for (batch.items) |e| {
             if (e == .status and e.status == .ready) reconnected = true;
+            if (e == .ready and was_ready) new_session = true;
             if (e == .notice) {
                 app.st.showToast(now(), true, "{s}", "{s}", .{e.notice});
                 const n = @min(e.notice.len, app.last_notice.len);
@@ -1164,16 +1232,33 @@ pub const App = struct {
             if (quiet) |ch| app.st.filtros.quiet(app.gpa, &app.store, ch);
         }
         if (!was_ready and app.store.ready) {
+            // O Discord aceitou: agora sim guarda a conta (e o token, se pediram).
+            // Antes do resto: abrir um canal já lê o cache desta conta.
+            app_accounts.ready(app);
             app.onReady();
             app.plugins.fireReady();
             if (app.login.phase == .connecting) app.login.setPhase(.leaving);
-            // O Discord aceitou: agora sim guarda a conta (e o token, se pediram).
-            app_accounts.ready(app);
         } else if (reconnected and was_ready) {
             // Voltou a conexão: as conversas que ficaram só no cache do disco
             // (abertas sem rede) buscam o histórico de novo.
             var it = app.store.channels.valueIterator();
-            while (it.next()) |cs| if (cs.*.cached) app.cmd(.{ .fetch_history = cs.*.info.id });
+            while (it.next()) |p| {
+                const cs = p.*;
+                if (cs.cached or cs.history == .failed) {
+                    if (cs.history == .failed) cs.history = .loading;
+                    app.cmd(.{ .fetch_history = cs.info.id });
+                } else if (new_session and cs.history == .loaded) {
+                    // Sessão nova: o Discord não repete o que passou enquanto
+                    // estávamos fora, e a conversa ficaria com um buraco.
+                    const open = std.mem.indexOfScalar(types.Id, app.st.tabs.items, cs.info.id) != null;
+                    const unsent = for (cs.messages.items) |m| {
+                        if (m.pending) break true;
+                    } else false;
+                    if (open or unsent) {
+                        app.cmd(.{ .fetch_history = cs.info.id });
+                    } else app.store.unload(cs);
+                }
+            }
         }
         if (failed and app.net == .real and !app.store.ready) {
             // Token recusado (ou erro fatal) antes de entrar: volta ao login.
@@ -1225,7 +1310,7 @@ pub const App = struct {
         const f = &app.st.filtros;
         if (m.author == app.store.me) return null;
         const cs = app.store.channel(m.channel) orelse return null;
-        const verdict = f.judge(m.author, m.content, cs.info.guild == 0, mentionsMe(m.content, app.store.me));
+        const verdict = f.judge(m.author, m.content, cs.info.guild == 0, app.mentionsMe(m, cs.info.guild));
         if (verdict == .important) {
             f.bump(app.gpa, &app.store, m.channel);
             if (!app.st.muted_channels.contains(m.channel)) {
@@ -1265,12 +1350,24 @@ pub const App = struct {
         app.notifiers.append(app.gpa, proc) catch c.SDL_DestroyProcess(proc);
     }
 
-    fn mentionsMe(content: []const u8, me: types.Id) bool {
+    /// A mensagem chama a gente: quem decide é o servidor, que já desconta
+    /// bloco de código e quem não tem permissão de usar @everyone.
+    fn mentionsMe(app: *App, m: types.Message, guild: types.Id) bool {
+        if (m.mention_everyone or m.mentions_me) return true;
+        // Menção a um cargo nosso (`<@&id>`).
+        var rest = m.content;
+        while (std.mem.indexOf(u8, rest, "<@&")) |i| {
+            rest = rest[i + 3..];
+            const end = std.mem.indexOfScalar(u8, rest, '>') orelse break;
+            const role = std.fmt.parseInt(types.Id, rest[0..end], 10) catch continue;
+            if (app.store.hasRole(guild, role)) return true;
+        }
+        // A demonstração não tem os campos do servidor.
+        if (!app.store.demo) return false;
         var b: [32]u8 = undefined;
-        const a = std.fmt.bufPrint(&b, "<@{d}>", .{me}) catch return false;
-        if (std.mem.indexOf(u8, content, a) != null) return true;
-        const n = std.fmt.bufPrint(&b, "<@!{d}>", .{me}) catch return false;
-        return std.mem.indexOf(u8, content, n) != null or std.mem.indexOf(u8, content, "@everyone") != null or std.mem.indexOf(u8, content, "@here") != null;
+        const a = std.fmt.bufPrint(&b, "<@{d}>", .{app.store.me}) catch return false;
+        if (std.mem.indexOf(u8, m.content, a) != null) return true;
+        return std.mem.indexOf(u8, m.content, "@everyone") != null or std.mem.indexOf(u8, m.content, "@here") != null;
     }
 
     /// Recolhe os notify-send que já terminaram (sem deixar processo zumbi).
@@ -1480,6 +1577,9 @@ pub const App = struct {
 
         while (running) {
             var e: c.SDL_Event = undefined;
+            // O relógio do sistema andou para trás: sem isso, o quadro adiado
+            // só viria quando ele alcançasse a hora antiga.
+            if (last_frame_ms > now()) last_frame_ms = now();
             // A tela de login anima sem parar: no máximo 60 quadros por segundo.
             if (app.login.visible() and !app.opts.qa and app.opts.shot == null and !bench and record_dir == null) {
                 const since_frame = now() - last_frame_ms;
@@ -1498,6 +1598,8 @@ pub const App = struct {
                 c.SDL_WaitEventTimeout(&e, @intCast(@min(wait, 1000)))
             else
                 c.SDL_WaitEvent(&e);
+            // Acordou só porque o teto de 1 s da espera venceu.
+            const timed_out = !got and !busy and wait > 0;
             var input = false;
             while (got) {
                 if (e.type == app.win.wake_type) {
@@ -1557,8 +1659,22 @@ pub const App = struct {
                 }
                 if (picked.items.len > 0) pending = 3;
             }
-            // Só coisa da rede e o último quadro foi agora há pouco: espera.
             const now_ms = now();
+            // Nada venceu ainda: não há por que redesenhar.
+            if (timed_out and pending == 0 and !bg_dirty and !was_active and now_ms < due) continue;
+            // Janela minimizada ou coberta: ninguém vê. Os eventos da rede já
+            // foram tratados; ao voltar, o SDL avisa e o quadro sai certo.
+            const hidden_flags = c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_OCCLUDED;
+            if (c.SDL_GetWindowFlags(app.win.window) & hidden_flags != 0 and running and !app.opts.qa and app.opts.shot == null and !bench and record_dir == null) {
+                bg_dirty = false;
+                pending = 0;
+                was_active = false;
+                anim.active = false;
+                anim.next_wake_ms = std.math.maxInt(i64);
+                app.images.next_frame_ms = std.math.maxInt(i64);
+                continue;
+            }
+            // Só coisa da rede e o último quadro foi agora há pouco: espera.
             if (bg_dirty and pending == 0 and !was_active and app.opts.shot == null and !app.opts.qa and
                 !app.login.visible() and now_ms - last_frame_ms < bg_frame_ms and now_ms < @min(app.images.next_frame_ms, anim.next_wake_ms)) continue;
             bg_dirty = false;
@@ -1566,6 +1682,7 @@ pub const App = struct {
             anim.now_ms = now_ms;
             anim.next_wake_ms = std.math.maxInt(i64);
             app.images.next_frame_ms = std.math.maxInt(i64);
+            app.images.drawn_ms = now_ms;
             const t0 = c.SDL_GetTicksNS();
             anim.dt = std.math.clamp(@as(f32, @floatFromInt(t0 - last)) / 1e9, 0.001, 1.0 / 30.0);
             last = t0;
@@ -1580,7 +1697,7 @@ pub const App = struct {
             if (mode != app.themes.mode) {
                 if (app.themes.setMode(mode)) app.applyThemeStyle();
             }
-            d.text_scale = set.font_scale;
+            d.text_scale = std.math.clamp(set.font_scale, 0.5, 3);
             // Idioma: o QA roda sempre em português (as marcações usam os rótulos).
             if (set.language != lang_setting) {
                 lang_setting = set.language;

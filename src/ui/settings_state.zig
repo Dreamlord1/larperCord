@@ -200,7 +200,7 @@ pub fn apply(s: *Settings, node: anytype) void {
                 @as(*bool, @ptrCast(base + f.offset)).* = v;
             },
             .float => if (node.num(f.name)) |v| {
-                @as(*f32, @ptrCast(@alignCast(base + f.offset))).* = @floatCast(v);
+                @as(*f32, @ptrCast(@alignCast(base + f.offset))).* = @floatCast(std.math.clamp(v, 0.5, 3));
             },
             .byte => if (node.num(f.name)) |v| {
                 (base + f.offset)[0] = @intFromFloat(std.math.clamp(v, 0, 255));

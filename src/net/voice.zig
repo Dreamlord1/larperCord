@@ -244,8 +244,11 @@ const Worker = struct {
             w.end = null;
             w.next_hb = std.math.maxInt(i64);
             w.hb_acked = true;
+            const opened_ms = nowMs();
             const how = w.loop();
             w.closeWs();
+            // Ficou de pé um bom tempo: esta queda não é a mesma de antes.
+            if (nowMs() - opened_ms >= 30_000) tries = 0;
             switch (how) {
                 .stop => return .stopped,
                 .fatal => return .fatal,
@@ -285,6 +288,7 @@ const Worker = struct {
         const h = c.curl_easy_init() orelse return false;
         w.ws = h;
         _ = c.curl_easy_setopt(h, c.CURLOPT_URL, url.ptr);
+        _ = c.curl_easy_setopt(h, c.CURLOPT_NOSIGNAL, @as(c_long, 1));
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECT_ONLY, @as(c_long, 2));
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, 4000));
         _ = c.curl_easy_setopt(h, c.CURLOPT_HTTP_VERSION, @as(c_long, c.CURL_HTTP_VERSION_1_1));
@@ -500,7 +504,8 @@ const Worker = struct {
             }
             if (flags & (c.CURLWS_PING | c.CURLWS_PONG) != 0) continue;
             if (got > 0) w.ws_in.appendSlice(alloc, w.in_buf[0..got]) catch return;
-            if (meta.*.bytesleft != 0) continue;
+            // Mensagem em vários pedaços: junta até o último.
+            if (meta.*.bytesleft != 0 or flags & c.CURLWS_CONT != 0) continue;
             const bytes = w.ws_in.items;
             if (bytes.len > 0) {
                 if (flags & c.CURLWS_TEXT != 0) {

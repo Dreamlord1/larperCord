@@ -33,6 +33,8 @@ const usage =
 ;
 
 pub fn main(init: std.process.Init.Minimal) !void {
+    // Um filho (secret-tool) ou pipe fechado vira erro de write, não a morte do app.
+    _ = c.signal(c.SIGPIPE, c.SIG_IGN);
     var opts: Options = .{};
     var it = std.process.Args.Iterator.init(init.args);
     _ = it.skip();

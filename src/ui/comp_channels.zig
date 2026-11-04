@@ -74,6 +74,9 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const o = c.ImGui_GetCursorScreenPos();
     var y = o.y + (if (variant == .tree) @as(f32, 2) else 8);
     const ids = ctx.store.channelsOf(g.id);
+    // Fora da tela só conta a altura (servidor com centenas de canais).
+    const vis_top = r.y - 64;
+    const vis_bottom = r.bottom() + 64;
     var collapsed_cat = false;
     var cat_id: Id = 0;
     for (ids, 0..) |id, idx| {
@@ -82,12 +85,22 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         if (ch.kind == .category) {
             cat_id = id;
             collapsed_cat = ctx.st.collapsed.contains(id);
+            const cat_h: f32 = if (variant == .tree) 30 else 40;
+            if (y + cat_h < vis_top or y > vis_bottom) {
+                y += cat_h;
+                continue;
+            }
             y = category(ctx, dl, fam, variant, ch, idx, r, y, collapsed_cat);
             continue;
         }
         const selected = ctx.st.activeChannel() == id;
         const in_voice = ctx.st.voice == id;
         if (collapsed_cat and !selected and !in_voice) continue;
+        const row_h = rowHeight(ctx, variant, cs);
+        if (y + row_h < vis_top or y > vis_bottom) {
+            y += row_h;
+            continue;
+        }
         const last = idx + 1 >= ids.len or (ctx.store.channel(ids[idx + 1]) orelse cs).info.kind == .category;
         y = row(ctx, dl, fam, variant, cs, idx, r, y, last);
     }
@@ -117,6 +130,23 @@ fn category(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, ch
     }
     y += hr.h + 2;
     return y;
+}
+
+/// Altura de uma linha de `row`, sem desenhar.
+fn rowHeight(ctx: *d.Ctx, variant: Variant, cs: anytype) f32 {
+    var h: f32 = switch (variant) {
+        .tree => 24,
+        .pills => 40,
+        .discord => 34,
+    };
+    if (cs.info.kind == .voice and cs.voice_members.items.len > 0) {
+        const member_h: f32 = if (variant == .tree) 20 else 28;
+        for (cs.voice_members.items) |uid| {
+            if (ctx.store.user(uid) != null) h += member_h;
+        }
+        h += 4;
+    }
+    return h;
 }
 
 fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: anytype, idx: usize, r: d.Rect, y: f32, last: bool) f32 {
@@ -484,6 +514,12 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
         if (!group and u == null) continue;
         const selected = ctx.st.activeChannel() == id and !ctx.st.friends;
         const row_h: f32 = if (tree) 24 else 44;
+        // Fora da tela: só a altura. O avatar nem é pedido (nada de baixar a
+        // foto de mil conversas, nem de segurar no cache o que não aparece).
+        if (y + row_h < r.y - 64 or y > r.bottom() + 64) {
+            y += row_h;
+            continue;
+        }
         const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
         const hb = d.hit(ctx, 300 + idx, rr);
         qa.mark(rr, "channel:{d}", .{id});

@@ -54,7 +54,8 @@ fn axisOf(name: []const u8) ?Axis {
 }
 
 fn num(n: *const kdl.Node, key: []const u8) ?f32 {
-    return if (n.num(key)) |v| @floatCast(v) else null;
+    // Número de um arquivo do usuário: 1e39 não vira infinito na conta do layout.
+    return if (n.num(key)) |v| @floatCast(std.math.clamp(v, -20_000, 20_000)) else null;
 }
 
 /// Consulta às opções do tema (`when="crt"`).

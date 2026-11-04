@@ -34,30 +34,32 @@ fn wanted(t: Tab, kind: types.Relationship, status: types.Status) bool {
 }
 
 /// Quem aparece na aba, em ordem alfabética (pedidos recebidos primeiro).
-fn collect(ctx: *const d.Ctx, t: Tab, out: []Id) []Id {
-    var n: usize = 0;
+fn collect(ctx: *const d.Ctx, t: Tab, out: *std.ArrayList(Id)) []const Id {
+    const gpa = ctx.st.gpa;
+    out.clearRetainingCapacity();
+    sort_rows.clearRetainingCapacity();
+    // A chave de ordenação é lida uma vez por pessoa, não a cada comparação.
     var it = ctx.store.relationships.iterator();
     while (it.next()) |e| {
-        if (n == out.len) break;
         const u = ctx.store.user(e.key_ptr.*) orelse continue;
         if (!wanted(t, e.value_ptr.*, u.status)) continue;
-        out[n] = u.id;
-        n += 1;
+        sort_rows.append(gpa, .{ .id = u.id, .incoming = e.value_ptr.* == .incoming, .name = u.name }) catch break;
     }
-    const Sort = struct {
-        ctx: *const d.Ctx,
-        fn lt(s: @This(), a: Id, b: Id) bool {
-            const ka = s.ctx.store.relationship(a) == .incoming;
-            const kb = s.ctx.store.relationship(b) == .incoming;
-            if (ka != kb) return ka;
-            const na = s.ctx.store.user(a).?.name;
-            const nb = s.ctx.store.user(b).?.name;
-            return std.ascii.lessThanIgnoreCase(na, nb);
+    std.mem.sort(SortRow, sort_rows.items, {}, struct {
+        fn lt(_: void, a: SortRow, b: SortRow) bool {
+            if (a.incoming != b.incoming) return a.incoming;
+            return std.ascii.lessThanIgnoreCase(a.name, b.name);
         }
-    };
-    std.mem.sort(Id, out[0..n], Sort{ .ctx = ctx }, Sort.lt);
-    return out[0..n];
+    }.lt);
+    out.ensureTotalCapacity(gpa, sort_rows.items.len) catch return out.items;
+    for (sort_rows.items) |r| out.appendAssumeCapacity(r.id);
+    return out.items;
 }
+
+const SortRow = struct { id: Id, incoming: bool, name: []const u8 };
+var sort_rows: std.ArrayList(SortRow) = .empty;
+var page_ids: std.ArrayList(Id) = .empty;
+var active_ids: std.ArrayList(Id) = .empty;
 
 fn incomingCount(ctx: *const d.Ctx) usize {
     var n: usize = 0;
@@ -123,8 +125,7 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
 pub fn page(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const fam = ctx.familyFor(n);
     const tab: Tab = @enumFromInt(@min(ctx.st.friends_tab, 3));
-    var ids_buf: [512]Id = undefined;
-    const ids = collect(ctx, tab, &ids_buf);
+    const ids = collect(ctx, tab, &page_ids);
     const dl = d.beginRegion(ctx, "##friends", r, c.ImGuiWindowFlags_NoScrollbar);
     const o = c.ImGui_GetCursorScreenPos();
     var y = o.y + 18;
@@ -263,8 +264,7 @@ pub fn activeNow(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     d.text(dl, fam.get(.bold), 18, r.x + 16, y, ctx.col(.text), i18n.tr("Ativos agora", "Active Now"));
     y += 38;
     var shown: usize = 0;
-    var ids_buf: [256]Id = undefined;
-    for (collect(ctx, .online, &ids_buf)) |uid| {
+    for (collect(ctx, .online, &active_ids)) |uid| {
         const u = ctx.store.user(uid) orelse continue;
         const act = u.activity orelse continue;
         const card: d.Rect = .{ .x = r.x + 16, .y = y, .w = r.w - 32, .h = 64 };

@@ -449,7 +449,6 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
         }
         x += base + gap;
     }
-    if (near) anim.active = true;
 }
 
 /// Lista vertical com ícone + nome (estilo "workspaces" do Slack).

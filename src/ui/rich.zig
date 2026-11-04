@@ -124,6 +124,16 @@ fn label(store: *const Store, sp: *const md.Span, buf: []u8) []const u8 {
     };
 }
 
+/// Largura de uma palavra. Uma enorme ("kkkk…"): se o começo já não cabe na
+/// linha, não precisa medir o resto (ela vai em pedaços de qualquer jeito).
+fn wordWidth(font: *c.ImFont, size: f32, s: []const u8, wrap: f32) f32 {
+    if (s.len > 512) {
+        const head = d.width(font, size, d.utf8Prefix(s, 512));
+        if (head > wrap) return head;
+    }
+    return d.width(font, size, s);
+}
+
 /// Mede (dl = null) ou desenha o texto. Retorna altura e maior largura de linha.
 pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: []const md.Span, x0: f32, y0: f32, wrap: f32, o: Opts, mouse: c.ImVec2) Measure {
     const space_w = d.width(o.family.get(.regular), o.size, " ");
@@ -151,7 +161,7 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
             const size = if (sp.flags.code) o.size - 1.5 else o.size;
             const pad: f32 = if (sp.flags.code) 5 else if (sp.mention != .none) 3 else 0;
             // Linha do bloco de código ocupa a largura toda (cortada se passar).
-            var w = if (sp.flags.block) wrap else d.width(font, size, s) + pad * 2;
+            var w = if (sp.flags.block) wrap else wordWidth(font, size, s, wrap) + pad * 2;
             if (word.breaks > 0 and !(x == 0 and y == 0 and line_start)) {
                 // Uma linha nova por \n (linhas em branco contam, até 3).
                 x = 0;
@@ -296,7 +306,7 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
         if (over) {
             c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_Hand);
             const drag = c.ImGui_GetMouseDragDelta(0, -1);
-            if (c.ImGui_IsMouseReleased(0) and @abs(drag.x) + @abs(drag.y) < 4) @import("attachments.zig").openUrl(s);
+            if (c.ImGui_IsMouseReleased(0) and @abs(drag.x) + @abs(drag.y) < 4) @import("attachments.zig").openUrl(sp.text);
         }
         return;
     }

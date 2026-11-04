@@ -238,7 +238,7 @@ pub fn openImage(ctx: *d.Ctx, url: []const u8, name: []const u8, w: u16, h: u16)
     const n = @min(url.len, v.url.len);
     @memcpy(v.url[0..n], url[0..n]);
     v.url_len = @intCast(n);
-    const fnl = @min(name.len, v.name.len);
+    const fnl = d.utf8Prefix(name, v.name.len).len;
     @memcpy(v.name[0..fnl], name[0..fnl]);
     v.name_len = @intCast(fnl);
     ctx.st.viewer = v;

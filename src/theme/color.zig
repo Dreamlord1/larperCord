@@ -75,6 +75,8 @@ const Parser = struct {
     s: []const u8,
     i: usize = 0,
     r: Resolver,
+    /// `mix(mix(mix(…` num tema não pode estourar a pilha.
+    depth: u8 = 0,
 
     fn skip(p: *Parser) void {
         while (p.i < p.s.len and (p.s[p.i] == ' ' or p.s[p.i] == '\t')) p.i += 1;
@@ -102,6 +104,9 @@ const Parser = struct {
     }
 
     fn expr(p: *Parser) Error!Rgba {
+        if (p.depth >= 16) return error.InvalidColor;
+        p.depth += 1;
+        defer p.depth -= 1;
         p.skip();
         const w = p.word();
         if (w.len == 0) return error.InvalidColor;
@@ -184,4 +189,16 @@ test "expressões de cor" {
     const nested = try eval(" mix( darken(@bg, 0.5) , wal:15, 0.1 ) ", r);
     try std.testing.expect(nested.r > 0);
     try std.testing.expectError(error.InvalidColor, eval("mix(black, 0.5)", r));
+}
+
+test "mix aninhado demais é erro" {
+    var buf: [40_000]u8 = undefined;
+    for (0..buf.len / 4) |i| @memcpy(buf[i * 4..][0..4], "mix(");
+    var pal: [16]Rgba = @splat(Rgba.black);
+    const r: Resolver = .{ .palette = &pal, .ctx = &pal, .lookup = struct {
+        fn f(_: *const anyopaque, _: []const u8) ?Rgba {
+            return null;
+        }
+    }.f };
+    try std.testing.expectError(error.InvalidColor, eval(&buf, r));
 }

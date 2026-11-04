@@ -54,11 +54,21 @@ pub fn step(value: f32, target: f32, speed: f32) f32 {
     if (instant) return target;
     const k = 1.0 - @exp(-speed * dt);
     const v = value + (target - value) * k;
-    if (@abs(target - v) < 0.01) return target;
+    // `v == value`: o passo ficou menor que a precisão do f32 (rolagem alta com
+    // muitos quadros por segundo). Sem isso, nunca chega e o app não dorme mais.
+    if (@abs(target - v) < 0.01 or v == value) return target;
     active = true;
     return v;
 }
 
 pub fn lerp(a: f32, b: f32, k: f32) f32 {
     return a + (b - a) * k;
+}
+
+test "passo menor que a precisão do f32 termina" {
+    instant = false;
+    dt = 0.001;
+    active = false;
+    try std.testing.expectEqual(@as(f32, 15847.22), step(15847.197, 15847.22, 18));
+    try std.testing.expect(!active);
 }

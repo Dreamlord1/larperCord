@@ -22,6 +22,8 @@ pub const StoredMessage = struct {
     /// cada campo, nessa ordem.
     embed_spans: []const []const markdown.Span = &.{},
     pending: bool = false,
+    /// O envio falhou (continua `pending`: sem ID, fora do cache e da busca).
+    failed: bool = false,
     /// Cache de layout (preenchido pela interface).
     layout_w: f32 = -1,
     layout_variant: u32 = 0xffff_ffff,
@@ -50,7 +52,7 @@ pub const StoredMessage = struct {
     }
 };
 
-pub const History = enum { none, loading, loaded };
+pub const History = enum { none, loading, loaded, failed };
 
 pub const Typing = struct { user: Id, until_ms: i64 };
 
@@ -60,6 +62,10 @@ pub const ChannelState = struct {
     history: History = .none,
     /// Mensagens mais antigas (rolando para cima).
     older: enum { idle, loading, done } = .idle,
+    /// Falhou ao buscar as antigas: não tenta de novo antes disso.
+    older_retry_ms: i64 = 0,
+    /// A pessoa rolou para cima: as que ela está lendo não são cortadas.
+    reading: bool = false,
     /// Última vez que a conversa apareceu na tela (a interface marca). As
     /// esquecidas há mais tempo são as primeiras a sair da memória.
     seen_ms: i64 = 0,
@@ -116,6 +122,8 @@ pub const Store = struct {
     folders: []types.GuildFolder = &.{},
     /// Perfis completos já buscados (e a bio já interpretada).
     profiles: std.AutoHashMapUnmanaged(Id, types.Profile) = .empty,
+    /// Muda quando `profiles` é esvaziado (dá para pedir os perfis de novo).
+    profiles_gen: u32 = 0,
     bios: std.AutoHashMapUnmanaged(Id, []const markdown.Span) = .empty,
     /// Atividades de cada um (jogo, música…), da presença; só quem tem alguma.
     activities: std.AutoHashMapUnmanaged(Id, []types.Activity) = .empty,
@@ -287,6 +295,7 @@ pub const Store = struct {
 
     fn freeMessage(s: *Store, m: *StoredMessage) void {
         ev_alloc.free(m.msg.content);
+        ev_alloc.free(m.msg.raw);
         types.freeAttachments(ev_alloc, m.msg.attachments);
         types.freeEmbeds(ev_alloc, m.msg.embeds);
         s.gpa.free(m.spans);
@@ -296,6 +305,7 @@ pub const Store = struct {
 
     fn freeRaw(m: types.Message) void {
         ev_alloc.free(m.content);
+        ev_alloc.free(m.raw);
         types.freeAttachments(ev_alloc, m.attachments);
         types.freeEmbeds(ev_alloc, m.embeds);
     }
@@ -453,8 +463,22 @@ pub const Store = struct {
     }
 
     pub fn guild(s: *const Store, id: Id) ?*types.Guild {
-        for (s.guilds.items) |*g| if (g.id == id) return g;
+        // Cada linha da lista de canais pergunta pelo mesmo servidor: o último
+        // achado responde sem varrer (só confere o ID, então nunca fica velho).
+        const items = s.guilds.items;
+        if (guild_hint < items.len and items[guild_hint].id == id) return &items[guild_hint];
+        for (items, 0..) |*g, i| if (g.id == id) {
+            guild_hint = i;
+            return g;
+        };
         return null;
+    }
+
+    /// Temos esse cargo no servidor? (Todos: os do cartão de membro são só os 6 maiores.)
+    pub fn hasRole(s: *const Store, guild_id: Id, role: Id) bool {
+        if (s.my_roles.get(guild_id)) |list| return std.mem.indexOfScalar(Id, list, role) != null;
+        const mi = s.memberInfo(guild_id, s.me) orelse return false;
+        return std.mem.indexOfScalar(Id, mi.roleSlice(), role) != null;
     }
 
     pub fn channelsOf(s: *const Store, guild_id: Id) []const Id {
@@ -511,8 +535,19 @@ pub const Store = struct {
                     for (h.messages) |m| freeRaw(m);
                     return;
                 };
-                // Falhou (sem rede, por exemplo) com o cache na tela: fica com ele.
-                if (!h.older and cs.cached and h.messages.len == 0 and h.more) return;
+                // Vazia e com `more` é falha (sem rede, 5xx...): uma página de
+                // verdade sem nada diz `more = false`. Nada do que está na tela
+                // (nem o cache do disco) se perde por causa disso.
+                if (h.messages.len == 0 and h.more) {
+                    if (h.older) {
+                        cs.older = .idle;
+                        cs.older_retry_ms = now_ms + 5000;
+                    } else if (!cs.cached and cs.history != .loaded) {
+                        cs.history = .failed;
+                        cs.version +%= 1;
+                    }
+                    return;
+                }
                 // Página nova por cima do cache do disco: troca o cache pelo
                 // que veio, mas fica com as do cache mais antigas que a página
                 // quando as duas se encostam (a conversa não pula).
@@ -611,6 +646,11 @@ pub const Store = struct {
             .latency => |l| s.latency_ms = l,
             .status => |st| s.connection = st,
             .notice => |n| ev_alloc.free(n),
+            .send_failed => |f| if (s.pendingByNonce(f.channel, f.nonce)) |m| {
+                m.failed = true;
+                m.layout_w = -1;
+                s.rev +%= 1;
+            },
             .reaction_set => |rs| {
                 const cs = s.channel(rs.channel) orelse return;
                 const m = s.find(cs, rs.id) orelse return;
@@ -678,12 +718,17 @@ pub const Store = struct {
                 const found = if (s.channel(up.channel)) |cs| if (s.find(cs, up.id)) |m| .{ cs, m } else null else null;
                 const cs, const m = found orelse {
                     if (up.content) |t| ev_alloc.free(t);
+                    if (up.raw) |t| ev_alloc.free(t);
                     if (up.embeds) |e| types.freeEmbeds(ev_alloc, e);
                     if (up.attachments) |a| types.freeAttachments(ev_alloc, a);
                     return;
                 };
                 if (up.content) |t| {
-                    const spans = markdown.parse(s.gpa, t) catch return ev_alloc.free(t);
+                    const spans = markdown.parse(s.gpa, t) catch {
+                        ev_alloc.free(t);
+                        if (up.raw) |x| ev_alloc.free(x);
+                        return;
+                    };
                     // Registro: guarda o texto de antes da primeira edição.
                     const same = std.mem.eql(u8, t, m.msg.content);
                     if (s.keep_log and !up.local and !same and m.original == null) {
@@ -691,6 +736,8 @@ pub const Store = struct {
                     } else ev_alloc.free(m.msg.content);
                     s.gpa.free(m.spans);
                     m.msg.content = t;
+                    ev_alloc.free(m.msg.raw);
+                    m.msg.raw = up.raw orelse "";
                     m.msg.edited = true;
                     m.spans = spans;
                 }
@@ -798,6 +845,7 @@ pub const Store = struct {
                     var pit = s.profiles.valueIterator();
                     while (pit.next()) |old| freeProfile(old.*);
                     s.profiles.clearRetainingCapacity();
+                    s.profiles_gen +%= 1;
                     var bit = s.bios.valueIterator();
                     while (bit.next()) |b| s.gpa.free(b.*);
                     s.bios.clearRetainingCapacity();
@@ -1072,9 +1120,16 @@ pub const Store = struct {
         var hi: usize = tail_start;
         while (lo < hi) {
             const mid = lo + (hi - lo) / 2;
-            const v = items[mid].msg.id;
-            if (v == id) return &items[mid];
-            if (v < id) lo = mid + 1 else hi = mid;
+            // Uma que não foi enviada (id 0) pode ter ficado aqui no meio.
+            var k = mid;
+            while (k < hi and items[k].msg.id == 0) k += 1;
+            if (k == hi) {
+                hi = mid;
+                continue;
+            }
+            const v = items[k].msg.id;
+            if (v == id) return &items[k];
+            if (v < id) lo = k + 1 else hi = mid;
         }
         return null;
     }
@@ -1100,7 +1155,7 @@ pub const Store = struct {
         for (m.reactions[0..m.n_reactions], 0..) |*r, i| if (std.mem.eql(u8, r.text(), emoji)) {
             if (add) {
                 if (mine and r.me) return;
-                r.count += 1;
+                r.count +|= 1;
                 if (mine) r.me = true;
             } else {
                 if (mine and !r.me) return;
@@ -1124,13 +1179,42 @@ pub const Store = struct {
     }
 
     /// Edição local imediata (o servidor confirma depois).
-    pub fn editLocal(s: *Store, channel_id: Id, id: Id, content: []const u8) !void {
+    /// `raw`: o texto de verdade, se difere do que aparece.
+    pub fn editLocal(s: *Store, channel_id: Id, id: Id, content: []const u8, raw: ?[]const u8) !void {
         const owned = try ev_alloc.dupe(u8, content);
-        try s.apply(.{ .message_update = .{ .channel = channel_id, .id = id, .content = owned, .local = true } }, 0);
+        errdefer ev_alloc.free(owned);
+        const raw_owned = if (raw) |t| try ev_alloc.dupe(u8, t) else null;
+        try s.apply(.{ .message_update = .{ .channel = channel_id, .id = id, .content = owned, .raw = raw_owned, .local = true } }, 0);
+    }
+
+    /// A cópia local de uma mensagem nossa ainda sem confirmação.
+    pub fn pendingByNonce(s: *const Store, channel_id: Id, nonce: u64) ?*StoredMessage {
+        const cs = s.channel(channel_id) orelse return null;
+        var i = cs.messages.items.len;
+        while (i > 0) {
+            i -= 1;
+            const m = &cs.messages.items[i];
+            if (m.pending and m.msg.nonce == nonce) return m;
+        }
+        return null;
+    }
+
+    /// Joga fora uma mensagem que não foi enviada.
+    pub fn discardPending(s: *Store, channel_id: Id, nonce: u64) void {
+        const cs = s.channel(channel_id) orelse return;
+        const m = s.pendingByNonce(channel_id, nonce) orelse return;
+        const i = (@intFromPtr(m) - @intFromPtr(cs.messages.items.ptr)) / @sizeOf(StoredMessage);
+        s.freeMessage(m);
+        _ = cs.messages.orderedRemove(i);
+        cs.version +%= 1;
+        s.rev +%= 1;
     }
 
     fn addMessage(s: *Store, m: types.Message, now_ms: i64) !void {
         const cs = s.channel(m.channel) orelse return freeRaw(m);
+        // Já temos (o histórico trouxe antes de o evento ser lido, ou um
+        // RESUME repetiu): duas cópias deixariam um fantasma ao apagar.
+        if (m.id != 0 and s.find(cs, m.id) != null) return freeRaw(m);
         // Quem mandou parou de digitar.
         for (cs.typing.items, 0..) |ty, i| if (ty.user == m.author) {
             _ = cs.typing.swapRemove(i);
@@ -1139,7 +1223,7 @@ pub const Store = struct {
         _ = now_ms;
         // Confirmação de uma mensagem nossa: troca a cópia pendente.
         if (m.nonce != 0) {
-            for (cs.messages.items) |*sm| if (sm.pending and sm.msg.nonce == m.nonce) {
+            for (cs.messages.items, 0..) |*sm, at| if (sm.pending and sm.msg.nonce == m.nonce) {
                 var msg = m;
                 // Sem anexos na confirmação (demonstração): fica com os locais.
                 if (msg.attachments.len == 0) {
@@ -1149,6 +1233,13 @@ pub const Store = struct {
                 const fresh = try s.stored(msg);
                 s.freeMessage(sm);
                 sm.* = fresh;
+                // Upload demorado: outras chegaram depois dela. A busca conta
+                // com a ordem por ID, então ela vai para o lugar certo.
+                var k = at;
+                const items = cs.messages.items;
+                while (k + 1 < items.len and items[k + 1].msg.id != 0 and items[k + 1].msg.id < items[k].msg.id) : (k += 1) {
+                    std.mem.swap(StoredMessage, &items[k], &items[k + 1]);
+                }
                 cs.version +%= 1;
                 return;
             };
@@ -1221,6 +1312,7 @@ pub const Store = struct {
     /// descarrega a conversa esquecida há mais tempo (ela é buscada de novo
     /// quando voltar para a tela).
     pub const global_budget: usize = 3000;
+    var guild_hint: usize = 0;
     var budget_tick: u32 = 0;
 
     fn enforceBudget(s: *Store, now_ms: i64) void {
@@ -1254,8 +1346,10 @@ pub const Store = struct {
     fn trim(s: *Store, cs: *ChannelState) void {
         // Em lote: tirar uma de cada vez deslocaria o canal inteiro a cada
         // mensagem nova num canal movimentado.
-        if (cs.messages.items.len <= s.max_messages + @min(trim_slack, s.max_messages / 8)) return;
+        if (cs.reading or cs.messages.items.len <= s.max_messages + @min(trim_slack, s.max_messages / 8)) return;
         const drop = cs.messages.items.len - s.max_messages;
+        // As cortadas podem ser buscadas de novo rolando para cima.
+        if (cs.older == .done) cs.older = .idle;
         for (cs.messages.items[0..drop]) |*m| s.freeMessage(m);
         cs.messages.replaceRangeAssumeCapacity(0, drop, &.{});
     }
@@ -1278,14 +1372,17 @@ pub const Store = struct {
 
     pub fn markRead(s: *Store, channel_id: Id) void {
         const cs = s.channel(channel_id) orelse return;
-        s.rev +%= 1;
+        if (cs.info.unread) s.rev +%= 1;
         cs.info.unread = false;
         // Marcador: a última que já veio do servidor (a pendente não tem ID).
         var i = cs.messages.items.len;
         while (i > 0) {
             i -= 1;
             if (cs.messages.items[i].msg.id != 0) {
-                cs.read_id = @max(cs.read_id, cs.messages.items[i].msg.id);
+                if (cs.messages.items[i].msg.id > cs.read_id) {
+                    cs.read_id = cs.messages.items[i].msg.id;
+                    s.rev +%= 1;
+                }
                 return;
             }
         }
@@ -1426,7 +1523,7 @@ test "reações, edição e exclusão" {
     try std.testing.expectEqual(@as(u16, 2), m.reactions[0].count);
     try std.testing.expect(m.reactions[0].me);
 
-    try s.editLocal(10, 7, "editado **agora**");
+    try s.editLocal(10, 7, "editado **agora**", null);
     try std.testing.expect(m.msg.edited);
     try std.testing.expectEqualStrings("editado **agora**", m.msg.content);
 
@@ -1493,4 +1590,110 @@ test "cache sem encostar no histórico é trocado; sem rede, fica" {
     try s.apply(.{ .history = .{ .channel = 10, .messages = try testMsgs(&.{ 50, 51 }, 10) } }, 0);
     try std.testing.expectEqual(@as(usize, 2), cs.messages.items.len);
     try std.testing.expectEqual(@as(Id, 50), cs.messages.items[0].msg.id);
+}
+
+fn testStore(s: *Store) !*ChannelState {
+    const c_alloc = std.heap.c_allocator;
+    const chans = try c_alloc.alloc(types.Channel, 1);
+    chans[0] = .{ .id = 10, .guild = 5, .name = try c_alloc.dupe(u8, "g"), .topic = try c_alloc.dupe(u8, "") };
+    try s.apply(.{ .ready = .{ .me = 1, .users = try c_alloc.alloc(types.User, 0), .guilds = try c_alloc.alloc(types.Guild, 0), .channels = chans, .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
+    return s.channel(10).?;
+}
+
+test "histórico que falhou não finge conversa vazia" {
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    const cs = try testStore(&s);
+    cs.history = .loading;
+    try s.apply(.{ .history = .{ .channel = 10, .messages = &.{} } }, 0);
+    try std.testing.expectEqual(History.failed, cs.history);
+    // Vazia de verdade (o Discord disse que acabou).
+    cs.history = .loading;
+    try s.apply(.{ .history = .{ .channel = 10, .messages = &.{}, .more = false } }, 0);
+    try std.testing.expectEqual(History.loaded, cs.history);
+    try s.apply(.{ .history = .{ .channel = 10, .messages = try testMsgs(&.{ 5, 6 }, 10), .more = true } }, 0);
+    // Falha ao buscar de novo ou as antigas: o que está na tela fica.
+    try s.apply(.{ .history = .{ .channel = 10, .messages = &.{} } }, 0);
+    try std.testing.expectEqual(@as(usize, 2), cs.messages.items.len);
+    try std.testing.expectEqual(History.loaded, cs.history);
+    cs.older = .loading;
+    try s.apply(.{ .history = .{ .channel = 10, .messages = &.{}, .older = true } }, 1000);
+    try std.testing.expect(cs.older == .idle);
+    try std.testing.expect(cs.older_retry_ms > 1000);
+}
+
+test "envio que falhou fica marcado e a busca continua achando as outras" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    const cs = try testStore(&s);
+    cs.history = .loading;
+    try s.apply(.{ .history = .{ .channel = 10, .messages = try testMsgs(&.{ 1, 2, 3 }, 10) } }, 0);
+    try s.addPending(10, "oi", 77, 0, 0, &.{});
+    try s.apply(.{ .send_failed = .{ .channel = 10, .nonce = 77 } }, 0);
+    try std.testing.expect(s.pendingByNonce(10, 77).?.failed);
+    // A que não foi (id 0) fica para trás, no meio da parte em ordem.
+    var id: Id = 100;
+    while (id < 140) : (id += 1) {
+        try s.apply(.{ .message_create = .{ .id = id, .channel = 10, .author = 2, .timestamp = 1, .content = try c_alloc.dupe(u8, "x") } }, 0);
+    }
+    id = 100;
+    while (id < 140) : (id += 1) try std.testing.expect(s.find(cs, id) != null);
+    try std.testing.expect(s.find(cs, 1) != null);
+    try std.testing.expect(s.find(cs, 99) == null);
+    s.discardPending(10, 77);
+    try std.testing.expect(s.pendingByNonce(10, 77) == null);
+    try std.testing.expectEqual(@as(usize, 43), cs.messages.items.len);
+}
+
+test "confirmação atrasada vai para o lugar certo e nada duplica" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    const cs = try testStore(&s);
+    cs.history = .loaded;
+    try s.addPending(10, "com anexo", 9, 0, 0, &.{});
+    try s.apply(.{ .message_create = .{ .id = 50, .channel = 10, .author = 2, .timestamp = 1, .content = try c_alloc.dupe(u8, "a") } }, 0);
+    try s.apply(.{ .message_create = .{ .id = 60, .channel = 10, .author = 1, .timestamp = 1, .content = try c_alloc.dupe(u8, "com anexo"), .nonce = 9 } }, 0);
+    try std.testing.expectEqual(@as(Id, 50), cs.messages.items[0].msg.id);
+    try std.testing.expectEqual(@as(Id, 60), cs.messages.items[1].msg.id);
+    // O evento chega depois de a mesma mensagem já ter vindo no histórico.
+    try s.apply(.{ .message_create = .{ .id = 60, .channel = 10, .author = 1, .timestamp = 1, .content = try c_alloc.dupe(u8, "com anexo") } }, 0);
+    try std.testing.expectEqual(@as(usize, 2), cs.messages.items.len);
+}
+
+test "editar guarda o texto de verdade (emoji personalizado)" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    const cs = try testStore(&s);
+    cs.history = .loaded;
+    try s.apply(.{ .message_create = .{ .id = 7, .channel = 10, .author = 1, .timestamp = 1, .content = try c_alloc.dupe(u8, ":pepe:"), .raw = try c_alloc.dupe(u8, "<:pepe:123>") } }, 0);
+    const m = s.find(cs, 7).?;
+    try std.testing.expectEqualStrings("<:pepe:123>", m.msg.editable());
+    try s.editLocal(10, 7, "oi :pepe:", "oi <:pepe:123>");
+    try std.testing.expectEqualStrings("oi :pepe:", m.msg.content);
+    try std.testing.expectEqualStrings("oi <:pepe:123>", m.msg.editable());
+    try s.editLocal(10, 7, "sem emoji", null);
+    try std.testing.expectEqualStrings("sem emoji", m.msg.editable());
+}
+
+test "quem está lendo lá em cima não perde mensagens; cortadas voltam a ser buscáveis" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    s.max_messages = 8;
+    const cs = try testStore(&s);
+    cs.history = .loaded;
+    cs.older = .done;
+    cs.reading = true;
+    var id: Id = 1;
+    while (id <= 20) : (id += 1) {
+        try s.apply(.{ .message_create = .{ .id = id, .channel = 10, .author = 2, .timestamp = 1, .content = try c_alloc.dupe(u8, "x") } }, 0);
+    }
+    try std.testing.expectEqual(@as(usize, 20), cs.messages.items.len);
+    cs.reading = false;
+    try s.apply(.{ .message_create = .{ .id = 21, .channel = 10, .author = 2, .timestamp = 1, .content = try c_alloc.dupe(u8, "x") } }, 0);
+    try std.testing.expect(cs.messages.items.len < 21);
+    try std.testing.expect(cs.older == .idle);
 }

@@ -17,8 +17,10 @@ pub const tenor_page = "tenor-page:";
 
 fn hostOf(url: []const u8) []const u8 {
     const rest = url[8..];
-    const end = std.mem.indexOfAny(u8, rest, "/?#:") orelse rest.len;
-    return rest[0..end];
+    const authority = rest[0 .. std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len];
+    // `https://cdn.discordapp.com:x@outro.com/` vai para outro.com: sem host.
+    if (std.mem.indexOfAny(u8, authority, "@\\") != null) return "";
+    return authority[0 .. std.mem.indexOfScalar(u8, authority, ':') orelse authority.len];
 }
 
 /// Domínios de onde a gente aceita baixar.
@@ -142,4 +144,11 @@ test "url no log fica sem a query" {
     try std.testing.expectEqualStrings("cdn.discordapp.com/attachments/1/2/a.png", logPart("https://cdn.discordapp.com/attachments/1/2/a.png?ex=1&hm=abc"));
     try std.testing.expectEqualStrings("media.discordapp.net/a.webp", logPart("https://media.discordapp.net/a.webp#x"));
     try std.testing.expectEqualStrings("/tmp/a.png", logPart("file:///tmp/a.png"));
+}
+
+test "endereço com usuário não engana a lista de hosts" {
+    try std.testing.expect(discordHost("https://cdn.discordapp.com:443/a.png"));
+    try std.testing.expect(!discordHost("https://cdn.discordapp.com:x@outro.com/a.png"));
+    try std.testing.expect(!discordHost("https://x@cdn.discordapp.com/a.png"));
+    try std.testing.expect(!discordHost("https://outro.com\\.discordapp.com/a.png"));
 }

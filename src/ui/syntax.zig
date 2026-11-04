@@ -204,8 +204,12 @@ pub const Lexer = struct {
             const caps = std.ascii.isUpper(ch) and word.len > 1 and lx.lang != .sh and lx.lang != .json;
             return lx.tok(start, if (caps) .type else .plain);
         }
-        // Pontuação e espaços: junta até o próximo começo de token.
+        // Pontuação e espaços: junta até o próximo começo de token. Um caractere
+        // acentuado vai inteiro: cada byte sozinho viraria "�" na tela.
         lx.i += 1;
+        if (ch >= 0x80) while (lx.i < s.len and (s[lx.i] & 0xC0) == 0x80) {
+            lx.i += 1;
+        };
         while (lx.i < s.len) : (lx.i += 1) {
             const x = s[lx.i];
             if (isIdent(x) or x == '"' or x == '\'' or x == '`' or x == '/' or x == '#' or x == '-' or x == '@' or x == '$' or x >= 0x80) break;
@@ -286,4 +290,10 @@ test "realce: shell, json e diff" {
     try std.testing.expectEqualSlices(Kind, &.{ .string, .keyword, .string, .number }, k[0..n]);
     var ld = Lexer.init(.diff, "+linha nova", &st);
     try std.testing.expectEqual(Kind.add, ld.next().?.kind);
+}
+
+test "realce: acento fora de string não é partido em bytes" {
+    var st: State = .normal;
+    var lx = Lexer.init(.sh, "echo olá ção", &st);
+    while (lx.next()) |t| try std.testing.expect(std.unicode.utf8ValidateSlice(t.text));
 }

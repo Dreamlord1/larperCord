@@ -154,7 +154,8 @@ fn rebuild(ctx: *d.Ctx) void {
             if (cs.info.kind == .category) continue;
             const prefix = if (cs.info.kind == .voice) "🔊 " else "# ";
             const label = std.fmt.allocPrint(a, "{s}{s}", .{ prefix, cs.info.name }) catch continue;
-            add(p, gpa, q, .{ .label = label, .hint = g.name, .kind = .channel, .id = id });
+            // Cópia: a paleta fica aberta e o nome do servidor pode mudar (READY).
+            add(p, gpa, q, .{ .label = label, .hint = a.dupe(u8, g.name) catch continue, .kind = .channel, .id = id });
         }
         const label = std.fmt.allocPrint(a, "{s}", .{g.name}) catch continue;
         add(p, gpa, q, .{ .label = label, .hint = i18n.tr("servidor", "server"), .kind = .guild, .id = g.id });

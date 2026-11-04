@@ -28,6 +28,12 @@ const max_download: usize = 32 * 1024 * 1024;
 /// pula quadros (o tempo total continua o mesmo, só fica menos fluido).
 const max_gif_bytes: usize = 32 * 1024 * 1024;
 const max_gif_frames: usize = 300;
+/// Teto de quadros lidos e de tempo decodificando uma animação: um GIF feito
+/// para isso (centenas de milhares de quadros) para aqui, com o que já tem.
+const max_gif_seen: usize = 20_000;
+const max_decode_ms: u64 = 10_000;
+/// Tempo por quadro criando texturas: o resto fica para o próximo quadro.
+const upload_budget_ns: u64 = 4 * std.time.ns_per_ms;
 /// 4 baixando, mas só 2 decodificando ao mesmo tempo (é o pico de memória e
 /// de CPU: cada animação passa por quadros em tamanho cheio).
 const workers = 4;
@@ -65,8 +71,9 @@ const Entry = struct {
         e.frames = &.{};
     }
 
+    /// Nunca 0 (é divisor): `add`, `halve` e `pump` somam saturando.
     fn total(e: *const Entry) u32 {
-        return if (e.frames.len == 0) 0 else e.frames[e.frames.len - 1].end_ms;
+        return if (e.frames.len == 0) 1 else @max(e.frames[e.frames.len - 1].end_ms, 1);
     }
 };
 
@@ -106,6 +113,14 @@ const Result = struct {
     px: Pixels = .{},
 };
 
+/// Resultado virando texturas aos poucos (ver `pump`).
+const Upload = struct {
+    r: Result,
+    frames: []Frame,
+    n: usize = 0,
+    end: u32 = 0,
+};
+
 pub const Cache = struct {
     renderer: *c.SDL_Renderer,
     wake_type: u32,
@@ -122,6 +137,12 @@ pub const Cache = struct {
     /// nessa hora em vez de redesenhar sem parar). Zerado a cada quadro.
     next_frame_ms: i64 = std.math.maxInt(i64),
     evicted_ms: i64 = 0,
+    /// Hora do último quadro desenhado (o app marca). É contra ela que se mede
+    /// o "não aparece há um tempo": depois de o app dormir mais de um minuto,
+    /// o que está na tela não pode ser solto antes de o quadro novo pedir.
+    drawn_ms: i64 = 0,
+    backlog: std.ArrayList(Result) = .empty,
+    uploading: ?Upload = null,
     /// Modo economia (atualizado a cada quadro pelo app): o que ainda não
     /// está no cache só baixa depois de um clique (`allow`).
     data_saver: bool = false,
@@ -152,7 +173,17 @@ pub const Cache = struct {
             curl_inited = false;
         }
         for (cache.jobs.items.items) |jb| freeJob(jb);
-        _ = cache.pump();
+        var rest: std.ArrayList(Result) = .empty;
+        defer rest.deinit(alloc);
+        cache.results.drain(&rest);
+        for (rest.items) |r| freeResult(r);
+        for (cache.backlog.items) |r| freeResult(r);
+        cache.backlog.deinit(alloc);
+        if (cache.uploading) |u| {
+            for (u.frames[0..u.n]) |f| c.SDL_DestroyTexture(f.tex);
+            alloc.free(u.frames);
+            freeResult(u.r);
+        }
         var it = cache.map.iterator();
         while (it.next()) |e| {
             e.value_ptr.free();
@@ -194,7 +225,7 @@ pub const Cache = struct {
         // Tamanhos arredondados: quem pede 301 ou 330 de largura usa a mesma.
         const bw = bucket(max_w);
         const bh = bucket(max_h);
-        var kbuf: [1024]u8 = undefined;
+        var kbuf: [2200]u8 = undefined;
         const key = std.fmt.bufPrint(&kbuf, "{d}x{d} {s}", .{ bw, bh, url }) catch return .failed;
         if (cache.map.getPtr(key)) |e| {
             e.used_ms = cache.now_ms;
@@ -242,51 +273,85 @@ pub const Cache = struct {
     }
 
     /// Thread principal: cria as texturas que chegaram e solta as velhas.
-    /// Retorna true se chegou alguma imagem (precisa redesenhar).
+    /// Retorna true se chegou alguma imagem (precisa redesenhar). Um GIF inteiro
+    /// (até 300 texturas) não trava o quadro: passou do orçamento, o resto fica
+    /// para a próxima volta.
     pub fn pump(cache: *Cache) bool {
         var batch: std.ArrayList(Result) = .empty;
         defer batch.deinit(alloc);
         cache.results.drain(&batch);
-        for (batch.items) |r| {
-            defer {
-                alloc.free(r.key);
-                r.px.deinit();
-            }
-            const e = cache.map.getPtr(r.key) orelse continue;
-            if (r.px.frames.len == 0) {
-                e.state = .failed;
+        cache.backlog.appendSlice(alloc, batch.items) catch {
+            for (batch.items) |r| freeResult(r);
+        };
+        const worked = cache.backlog.items.len > 0 or cache.uploading != null;
+        const t0 = c.SDL_GetTicksNS();
+        while (true) {
+            if (cache.uploading == null) {
+                if (cache.backlog.items.len == 0) break;
+                cache.beginUpload(cache.backlog.orderedRemove(0));
                 continue;
             }
-            const frames = alloc.alloc(Frame, r.px.frames.len) catch {
-                e.state = .failed;
-                continue;
-            };
-            var n: usize = 0;
-            var end: u32 = 0;
-            for (r.px.frames) |pf| {
-                const tex = c.SDL_CreateTexture(cache.renderer, c.SDL_PIXELFORMAT_RGBA32, c.SDL_TEXTUREACCESS_STATIC, r.px.w, r.px.h) orelse break;
-                _ = c.SDL_UpdateTexture(tex, null, pf.data.ptr, @as(c_int, r.px.w) * 4);
-                _ = c.SDL_SetTextureScaleMode(tex, c.SDL_SCALEMODE_LINEAR);
-                _ = c.SDL_SetTextureBlendMode(tex, c.SDL_BLENDMODE_BLEND);
-                end += @max(pf.delay_ms, 1);
-                frames[n] = .{ .tex = tex, .end_ms = end };
-                n += 1;
-            }
-            if (n == 0) {
-                alloc.free(frames);
-                e.state = .failed;
-                continue;
-            }
-            const bytes = @as(usize, r.px.w) * r.px.h * 4 * n;
-            e.* = .{ .state = .ready, .frames = alloc.realloc(frames, n) catch frames[0..n], .w = r.px.w, .h = r.px.h, .bytes = bytes, .used_ms = cache.now_ms };
-            cache.bytes += bytes;
+            cache.stepUpload();
+            if (c.SDL_GetTicksNS() - t0 >= upload_budget_ns) break;
         }
         // A varredura do cache não precisa ser a cada quadro.
-        if (batch.items.len > 0 or cache.now_ms - cache.evicted_ms > 500) {
+        if (worked or cache.now_ms - cache.evicted_ms > 500) {
             cache.evicted_ms = cache.now_ms;
             cache.evict();
         }
-        return batch.items.len > 0;
+        return worked;
+    }
+
+    fn freeResult(r: Result) void {
+        alloc.free(r.key);
+        r.px.deinit();
+    }
+
+    fn beginUpload(cache: *Cache, r: Result) void {
+        const e = cache.map.getPtr(r.key) orelse return freeResult(r);
+        if (r.px.frames.len == 0) {
+            e.state = .failed;
+            return freeResult(r);
+        }
+        const frames = alloc.alloc(Frame, r.px.frames.len) catch {
+            e.state = .failed;
+            return freeResult(r);
+        };
+        cache.uploading = .{ .r = r, .frames = frames };
+    }
+
+    /// Mais uma textura do resultado em andamento (ou o fim dele).
+    fn stepUpload(cache: *Cache) void {
+        const u = &cache.uploading.?;
+        const px = u.r.px;
+        if (u.n < px.frames.len) created: {
+            const pf = px.frames[u.n];
+            const tex = c.SDL_CreateTexture(cache.renderer, c.SDL_PIXELFORMAT_RGBA32, c.SDL_TEXTUREACCESS_STATIC, px.w, px.h) orelse break :created;
+            _ = c.SDL_UpdateTexture(tex, null, pf.data.ptr, @as(c_int, px.w) * 4);
+            _ = c.SDL_SetTextureScaleMode(tex, c.SDL_SCALEMODE_LINEAR);
+            _ = c.SDL_SetTextureBlendMode(tex, c.SDL_BLENDMODE_BLEND);
+            u.end +|= @max(pf.delay_ms, 1);
+            u.frames[u.n] = .{ .tex = tex, .end_ms = u.end };
+            u.n += 1;
+            if (u.n < px.frames.len) return;
+        }
+        // Acabou (ou o SDL não criou mais: fica com o que deu).
+        const done = u.*;
+        cache.uploading = null;
+        defer freeResult(done.r);
+        const e = cache.map.getPtr(done.r.key) orelse {
+            for (done.frames[0..done.n]) |f| c.SDL_DestroyTexture(f.tex);
+            alloc.free(done.frames);
+            return;
+        };
+        if (done.n == 0) {
+            alloc.free(done.frames);
+            e.state = .failed;
+            return;
+        }
+        const bytes = @as(usize, px.w) * px.h * 4 * done.n;
+        e.* = .{ .state = .ready, .frames = alloc.realloc(done.frames, done.n) catch done.frames[0..done.n], .w = px.w, .h = px.h, .bytes = bytes, .used_ms = cache.now_ms };
+        cache.bytes += bytes;
     }
 
     /// Solta o que não aparece há `idle_ms` e, se passar do limite, as menos
@@ -298,7 +363,7 @@ pub const Cache = struct {
             var it = cache.map.iterator();
             while (it.next()) |e| {
                 if (e.value_ptr.state == .loading) continue;
-                const idle = cache.now_ms - e.value_ptr.used_ms;
+                const idle = cache.drawn_ms - e.value_ptr.used_ms;
                 if (idle > idle_ms or (cache.bytes > budget_bytes and idle > 1000)) {
                     if (e.value_ptr.used_ms < oldest_ms) {
                         oldest_ms = e.value_ptr.used_ms;
@@ -336,6 +401,12 @@ pub const Cache = struct {
                 res.deinit();
                 continue;
             };
+            if (cache.stopping.load(.acquire)) {
+                // Encerrando: ninguém mais vai ler a fila de resultados.
+                alloc.free(key);
+                res.deinit();
+                continue;
+            }
             cache.results.push(.{ .key = key, .px = res });
             platform.Window.wake(cache.wake_type, .media);
         }
@@ -350,7 +421,11 @@ fn bucket(v: f32) u16 {
 }
 
 fn load(curl: *?*c.CURL, jb: Job, stop: *std.atomic.Value(bool)) Pixels {
-    if (std.mem.startsWith(u8, jb.url, "demo:")) return demo(jb);
+    if (std.mem.startsWith(u8, jb.url, "demo:")) return demo(jb, stop);
+    // Vídeo vira animação só no GIF antigo do Tenor. Em qualquer outro endereço
+    // (um .mp4 renomeado para .gif, por exemplo), os decodificadores do sistema
+    // não rodam em algo que a pessoa só passou o olho: vídeo é com um clique.
+    var allow_video = false;
     var bytes: std.ArrayList(u8) = .empty;
     defer bytes.deinit(alloc);
     if (std.mem.startsWith(u8, jb.url, "file://")) {
@@ -392,13 +467,14 @@ fn load(curl: *?*c.CURL, jb: Job, stop: *std.atomic.Value(bool)) Pixels {
             bytes.clearRetainingCapacity();
             pj.url = @constCast(video);
             if (!download(curl, pj, &bytes, stop)) return .{};
+            allow_video = true;
         }
     } else {
         if (!download(curl, jb, &bytes, stop)) return .{};
     }
     // Vaga de decodificação (no máximo 2 ao mesmo tempo).
     c.SDL_WaitSemaphore(decode_slots);
-    const px = decode(bytes.items, jb.max_w, jb.max_h);
+    const px = decode(bytes.items, jb.max_w, jb.max_h, stop, allow_video);
     c.SDL_SignalSemaphore(decode_slots);
     if (px.frames.len == 0) logFail(jb.url, "não decodificou ({d} bytes, começa com {x})", .{ bytes.items.len, bytes.items[0..@min(4, bytes.items.len)] });
     return px;
@@ -512,6 +588,7 @@ pub fn fetch(curl: *?*c.CURL, url: [:0]const u8, sink: Sink, stop: *std.atomic.V
         var t: Transfer = .{ .sink = sink, .h = h };
         c.curl_easy_reset(h);
         _ = c.curl_easy_setopt(h, c.CURLOPT_URL, cur_url.ptr);
+        _ = c.curl_easy_setopt(h, c.CURLOPT_NOSIGNAL, @as(c_long, 1));
         _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, "Mozilla/5.0 (X11; Linux x86_64) larperCord/0.1");
         _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEFUNCTION, writeCb);
         _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEDATA, &t);
@@ -574,16 +651,17 @@ fn fit(sw: usize, sh: usize, max_w: u16, max_h: u16) [2]usize {
 /// Decodifica e reduz para caber em max_w×max_h. Os pixels voltam no
 /// c_allocator (RGBA, 4 bytes por pixel). GIF, WebP e PNG animados viram
 /// vários quadros. O formato vem dos primeiros bytes, não da URL.
-fn decode(data: []const u8, max_w: u16, max_h: u16) Pixels {
-    if (isWebp(data)) return decodeWebp(data, max_w, max_h);
+fn decode(data: []const u8, max_w: u16, max_h: u16, stop: *std.atomic.Value(bool), allow_video: bool) Pixels {
+    if (data.len > std.math.maxInt(c_int)) return .{};
+    if (isWebp(data)) return decodeWebp(data, max_w, max_h, stop);
     // GIF que só existe em MP4 (Tenor antigo): pelo FFmpeg, se tiver.
-    if (ffmpeg.looksLikeVideo(data)) return decodeVideo(data, max_w, max_h);
+    if (ffmpeg.looksLikeVideo(data)) return if (allow_video) decodeVideo(data, max_w, max_h, stop) else .{};
     if (data.len > 6 and std.mem.startsWith(u8, data, "GIF8")) {
-        const anim_px = decodeGif(data, max_w, max_h);
+        const anim_px = decodeGif(data, max_w, max_h, stop);
         if (anim_px.frames.len > 0) return anim_px;
     }
     if (apng.isAnimated(data)) {
-        const anim_px = decodeApng(data, max_w, max_h);
+        const anim_px = decodeApng(data, max_w, max_h, stop);
         if (anim_px.frames.len > 0) return anim_px;
     }
     var w: c_int = 0;
@@ -619,6 +697,8 @@ fn gifDelay(ms: i64) u32 {
 const FrameSink = struct {
     max_w: u16,
     max_h: u16,
+    stop: *std.atomic.Value(bool),
+    deadline_ms: u64,
     frames: std.ArrayList(PixFrame) = .empty,
     w: usize = 0,
     h: usize = 0,
@@ -637,7 +717,7 @@ const FrameSink = struct {
         while (i < g.frames.items.len) : (i += 2) {
             var f = g.frames.items[i];
             if (i + 1 < g.frames.items.len) {
-                f.delay_ms += g.frames.items[i + 1].delay_ms;
+                f.delay_ms +|= g.frames.items[i + 1].delay_ms;
                 alloc.free(g.frames.items[i + 1].data);
             }
             g.frames.items[o] = f;
@@ -649,9 +729,12 @@ const FrameSink = struct {
 
     /// Mais um quadro RGBA sw×sh (todos do mesmo tamanho). false = parar.
     fn add(g: *FrameSink, rgba: []const u8, sw: usize, sh: usize, ms: u32) bool {
+        // Mesmo pulando quadros, cada um custa decodificar: aqui é o único ponto
+        // comum aos quatro formatos para desistir (e para o app poder fechar).
+        if (g.seen >= max_gif_seen or g.stop.load(.acquire) or c.SDL_GetTicks() >= g.deadline_ms) return false;
         defer g.seen += 1;
         if (g.seen % g.step != 0) {
-            if (g.frames.items.len > 0) g.frames.items[g.frames.items.len - 1].delay_ms += ms;
+            if (g.frames.items.len > 0) g.frames.items[g.frames.items.len - 1].delay_ms +|= ms;
             return true;
         }
         const dims = fit(sw, sh, g.max_w, g.max_h);
@@ -687,8 +770,12 @@ const FrameSink = struct {
     }
 };
 
-fn decodeGif(data: []const u8, max_w: u16, max_h: u16) Pixels {
-    var sink: FrameSink = .{ .max_w = max_w, .max_h = max_h };
+fn newSink(max_w: u16, max_h: u16, stop: *std.atomic.Value(bool)) FrameSink {
+    return .{ .max_w = max_w, .max_h = max_h, .stop = stop, .deadline_ms = c.SDL_GetTicks() + max_decode_ms };
+}
+
+fn decodeGif(data: []const u8, max_w: u16, max_h: u16, stop: *std.atomic.Value(bool)) Pixels {
+    var sink = newSink(max_w, max_h, stop);
     _ = c.larper_gif_frames(data.ptr, @intCast(data.len), FrameSink.gifCb, &sink);
     return sink.finish();
 }
@@ -700,7 +787,7 @@ fn isWebp(data: []const u8) bool {
 
 /// WebP parado vai direto; o animado passa pelo WebPAnimDecoder, que já
 /// compõe cada quadro na tela cheia (os tempos dele são acumulados).
-fn decodeWebp(data: []const u8, max_w: u16, max_h: u16) Pixels {
+fn decodeWebp(data: []const u8, max_w: u16, max_h: u16, stop: *std.atomic.Value(bool)) Pixels {
     var feat: c.WebPBitstreamFeatures = undefined;
     if (c.WebPGetFeatures(data.ptr, data.len, &feat) != c.VP8_STATUS_OK) return .{};
     // O tamanho vem no cabeçalho: recusa antes de alocar (mesmo limite do stb).
@@ -724,7 +811,7 @@ fn decodeWebp(data: []const u8, max_w: u16, max_h: u16) Pixels {
     if (info.canvas_width == 0 or info.canvas_height == 0 or info.canvas_width > 4096 or info.canvas_height > 4096) return .{};
     const cw: usize = info.canvas_width;
     const ch: usize = info.canvas_height;
-    var sink: FrameSink = .{ .max_w = max_w, .max_h = max_h };
+    var sink = newSink(max_w, max_h, stop);
     var last: c_int = 0;
     while (c.WebPAnimDecoderHasMoreFrames(dec) != 0) {
         var buf: [*c]u8 = null;
@@ -739,12 +826,12 @@ fn decodeWebp(data: []const u8, max_w: u16, max_h: u16) Pixels {
 /// Um vídeo curto virando animação (como um GIF): até 30 qps, 60 s e o
 /// mesmo limite de memória das outras animações. O tempo de cada quadro é
 /// a distância até o próximo.
-fn decodeVideo(data: []const u8, max_w: u16, max_h: u16) Pixels {
+fn decodeVideo(data: []const u8, max_w: u16, max_h: u16, stop: *std.atomic.Value(bool)) Pixels {
     const a = ffmpeg.get() orelse return .{};
     var rd: ffmpeg.MemReader = .{ .data = data };
     var m = ffmpeg.Media.open(a, rd.io(), false, 1) catch return .{};
     defer m.close();
-    var sink: FrameSink = .{ .max_w = max_w, .max_h = max_h };
+    var sink = newSink(max_w, max_h, stop);
     var prev: []u8 = &.{};
     defer if (prev.len > 0) alloc.free(prev);
     var dims: [2]usize = .{ 0, 0 };
@@ -790,8 +877,10 @@ fn decodeVideo(data: []const u8, max_w: u16, max_h: u16) Pixels {
         if (eof) done = true;
     }
     if (have) {
+        // O último quadro dura até o fim do vídeo, mas um vídeo cortado em 60 s
+        // (ou com a duração errada no arquivo) não pode congelar nele.
         const end = if (m.duration_ms > prev_t) m.duration_ms else prev_t + 33;
-        _ = sink.add(prev, dims[0], dims[1], @intCast(@max(end - prev_t, 20)));
+        _ = sink.add(prev, dims[0], dims[1], @intCast(std.math.clamp(end - prev_t, 20, 5000)));
     }
     return sink.finish();
 }
@@ -818,8 +907,8 @@ const ApngCtx = struct {
     }
 };
 
-fn decodeApng(data: []const u8, max_w: u16, max_h: u16) Pixels {
-    var sink: FrameSink = .{ .max_w = max_w, .max_h = max_h };
+fn decodeApng(data: []const u8, max_w: u16, max_h: u16, stop: *std.atomic.Value(bool)) Pixels {
+    var sink = newSink(max_w, max_h, stop);
     var ctx: ApngCtx = .{ .sink = &sink };
     _ = apng.play(alloc, data, 4096, &ctx) catch {};
     return sink.finish();
@@ -862,7 +951,7 @@ fn resize(src: []const u8, sw: usize, sh: usize, dst: []u8, dw: usize, dh: usize
 
 // --- Imagens da demonstração (geradas, para não pesar no executável) -----------
 
-fn demo(jb: Job) Pixels {
+fn demo(jb: Job, stop: *std.atomic.Value(bool)) Pixels {
     const spec = jb.url[5..];
     if (std.mem.startsWith(u8, spec, "av:")) return demoAvatar(std.fmt.parseInt(u64, spec[3..], 10) catch 0, jb, false);
     if (std.mem.startsWith(u8, spec, "icon:")) return demoAvatar(std.fmt.parseInt(u64, spec[5..], 10) catch 0, jb, true);
@@ -871,7 +960,7 @@ fn demo(jb: Job) Pixels {
     if (std.mem.eql(u8, spec, "mp4")) {
         c.SDL_WaitSemaphore(decode_slots);
         defer c.SDL_SignalSemaphore(decode_slots);
-        return decodeVideo(@import("video.zig").demo_mp4, jb.max_w, jb.max_h);
+        return decodeVideo(@import("video.zig").demo_mp4, jb.max_w, jb.max_h, stop);
     }
     const which = std.fmt.parseInt(u8, spec, 10) catch 1;
     const full: [2]f32 = switch (which) {

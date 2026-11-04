@@ -256,9 +256,9 @@ pub fn loadWith(gpa: std.mem.Allocator, src: []const u8, lo: LoadOptions, diag: 
         } else if (std.mem.eql(u8, n.name, "fonts")) {
             if (n.str("ui")) |s| t.font_ui = try a.dupeSentinel(u8, s, 0);
             if (n.str("mono")) |s| t.font_mono = try a.dupeSentinel(u8, s, 0);
-            if (n.num("size")) |v| t.font_size = @floatCast(v);
+            if (n.num("size")) |v| t.font_size = @floatCast(std.math.clamp(v, 6, 72));
         } else if (std.mem.eql(u8, n.name, "metrics")) {
-            if (n.num("radius")) |v| t.radius = @floatCast(v);
+            if (n.num("radius")) |v| t.radius = @floatCast(std.math.clamp(v, 0, 64));
         } else if (std.mem.eql(u8, n.name, "window")) {
             if (n.flag("transparent")) |v| t.transparent = v;
         } else if (std.mem.eql(u8, n.name, "styles")) {

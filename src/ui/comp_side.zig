@@ -138,6 +138,9 @@ const Rows = struct {
     }
 };
 
+var loading_guild: types.Id = 0;
+var loading_since: i64 = 0;
+
 /// Enquanto a lista do Discord não chega: linhas-esqueleto piscando.
 fn loading(rw: *Rows) void {
     const ctx = rw.ctx;
@@ -155,7 +158,13 @@ fn loading(rw: *Rows) void {
         d.rect(rw.dl, .{ .x = rw.r.x + 56, .y = rw.y + 15, .w = 60 + @as(f32, @floatFromInt((i * 37) % 70)), .h = 12 }, col, 6);
         rw.y += 44;
     }
-    anim.every(60);
+    // Sem conexão, ou se o Discord não respondeu, para de animar (a resposta
+    // acorda o app quando vier): piscar para sempre gastaria CPU à toa.
+    if (ctx.st.guild != loading_guild) {
+        loading_guild = ctx.st.guild;
+        loading_since = ctx.now_ms;
+    }
+    if (ctx.store.connection == .ready and ctx.now_ms - loading_since < 8000) anim.every(60);
     d.endRegion(ctx, rw.y, rw.r.x);
 }
 

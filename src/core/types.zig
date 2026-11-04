@@ -277,6 +277,9 @@ pub const Message = struct {
     /// Segundos desde 1970 (UTC).
     timestamp: i64,
     content: []const u8,
+    /// O texto como o Discord guarda, quando difere de `content` (emoji
+    /// personalizado vira `:nome:` na tela). Vazio = igual. É o que se edita.
+    raw: []const u8 = "",
     /// Identificador local de uma mensagem enviada por nós, para casar a
     /// confirmação do servidor com a cópia "pendente" já exibida.
     nonce: u64 = 0,
@@ -288,6 +291,15 @@ pub const Message = struct {
     /// Mensagem de sistema (entrou, saiu, chamada, fixou…): `content` já
     /// vem com o texto pronto e a interface desenha como uma linha cinza.
     system: SystemKind = .none,
+    /// Do servidor: @everyone/@here valendo (quem escreveu tinha permissão) e
+    /// menção a nós fora de bloco de código.
+    mention_everyone: bool = false,
+    mentions_me: bool = false,
+
+    /// O texto que vai para a caixa ao editar (e volta ao Discord).
+    pub fn editable(m: *const Message) []const u8 {
+        return if (m.raw.len > 0) m.raw else m.content;
+    }
 };
 
 pub const SystemKind = enum(u8) { none, join, leave, call, pin, edit, boost, other };
@@ -298,6 +310,8 @@ pub const Reaction = struct {
     len: u8 = 0,
     count: u16 = 0,
     me: bool = false,
+    /// Emoji personalizado (0 = unicode): é assim que a API o reconhece.
+    custom: Id = 0,
 
     pub fn text(r: *const Reaction) []const u8 {
         return r.emoji[0..r.len];
@@ -311,6 +325,12 @@ pub const Reaction = struct {
         return r;
     }
 };
+
+/// Imagem colada: um arquivo temporário nosso, apagado depois de enviado.
+pub fn isPastedFile(path: []const u8) bool {
+    const name = path[(if (std.mem.lastIndexOfScalar(u8, path, '/')) |i| i + 1 else 0)..];
+    return std.mem.startsWith(u8, name, "larpercord-colado-") or std.mem.startsWith(u8, name, "larpercord-pasted-");
+}
 
 /// Timestamp embutido num snowflake do Discord (ms desde 2015-01-01).
 pub fn snowflakeTime(id: Id) i64 {

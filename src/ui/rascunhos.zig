@@ -76,10 +76,11 @@ pub const Drafts = struct {
         }
     }
 
-    pub fn parse(dr: *Drafts, gpa: std.mem.Allocator, src: []const u8) void {
+    /// false: o arquivo não é KDL válido.
+    pub fn parse(dr: *Drafts, gpa: std.mem.Allocator, src: []const u8) bool {
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
-        const nodes = kdl.parse(arena.allocator(), src, null) catch return;
+        const nodes = kdl.parse(arena.allocator(), src, null) catch return false;
         for (nodes) |*n| {
             if (!std.mem.eql(u8, n.name, "draft")) continue;
             const id_s = (n.arg(0) orelse continue).asString() orelse continue;
@@ -88,22 +89,23 @@ pub const Drafts = struct {
             dr.put(gpa, ch, text);
         }
         dr.dirty = false;
+        return true;
     }
 
     pub fn load(dr: *Drafts, gpa: std.mem.Allocator, path: [:0]const u8) void {
         var size: usize = 0;
         const data = c.SDL_LoadFile(path.ptr, &size) orelse return;
         defer c.SDL_free(data);
-        dr.parse(gpa, @as([*]const u8, @ptrCast(data))[0..size]);
+        if (!dr.parse(gpa, @as([*]const u8, @ptrCast(data))[0..size])) @import("../platform/fsutil.zig").keepBroken(path);
     }
 
     /// Salva (só para o dono do arquivo: pode ter texto de uma DM).
     pub fn save(dr: *Drafts, gpa: std.mem.Allocator, path: [:0]const u8) void {
-        dr.dirty = false;
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(gpa);
         dr.write(&out, gpa) catch return;
-        _ = @import("../platform/fsutil.zig").writePrivate(path, out.items);
+        // Só deixa de estar pendente se gravou (senão tenta de novo depois).
+        if (@import("../platform/fsutil.zig").writePrivate(path, out.items)) dr.dirty = false;
     }
 };
 
@@ -126,7 +128,7 @@ test "rascunho por canal: troca, volta e vai pelo arquivo" {
     try dr.write(&out, gpa);
     var back: Drafts = .{};
     defer back.deinit(gpa);
-    back.parse(gpa, out.items);
+    try std.testing.expect(back.parse(gpa, out.items));
     try std.testing.expectEqualStrings("oi \"todo\"", back.get(10).?);
     try std.testing.expectEqualStrings("linha\n", back.get(20).?);
     back.put(gpa, 10, "  ");

@@ -92,6 +92,8 @@ pub fn parse(arena: std.mem.Allocator, src: []const u8, diag: ?*Diagnostic) Erro
     return nodes;
 }
 
+const max_depth = 64;
+
 const Parser = struct {
     src: []const u8,
     i: usize = 0,
@@ -99,6 +101,8 @@ const Parser = struct {
     line_start: usize = 0,
     arena: std.mem.Allocator,
     diag: ?*Diagnostic,
+    /// Blocos abertos: um arquivo com `a{a{a{…` não estoura a pilha.
+    depth: u16 = 0,
 
     fn fail(p: *Parser, msg: []const u8) Error {
         if (p.diag) |d| d.* = .{ .line = p.line, .column = @intCast(p.i - p.line_start + 1), .message = msg };
@@ -157,6 +161,9 @@ const Parser = struct {
     }
 
     fn nodeList(p: *Parser, in_block: bool) Error![]const Node {
+        if (p.depth >= max_depth) return p.fail("blocos aninhados demais");
+        p.depth += 1;
+        defer p.depth -= 1;
         var list: std.ArrayList(Node) = .empty;
         while (true) {
             try p.skipSpace(true);
@@ -377,4 +384,16 @@ test "erro com linha" {
     var d: Diagnostic = .{};
     try std.testing.expectError(error.SyntaxError, parse(arena.allocator(), "a {\n  b \"sem fim\n", &d));
     try std.testing.expect(d.line >= 2);
+}
+
+test "aninhamento absurdo vira erro, não estouro de pilha" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const deep = try a.alloc(u8, 200_000);
+    for (0..deep.len / 2) |i| {
+        deep[i * 2] = 'a';
+        deep[i * 2 + 1] = '{';
+    }
+    try std.testing.expectError(error.SyntaxError, parse(a, deep, null));
 }

@@ -11,6 +11,8 @@ bin=./.zig-cache/qa/bin/larpercord
 total_fail=0
 run() {
     local label="$1"; shift
+    # Cada bateria começa sem o cache de mensagens da anterior.
+    rm -rf qa-out/cache
     local out; out=$("$@" 2>&1 | grep -v '^info:')
     local line; line=$(echo "$out" | grep 'passaram')
     printf "%-24s %s\n" "$label" "${line%%(*}"

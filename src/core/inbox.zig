@@ -47,14 +47,15 @@ pub const Model = struct {
 
 /// A mensagem fala com a gente: <@nós>, um cargo nosso, @everyone ou @here.
 pub fn mentionsMe(store: *const Store, guild: Id, m: *const StoredMessage) bool {
-    const mine = store.memberInfo(guild, store.me);
     for (m.spans) |sp| switch (sp.mention) {
         .user => |u| if (u == store.me) return true,
-        .role => |r| if (mine) |mi| {
-            if (std.mem.indexOfScalar(Id, mi.roleSlice(), r) != null) return true;
-        },
+        .role => |r| if (store.hasRole(guild, r)) return true,
         else => {},
     };
+    if (m.msg.mention_everyone) return true;
+    // "@everyone" escrito por quem não tem permissão não chama ninguém; a
+    // demonstração não tem esse dado do servidor.
+    if (!store.demo) return false;
     const t = m.msg.content;
     return std.mem.indexOf(u8, t, "@everyone") != null or std.mem.indexOf(u8, t, "@here") != null;
 }

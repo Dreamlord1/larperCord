@@ -480,6 +480,32 @@ fn sentConfirmed(app: *App) bool {
     const m = lastMsg(app, 0) orelse return false;
     return m.msg.author == app.store.me and !m.pending and std.mem.eql(u8, m.msg.content, "teste do QA 🎉 **negrito**");
 }
+fn failSend(app: *App) void {
+    const id = app.st.activeChannel() orelse return;
+    app.store.addPending(id, "mensagem que não foi", 900001, 0, gw.nowMs(), &.{}) catch return;
+    app.store.apply(.{ .send_failed = .{ .channel = id, .nonce = 900001 } }, gw.nowMs()) catch {};
+    app.st.scrollOf(id).stick_bottom = true;
+}
+fn failedShown(app: *App) bool {
+    const m = lastMsg(app, 0) orelse return false;
+    return m.failed and m.pending and std.mem.eql(u8, m.msg.content, "mensagem que não foi");
+}
+fn failedGone(app: *App) bool {
+    const id = app.st.activeChannel() orelse return false;
+    return app.store.pendingByNonce(id, 900001) == null;
+}
+fn failedResent(app: *App) bool {
+    const m = lastMsg(app, 0) orelse return false;
+    return !m.pending and !m.failed and std.mem.eql(u8, m.msg.content, "mensagem que não foi");
+}
+fn failHistory(app: *App) void {
+    const cs = active(app) orelse return;
+    cs.history = .failed;
+}
+fn historyBack(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return cs.history == .loaded;
+}
 fn replyArmed(app: *App) bool {
     return app.st.reply_to != 0 and app.st.reply_to == saved_id;
 }
@@ -1636,6 +1662,18 @@ const ops = [_]Op{
     expect("mensagem longa com markdown e emoji", longSent),
     .{ .shot = "03-enviadas" },
 
+    s("envio que falhou"),
+    .{ .run = failSend },
+    .{ .wait = 100 },
+    expect("a mensagem que não foi fica marcada, com o texto", failedShown),
+    .{ .shot = "03b-nao-enviada" },
+    click("failed-discard:900001"),
+    expect("descartar tira a mensagem", failedGone),
+    .{ .run = failSend },
+    .{ .wait = 100 },
+    click("failed-resend:900001"),
+    expect("reenviar manda de novo e o servidor confirma", failedResent),
+
     s("responder"),
     .{ .hover = .{ .dyn = tHoverOther } },
     .{ .wait = 150 },
@@ -2211,6 +2249,17 @@ const ops = [_]Op{
     expect("a primeira bolinha tira a cor", guildPlain),
 
 } ++ ops_editor ++ [_]Op{
+    s("conversa que não carregou"),
+    .{ .run = toClassico },
+    .{ .wait = 200 },
+    click("guild:500000"),
+    .{ .wait = 300 },
+    .{ .run = failHistory },
+    .{ .wait = 100 },
+    .{ .shot = "03c-nao-carregou" },
+    click("history-retry"),
+    expect("tentar de novo carrega a conversa", historyBack),
+
     s("clicar em tudo: servidor"),
     .{ .run = toClassico },
     .{ .wait = 200 },
@@ -2796,6 +2845,7 @@ pub const Runner = struct {
         h.update(std.mem.asBytes(&st.jump));
         h.update(std.mem.asBytes(&app.themes.current));
         h.update(std.mem.asBytes(&app.plugins.generation));
+        h.update(&.{@intFromBool(video.info().active)});
         h.update(std.mem.asBytes(&mosaic.panes));
         h.update(std.mem.asBytes(&@as(u32, st.open_folders.count())));
         h.update(std.mem.asBytes(&@as(u32, st.collapsed.count())));

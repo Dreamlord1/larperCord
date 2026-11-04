@@ -525,7 +525,7 @@ pub fn insertText(st: *state.State, text: []const u8, mention: bool) void {
     }
     const piece = if (mention) "@" else "";
     for ([_][]const u8{ piece, text, if (mention) " " else "" }) |part| {
-        const k = @min(part.len, out.len - n - 1);
+        const k = d.utf8Prefix(part, out.len - n - 1).len;
         @memcpy(out[n .. n + k], part[0..k]);
         n += k;
     }

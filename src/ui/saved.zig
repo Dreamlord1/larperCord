@@ -52,7 +52,10 @@ pub fn load(list: *saved.List, gpa: std.mem.Allocator, owner: Id, read_file: boo
     var size: usize = 0;
     const data = c.SDL_LoadFile(p.ptr, &size) orelse return;
     defer c.SDL_free(data);
-    list.read(gpa, @as([*]const u8, @ptrCast(data))[0..size]) catch |err| std.log.warn("mensagens salvas: não consegui ler {s} ({t})", .{ p, err });
+    list.read(gpa, @as([*]const u8, @ptrCast(data))[0..size]) catch |err| {
+        std.log.warn("mensagens salvas: não consegui ler {s} ({t})", .{ p, err });
+        fsutil.keepBroken(p);
+    };
 }
 
 /// Grava a lista (num arquivo temporário e depois troca, para uma queda no
@@ -123,10 +126,30 @@ pub fn draw(ctx: *d.Ctx) void {
         y += 140;
     }
     // Remover é uma ação (aplicada depois do quadro): a lista não muda aqui.
-    for (list.items.items, 0..) |*it, i| y = item(ctx, bdl, body, y, it, i);
+    // Cartões fora da tela só contam a altura (até 500 refazendo a prévia a
+    // cada quadro pesava com o painel aberto).
+    if (heights_w != body.w or heights_n != list.items.items.len) {
+        heights = @splat(0);
+        heights_w = body.w;
+        heights_n = list.items.items.len;
+    }
+    for (list.items.items, 0..) |*it, i| {
+        const known = if (i < heights.len) heights[i] else 0;
+        if (known > 0 and editing != it.id and (y + known < body.y - 64 or y > body.bottom() + 64)) {
+            y += known;
+            continue;
+        }
+        const y1 = item(ctx, bdl, body, y, it, i);
+        if (i < heights.len) heights[i] = y1 - y;
+        y = y1;
+    }
     d.endRegion(ctx, y + 6, body.x);
     ctx.dl = dl;
 }
+
+var heights: [512]f32 = @splat(0);
+var heights_w: f32 = 0;
+var heights_n: usize = 0;
 
 /// Um cartão: de onde veio, autor e texto, a anotação e os botões.
 fn item(ctx: *d.Ctx, dl: *c.ImDrawList, body: d.Rect, y0: f32, it: *const saved.Item, index: usize) f32 {

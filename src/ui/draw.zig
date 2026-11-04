@@ -80,7 +80,7 @@ pub fn pstr(n: *const kdl.Node, key: []const u8, default: []const u8) []const u8
 }
 
 pub fn pnum(n: *const kdl.Node, key: []const u8, default: f32) f32 {
-    return if (n.num(key)) |x| @floatCast(x) else default;
+    return if (n.num(key)) |x| @floatCast(std.math.clamp(x, -20_000, 20_000)) else default;
 }
 
 /// Tema do quadro atual, para resolver `$opção` nas propriedades.
@@ -189,6 +189,19 @@ pub fn text(dl: *c.ImDrawList, font: *c.ImFont, size: f32, x: f32, y: f32, color
 pub fn fitBytes(font: *c.ImFont, size: f32, s: []const u8, max_w: f32) usize {
     var lo: usize = 0;
     var hi: usize = s.len;
+    // Palavra enorme ("kkkk…" de 4000 bytes): sobe dobrando até passar, para
+    // o custo ser o do pedaço que cabe e não o do resto todo, a cada linha.
+    var probe: usize = 128;
+    while (probe < hi) : (probe *= 2) {
+        var at = probe;
+        while (at > lo and (s[at] & 0xC0) == 0x80) at -= 1;
+        if (at == lo) continue;
+        if (width(font, size, s[0..at]) > max_w) {
+            hi = at - 1;
+            break;
+        }
+        lo = at;
+    }
     while (lo < hi) {
         var mid = lo + (hi - lo + 1) / 2;
         while (mid > lo and mid < s.len and (s[mid] & 0xC0) == 0x80) mid -= 1;
@@ -203,6 +216,31 @@ pub fn fitBytes(font: *c.ImFont, size: f32, s: []const u8, max_w: f32) usize {
         if (width(font, size, s[0..mid]) <= max_w) lo = mid else hi = mid - 1;
     }
     return lo;
+}
+
+/// O começo de `s` com no máximo `n` bytes, sem partir um caractere no meio.
+pub fn utf8Prefix(s: []const u8, n: usize) []const u8 {
+    if (s.len <= n) return s;
+    var k = n;
+    while (k > 0 and (s[k] & 0xC0) == 0x80) k -= 1;
+    return s[0..k];
+}
+
+/// `bufPrint` que, sem espaço, corta o texto (nunca no meio de um caractere)
+/// em vez de não mostrar nada.
+pub fn printClip(buf: []u8, comptime fmt: []const u8, args: anytype) []const u8 {
+    var wr = std.Io.Writer.fixed(buf);
+    wr.print(fmt, args) catch {};
+    const out = wr.buffered();
+    if (out.len < buf.len) return out;
+    // Encheu: tira o último caractere se ele ficou pela metade.
+    var k = out.len;
+    while (k > 0 and (out[k - 1] & 0xC0) == 0x80) k -= 1;
+    if (k > 0 and out[k - 1] >= 0xC0) {
+        const want = std.unicode.utf8ByteSequenceLength(out[k - 1]) catch 1;
+        if (out.len - (k - 1) < want) return out[0 .. k - 1];
+    }
+    return out;
 }
 
 /// Texto que corta com "…" se passar de `max_w`. Retorna a largura usada.
@@ -228,7 +266,7 @@ pub fn centerY(r: Rect, size: f32) f32 {
 
 /// Copia `s` em maiúsculas (ASCII + acentos latinos comuns).
 pub fn upper(buf: []u8, s: []const u8) []const u8 {
-    const n = @min(buf.len, s.len);
+    const n = utf8Prefix(s, buf.len).len;
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const ch = s[i];

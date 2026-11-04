@@ -26,10 +26,10 @@ pub fn block(ctx: *d.Ctx, dl: ?*c.ImDrawList, m: *const StoredMessage, x: f32, y
     var k: usize = 0;
     for (m.msg.embeds, 0..) |*e, i| {
         y += gap;
-        const spans = m.embed_spans[k..@min(m.embed_spans.len, k + 1 + e.fields.len)];
+        const spans = m.embed_spans[@min(m.embed_spans.len, k)..@min(m.embed_spans.len, k + 1 + e.fields.len)];
         k += 1 + e.fields.len;
         const w = @min(avail, max_w);
-        const h = card(ctx, null, e, spans, x, y, w, alpha, 0, 0);
+        const h = cardHeight(ctx, e, spans, w, dl != null);
         if (dl) |l| {
             _ = card(ctx, l, e, spans, x, y, w, alpha, h, m.msg.id);
             qa.mark(.{ .x = x, .y = y, .w = w, .h = h }, "embed:{d}:{d}", .{ m.msg.id, i });
@@ -37,6 +37,25 @@ pub fn block(ctx: *d.Ctx, dl: ?*c.ImDrawList, m: *const StoredMessage, x: f32, y
         y += h;
     }
     return y - y_in;
+}
+
+/// Altura medida por embed: desenhar não precisa fazer o layout duas vezes
+/// por quadro. Quem erra a chave só mede de novo.
+const HeightSlot = struct { key: u64 = 0, h: f32 = 0 };
+var height_cache: [64]HeightSlot = @splat(.{});
+
+fn cardHeight(ctx: *d.Ctx, e: *const types.Embed, spans: []const []const md.Span, w: f32, use_cache: bool) f32 {
+    if (!use_cache) return card(ctx, null, e, spans, 0, 0, w, 1, 0, 0);
+    var hash = std.hash.Wyhash.init(0);
+    hash.update(std.mem.asBytes(&@intFromPtr(e)));
+    hash.update(std.mem.asBytes(&w));
+    hash.update(std.mem.asBytes(&d.text_scale));
+    hash.update(std.mem.asBytes(&ctx.st.theme_gen));
+    const key = hash.final() | 1;
+    const slot = &height_cache[key % height_cache.len];
+    if (slot.key == key) return slot.h;
+    slot.* = .{ .key = key, .h = card(ctx, null, e, spans, 0, 0, w, 1, 0, 0) };
+    return slot.h;
 }
 
 fn opts(ctx: *const d.Ctx, size: f32) rich.Opts {

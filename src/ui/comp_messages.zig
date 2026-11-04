@@ -118,6 +118,33 @@ fn textH(g: Geo, m: *const StoredMessage, t: rich.Measure) f32 {
     return h;
 }
 
+/// Linha "Não enviada · Reenviar · Descartar" embaixo do texto e dos anexos.
+fn failedW(g: Geo) f32 {
+    const f = g.fam.get(.regular);
+    return d.width(f, 12, i18n.tr("Não enviada", "Not sent")) + d.width(f, 12, i18n.tr("Reenviar", "Resend")) + d.width(f, 12, i18n.tr("Descartar", "Discard")) + 40;
+}
+
+fn failedRow(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x_in: f32, y: f32) void {
+    const f = g.fam.get(.regular);
+    const ty = y + (g.line_h - 12 * 1.2) / 2;
+    var x = x_in;
+    const lbl = i18n.tr("Não enviada", "Not sent");
+    d.text(dl, f, 12, x, ty, ctx.col(.danger), lbl);
+    x += d.width(f, 12, lbl) + 14;
+    const channel = m.msg.channel;
+    const nonce = m.msg.nonce;
+    for ([_][]const u8{ i18n.tr("Reenviar", "Resend"), i18n.tr("Descartar", "Discard") }, 0..) |t, i| {
+        const tw = d.width(f, 12, t);
+        const hr: d.Rect = .{ .x = x, .y = y, .w = tw, .h = g.line_h };
+        const hb = d.hit(ctx, @truncate(nonce ^ (0xFA11_ED00 + i)), hr);
+        qa.mark(hr, "failed-{s}:{d}", .{ if (i == 0) "resend" else "discard", nonce });
+        d.text(dl, f, 12, x, ty, if (hb.hovered) ctx.col(.text) else ctx.col(.link), t);
+        if (hb.hovered) d.line(dl, x, y + g.line_h - 3, x + tw, y + g.line_h - 3, ctx.col(.link), 1);
+        if (hb.clicked) ctx.act(if (i == 0) .{ .resend_message = .{ .channel = channel, .nonce = nonce } } else .{ .discard_message = .{ .channel = channel, .nonce = nonce } });
+        x += tw + 14;
+    }
+}
+
 fn editedLabel() []const u8 {
     return i18n.tr("(editado)", "(edited)");
 }
@@ -135,6 +162,7 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     var text_h = textH(g, m, t);
     text_h += att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
     text_h += emb.block(ctx, null, m, 0, 0, g.wrap, 1);
+    if (m.failed) text_h += g.line_h;
     const group = flags & flag_group != 0;
     const day = flags & flag_day != 0;
     const reply = flags & flag_reply != 0;
@@ -168,6 +196,7 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     m.natural_w = @max(@max(t.w, if (m.msg.edited) t.last_x + editedW(g) else 0), att.blockWidth(m.msg.attachments, g.wrap));
     if (m.msg.embeds.len > 0) m.natural_w = @max(m.natural_w, @min(g.wrap, 520));
     if (reply and g.variant == .bubbles) m.natural_w = @max(m.natural_w, 180);
+    if (m.failed) m.natural_w = @max(m.natural_w, failedW(g));
     return h;
 }
 
@@ -211,6 +240,10 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     vim.page_h = r.h;
 
     cs.seen_ms = ctx.now_ms;
+    if (cs.history == .failed) return loadFailed(ctx, g, r, ch_id);
+    // Saiu da memória e voltou para a tela sem passar por "abrir" (a aba ao
+    // lado foi fechada, por exemplo): sem isso, o esqueleto ficaria para sempre.
+    if (cs.history == .none) ctx.act(.{ .retry_history = ch_id });
     if (cs.history != .loaded) return skeleton(ctx, g, r);
 
     const msgs = cs.messages.items;
@@ -267,20 +300,21 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
 
     const sc = st.scrollOf(ch_id);
     const max_scroll = @max(0, total - r.h);
-    // Entraram mensagens antigas em cima: mantém na tela o que estava.
-    if (msgs.len > 0) {
-        if (sc.first_id != 0 and msgs[0].msg.id != sc.first_id and !sc.stick_bottom) {
-            for (msgs, 0..) |m, k| if (m.msg.id == sc.first_id) {
-                const delta = st.offsets.items[k] - st.offsets.items[0];
+    // A pessoa está lendo lá em cima: nada dali é cortado (ver Store.trim).
+    cs.reading = !sc.stick_bottom;
+    // Mudou algo acima do que está na tela: mantém no lugar o que estava.
+    if (sc.anchor_id != 0 and !sc.stick_bottom and sc.pos >= 0) {
+        if (ctx.store.find(cs, sc.anchor_id)) |am| {
+            const k = (@intFromPtr(am) - @intFromPtr(msgs.ptr)) / @sizeOf(StoredMessage);
+            const delta = st.offsets.items[k] + sc.anchor_off - sc.pos;
+            if (delta != 0) {
                 sc.pos += delta;
                 sc.target += delta;
-                break;
-            };
+            }
         }
-        sc.first_id = msgs[0].msg.id;
     }
-    // Perto do topo: pede as anteriores.
-    if (cs.older == .idle and msgs.len > 0 and sc.pos >= 0 and sc.pos < r.h * 0.6 + 200) ctx.act(.{ .load_older = ch_id });
+    // Perto do topo: pede as anteriores (depois de uma falha, com calma).
+    if (cs.older == .idle and ctx.now_ms >= cs.older_retry_ms and msgs.len > 0 and sc.pos >= 0 and sc.pos < r.h * 0.6 + 200) ctx.act(.{ .load_older = ch_id });
     // Pulo para uma mensagem (clique numa resposta): só no painel focado.
     if (st.jump != 0 and st.activeChannel() == ch_id) {
         const found = for (msgs, 0..) |m, i| {
@@ -307,12 +341,15 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     }
     sc.target = std.math.clamp(sc.target, 0, max_scroll);
     if (sc.target >= max_scroll - 1) sc.stick_bottom = true;
+    // Longe do fim e indo para lá (a conversa trocou, "Ir para o fim"): vai
+    // direto. Passar por centenas de mensagens baixaria cada imagem do caminho.
+    if (sc.stick_bottom and max_scroll - sc.pos > r.h * 3) sc.pos = max_scroll;
     sc.pos = anim.step(sc.pos, sc.target, 18);
 
     c.ImGui_SetNextWindowScroll(d.v(-1, sc.pos));
     const dl = d.beginRegion(ctx, region, r, c.ImGuiWindowFlags_NoScrollWithMouse);
     const fade_start = dl.*.VtxBuffer.Size;
-    const s = c.ImGui_GetScrollY();
+    var s = c.ImGui_GetScrollY();
     // Arrastando a barra de rolagem (só a desta conversa: um clique nas
     // configurações ou num popup por cima não conta).
     if (@abs(s - sc.pos) > 1 and c.ImGui_IsMouseDown(0) and ctx.mouse.x >= r.right() - 14 and c.ImGui_IsWindowHovered(0) and !st.settings.open) {
@@ -321,6 +358,10 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         sc.stick_bottom = s >= max_scroll - 1;
     }
     c.ImGui_Dummy(d.v(r.w - 12, total));
+    // Primeiro quadro da conversa: o ImGui ainda não sabe a altura e prende a
+    // rolagem bem longe de onde ela está. Sem isso, desenharia (e baixaria) o
+    // topo da conversa à toa. Uns pixels de diferença são normais: fica.
+    if (s < sc.pos - r.h) s = sc.pos;
 
     const base = r.y - s + @max(0, r.h - total);
     var lo: usize = 0;
@@ -329,6 +370,10 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         const mid = (lo + hi) / 2;
         if (st.offsets.items[mid] + msgs[mid].height < s) lo = mid + 1 else hi = mid;
     }
+    if (lo < msgs.len) {
+        sc.anchor_id = msgs[lo].msg.id;
+        sc.anchor_off = sc.pos - st.offsets.items[lo];
+    } else sc.anchor_id = 0;
 
     // Papel pautado: linhas que rolam junto com a conversa + margem vermelha.
     if (d.pflag(n, "ruled", false)) {
@@ -524,8 +569,26 @@ fn topOfChannel(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, cs: anytype, r: d.Rect, 
     qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = h }, "channel-top", .{});
 }
 
+/// A conversa não carregou (sem rede, 5xx, sem permissão).
+fn loadFailed(ctx: *d.Ctx, g: Geo, r: d.Rect, ch_id: Id) void {
+    const dl = ctx.dl;
+    const f = g.fam.get(.medium);
+    const msg = i18n.tr("Não consegui carregar as mensagens.", "Couldn't load the messages.");
+    const again = i18n.tr("Tentar de novo", "Try again");
+    const cy = r.y + r.h / 2;
+    d.text(dl, f, 15, r.x + (r.w - d.width(f, 15, msg)) / 2, cy - 30, ctx.col(.muted), msg);
+    const bw = d.width(f, 14, again) + 28;
+    const br: d.Rect = .{ .x = r.x + (r.w - bw) / 2, .y = cy, .w = bw, .h = 32 };
+    const hb = d.hitRaw(ctx, br);
+    qa.mark(br, "history-retry", .{});
+    d.rect(dl, br, if (hb.hovered) ctx.col(.accent) else ctx.col(.elevated), ctx.th.radius);
+    d.text(dl, f, 14, br.x + 14, d.centerY(br, 14), if (hb.hovered) ctx.col(.accent_text) else ctx.col(.text), again);
+    if (hb.clicked) ctx.act(.{ .retry_history = ch_id });
+}
+
 fn skeleton(ctx: *d.Ctx, g: Geo, r: d.Rect) void {
-    anim.every(50);
+    // Sem conexão a resposta não vem tão cedo: fica parado em vez de animar.
+    if (ctx.store.connection == .ready) anim.every(50);
     const phase = @as(f32, @floatFromInt(@mod(ctx.now_ms, 1400))) / 1400.0;
     var y = r.bottom() - 40;
     var k: usize = 0;
@@ -819,6 +882,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             att.draw(ctx, dl, m, tx, y + th, g.wrap, alpha);
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
             ah += emb.block(ctx, dl, m, tx, y + th + ah, g.wrap, alpha);
+            if (m.failed) failedRow(ctx, dl, g, m, tx, y + th + ah);
             if (m.n_reactions > 0) reactions(ctx, dl, m, tx, y + th + ah, under, false, 0);
             if (ctx.st.settings.developer_mode and under) {
                 const idt = std.fmt.bufPrint(&buf, "id {d}", .{m.msg.id}) catch "";
@@ -841,7 +905,8 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 const found = ctx.store.findNear(m.msg.channel, m.msg.reply_to);
                 const ru = if (found) |f| ctx.store.user(f.m.msg.author) else null;
                 var rb: [160]u8 = undefined;
-                const line = std.fmt.bufPrint(&rb, "↳ {s}: {s}", .{ if (ru) |x| x.name else "?", if (found) |f| snippet(rb[100..], quotedText(ctx, f.m)) else "…" }) catch "";
+                var sb: [60]u8 = undefined;
+                const line = std.fmt.bufPrint(&rb, "↳ {s}: {s}", .{ if (ru) |x| x.name else "?", if (found) |f| snippet(&sb, quotedText(ctx, f.m)) else "…" }) catch "";
                 const lr: d.Rect = .{ .x = r.x + g.content_x, .y = y, .w = g.wrap, .h = g.line_h };
                 const hb = d.hitUnder(ctx, @truncate(m.msg.id ^ 0x5151), lr);
                 qa.mark(lr, "reply-line:{d}", .{m.msg.id});
@@ -869,6 +934,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             att.draw(ctx, dl, m, r.x + g.content_x, y + th, g.wrap, alpha);
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
             ah += emb.block(ctx, dl, m, r.x + g.content_x, y + th + ah, g.wrap, alpha);
+            if (m.failed) failedRow(ctx, dl, g, m, r.x + g.content_x, y + th + ah);
             if (m.n_reactions > 0) reactions(ctx, dl, m, r.x + g.content_x, y + th + ah - 2, under, false, 0);
             if (show_bar) toolbar(ctx, dl, m, r.right() - 12, row.y - 2);
         },
@@ -913,7 +979,9 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             editedMark(ctx, dl, g, m, br.x + 14, ty, t);
             if (m.msg.content.len > 0) qa.mark(.{ .x = br.x + 14, .y = ty, .w = @max(t.w, 4), .h = t.h }, "msgtext:{d}", .{m.msg.id});
             att.draw(ctx, dl, m, br.x + 14, ty + textH(g, m, t), g.wrap, alpha);
-            _ = emb.block(ctx, dl, m, br.x + 14, ty + textH(g, m, t) + att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0), g.wrap, alpha);
+            const below = textH(g, m, t) + att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
+            const eh = emb.block(ctx, dl, m, br.x + 14, ty + below, g.wrap, alpha);
+            if (m.failed) failedRow(ctx, dl, g, m, br.x + 14, ty + below + eh);
             if (m.n_reactions > 0) reactions(ctx, dl, m, br.x, br.bottom(), under, self, br.right());
             if (ctx.hovering(br)) {
                 const ck = w.clock(&buf, m.msg.timestamp);
@@ -923,10 +991,10 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             }
             // "Entregue ✓✓" embaixo da nossa última mensagem.
             if (show_ticks and self and (m.msg.id == last_self_id or (m.pending and last_self_id == std.math.maxInt(Id)))) {
-                const tick = if (m.pending) i18n.tr("Enviando…", "Sending…") else i18n.tr("Entregue ✓✓", "Delivered ✓✓");
+                const tick = if (m.failed) i18n.tr("Não enviada", "Not sent") else if (m.pending) i18n.tr("Enviando…", "Sending…") else i18n.tr("Entregue ✓✓", "Delivered ✓✓");
                 const tw = d.width(fam.get(.medium), 11, tick);
                 const tick_y = br.bottom() + (if (m.n_reactions > 0) react_h else 0) + 1;
-                d.text(dl, fam.get(.medium), 11, br.right() - tw - 4, tick_y, if (m.pending) ctx.col(.faint) else ctx.col(.accent), tick);
+                d.text(dl, fam.get(.medium), 11, br.right() - tw - 4, tick_y, if (m.failed) ctx.col(.danger) else if (m.pending) ctx.col(.faint) else ctx.col(.accent), tick);
             }
             if (show_bar) toolbar(ctx, dl, m, if (self) br.x - 50 else @min(br.right() + 180, r.right() - 12), br.y - 12);
         },
@@ -947,7 +1015,7 @@ fn editedMark(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x
     d.text(dl, g.fam.get(.regular), 11, ex, ey + (g.line_h - 13) / 2, col, lbl);
     if (m.original) |o| if (ctx.hovering(lr)) {
         var buf: [200]u8 = undefined;
-        const n = @min(o.len, 120);
+        const n = d.utf8Prefix(o, 120).len;
         const tip = i18n.fmt(&buf, "antes: {s}{s}", "before: {s}{s}", .{ o[0..n], if (o.len > n) "…" else "" });
         d.tip(ctx, lr, tip, true);
     };

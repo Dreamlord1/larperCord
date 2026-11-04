@@ -12,6 +12,7 @@
 #include <arpa/inet.h>
 #include <malloc.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <zlib.h>

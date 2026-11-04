@@ -31,8 +31,20 @@ pub fn trZ(pt: [:0]const u8, english: [:0]const u8) [:0]const u8 {
     return if (en()) english else pt;
 }
 
+/// Sem espaço, corta o texto (nunca no meio de um caractere) em vez de sumir.
 pub fn fmt(buf: []u8, comptime pt: []const u8, comptime english: []const u8, args: anytype) []const u8 {
-    return (if (en()) std.fmt.bufPrint(buf, english, args) else std.fmt.bufPrint(buf, pt, args)) catch buf[0..0];
+    var wr = std.Io.Writer.fixed(buf);
+    (if (en()) wr.print(english, args) else wr.print(pt, args)) catch {};
+    const out = wr.buffered();
+    if (out.len < buf.len) return out;
+    // Encheu: tira o último caractere se ele ficou pela metade.
+    var k = out.len;
+    while (k > 0 and (out[k - 1] & 0xC0) == 0x80) k -= 1;
+    if (k > 0 and out[k - 1] >= 0xC0) {
+        const want = std.unicode.utf8ByteSequenceLength(out[k - 1]) catch 1;
+        if (out.len - (k - 1) < want) return out[0 .. k - 1];
+    }
+    return out;
 }
 
 pub fn fmtZ(buf: []u8, comptime pt: []const u8, comptime english: []const u8, args: anytype) [:0]const u8 {

@@ -98,22 +98,60 @@ pub const Gateway = struct {
     /// Comandos que chegaram enquanto o gateway estava reconectando ou
     /// esperando rate limit. São enviados quando a conexão volta.
     pending: std.ArrayList(ev.Command) = .empty,
+    /// Comandos que vão pelo próprio gateway (op 3, 4, 14): só valem depois
+    /// do READY/RESUMED (antes, o Discord fecha com 4003 e o pedido se perde).
+    held: std.ArrayList(ev.Command) = .empty,
+    /// O handshake acabou: dá para ler e escrever no WebSocket.
+    ws_live: bool = false,
+    /// O gateway já respondeu READY ou RESUMED nesta conexão.
+    ws_ready: bool = false,
+    /// Como a conexão acabou, visto de dentro de uma espera do REST.
+    ws_end: ?End = null,
+    servicing: bool = false,
+    serviced_ms: i64 = 0,
+    /// Sem HELLO até aqui: a conexão ficou muda, abre outra.
+    hello_until: i64 = 0,
+    /// Último bloqueio longo avisado (para não repetir o aviso a cada comando).
+    block_noticed: i64 = 0,
+    /// Acorda o poll do gateway quando chega comando (leitura, escrita).
+    wake_pipe: [2]c_int = .{ -1, -1 },
 
     pub fn start(g: *Gateway) !void {
-        g.thread = c.SDL_CreateThread(threadMain, "discord", g) orelse return error.SdlThread;
+        if (c.pipe(&g.wake_pipe) == 0) {
+            for (g.wake_pipe) |fd| {
+                _ = c.fcntl(fd, c.F_SETFL, c.O_NONBLOCK);
+                _ = c.fcntl(fd, c.F_SETFD, c.FD_CLOEXEC);
+            }
+        } else g.wake_pipe = .{ -1, -1 };
+        g.commands.wake_fd = g.wake_pipe[1];
+        g.thread = c.SDL_CreateThread(threadMain, "discord", g) orelse {
+            g.closeWakePipe();
+            return error.SdlThread;
+        };
+    }
+
+    fn closeWakePipe(g: *Gateway) void {
+        g.commands.wake_fd = -1;
+        for (g.wake_pipe) |fd| if (fd >= 0) {
+            _ = c.close(fd);
+        };
+        g.wake_pipe = .{ -1, -1 };
     }
 
     pub fn stop(g: *Gateway) void {
         g.abort.store(true, .release);
         g.commands.push(.shutdown);
         if (g.thread) |t| c.SDL_WaitThread(t, null);
+        g.closeWakePipe();
         g.stopVoice();
         std.crypto.secureZero(u8, g.token);
         alloc.free(g.token);
         @memset(&g.session_id, 0);
         @memset(&g.resume_base, 0);
-        for (g.pending.items) |cmd| freeCommand(cmd);
+        for (g.pending.items) |cmd| g.dropCommand(cmd);
         g.pending.deinit(alloc);
+        g.held.deinit(alloc);
+        g.frame.deinit(alloc);
         g.zout.deinit(alloc);
         g.role_info.deinit(alloc);
         g.voice_volumes.deinit(alloc);
@@ -158,24 +196,31 @@ pub const Gateway = struct {
             // "conectando": ele está retomando uma sessão, não abrindo outra.
             g.emit(.{ .status = if (g.canResume()) .reconnecting else .connecting });
             const result = g.session();
+            g.ws_live = false;
             if (g.ws) |h| {
                 c.curl_easy_cleanup(h);
                 g.ws = null;
             }
             if (g.stopping) break;
+            // A conexão chegou a funcionar: a próxima queda começa do zero.
+            const worked = g.ws_ready;
+            g.ws_ready = false;
+            if (worked) backoff = 2000;
             switch (result) {
                 .fatal => {
                     g.emit(.{ .status = .failed });
                     // Não há mais para onde mandar os comandos pendentes.
-                    for (g.pending.items) |cmd| freeCommand(cmd);
+                    for (g.pending.items) |cmd| g.dropCommand(cmd);
                     g.pending.clearRetainingCapacity();
+                    g.held.clearRetainingCapacity();
                     // Fica só atendendo o encerramento.
                     var cmds: std.ArrayList(ev.Command) = .empty;
+                    defer cmds.deinit(alloc);
                     while (!g.stopping) {
                         g.commands.waitDrain(&cmds, 1000);
                         for (cmds.items) |cmd| if (cmd == .shutdown) {
                             g.stopping = true;
-                        } else freeCommand(cmd);
+                        } else g.dropCommand(cmd);
                         cmds.clearRetainingCapacity();
                     }
                     break;
@@ -187,8 +232,9 @@ pub const Gateway = struct {
                 },
                 .reconnect => {
                     g.emit(.{ .status = .reconnecting });
-                    g.sleepServing(1000);
-                    backoff = 2000;
+                    // Caiu antes de valer: nada de um IDENTIFY por segundo.
+                    g.sleepServing(if (worked) 1000 else backoff);
+                    if (!worked) backoff = @min(backoff * 2, 60_000);
                 },
                 .new_session => {
                     // Sessão inválida/expirada: o Discord manda esperar de
@@ -196,8 +242,8 @@ pub const Gateway = struct {
                     g.clearSession();
                     g.emit(.{ .status = .reconnecting });
                     var prng = std.Random.DefaultPrng.init(@bitCast(nowMs()));
-                    g.sleepServing(1000 + prng.random().uintLessThan(u32, 4000));
-                    backoff = 2000;
+                    g.sleepServing(1000 + prng.random().uintLessThan(u32, 4000) + (if (worked) 0 else backoff));
+                    if (!worked) backoff = @min(backoff * 2, 60_000);
                 },
             }
         }
@@ -222,11 +268,8 @@ pub const Gateway = struct {
                 else => g.pending.append(alloc, cmd) catch freeCommand(cmd),
             };
             cmds.clearRetainingCapacity();
-            // Uma espera de rate limit não pode deixar o gateway sem
-            // heartbeat. Se o ACK anterior ainda não chegou, não manda outro.
-            if (g.ws != null and g.acked and g.next_hb != std.math.maxInt(i64) and nowMs() >= g.next_hb) {
-                g.heartbeat();
-            }
+            // Uma espera de rate limit não pode deixar o gateway surdo.
+            g.serviceWs();
         }
     }
 
@@ -236,13 +279,73 @@ pub const Gateway = struct {
             const cmd = g.pending.orderedRemove(0);
             if (cmd == .shutdown) {
                 g.stopping = true;
-                freeCommand(cmd);
                 return .reconnect;
             }
             g.execute(cmd);
             if (g.stopping) return .reconnect;
         }
         return null;
+    }
+
+    /// Comando que não vai mais ser executado. Quem espera resposta fica sabendo.
+    fn dropCommand(g: *Gateway, cmd: ev.Command) void {
+        switch (cmd) {
+            .send_message => |m| g.emit(.{ .send_failed = .{ .channel = m.channel, .nonce = m.nonce } }),
+            .fetch_history => |ch| g.emit(.{ .history = .{ .channel = ch, .messages = &.{} } }),
+            .fetch_older => |o| g.emit(.{ .history = .{ .channel = o.channel, .messages = &.{}, .older = true } }),
+            else => {},
+        }
+        freeCommand(cmd);
+    }
+
+    /// Lê o que chegou no WebSocket e cuida do heartbeat. Também roda de dentro
+    /// das esperas do REST (upload, rate limit): o gateway não fica surdo.
+    fn serviceWs(g: *Gateway) void {
+        if (!g.ws_live or g.servicing or g.ws_end != null) return;
+        const h = g.ws orelse return;
+        g.servicing = true;
+        defer g.servicing = false;
+        var buf: [64 * 1024]u8 = undefined;
+        while (true) {
+            var got: usize = 0;
+            var meta: [*c]const c.struct_curl_ws_frame = null;
+            const rc = c.curl_ws_recv(h, &buf, buf.len, &got, &meta);
+            if (rc == c.CURLE_AGAIN) break;
+            if (rc != c.CURLE_OK) {
+                g.ws_end = .retry;
+                return;
+            }
+            if (meta == null) break;
+            if (meta.*.flags & c.CURLWS_CLOSE != 0) {
+                const code: u16 = if (got >= 2) (@as(u16, buf[0]) << 8) | buf[1] else 0;
+                g.ws_end = g.onClose(code);
+                return;
+            }
+            // Ping/pong são tratados pelo libcurl; não são payload do gateway.
+            if (meta.*.flags & (c.CURLWS_PING | c.CURLWS_PONG) != 0) continue;
+            if (got > 0) g.frame.appendSlice(alloc, buf[0..got]) catch {
+                g.ws_end = .retry;
+                return;
+            };
+            if (meta.*.bytesleft == 0 and meta.*.flags & c.CURLWS_CONT == 0) {
+                // O Discord fecha cada payload com 00 00 FF FF. Se ainda
+                // não veio, guarda o pedaço e espera o resto.
+                if (g.inflateFrame()) |e| {
+                    g.ws_end = e;
+                    return;
+                }
+            }
+        }
+        const now = nowMs();
+        if (g.next_hb == std.math.maxInt(i64)) {
+            if (now >= g.hello_until) g.ws_end = .retry;
+        } else if (now >= g.next_hb) {
+            if (!g.acked) {
+                g.ws_end = .reconnect; // conexão "zumbi"
+                return;
+            }
+            g.heartbeat();
+        }
     }
 
     const End = enum {
@@ -287,62 +390,55 @@ pub const Gateway = struct {
         // `seq` e `session_id` sobrevivem à queda: é isso que permite o RESUME.
         g.acked = true;
         g.next_hb = std.math.maxInt(i64);
+        g.hello_until = nowMs() + 30_000;
         g.hb_sent_at = 0;
+        g.ws_end = null;
+        g.ws_live = true;
         g.frame.clearRetainingCapacity();
         g.zout.clearRetainingCapacity();
         g.shrinkBuffers();
 
         var cmds: std.ArrayList(ev.Command) = .empty;
         defer cmds.deinit(alloc);
-        var buf: [64 * 1024]u8 = undefined;
         while (true) {
             // Primeiro o que ficou esperando a conexão voltar.
             if (g.runPending()) |e| return e;
             // Depois os comandos novos do app (REST).
             g.commands.drain(&cmds);
-            for (cmds.items) |cmd| {
+            for (cmds.items, 0..) |cmd, i| {
                 if (cmd == .shutdown) {
                     g.stopping = true;
+                    for (cmds.items[i + 1..]) |rest| freeCommand(rest);
+                    cmds.clearRetainingCapacity();
                     return .reconnect;
                 }
-                g.execute(cmd);
+                // Uma espera lá dentro (rate limit) pode ter visto o pedido de parar.
+                if (g.stopping) freeCommand(cmd) else g.execute(cmd);
             }
             cmds.clearRetainingCapacity();
+            if (g.stopping) return .reconnect;
             g.voiceTick();
+            if (g.ws_end) |e| return e;
 
-            // Espera o socket ou o próximo heartbeat (no máximo 50 ms, para
-            // atender os comandos rápido).
+            // Dorme até chegar algo no socket, um comando ou o próximo
+            // heartbeat. Em call, a thread de voz é conferida 20x por segundo.
             const now = nowMs();
-            const wait: c_int = @intCast(std.math.clamp(g.next_hb - now, 0, 50));
-            var pfd: c.struct_pollfd = .{ .fd = sock, .events = c.POLLIN, .revents = 0 };
-            _ = c.poll(&pfd, 1, wait);
-
-            // Lê tudo que chegou.
-            while (true) {
-                var got: usize = 0;
-                var meta: [*c]const c.struct_curl_ws_frame = null;
-                const rc = c.curl_ws_recv(h, &buf, buf.len, &got, &meta);
-                if (rc == c.CURLE_AGAIN) break;
-                if (rc != c.CURLE_OK) return .retry;
-                if (meta == null) break;
-                if (meta.*.flags & c.CURLWS_CLOSE != 0) {
-                    const code: u16 = if (got >= 2) (@as(u16, buf[0]) << 8) | buf[1] else 0;
-                    return g.onClose(code);
-                }
-                // Ping/pong são tratados pelo libcurl; não são payload do gateway.
-                if (meta.*.flags & (c.CURLWS_PING | c.CURLWS_PONG) != 0) continue;
-                if (got > 0) g.frame.appendSlice(alloc, buf[0..got]) catch return .retry;
-                if (meta.*.bytesleft == 0 and meta.*.flags & c.CURLWS_CONT == 0) {
-                    // O Discord fecha cada payload com 00 00 FF FF. Se ainda
-                    // não veio, guarda o pedaço e espera o resto.
-                    if (g.inflateFrame()) |e| return e;
-                }
+            const voice_busy = g.voice != null or g.voice_wait_until != 0;
+            const cap: i64 = if (voice_busy or g.wake_pipe[0] < 0) 50 else 1000;
+            const due = if (g.next_hb == std.math.maxInt(i64)) g.hello_until else g.next_hb;
+            const wait: c_int = @intCast(std.math.clamp(due - now, 0, cap));
+            var pfd = [2]c.struct_pollfd{
+                .{ .fd = sock, .events = c.POLLIN, .revents = 0 },
+                .{ .fd = g.wake_pipe[0], .events = c.POLLIN, .revents = 0 },
+            };
+            _ = c.poll(&pfd, 2, wait);
+            if (pfd[1].revents & c.POLLIN != 0) {
+                var junk: [64]u8 = undefined;
+                _ = c.read(g.wake_pipe[0], &junk, junk.len);
             }
 
-            if (nowMs() >= g.next_hb) {
-                if (!g.acked) return .reconnect; // conexão "zumbi"
-                g.heartbeat();
-            }
+            g.serviceWs();
+            if (g.ws_end) |e| return e;
         }
     }
 
@@ -409,8 +505,29 @@ pub const Gateway = struct {
 
     fn send(g: *Gateway, payload: []const u8) void {
         const h = g.ws orelse return;
-        var sent: usize = 0;
-        _ = c.curl_ws_send(h, payload.ptr, payload.len, &sent, 0, c.CURLWS_TEXT);
+        if (!g.ws_live) return;
+        var off: usize = 0;
+        var first = true;
+        var waited: u8 = 0;
+        while (off < payload.len) {
+            var sent: usize = 0;
+            const flags: c_uint = if (first) c.CURLWS_TEXT else c.CURLWS_CONT;
+            const rc = c.curl_ws_send(h, payload.ptr + off, payload.len - off, &sent, 0, flags);
+            if (rc == c.CURLE_AGAIN) {
+                waited += 1;
+                if (waited > 50) break;
+                var sock: c.curl_socket_t = -1;
+                _ = c.curl_easy_getinfo(h, c.CURLINFO_ACTIVESOCKET, &sock);
+                var pfd: c.struct_pollfd = .{ .fd = sock, .events = c.POLLOUT, .revents = 0 };
+                _ = c.poll(&pfd, 1, 20);
+                continue;
+            }
+            if (rc != c.CURLE_OK or sent == 0) break;
+            off += sent;
+            first = false;
+        }
+        // Metade de um quadro não tem conserto: reconecta (o RESUME recupera).
+        if (off < payload.len and g.ws_end == null) g.ws_end = .reconnect;
     }
 
     fn heartbeat(g: *Gateway) void {
@@ -743,7 +860,10 @@ pub const Gateway = struct {
         if (std.mem.eql(u8, t, "READY")) return g.onReady(d, arena);
         if (std.mem.eql(u8, t, "RESUMED")) {
             // O gateway reenviou o que perdemos; o estado local continua válido.
+            g.gatewayReady();
             g.emit(.{ .status = .ready });
+            // Um pedido de lista feito bem na hora da queda se perdeu.
+            if (g.sub_guild != 0) g.subscribe(g.sub_guild, g.sub_channel);
             return;
         }
         if (std.mem.eql(u8, t, "MESSAGE_CREATE")) {
@@ -756,7 +876,9 @@ pub const Gateway = struct {
             // Pode vir só com os embeds (a prévia de um link, segundos depois).
             const ch = j.id(j.get(d, "channel_id")) orelse return;
             const id = j.id(j.get(d, "id")) orelse return;
-            const content: ?[]const u8 = if (j.str(j.get(d, "content"))) |t2| try j.simplifyContent(alloc, t2) else null;
+            const text = j.str(j.get(d, "content"));
+            const content: ?[]const u8 = if (text) |t2| try j.simplifyContent(alloc, t2) else null;
+            const raw: ?[]const u8 = if (text != null and content.?.len != text.?.len) try alloc.dupe(u8, text.?) else null;
             const has_embeds = j.get(d, "embeds") != null;
             var atts: ?[]types.Attachment = null;
             if (j.get(d, "attachments") != null) {
@@ -771,6 +893,7 @@ pub const Gateway = struct {
                 .channel = ch,
                 .id = id,
                 .content = content,
+                .raw = raw,
                 .embeds = if (has_embeds) try embedsOf(d) else null,
                 .attachments = atts,
             } });
@@ -793,6 +916,9 @@ pub const Gateway = struct {
             return;
         }
         if (std.mem.eql(u8, t, "GUILD_DELETE")) {
+            // `unavailable`: queda do Discord, não saída. O servidor volta com
+            // um GUILD_CREATE, e as mensagens em memória continuam valendo.
+            if (j.get(d, "unavailable")) |u| if (u == .bool and u.bool) return;
             if (j.id(j.get(d, "id"))) |id| g.emit(.{ .guild_delete = id });
             return;
         }
@@ -954,7 +1080,8 @@ pub const Gateway = struct {
         const add = std.mem.eql(u8, t, "MESSAGE_REACTION_ADD");
         if (add or std.mem.eql(u8, t, "MESSAGE_REACTION_REMOVE")) {
             const user = j.id(j.get(d, "user_id")) orelse return;
-            if (user == g.me) return; // a nossa já foi aplicada na hora
+            // A nossa volta aqui também: o Store ignora o que já aplicou na
+            // hora, e o que veio de outro aparelho entra.
             const emoji = j.get(d, "emoji") orelse return;
             g.emit(.{ .reaction = .{
                 .channel = j.id(j.get(d, "channel_id")) orelse return,
@@ -1005,7 +1132,9 @@ pub const Gateway = struct {
         if (j.isNull(j.get(e, "id"))) return types.Reaction.init(name);
         // Emoji personalizado: mostra o nome enquanto não há imagens.
         var b: [16]u8 = undefined;
-        return types.Reaction.init(std.fmt.bufPrint(&b, ":{s}:", .{name[0..@min(name.len, 12)]}) catch name);
+        var r = types.Reaction.init(std.fmt.bufPrint(&b, ":{s}:", .{name[0..@min(name.len, 12)]}) catch name);
+        r.custom = j.id(j.get(e, "id")) orelse 0;
+        return r;
     }
 
     fn upsert(g: *Gateway, u: Value) void {
@@ -1169,16 +1298,6 @@ pub const Gateway = struct {
 
         const parent = j.id(j.get(cv, "parent_id")) orelse 0;
         const pos: u16 = @intCast(std.math.clamp(j.int(j.get(cv, "position")) orelse 0, 0, 65535));
-        var ows: std.ArrayList(types.Overwrite) = .empty;
-        for (j.array(j.get(cv, "permission_overwrites"))) |ov| {
-            const oid = j.id(j.get(ov, "id")) orelse continue;
-            ows.append(alloc, .{
-                .id = oid,
-                .member = (j.int(j.get(ov, "type")) orelse 0) == 1,
-                .allow = permBits(j.get(ov, "allow")),
-                .deny = permBits(j.get(ov, "deny")),
-            }) catch {};
-        }
         return .{
             .id = cid,
             .guild = gid,
@@ -1191,8 +1310,23 @@ pub const Gateway = struct {
             .recipients = recipients,
             .group = kind_i == 3,
             .icon = optDupe(j.str(j.get(cv, "icon"))),
-            .overwrites = ows.toOwnedSlice(alloc) catch &.{},
+            .overwrites = overwritesOf(cv),
         };
+    }
+
+    /// Exceções de permissão de um canal (o Store fica com a lista).
+    fn overwritesOf(cv: Value) []const types.Overwrite {
+        var ows: std.ArrayList(types.Overwrite) = .empty;
+        for (j.array(j.get(cv, "permission_overwrites"))) |ov| {
+            const oid = j.id(j.get(ov, "id")) orelse continue;
+            ows.append(alloc, .{
+                .id = oid,
+                .member = (j.int(j.get(ov, "type")) orelse 0) == 1,
+                .allow = permBits(j.get(ov, "allow")),
+                .deny = permBits(j.get(ov, "deny")),
+            }) catch {};
+        }
+        return ows.toOwnedSlice(alloc) catch &.{};
     }
 
     /// Permissões vêm como texto ("1024") nas versões novas da API.
@@ -1245,11 +1379,13 @@ pub const Gateway = struct {
 
     /// Mensagem da API -> nosso tipo (conteúdo alocado).
     fn message(g: *Gateway, m: Value) !?types.Message {
-        _ = g;
         const author = j.get(m, "author") orelse return null;
         const msg_id = j.id(j.get(m, "id")) orelse return null;
-        var content = try j.simplifyContent(alloc, j.str(j.get(m, "content")) orelse "");
+        const raw_text = j.str(j.get(m, "content")) orelse "";
+        var content = try j.simplifyContent(alloc, raw_text);
         errdefer alloc.free(content);
+        const raw: []const u8 = if (content.len != raw_text.len) try alloc.dupe(u8, raw_text) else "";
+        errdefer alloc.free(raw);
         const atts = try attachmentsOf(m);
         errdefer types.freeAttachments(alloc, atts);
         for (j.array(j.get(m, "sticker_items"))) |s| {
@@ -1276,12 +1412,17 @@ pub const Gateway = struct {
             .author = j.id(j.get(author, "id")) orelse 0,
             .timestamp = j.isoTime(j.str(j.get(m, "timestamp")) orelse ""),
             .content = content,
+            .raw = raw,
             .nonce = nonce,
             .reply_to = reply,
             .edited = !j.isNull(j.get(m, "edited_timestamp")),
             .attachments = atts,
             .embeds = embeds,
             .system = sys.kind,
+            .mention_everyone = if (j.get(m, "mention_everyone")) |me| me == .bool and me.bool else false,
+            .mentions_me = for (j.array(j.get(m, "mentions"))) |u| {
+                if (j.id(j.get(u, "id")) == g.me) break true;
+            } else false,
         };
     }
 
@@ -1313,6 +1454,12 @@ pub const Gateway = struct {
         };
     }
 
+    /// URL de mídia que veio do servidor: `file://` é só para o que a própria
+    /// pessoa anexou, nunca para o que vem da rede.
+    fn isHttp(u: []const u8) bool {
+        return std.mem.startsWith(u8, u, "https://") or std.mem.startsWith(u8, u, "http://");
+    }
+
     /// Anexos e imagens de links (embeds de imagem/GIF) de uma mensagem.
     /// Imagens usam o `proxy_url` (media.discordapp.net), que sabe reduzir.
     fn attachmentsOf(m: Value) ![]types.Attachment {
@@ -1331,6 +1478,7 @@ pub const Gateway = struct {
             // Imagem pelo proxy (que reduz); GIF do arquivo original (o proxy
             // pode devolver parado); vídeo: um quadro pelo proxy, e o link.
             const url = if (image and !gif) j.str(j.get(a, "proxy_url")) orelse cdn else cdn;
+            if (!isHttp(url)) continue;
             try list.append(alloc, .{
                 .url = try alloc.dupe(u8, url),
                 .filename = try alloc.dupe(u8, name),
@@ -1355,6 +1503,7 @@ pub const Gateway = struct {
             if (!std.mem.eql(u8, kind, "image") and !std.mem.eql(u8, kind, "gifv")) continue;
             const iv = j.get(e, "image") orelse j.get(e, "thumbnail") orelse continue;
             const url = j.str(j.get(iv, "proxy_url")) orelse continue;
+            if (!isHttp(url)) continue;
             const w = j.int(j.get(iv, "width")) orelse 0;
             const h = j.int(j.get(iv, "height")) orelse 0;
             if (w <= 0 or h <= 0) continue;
@@ -1416,13 +1565,14 @@ pub const Gateway = struct {
                 if (media_url.discordHost(pu)) out.video_url = try alloc.dupe(u8, pu);
             };
             const big = j.get(e, "image") orelse if (out.video) j.get(e, "thumbnail") else null;
-            if (big) |iv| if (j.str(j.get(iv, "proxy_url"))) |u| {
+            if (big) |iv| if (j.str(j.get(iv, "proxy_url"))) |u| if (isHttp(u)) {
                 out.image = try alloc.dupe(u8, u);
                 out.image_w = @intCast(std.math.clamp(j.int(j.get(iv, "width")) orelse 400, 1, 65535));
                 out.image_h = @intCast(std.math.clamp(j.int(j.get(iv, "height")) orelse 225, 1, 65535));
             };
             if (!out.video) if (j.get(e, "thumbnail")) |tv| {
-                out.thumb = try dupeOpt(j.str(j.get(tv, "proxy_url")) orelse "");
+                const u = j.str(j.get(tv, "proxy_url")) orelse "";
+                out.thumb = try dupeOpt(if (isHttp(u)) u else "");
             };
             const empty = out.title.len == 0 and out.description.len == 0 and out.author.len == 0 and out.fields.len == 0 and out.image.len == 0 and out.thumb.len == 0;
             if (empty) {
@@ -1646,34 +1796,54 @@ pub const Gateway = struct {
             if (settings_proto.fromJson(alloc, gf)) |layout| g.emitFolders(layout) else |_| {}
         };
         g.emit(.{ .status = .ready });
+        g.gatewayReady();
         // Sessão nova: a lista de membros que estava aberta precisa ser pedida de novo.
         if (g.sub_guild != 0) g.subscribe(g.sub_guild, g.sub_channel);
     }
 
-    fn sortDms(chs: []types.Channel, pcs: []const Value) void {
-        const Ctx = struct {
-            pcs: []const Value,
-            fn last(self: @This(), id: Id) u64 {
-                for (self.pcs) |pc| if (j.id(j.get(pc, "id")) == id) return j.id(j.get(pc, "last_message_id")) orelse 0;
-                return 0;
-            }
-            fn lt(self: @This(), a: types.Channel, b: types.Channel) bool {
-                if (a.guild != 0 or b.guild != 0) return false;
-                return self.last(a.id) > self.last(b.id);
-            }
+    /// READY/RESUMED: o que esperava o gateway volta para a fila.
+    fn gatewayReady(g: *Gateway) void {
+        g.ws_ready = true;
+        g.pending.appendSlice(alloc, g.held.items) catch {};
+        g.held.clearRetainingCapacity();
+    }
+
+    /// Comando que é escrito no WebSocket (não passa pelo REST).
+    fn usesGateway(cmd: ev.Command) bool {
+        return switch (cmd) {
+            .subscribe_guild, .set_status, .join_voice, .voice_flags => true,
+            else => false,
         };
+    }
+
+    fn sortDms(chs: []types.Channel, pcs: []const Value) void {
         var first_dm: usize = chs.len;
         for (chs, 0..) |ch, i| if (ch.guild == 0) {
             first_dm = i;
             break;
         };
-        std.mem.sort(types.Channel, chs[first_dm..], Ctx{ .pcs = pcs }, Ctx.lt);
+        // Conta de muitas DMs: a última mensagem é lida uma vez por canal,
+        // não a cada comparação.
+        var last: std.AutoHashMapUnmanaged(Id, u64) = .empty;
+        defer last.deinit(alloc);
+        last.ensureTotalCapacity(alloc, @intCast(pcs.len)) catch return;
+        for (pcs) |pc| if (j.id(j.get(pc, "id"))) |id| {
+            last.putAssumeCapacity(id, j.id(j.get(pc, "last_message_id")) orelse 0);
+        };
+        const Ctx = struct {
+            last: *const std.AutoHashMapUnmanaged(Id, u64),
+            fn lt(self: @This(), a: types.Channel, b: types.Channel) bool {
+                if (a.guild != 0 or b.guild != 0) return false;
+                return (self.last.get(a.id) orelse 0) > (self.last.get(b.id) orelse 0);
+            }
+        };
+        std.mem.sort(types.Channel, chs[first_dm..], Ctx{ .last = &last }, Ctx.lt);
     }
 
     /// Canais de um servidor na ordem do Discord: soltos primeiro, depois
     /// cada categoria com os seus (texto antes de voz).
     fn appendChannels(out: *std.ArrayList(types.Channel), gid: Id, list: []const Value) !void {
-        const Ch = struct { id: Id, parent: Id, kind: types.ChannelKind, pos: i64, name: []const u8, topic: []const u8 };
+        const Ch = struct { id: Id, parent: Id, kind: types.ChannelKind, pos: i64, name: []const u8, topic: []const u8, source: Value };
         var tmp: std.ArrayList(Ch) = .empty;
         defer tmp.deinit(alloc);
         for (list) |cv| {
@@ -1690,6 +1860,7 @@ pub const Gateway = struct {
                 .pos = j.int(j.get(cv, "position")) orelse 0,
                 .name = j.str(j.get(cv, "name")) orelse "?",
                 .topic = j.str(j.get(cv, "topic")) orelse "",
+                .source = cv,
             });
         }
         const lt = struct {
@@ -1704,7 +1875,7 @@ pub const Gateway = struct {
         var pos: u16 = 0;
         const push = struct {
             fn f(o: *std.ArrayList(types.Channel), g: Id, ch: Ch, p: *u16) !void {
-                try o.append(alloc, .{ .id = ch.id, .guild = g, .parent = if (ch.parent == 0) null else ch.parent, .kind = ch.kind, .name = dupe(ch.name), .topic = dupe(ch.topic), .position = p.* });
+                try o.append(alloc, .{ .id = ch.id, .guild = g, .parent = if (ch.parent == 0) null else ch.parent, .kind = ch.kind, .name = dupe(ch.name), .topic = dupe(ch.topic), .position = p.*, .overwrites = overwritesOf(ch.source) });
                 p.* +%= 1;
             }
         }.f;
@@ -1737,6 +1908,7 @@ pub const Gateway = struct {
 
     /// Transferência que para assim que o app pede para encerrar.
     fn abortable(g: *Gateway, h: *c.CURL) void {
+        _ = c.curl_easy_setopt(h, c.CURLOPT_NOSIGNAL, @as(c_long, 1));
         _ = c.curl_easy_setopt(h, c.CURLOPT_NOPROGRESS, @as(c_long, 0));
         _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFOFUNCTION, abortCb);
         _ = c.curl_easy_setopt(h, c.CURLOPT_XFERINFODATA, g);
@@ -1744,7 +1916,15 @@ pub const Gateway = struct {
 
     fn abortCb(ud: ?*anyopaque, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t) callconv(.c) c_int {
         const g: *Gateway = @ptrCast(@alignCast(ud.?));
-        return @intFromBool(g.abort.load(.acquire));
+        if (g.abort.load(.acquire)) return 1;
+        // Transferência longa (upload): o WebSocket é outro handle e continua
+        // sendo atendido, senão o Discord derruba a sessão por falta de heartbeat.
+        const now = nowMs();
+        if (now - g.serviced_ms >= 200) {
+            g.serviced_ms = now;
+            g.serviceWs();
+        }
+        return 0;
     }
 
     fn writeCb(ptr: [*c]u8, size: usize, n: usize, user: ?*anyopaque) callconv(.c) usize {
@@ -1755,7 +1935,13 @@ pub const Gateway = struct {
 
     fn secondsToMs(s: []const u8) ?u32 {
         const f = std.fmt.parseFloat(f64, s) catch return null;
-        if (!(f >= 0) or f > 300) return null;
+        return floatSecondsToMs(f);
+    }
+
+    /// Segundos vindos do servidor: nada de negativo, NaN ou infinito. Um
+    /// bloqueio longo (Cloudflare: até horas) vale inteiro.
+    fn floatSecondsToMs(f: f64) ?u32 {
+        if (!(f >= 0) or f > 86_400) return null;
         return @intFromFloat(f * 1000);
     }
 
@@ -1833,7 +2019,16 @@ pub const Gateway = struct {
             // balde do rate limit libera; fazemos o mesmo.
             const now = nowMs();
             const until = @max(g.rate_until, g.global_until);
-            if (until > now) g.sleepServing(@intCast(@min(until - now, 20_000)));
+            if (until > now) {
+                // Bloqueio longo: insistir só aumenta a pena. Falha na hora e
+                // quem pediu fica sabendo (a fila não trava por minutos).
+                if (until - now > long_block_ms) {
+                    g.noticeBlocked(until);
+                    return null;
+                }
+                g.sleepServing(@intCast(until - now));
+                if (g.stopping) return null;
+            }
 
             var headers: ?*c.struct_curl_slist = null;
             headers = c.curl_slist_append(headers, auth.ptr);
@@ -1885,8 +2080,8 @@ pub const Gateway = struct {
                 if (std.json.parseFromSlice(Value, alloc, resp.body.items, .{})) |parsed| {
                     defer parsed.deinit();
                     if (j.get(parsed.value, "retry_after")) |ra| switch (ra) {
-                        .float => |f| wait_ms = @intFromFloat(@min(f, 30) * 1000),
-                        .integer => |i| wait_ms = @intCast(@min(i, 30) * 1000),
+                        .float => |f| wait_ms = floatSecondsToMs(f) orelse wait_ms,
+                        .integer => |i| wait_ms = floatSecondsToMs(@floatFromInt(i)) orelse wait_ms,
                         else => {},
                     };
                     if (j.get(parsed.value, "global")) |gv| {
@@ -1900,8 +2095,13 @@ pub const Gateway = struct {
                     g.rate_until = @max(g.rate_until, retry_at);
                 }
                 resp.body.deinit(alloc);
+                if (wait_ms > long_block_ms) {
+                    g.noticeBlocked(retry_at);
+                    return null;
+                }
                 g.notice("o Discord pediu calma: esperando {d} ms", "Discord asked us to slow down: waiting {d} ms", .{wait_ms});
                 g.sleepServing(wait_ms + 100);
+                if (g.stopping) return null;
                 continue;
             }
             // 5xx passageiro: o cliente oficial tenta de novo só em leituras.
@@ -1913,6 +2113,16 @@ pub const Gateway = struct {
             return resp;
         }
         return null;
+    }
+
+    /// Espera de rate limit a partir da qual o comando falha em vez de esperar.
+    const long_block_ms = 30_000;
+
+    fn noticeBlocked(g: *Gateway, until: i64) void {
+        if (g.block_noticed == until) return;
+        g.block_noticed = until;
+        const mins = @max(@divFloor(until - nowMs() + 30_000, 60_000), 1);
+        g.notice("o Discord bloqueou os pedidos por {d} min; tentando de novo depois disso", "Discord blocked requests for {d} min; will try again after that", .{mins});
     }
 
     fn freeCommand(cmd: ev.Command) void {
@@ -2017,6 +2227,10 @@ pub const Gateway = struct {
     }
 
     fn execute(g: *Gateway, cmd: ev.Command) void {
+        if (!g.ws_ready and usesGateway(cmd)) {
+            g.held.append(alloc, cmd) catch {};
+            return;
+        }
         defer freeCommand(cmd);
         var path_buf: [256]u8 = undefined;
         switch (cmd) {
@@ -2036,7 +2250,8 @@ pub const Gateway = struct {
             },
             .fetch_older => |o| {
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages?before={d}&limit=50", .{ o.channel, o.before }) catch return;
-                const none: ev.Event = .{ .history = .{ .channel = o.channel, .messages = &.{}, .older = true, .more = false } };
+                // Falha não é "acabou o histórico": `more` fica ligado (ver Store).
+                const none: ev.Event = .{ .history = .{ .channel = o.channel, .messages = &.{}, .older = true } };
                 var resp = g.request("GET", path, null) orelse return g.emit(none);
                 defer resp.body.deinit(alloc);
                 if (resp.status != 200) return g.emit(none);
@@ -2079,10 +2294,16 @@ pub const Gateway = struct {
                         _ = c.curl_mime_filedata(fp, f.ptr);
                     }
                 }
-                var resp = g.requestEx("POST", path, if (mime == null) b.items else null, mime) orelse return;
+                const failed: ev.Event = .{ .send_failed = .{ .channel = m.channel, .nonce = m.nonce } };
+                var resp = g.requestEx("POST", path, if (mime == null) b.items else null, mime) orelse return g.emit(failed);
                 defer resp.body.deinit(alloc);
+                if (resp.status >= 300) g.emit(failed);
                 if (resp.status == 413) return g.notice("arquivo grande demais para o Discord (limite de 10 MB sem Nitro)", "file too large for Discord (10 MB limit without Nitro)", .{});
-                if (resp.status >= 300) g.noticeHttp(i18n.tr("não foi possível enviar", "couldn't send"), &resp);
+                if (resp.status >= 300) return g.noticeHttp(i18n.tr("não foi possível enviar", "couldn't send"), &resp);
+                // A imagem colada era um arquivo temporário nosso: já foi.
+                for (m.files) |f| if (types.isPastedFile(f)) {
+                    _ = c.unlink(f.ptr);
+                };
             },
             .edit_message => |m| {
                 var b: std.ArrayList(u8) = .empty;
@@ -2103,7 +2324,11 @@ pub const Gateway = struct {
             },
             .react => |r| {
                 var enc: [64]u8 = undefined;
-                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}/reactions/{s}/@me", .{ r.channel, r.id, j.urlEncode(&enc, r.emoji.text()) }) catch return;
+                // Personalizado: a API pede `nome:id` (quem vale é o ID).
+                var name_buf: [48]u8 = undefined;
+                const label = std.mem.trim(u8, r.emoji.text(), ":");
+                const emoji = if (r.emoji.custom != 0) std.fmt.bufPrint(&name_buf, "{s}:{d}", .{ label, r.emoji.custom }) catch return else r.emoji.text();
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}/reactions/{s}/@me", .{ r.channel, r.id, j.urlEncode(&enc, emoji) }) catch return;
                 var resp = g.request(if (r.add) "PUT" else "DELETE", path, null) orelse return;
                 defer resp.body.deinit(alloc);
                 if (resp.status >= 300 and resp.status != 404) g.noticeHttp(i18n.tr("não foi possível reagir", "couldn't react"), &resp);
@@ -2275,8 +2500,8 @@ pub const Gateway = struct {
             const mid = j.id(j.get(m, "id")) orelse continue;
             for (j.array(j.get(m, "reactions"))) |rv| {
                 var r = emojiOf(j.get(rv, "emoji") orelse continue);
-                r.count = @intCast(@min(j.int(j.get(rv, "count")) orelse 1, 65535));
-                r.me = (j.get(rv, "me") orelse Value{ .bool = false }) == .bool and (j.get(rv, "me").?).bool;
+                r.count = @intCast(std.math.clamp(j.int(j.get(rv, "count")) orelse 1, 0, 65535));
+                r.me = if (j.get(rv, "me")) |me| me == .bool and me.bool else false;
                 g.emit(.{ .reaction_set = .{ .channel = ch, .id = mid, .reaction = r } });
             }
         }
