@@ -12,6 +12,7 @@
 const std = @import("std");
 const c = @import("c");
 const voz = @import("../core/voz.zig");
+const ruido = @import("../core/ruido.zig");
 const S = @import("../ui/settings_state.zig");
 
 const Atomic = std.atomic.Value;
@@ -52,6 +53,7 @@ pub const Shared = struct {
     auto: Atomic(bool) = .init(false),
     highpass: Atomic(bool) = .init(true),
     gate: Atomic(bool) = .init(false),
+    denoise: Atomic(ruido.Mode) = .init(ruido.Mode.default),
     sounds: Atomic(bool) = .init(true),
     ptt: Atomic(bool) = .init(false),
     /// A tecla do aperte para falar está apertada (eventos do SDL, janela em foco).
@@ -76,6 +78,10 @@ pub const Shared = struct {
 
     // Contadores e injeção para o QA (nada disso muda o som de verdade).
     qa_tone: Atomic(f32) = .init(0),
+    /// Ruído branco no lugar do microfone (amplitude, de 0 a 1).
+    qa_noise: Atomic(f32) = .init(0),
+    /// O nível do que o teste do microfone devolveu por último.
+    loop_db: Atomic(f32) = .init(voz.db_silence),
     qa_fail_mic: Atomic(bool) = .init(false),
     sounds_played: Atomic(u32) = .init(0),
     loop_frames: Atomic(u32) = .init(0),
@@ -89,6 +95,7 @@ pub const Shared = struct {
             .auto = s.auto.load(.monotonic),
             .highpass = s.highpass.load(.monotonic),
             .gate = s.gate.load(.monotonic),
+            .denoise = s.denoise.load(.monotonic),
         };
     }
 };
@@ -118,6 +125,7 @@ pub fn apply(set: *const S.Settings) void {
     sh.auto.store(set.voice_auto, .monotonic);
     sh.highpass.store(set.voice_highpass, .monotonic);
     sh.gate.store(set.voice_gate, .monotonic);
+    sh.denoise.store(ruido.Mode.fromByte(set.voice_denoise), .monotonic);
     sh.sounds.store(set.voice_sounds, .monotonic);
     if (set.voice_ptt != sh.ptt.load(.monotonic)) {
         sh.ptt.store(set.voice_ptt, .monotonic);
@@ -234,6 +242,7 @@ pub const Mic = struct {
     last_data_ms: i64 = 0,
     next_check_ms: i64 = 0,
     phase: f32 = 0,
+    noise_seed: u32 = 12345,
 
     const check_ms = 1000;
     const no_data_ms = 3000;
@@ -329,6 +338,17 @@ pub const Mic = struct {
                 out[i] = v;
                 out[i + 1] = v;
                 m.phase = @mod(m.phase + 2 * std.math.pi * 440.0 / @as(f32, voz.rate), 2 * std.math.pi);
+            }
+        }
+        const noise = sh.qa_noise.load(.monotonic);
+        if (noise > 0) {
+            var i: usize = 0;
+            while (i < out.len) : (i += 2) {
+                m.noise_seed = m.noise_seed *% 1664525 +% 1013904223;
+                const u = @as(f32, @floatFromInt(m.noise_seed >> 8)) / (1 << 24);
+                const v: i16 = @intFromFloat((u * 2 - 1) * noise * 32767);
+                out[i] = v;
+                out[i + 1] = v;
             }
         }
         return true;
@@ -541,6 +561,7 @@ const Helper = struct {
 
     fn closeAll(h: *Helper) void {
         h.mic.close();
+        h.cap.release();
         h.mic_open = false;
         if (h.loop) |s| c.SDL_DestroyAudioStream(s);
         h.loop = null;
@@ -566,6 +587,7 @@ const Helper = struct {
             if (h.mic_open) {
                 h.mic.close();
                 h.mic_open = false;
+                h.cap.release();
                 h.cap = .{};
                 h.shown_db = voz.db_silence;
                 sh.level_db.store(voz.db_silence, .monotonic);
@@ -604,6 +626,7 @@ const Helper = struct {
                 if (c.SDL_GetAudioStreamQueued(s) > 200 * bytes_per_ms) _ = c.SDL_ClearAudioStream(s);
                 _ = c.SDL_PutAudioStreamData(s, &pcm, frame_bytes);
                 _ = sh.loop_frames.fetchAdd(1, .monotonic);
+                sh.loop_db.store(voz.dbOf(voz.rmsOf(&pcm)), .monotonic);
             }
         }
         // Sobe na hora e cai devagar: dá para ler a barra.

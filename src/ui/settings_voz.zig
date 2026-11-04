@@ -11,6 +11,7 @@ const icons = @import("icons.zig");
 const i18n = @import("i18n.zig");
 const S = @import("settings_state.zig");
 const voz = @import("../core/voz.zig");
+const ruido = @import("../core/ruido.zig");
 const voz_audio = @import("../net/voz_audio.zig");
 const channels_ui = @import("comp_channels.zig");
 
@@ -61,6 +62,7 @@ pub fn draw(p: anytype) void {
 
     p.divider();
     p.heading(i18n.tr("Filtros", "Filters"));
+    denoise(p, &s.voice_denoise);
     p.toggle(i18n.tr("Tirar ronco (passa-altas)", "Remove rumble (high-pass)"), i18n.tr("Corta os graves abaixo de 90 Hz: vento, ventilador, zumbido da tomada.", "Cuts lows below 90 Hz: wind, fans, mains hum."), &s.voice_highpass);
     p.toggle(i18n.tr("Porta de ruído", "Noise gate"), i18n.tr("Abaixa o som quando o microfone só capta o ruído de fundo.", "Lowers the sound while the mic only picks up background noise."), &s.voice_gate);
 
@@ -141,22 +143,44 @@ fn volume(p: anytype, x: f32, wd: f32, y: f32, id: usize, label: []const u8, val
 // --- Modo de entrada --------------------------------------------------------
 
 fn mode(p: anytype, ptt: *bool) void {
+    const labels = [_][]const u8{ i18n.tr("Detecção de voz", "Voice activity"), i18n.tr("Aperte para falar", "Push to talk") };
+    if (segments(p, &labels, "voz-modo", 20, @intFromBool(ptt.*))) |i| ptt.* = i == 1;
+}
+
+/// Supressão de ruído: uma escolha entre motores, na ordem de `ruido.Mode`.
+fn denoise(p: anytype, value: *u8) void {
+    const ctx = p.ctx;
+    d.text(p.dl, p.font(.medium), 16, p.x, p.y, ctx.col(.text), i18n.tr("Supressão de ruído", "Noise suppression"));
+    p.y += 28;
+    const labels = [_][]const u8{ i18n.tr("Desligada", "Off"), "RNNoise" };
+    if (segments(p, &labels, "voz-ruido", 30, @intFromEnum(ruido.Mode.fromByte(value.*)))) |i| value.* = @intCast(i);
+    p.y -= 8;
+    p.note(i18n.tr("Rede neural pequena que roda neste computador, sem internet. Ouça o efeito em Testar microfone.", "A small neural network that runs on this computer, no internet. Hear it with Test microphone."));
+    p.note(i18n.tr("Reduz ruído constante: ventilador, chiado, ar-condicionado. Atrasa o microfone em 20 ms.", "Reduces steady noise: fans, hiss, air conditioning. Delays your mic by 20 ms."));
+    p.note(i18n.tr("Teclado e pancadas podem passar, outras vozes ficam e a sua pode abafar um pouco.", "Typing and bangs may get through, other voices stay and yours may get a bit muffled."));
+    p.y += 4;
+}
+
+/// Botões lado a lado, um escolhido. Devolve o que foi clicado.
+fn segments(p: anytype, labels: []const []const u8, comptime tag: []const u8, id: usize, selected: usize) ?usize {
     const ctx = p.ctx;
     const gap: f32 = 8;
-    const bw = (p.w - gap) / 2;
-    const labels = [_][]const u8{ i18n.tr("Detecção de voz", "Voice activity"), i18n.tr("Aperte para falar", "Push to talk") };
+    const count: f32 = @floatFromInt(labels.len);
+    const bw = (p.w - gap * (count - 1)) / count;
+    var clicked: ?usize = null;
     for (labels, 0..) |lb, i| {
         const r: d.Rect = .{ .x = p.x + @as(f32, @floatFromInt(i)) * (bw + gap), .y = p.y, .w = bw, .h = 42 };
-        const hb = d.hit(ctx, base_id + 20 + i, r);
-        qa.mark(r, "voz-modo:{d}", .{i});
-        if (hb.clicked) ptt.* = i == 1;
-        const sel = ptt.* == (i == 1);
+        const hb = d.hit(ctx, base_id + id + i, r);
+        qa.mark(r, tag ++ ":{d}", .{i});
+        if (hb.clicked) clicked = i;
+        const sel = selected == i;
         d.rect(p.dl, r, if (sel) ctx.col(.accent).alpha(0.22) else if (hb.hovered) ctx.col(.hover) else ctx.col(.rail).alpha(0.6), ctx.th.radius + 2);
         d.border(p.dl, r, if (sel) ctx.col(.accent) else ctx.col(.border), ctx.th.radius + 2, if (sel) 2 else 1);
         const tw = d.width(p.font(.semibold), 15, lb);
         d.text(p.dl, p.font(.semibold), 15, r.x + (r.w - tw) / 2, d.centerY(r, 15), if (sel) ctx.col(.text) else ctx.col(.muted), lb);
     }
     p.y += 56;
+    return clicked;
 }
 
 fn pushToTalk(p: anytype, key: *S.Text) void {

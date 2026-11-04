@@ -365,6 +365,7 @@ const Worker = struct {
     fn cleanup(w: *Worker) void {
         for (w.sources[0..w.n_sources]) |*s| s.deinit();
         w.n_sources = 0;
+        w.cap.release();
         w.mic.close();
         w.out.close();
         if (w.audio_on) voz_audio.release();
@@ -856,6 +857,8 @@ const Worker = struct {
         const blocked = w.v.micBlocked();
         var pcm: [frame_samples * channels]i16 = undefined;
         const have = !blocked and w.mic.read(&pcm);
+        // Mudo não gasta nada com o supressor: nem o estado fica.
+        if (blocked or w.mic.stream == null) w.cap.release();
         var voice = false;
         if (have) {
             const res = w.cap.process(&pcm, sh.captureCfg());
