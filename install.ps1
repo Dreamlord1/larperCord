@@ -1,6 +1,6 @@
-# Instala o larperCord para o usuario atual, sem administrador.
+# Installs larperCord for the current user, no administrator needed.
 #   irm https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.ps1 | iex
-#   Desinstalar: & ([scriptblock]::Create((irm .../install.ps1))) -Uninstall
+#   Uninstall: & ([scriptblock]::Create((irm .../install.ps1))) -Uninstall
 param([switch]$Uninstall)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -14,7 +14,7 @@ if ($Uninstall) {
     Get-Process larpercord -ErrorAction SilentlyContinue | Stop-Process -Force
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $shortcut -Force -ErrorAction SilentlyContinue
-    Write-Host 'larperCord removido. Suas configuracoes continuam em %APPDATA%\larpercord.'
+    Write-Host 'larperCord removed. Your settings are still in %APPDATA%\larpercord.'
     return
 }
 
@@ -22,7 +22,7 @@ $base = "https://github.com/$repo/releases/latest/download"
 $tmp = Join-Path $env:TEMP ("larpercord-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
-    Write-Host 'Baixando a ultima versao...'
+    Write-Host 'Downloading the latest version...'
     Invoke-WebRequest "$base/SHA256SUMS" -OutFile "$tmp\SHA256SUMS" -UseBasicParsing
     $files = @{
         'larpercord-windows-x86_64.exe' = 'larpercord.exe'
@@ -39,7 +39,7 @@ try {
         Invoke-WebRequest "$base/$asset" -OutFile "$tmp\$asset" -UseBasicParsing
         $hash = (Get-FileHash "$tmp\$asset" -Algorithm SHA256).Hash
         if (-not $sums.ContainsKey($asset) -or $hash -ne $sums[$asset].ToUpper()) {
-            throw "O arquivo $asset nao confere com o SHA256SUMS. Nada foi instalado."
+            throw "$asset does not match SHA256SUMS. Nothing was installed."
         }
     }
     Get-Process larpercord -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -52,7 +52,7 @@ try {
     $link.TargetPath = Join-Path $dir 'larpercord.exe'
     $link.WorkingDirectory = $dir
     $link.Save()
-    Write-Host 'Pronto. Abra o larperCord pelo Menu Iniciar.'
+    Write-Host 'Done. Open larperCord from the Start menu.'
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
