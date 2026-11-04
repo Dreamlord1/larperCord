@@ -4,6 +4,7 @@
 const std = @import("std");
 const c = @import("c");
 const platform = @import("platform/window.zig");
+const timeline = @import("platform/timeline.zig");
 const Store = @import("core/store.zig").Store;
 const ev = @import("core/event.zig");
 const types = @import("core/types.zig");
@@ -102,7 +103,9 @@ pub const App = struct {
     /// notify-send em andamento (recolhidos quando terminam).
     notifiers: std.ArrayList(*c.SDL_Process) = .empty,
     paste_n: u32 = 0,
-    curl_on: bool = false,
+    /// Muita memória acabou de ser solta (READY, rajada de imagens): o tique
+    /// do relógio devolve ao sistema.
+    trim_wanted: std.atomic.Value(bool) = .init(false),
     /// Guardar o token quando o Discord aceitar (o "Lembrar" do login).
     save_token: bool = false,
     /// Último aviso da rede (vira a mensagem de erro do login).
@@ -125,6 +128,7 @@ pub const App = struct {
         app.win = try platform.Window.init("larperCord", 1280, 800);
         wake_type_global = app.win.wake_type;
 
+        timeline.mark(.janela);
         _ = c.ImGui_CreateContext(null);
         const io = c.ImGui_GetIO();
         io.*.IniFilename = null;
@@ -132,7 +136,12 @@ pub const App = struct {
         _ = c.cImGui_ImplSDL3_InitForSDLRenderer(app.win.window, app.win.renderer);
         _ = c.cImGui_ImplSDLRenderer3_Init(app.win.renderer);
 
+        timeline.mark(.imgui);
         app.* = .{
+        const theme_list = try themes.Manager.init(gpa);
+        timeline.mark(.lista_temas);
+        const base_fonts = fonts_mod.Fonts.init(gpa, io.*.Fonts);
+        timeline.mark(.fontes_base);
             .gpa = gpa,
             .win = app.win,
             .store = Store.init(gpa),
@@ -170,14 +179,19 @@ pub const App = struct {
         i18n.set(if (opts.qa) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language));
         app.st.settings.open = opts.settings;
         const name = opts.theme orelse saved_theme orelse "classico";
+        timeline.mark(.config);
         const want = app.themes.indexOf(name) orelse 0;
         if (!app.themes.load(want)) {
             std.log.err("{s}", .{app.themes.last_error orelse "tema inválido"});
             if (!app.themes.load(0)) return error.NoTheme;
         }
         app.applyThemeStyle();
+        timeline.mark(.tema);
         app.themes.watch(wakeTheme);
+        timeline.mark(.fontes_tema);
 
+        // Antes da rede: a thread do gateway inicia o libcurl pelo mesmo caminho.
+        app.images = try images.Cache.init(app.win.renderer, app.win.wake_type);
         // Com token salvo: conecta direto (a tela de abertura aparece enquanto
         // isso). Sem token: a tela de login. Prints e QA usam a demonstração.
         app.net = .none;
@@ -187,19 +201,23 @@ pub const App = struct {
         } else if (opts.demo or opts.qa or (opts.shot != null and c.SDL_getenv("LARPER_SHOT_REAL") == null)) {
             // (LARPER_SHOT_REAL=1: print com a conta de verdade, para depurar.)
             try app.startDemo();
-        } else if (app_accounts.startupToken()) |t| {
+        } else if (app_accounts.envStartupToken()) |t| {
             try app.startReal(t);
             app.login.begin(.connecting);
-        } else app.login.begin(.form);
+        } else {
+            // O chaveiro (secret-tool) leva um tempo e pode até pedir senha: a
+            // janela abre antes e a resposta chega por `finishStartupLookup`.
+            app.login.begin(if (accounts_store.list.len > 0) .connecting else .form);
+            app_accounts.startStartupLookup(app.win.wake_type);
+        }
 
         // Relógio e RAM da barra de status: um tique a cada 2 s.
         app.timer = c.SDL_AddTimer(2000, tick, app);
         app.stats.ram_kb = platform.selfPssKb();
-        app.images = try images.Cache.init(app.win.renderer, app.win.wake_type);
-        try app.images.start();
         app.picked = try Queue([:0]u8).init(std.heap.c_allocator);
         plugin_host.init(app);
         return app;
+        timeline.mark(.create_fim);
     }
 
     pub fn destroy(app: *App) void {
@@ -227,8 +245,6 @@ pub const App = struct {
         app.picked.deinit();
         @import("ui/video.zig").shutdown();
         app.images.deinit();
-        // Por último: as threads de mídia e de vídeo também usam o libcurl.
-        if (app.curl_on) c.curl_global_cleanup();
         app.st.saved.deinit(app.gpa);
         app.store.deinit();
         app.themes.deinit();
@@ -250,9 +266,6 @@ pub const App = struct {
 
     /// Conecta na conta de verdade. O gateway passa a ser dono do token.
     pub fn startReal(app: *App, token: [:0]u8) !void {
-        // Só inicia o libcurl/OpenSSL quando vai usar (~5 MB a menos no modo demonstração).
-        if (!app.curl_on) _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
-        app.curl_on = true;
         app.store.demo = false;
         app.net = .{ .real = .{
             .commands = try Queue(ev.Command).init(app.gpa),
@@ -422,6 +435,8 @@ pub const App = struct {
     /// O que a tela de login pediu.
     fn loginResult(app: *App, r: login_mod.Result) void {
         const lg = &app.login;
+        // Decidiu alguma coisa na tela: a resposta do chaveiro não vale mais.
+        app_accounts.abandonStartupLookup();
         switch (r) {
             .submit => {
                 const t = lg.tokenText();
@@ -721,7 +736,7 @@ pub const App = struct {
         for (n.children) |*ch| app.loadNodeFonts(ch);
     }
 
-    fn uiFamily(app: *App, name: []const u8) *fonts_mod.Family {
+    pub fn uiFamily(app: *App, name: []const u8) *fonts_mod.Family {
         return app.fonts.family(name) catch app.fonts.family("Inter") catch app.fonts.families.items[0];
     }
 
@@ -1515,6 +1530,7 @@ pub const App = struct {
             if (app.opts.stats) switch (e) {
                 .status => |st| std.log.info("conexão: {t}", .{st}),
                 .notice => |n| std.log.info("aviso: {s}", .{n}),
+            if (e == .history) timeline.mark(.historico);
                 .latency => |l| std.log.info("ping: {d} ms", .{l}),
                 .ready => |r| std.log.info("READY: {d} servidores, {d} canais, {d} usuários", .{ r.guilds.len, r.channels.len, r.users.len }),
                 else => {},
@@ -1530,7 +1546,11 @@ pub const App = struct {
             app_accounts.ready(app);
             app.onReady();
             app.plugins.fireReady();
-            if (app.login.phase == .connecting) app.login.setPhase(.leaving);
+            // A conversa aparece já neste quadro: nada de esperar uma animação.
+            if (app.login.phase == .connecting) app.login.phase = .hidden;
+            timeline.mark(.store);
+            // O texto do READY e a arena dele já foram: devolve a memória ao sistema.
+            app.trim_wanted.store(true, .release);
         } else if (reconnected and was_ready) {
             // Voltou a conexão: as conversas que ficaram só no cache do disco
             // (abertas sem rede) buscam o histórico de novo.
@@ -1969,6 +1989,11 @@ pub const App = struct {
                         // Some da tela na hora; o resto do encerramento é por trás.
                         _ = c.SDL_HideWindow(app.win.window);
                     }
+                        .token => {
+                            timeline.mark(.token_fim);
+                            app_accounts.finishStartupLookup(app);
+                            pending = 3;
+                        },
                     // Arquivo arrastado para a janela: vai para a bandeja.
                     if (e.type == c.SDL_EVENT_DROP_FILE and app.store.ready and app.st.activeChannel() != null)
                         if (e.drop.data) |p| app.attachFile(std.mem.span(p));
@@ -2109,6 +2134,8 @@ pub const App = struct {
                 const result = login_mod.draw(&app.login, .{
                     .ui = app.uiFamily("Inter"),
                     .io = app.io,
+                // As miniaturas de tema só existem para a página de Configurações.
+                if (app.st.settings.open) app.themes.ensurePreviews();
                     .light = app.themes.mode == .light,
                     .reduce = set.reduce_motion,
                     .dt = if (record_dir != null) 1.0 / 30.0 else anim.dt,
@@ -2195,9 +2222,15 @@ pub const App = struct {
                     S.max = 0;
                 }
             }
-            if (app.opts.stats and !first_frame_logged and app.store.ready) {
-                first_frame_logged = true;
-                std.log.info("primeiro quadro em {d} ms", .{(c.SDL_GetTicksNS() - app.started_ns) / 1_000_000});
+            if (app.opts.stats) {
+                timeline.mark(.tela_1);
+                if (!first_frame_logged and app.store.ready) {
+                    first_frame_logged = true;
+                    timeline.mark(.conversa_1);
+                    std.log.info("primeiro quadro em {d} ms", .{(c.SDL_GetTicksNS() - app.started_ns) / 1_000_000});
+                }
+                if (!app.login.visible() and app.store.ready) timeline.mark(.login_fora);
+                if (timeline.isMarked(.login_fora) and timeline.isMarked(.historico)) timeline.report();
             }
             if (record_dir) |dir| if (app.login.visible()) {
                 var pbuf: [512]u8 = undefined;
@@ -2231,3 +2264,5 @@ pub const App = struct {
         return runner.fail == 0;
     }
 };
+        // Não chegou a conectar: o que deu para medir ainda sai.
+        timeline.report();

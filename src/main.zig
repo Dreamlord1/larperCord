@@ -17,6 +17,7 @@ const Options = @import("app.zig").Options;
 const discord = @import("net/discord.zig");
 const ev = @import("core/event.zig");
 const Queue = @import("net/queue.zig").Queue;
+const timeline = @import("platform/timeline.zig");
 
 const usage =
     \\larperCord — cliente de Discord nativo e leve
@@ -88,6 +89,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         } else return fail("opção desconhecida (veja --help)");
     }
 
+    if (opts.stats) timeline.begin();
     const app = try App.create(std.heap.c_allocator, opts);
     const ok = app.run();
     // Fechou a janela: o processo termina de qualquer jeito, mesmo que uma

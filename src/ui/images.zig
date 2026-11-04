@@ -155,13 +155,17 @@ pub const Cache = struct {
             .jobs = try Queue(Job).init(alloc),
             .results = try Queue(Result).init(alloc),
         };
-    }
-
-    /// Começa a thread (depois de o Cache estar no lugar definitivo).
-    pub fn start(cache: *Cache) !void {
         if (curl_mutex == null) curl_mutex = c.SDL_CreateMutex() orelse return error.SdlMutex;
         if (decode_slots == null) decode_slots = c.SDL_CreateSemaphore(2) orelse return error.SdlSemaphore;
-        for (&cache.threads) |*t| t.* = c.SDL_CreateThread(worker, "media", cache) orelse return error.SdlThread;
+    }
+
+    /// Só com a primeira imagem pedida: a tela de login não usa nenhuma thread.
+    fn startWorkers(cache: *Cache) void {
+        if (cache.threads[0] != null) return;
+        for (&cache.threads) |*t| {
+            t.* = c.SDL_CreateThread(worker, "media", cache);
+            if (t.* == null) std.log.warn("não consegui criar uma thread de imagens", .{});
+        }
     }
 
     pub fn deinit(cache: *Cache) void {
@@ -254,6 +258,7 @@ pub const Cache = struct {
 
     /// O quadro de agora (todos os GIFs andam no mesmo relógio) e quando
     /// o próximo vence.
+        cache.startWorkers();
     fn frameOf(cache: *Cache, e: *const Entry, play: bool) *c.SDL_Texture {
         if (e.frames.len == 1 or !play) return e.frames[0].tex;
         const total = e.total();

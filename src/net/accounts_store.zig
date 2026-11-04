@@ -125,12 +125,12 @@ pub fn forgetToken(acc: *const accounts.Account) void {
 
 /// Token para abrir o app: a conta usada da última vez, depois qualquer
 /// outra guardada. `id` recebe de qual conta veio.
-pub fn startupToken(id: *Id) ?[:0]u8 {
-    if (list.find(list.active)) |a| if (tokenFor(a)) |t| {
+pub fn startupTokenFrom(from: *accounts.List, id: *Id) ?[:0]u8 {
+    if (from.find(from.active)) |a| if (tokenFor(a)) |t| {
         id.* = a.id;
         return t;
     };
-    for (list.slice()) |*a| if (a.id != list.active) if (tokenFor(a)) |t| {
+    for (from.slice()) |*a| if (a.id != from.active) if (tokenFor(a)) |t| {
         id.* = a.id;
         return t;
     };

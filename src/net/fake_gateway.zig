@@ -3,6 +3,7 @@
 //! latência. Quando o gateway real existir, ele implementa a mesma interface
 //! (recebe `Command`, entrega `Event` no `Sink`) e o resto do app não muda.
 const std = @import("std");
+const timeline = @import("../platform/timeline.zig");
 const c = @import("c");
 const types = @import("../core/types.zig");
 const ev = @import("../core/event.zig");
@@ -115,6 +116,7 @@ pub const Gateway = struct {
     }
 
     fn run(g: *Gateway) !void {
+        timeline.mark(.gateway);
         g.epoch_ms = nowMs();
         g.emit(.{ .ready = try buildReady() });
         g.emit(.{ .read_states = .{ .entries = try demoReadStates(g.epoch_ms) } });

@@ -4,7 +4,7 @@
 const std = @import("std");
 const c = @import("c");
 
-pub const Wake = enum(i32) { gateway = 1, theme = 2, tick = 3, media = 4 };
+pub const Wake = enum(i32) { gateway = 1, theme = 2, tick = 3, media = 4, token = 5 };
 
 pub const Window = struct {
     window: *c.SDL_Window,

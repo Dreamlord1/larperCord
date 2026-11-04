@@ -19,6 +19,7 @@ const Queue = @import("queue.zig").Queue;
 const Sink = @import("fake_gateway.zig").Sink;
 const nowMs = @import("fake_gateway.zig").nowMs;
 const j = @import("jsonx.zig");
+const timeline = @import("../platform/timeline.zig");
 const i18n = @import("../ui/i18n.zig");
 const media_url = @import("media_url.zig");
 const proxy = @import("proxy.zig");
@@ -121,6 +122,12 @@ pub const Gateway = struct {
     hello_until: i64 = 0,
     /// Último bloqueio longo avisado (para não repetir o aviso a cada comando).
     block_noticed: i64 = 0,
+    /// Quando o pacote em andamento começou e acabou de chegar e de descomprimir
+    /// (--stats: a linha do tempo só sabe que era o READY depois de ler).
+    frame_t0: u64 = 0,
+    frame_t1: u64 = 0,
+    frame_t2: u64 = 0,
+    frame_len: usize = 0,
     /// Acorda o poll do gateway quando chega comando (leitura, escrita).
     wake_pipe: [2]c_int = .{ -1, -1 },
 
@@ -197,6 +204,10 @@ pub const Gateway = struct {
     }
 
     fn run(g: *Gateway) void {
+        timeline.mark(.gateway);
+        // Aqui, não na thread da UI: carregar o OpenSSL leva dezenas de ms.
+        @import("../ui/images.zig").curlGlobalInit();
+        timeline.mark(.curl);
         g.rest = c.curl_easy_init();
         defer if (g.rest) |h| c.curl_easy_cleanup(h);
         var backoff: u32 = 2000;
@@ -338,10 +349,13 @@ pub const Gateway = struct {
             }
             // Ping/pong são tratados pelo libcurl; não são payload do gateway.
             if (meta.*.flags & (c.CURLWS_PING | c.CURLWS_PONG) != 0) continue;
-            if (got > 0) g.frame.appendSlice(alloc, buf[0..got]) catch {
-                g.ws_end = .retry;
-                return;
-            };
+            if (got > 0) {
+                if (g.frame.items.len == 0) g.frame_t0 = timeline.now();
+                g.frame.appendSlice(alloc, buf[0..got]) catch {
+                    g.ws_end = .retry;
+                    return;
+                };
+            }
             if (meta.*.bytesleft == 0 and meta.*.flags & c.CURLWS_CONT == 0) {
                 // O Discord fecha cada payload com 00 00 FF FF. Se ainda
                 // não veio, guarda o pedaço e espera o resto.
@@ -400,6 +414,7 @@ pub const Gateway = struct {
         useProxy(h);
         g.abortable(h);
         if (c.curl_easy_perform(h) != c.CURLE_OK) return .retry;
+        timeline.mark(.websocket);
         var sock: c.curl_socket_t = -1;
         _ = c.curl_easy_getinfo(h, c.CURLINFO_ACTIVESOCKET, &sock);
         // `seq` e `session_id` sobrevivem à queda: é isso que permite o RESUME.
@@ -473,6 +488,8 @@ pub const Gateway = struct {
         const buf = g.frame.items;
         if (!g.z_on or buf.len < 4) return null;
         if (!std.mem.eql(u8, buf[buf.len - 4 ..], "\x00\x00\xff\xff")) return null;
+        g.frame_t1 = timeline.now();
+        g.frame_len = buf.len;
         g.zout.clearRetainingCapacity();
         g.z.next_in = buf.ptr;
         g.z.avail_in = @intCast(buf.len);
@@ -496,6 +513,7 @@ pub const Gateway = struct {
         }
         g.frame.clearRetainingCapacity();
         if (g.zout.items.len == 0) return null;
+        g.frame_t2 = timeline.now();
         const end = g.onPayload(g.zout.items);
         g.zout.clearRetainingCapacity();
         g.shrinkBuffers();
@@ -609,15 +627,18 @@ pub const Gateway = struct {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
         const root = std.json.parseFromSliceLeaky(Value, arena.allocator(), text, .{}) catch return null;
+        const parsed_at = timeline.now();
         const op = j.int(j.get(root, "op")) orelse return null;
         switch (op) {
             10 => {
                 const d = j.get(root, "d") orelse return null;
+                timeline.mark(.hello);
                 g.hb_interval = j.int(j.get(d, "heartbeat_interval")) orelse 41250;
                 g.scheduleHeartbeat();
                 // Se já existe sessão, o cliente oficial retoma (RESUME);
                 // só abre uma nova quando não há nada para retomar.
                 g.beginSession();
+                timeline.mark(.identify);
             },
             11 => {
                 g.acked = true;
@@ -641,7 +662,16 @@ pub const Gateway = struct {
                 if (j.int(j.get(root, "s"))) |s| g.seq = s;
                 const t = j.str(j.get(root, "t")) orelse return null;
                 const d = j.get(root, "d") orelse return null;
+                const is_ready = timeline.enabled and std.mem.eql(u8, t, "READY");
+                if (is_ready) {
+                    timeline.markAt(.ready_1o_byte, g.frame_t0);
+                    timeline.markAt(.ready_ultimo_byte, g.frame_t1);
+                    timeline.markAt(.ready_inflate, g.frame_t2);
+                    timeline.markAt(.ready_json, parsed_at);
+                    timeline.readySizes(g.frame_len, text.len);
+                }
                 g.dispatch(t, d, arena.allocator()) catch {};
+                if (is_ready) timeline.mark(.ready_eventos);
             },
             else => {},
         }
