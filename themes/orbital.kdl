@@ -76,7 +76,7 @@ metrics radius=8
 
 styles {
     // Painel de vidro fumê: o fundo passa um pouco, o texto não perde contraste.
-    style "panel" radius=10 gradient="alpha(mix(@surface, @accent, 0.05), 0.90) alpha(@surface, 0.76)" border-gradient="alpha(@accent, 0.60) alpha(@border, 0.9) alpha(@border, 0.45)" border-gradient-angle=70 inner-shadow="alpha(@accent, 0.035)" inner-shadow-size=18 hover-bg="alpha(@accent, 0.012)"
+    style "panel" radius=10 gradient="alpha(mix(@surface, @accent, 0.05), 0.90) alpha(@surface, 0.76)" border-gradient="alpha(@accent, 0.60) alpha(@border, 0.9) alpha(@border, 0.45)" border-gradient-angle=70 inner-shadow="alpha(@accent, 0.035)" inner-shadow-size=18 hover-bg="alpha(@accent, 0.012)" drop-shadow="@shadow" drop-shadow-size=20 drop-shadow-y=4
 }
 
 layout {

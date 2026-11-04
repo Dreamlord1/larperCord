@@ -16,7 +16,7 @@ pub const Preview = struct {
     name: []const u8,
     description: []const u8,
     description_en: []const u8 = "",
-    kind: enum { classic, glass, terminal, bubbles, zen, mirror, office },
+    kind: enum { classic, glass, terminal, bubbles, zen, mirror, office, desktop },
     bg: Rgba,
     rail: Rgba,
     sidebar: Rgba,

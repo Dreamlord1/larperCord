@@ -21,6 +21,10 @@ pub const Gradient = struct {
 
 pub const PatternKind = enum { dots, lines, grid, diagonal };
 
+/// Quais cantos o preenchimento arredonda (`corners=left`): uma janela feita de
+/// dois painéis lado a lado, um com os cantos da esquerda, outro com os da direita.
+pub const Corners = enum { all, left, right, top, bottom };
+
 pub const Pattern = struct {
     kind: PatternKind,
     color: *const Expr,
@@ -41,6 +45,11 @@ pub const Box = struct {
     inner_shadow: ?*const Expr = null,
     inner_shadow_size: f32 = 14,
     hover_bg: ?*const Expr = null,
+    corners: Corners = .all,
+    /// Sombra macia e oca: não escurece o que está embaixo de um painel translúcido.
+    drop_shadow: ?*const Expr = null,
+    drop_shadow_size: f32 = 32,
+    drop_shadow_y: f32 = 10,
     /// Borda inteira, só nos nós (nos estilos é o `border` de sempre).
     border: ?*const Expr = null,
     border_width: f32 = 1,
@@ -209,6 +218,12 @@ pub fn parseBox(cx: *Cx, n: *const kdl.Node, is_style: bool) Error!?*const Box {
         b.inner_shadow_size = numOr(n, "inner-shadow-size", b.inner_shadow_size);
         used = true;
     }
+    if (try cx.opt(n, "drop-shadow", "drop-shadow inválida")) |e| {
+        b.drop_shadow = e;
+        b.drop_shadow_size = @max(numOr(n, "drop-shadow-size", b.drop_shadow_size), 1);
+        b.drop_shadow_y = numOr(n, "drop-shadow-y", b.drop_shadow_y);
+        used = true;
+    }
     if (try cx.opt(n, "hover-bg", "hover-bg inválido")) |e| {
         b.hover_bg = e;
         used = true;
@@ -229,6 +244,7 @@ pub fn parseBox(cx: *Cx, n: *const kdl.Node, is_style: bool) Error!?*const Box {
         used = true;
     };
     if (!used) return null;
+    if (n.str("corners")) |s| b.corners = std.meta.stringToEnum(Corners, s) orelse return cx.fail(n, "corners: all, left, right, top ou bottom");
     const out = try cx.a.create(Box);
     out.* = b;
     return out;
@@ -299,9 +315,9 @@ pub fn parseText(cx: *Cx, n: *const kdl.Node, color_is_expr: bool) Error!?*const
 
 /// Componentes que guardam cores (o resto das propriedades é lido ao desenhar).
 const painted = std.StaticStringMap(void).initComptime(.{
-    .{"shape"}, .{"rule"}, .{"starfield"}, .{"orbit"}, .{"aurora"}, .{"topography"}, .{"radar"},
+    .{"shape"}, .{"rule"}, .{"starfield"}, .{"orbit"}, .{"aurora"}, .{"dunes"}, .{"topography"}, .{"radar"}, .{"window-controls"},
 });
-const color_keys = [_][]const u8{ "color", "color2", "fill", "dot", "ornament-color" };
+const color_keys = [_][]const u8{ "color", "color2", "color3", "fill", "dot", "ornament-color" };
 
 /// Lê o que um nó do layout tem de novo. null = nada (o caso de quase todos).
 pub fn parseNode(cx: *Cx, n: *const kdl.Node, bg_is_token: bool) Error!?*const NodeFx {
@@ -392,6 +408,13 @@ test "caixa: gradiente, padrão, grão, vinheta e estilos v2" {
     try testing.expectEqual(@as(u8, 2), b.border_gradient.?.n);
     try testing.expectEqual(@as(f32, 1.5), b.border_width);
     try testing.expect(b.hasFill());
+    try testing.expectEqual(Corners.all, b.corners);
+    try testing.expectEqual(Corners.left, (try parseBox(&cx, try e.node("s grain=\"@bg\" corners=left"), false)).?.corners);
+    const ds = (try parseBox(&cx, try e.node("s drop-shadow=\"alpha(black, 0.5)\" drop-shadow-size=40 drop-shadow-y=12"), false)).?;
+    try testing.expectEqual(@as(f32, 40), ds.drop_shadow_size);
+    try testing.expectEqual(@as(f32, 12), ds.drop_shadow_y);
+    var cx_c = e.cx();
+    try testing.expectError(error.Invalid, parseBox(&cx_c, try e.node("s grain=\"@bg\" corners=nada"), false));
     // Estilo simples não ganha caixa: fica no desenho de sempre.
     try testing.expect((try parseBox(&cx, try e.node("style \"y\" bg=\"@bg\" radius=4 border=\"@bg\""), true)) == null);
 }

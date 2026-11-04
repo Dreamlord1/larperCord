@@ -187,12 +187,22 @@ fn packed8(col: Rgba) u32 {
     return col.u(); // ABGR em memória é RGBA: o mesmo que a textura espera.
 }
 
-fn fillGradient(ctx: *const d.Ctx, dl: *c.ImDrawList, g: tfx.Gradient, r: Rect, radius: f32) void {
+fn cornerFlags(k: tfx.Corners) c_int {
+    return switch (k) {
+        .all => 0,
+        .left => c.ImDrawFlags_RoundCornersLeft,
+        .right => c.ImDrawFlags_RoundCornersRight,
+        .top => c.ImDrawFlags_RoundCornersTop,
+        .bottom => c.ImDrawFlags_RoundCornersBottom,
+    };
+}
+
+fn fillGradient(ctx: *const d.Ctx, dl: *c.ImDrawList, g: tfx.Gradient, r: Rect, radius: f32, flags: c_int) void {
     const s = Stops.of(ctx, g);
     if (s.n == 2) {
         // Duas paradas: a cor varia linearmente, os vértices já bastam.
         const start = vtxCount(dl);
-        c.ImDrawList_AddRectFilledEx(dl, d.v(r.x, r.y), d.v(r.right(), r.bottom()), 0xffffffff, radius, 0);
+        c.ImDrawList_AddRectFilledEx(dl, d.v(r.x, r.y), d.v(r.right(), r.bottom()), 0xffffffff, radius, flags);
         s.shade(dl, start, r);
         return;
     }
@@ -204,47 +214,128 @@ fn fillGradient(ctx: *const d.Ctx, dl: *c.ImDrawList, g: tfx.Gradient, r: Rect, 
     const ay: i16 = @intFromFloat(@round(r.h * s.dy / len * 64));
     const spec: procgen.Spec = .{ .gradient = .{ .c = .{ packed8(s.c[0]), packed8(s.c[1]), packed8(s.c[2]) }, .ax = ax * 16, .ay = ay * 16 } };
     const tex = texture(ctx, spec) orelse return;
-    c.ImDrawList_AddImageRounded(dl, refOf(tex), d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), 0xffffffff, radius, 0);
+    c.ImDrawList_AddImageRounded(dl, refOf(tex), d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), 0xffffffff, radius, flags);
 }
 
 /// Ladrilho que se repete preso à janela: `u = x / lado` faz cada pixel da tela
 /// cair num pixel da textura, sem borrar, mesmo em retângulo de posição quebrada.
-fn tiled(dl: *c.ImDrawList, tex: *c.SDL_Texture, r: Rect, side: f32, col: u32, radius: f32) void {
-    c.ImDrawList_AddImageRounded(dl, refOf(tex), d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(r.x / side, r.y / side), d.v(r.right() / side, r.bottom() / side), col, radius, 0);
+fn tiled(dl: *c.ImDrawList, tex: *c.SDL_Texture, r: Rect, side: f32, col: u32, radius: f32, flags: c_int) void {
+    c.ImDrawList_AddImageRounded(dl, refOf(tex), d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(r.x / side, r.y / side), d.v(r.right() / side, r.bottom() / side), col, radius, flags);
 }
 
-fn drawPattern(ctx: *const d.Ctx, dl: *c.ImDrawList, p: tfx.Pattern, r: Rect, radius: f32) void {
+fn drawPattern(ctx: *const d.Ctx, dl: *c.ImDrawList, p: tfx.Pattern, r: Rect, radius: f32, flags: c_int) void {
     const side = tileSide(ctx, p.size);
     const kind: procgen.PatternKind = @enumFromInt(@intFromEnum(p.kind));
     const spec: procgen.Spec = .{ .pattern = .{ .kind = kind, .size = side, .width_q = @intFromFloat(p.width * 8) } };
     const tex = texture(ctx, spec) orelse return;
-    tiled(dl, tex, r, @floatFromInt(side), p.color.eval(ctx.th.tokenValues()).u(), radius);
+    tiled(dl, tex, r, @floatFromInt(side), p.color.eval(ctx.th.tokenValues()).u(), radius, flags);
 }
 
 /// Grão: 128×128 de ruído gerado uma vez e repetido.
-fn drawGrain(ctx: *const d.Ctx, dl: *c.ImDrawList, col: Rgba, r: Rect, radius: f32) void {
+fn drawGrain(ctx: *const d.Ctx, dl: *c.ImDrawList, col: Rgba, r: Rect, radius: f32, flags: c_int) void {
     const tex = texture(ctx, .{ .grain = 0x5eed }) orelse return;
-    tiled(dl, tex, r, 128, col.u(), radius);
+    tiled(dl, tex, r, 128, col.u(), radius, flags);
 }
 
-fn drawVignette(ctx: *const d.Ctx, dl: *c.ImDrawList, col: Rgba, size: f32, r: Rect, radius: f32) void {
+fn drawVignette(ctx: *const d.Ctx, dl: *c.ImDrawList, col: Rgba, size: f32, r: Rect, radius: f32, flags: c_int) void {
     const tex = texture(ctx, .{ .vignette = @intFromFloat(size * 100) }) orelse return;
-    c.ImDrawList_AddImageRounded(dl, refOf(tex), d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), col.u(), radius, 0);
+    c.ImDrawList_AddImageRounded(dl, refOf(tex), d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), col.u(), radius, flags);
+}
+
+/// Sombra macia em 8 pedaços (cantos de uma textura, lados esticados), sem o
+/// miolo: em volta de um painel translúcido, o fundo não escurece por dentro.
+pub fn dropShadow(ctx: *const d.Ctx, dl: *c.ImDrawList, b: *const tfx.Box, r: Rect, radius: f32) void {
+    const e = b.drop_shadow orelse return;
+    const col = e.eval(ctx.th.tokenValues()).u();
+    const blur = b.drop_shadow_size;
+    const rad = std.math.clamp(radius, 0, @min(r.w, r.h) / 2);
+    const side = blur + rad;
+    const tex = texture(ctx, .{ .shadow = @intFromFloat(rad / side * 1000) }) orelse return;
+    const ref = refOf(tex);
+    const s: Rect = .{ .x = r.x, .y = r.y + b.drop_shadow_y, .w = r.w, .h = r.h };
+    const x0 = s.x - blur;
+    const x1 = s.x + rad;
+    const x2 = s.right() - rad;
+    const x3 = s.right() + blur;
+    const y0 = s.y - blur;
+    const y1 = s.y + rad;
+    const y2 = s.bottom() - rad;
+    const y3 = s.bottom() + blur;
+    const Piece = struct {
+        dl: *c.ImDrawList,
+        ref: c.ImTextureRef,
+        col: u32,
+        side: f32,
+        /// Quad [xa, xb]×[ya, yb]; `ox`/`oy` é o canto de fora do bloco e
+        /// `dirx`/`diry` o sentido em que a textura cresce.
+        fn put(q: @This(), xa: f32, xb: f32, ya: f32, yb: f32, ox: f32, oy: f32, dirx: f32, diry: f32) void {
+            if (xb <= xa or yb <= ya) return;
+            c.ImDrawList_AddImageEx(q.dl, q.ref, d.v(xa, ya), d.v(xb, yb), d.v((xa - ox) * dirx / q.side, (ya - oy) * diry / q.side), d.v((xb - ox) * dirx / q.side, (yb - oy) * diry / q.side), q.col);
+        }
+    };
+    const q: Piece = .{ .dl = dl, .ref = ref, .col = col, .side = side };
+    // Cantos: a mesma textura espelhada, cortada para não entrar no painel.
+    q.put(x0, @min(x1, r.x), y0, y1, x0, y0, 1, 1);
+    q.put(r.x, x1, y0, @min(y1, r.y), x0, y0, 1, 1);
+    q.put(@max(x2, r.right()), x3, y0, y1, x3, y0, -1, 1);
+    q.put(x2, r.right(), y0, @min(y1, r.y), x3, y0, -1, 1);
+    q.put(x0, @min(x1, r.x), y2, y3, x0, y3, 1, -1);
+    q.put(r.x, x1, @max(y2, r.bottom()), y3, x0, y3, 1, -1);
+    q.put(@max(x2, r.right()), x3, y2, y3, x3, y3, -1, -1);
+    q.put(x2, r.right(), @max(y2, r.bottom()), y3, x3, y3, -1, -1);
+    // Entre o painel e a forma deslocada para baixo, a sombra está cheia.
+    if (y2 > r.bottom()) d.rect(dl, .{ .x = r.x, .y = r.bottom(), .w = r.w, .h = y2 - r.bottom() }, e.eval(ctx.th.tokenValues()), 0);
+    // Lados: só o trecho de fora; a queda vem da última coluna da textura.
+    const top = @min(y1, r.y);
+    if (top > y0) c.ImDrawList_AddImageEx(dl, ref, d.v(x1, y0), d.v(x2, top), d.v(1, 0), d.v(1, (top - y0) / side), col);
+    const bot = @max(y2, r.bottom());
+    if (y3 > bot) c.ImDrawList_AddImageEx(dl, ref, d.v(x1, bot), d.v(x2, y3), d.v(1, (y3 - bot) / side), d.v(1, 0), col);
+    c.ImDrawList_AddImageEx(dl, ref, d.v(x0, y1), d.v(s.x, y2), d.v(0, 1), d.v(blur / side, 1), col);
+    c.ImDrawList_AddImageEx(dl, ref, d.v(s.right(), y1), d.v(x3, y2), d.v(blur / side, 1), d.v(0, 1), col);
+    // A pontinha entre o canto arredondado do painel e o quadrado que ficou de
+    // fora: sem isso, sobra uma lua clara dentro da sombra.
+    if (rad > 0.5) {
+        const color = e.eval(ctx.th.tokenValues());
+        const corners = [4][4]f32{
+            .{ r.x, r.y, 1, 1 },
+            .{ r.right(), r.y, -1, 1 },
+            .{ r.x, r.bottom(), 1, -1 },
+            .{ r.right(), r.bottom(), -1, -1 },
+        };
+        for (corners) |k| {
+            var pts: [8]c.ImVec2 = undefined;
+            pts[0] = d.v(k[0], k[1]);
+            const cx = k[0] + k[2] * rad;
+            const cy = k[1] + k[3] * rad;
+            for (0..7) |i| {
+                const ang = (std.math.pi / 2.0) * @as(f32, @floatFromInt(i)) / 6;
+                pts[i + 1] = d.v(cx - k[2] * rad * @cos(ang), cy - k[3] * rad * @sin(ang));
+            }
+            // A força que a sombra tem nesse ponto, como na textura.
+            const sy = std.math.clamp(k[1], y1, y2);
+            const sx = std.math.clamp(k[0], x1, x2);
+            const dist = std.math.hypot(k[0] - sx, k[1] - sy) - rad;
+            const t = std.math.clamp(dist / blur, 0, 1);
+            const f = (1 - t) * (1 - t) * (1 + 2 * t) * (1 - t);
+            c.ImDrawList_AddConcavePolyFilled(dl, &pts, pts.len, color.col(f));
+        }
+    }
 }
 
 /// O que vai sobre o fundo e embaixo do conteúdo.
 pub fn fill(ctx: *const d.Ctx, dl: *c.ImDrawList, b: *const tfx.Box, r: Rect, radius: f32, key: usize) void {
     if (r.w <= 0 or r.h <= 0) return;
     const toks = ctx.th.tokenValues();
-    if (b.gradient) |g| fillGradient(ctx, dl, g, r, radius);
+    const flags = cornerFlags(b.corners);
+    if (b.gradient) |g| fillGradient(ctx, dl, g, r, radius, flags);
     if (b.hover_bg) |e| {
         const k = anim.to(anim.id("style-hover", key), if (ctx.hovering(r)) 1 else 0, 14);
         hover_now = @max(hover_now, k);
-        if (k > 0.01) d.rect(dl, r, e.eval(toks).alpha(k), radius);
+        if (k > 0.01) d.rectFlags(dl, r, e.eval(toks).alpha(k), radius, flags);
     }
-    if (b.pattern) |p| drawPattern(ctx, dl, p, r, radius);
-    if (b.grain) |e| drawGrain(ctx, dl, e.eval(toks), r, radius);
-    if (b.vignette) |e| drawVignette(ctx, dl, e.eval(toks), b.vignette_size, r, radius);
+    if (b.pattern) |p| drawPattern(ctx, dl, p, r, radius, flags);
+    if (b.grain) |e| drawGrain(ctx, dl, e.eval(toks), r, radius, flags);
+    if (b.vignette) |e| drawVignette(ctx, dl, e.eval(toks), b.vignette_size, r, radius, flags);
 }
 
 /// Contorno do retângulo arredondado com vértices no meio dos lados: é o que
@@ -317,6 +408,7 @@ pub fn edges(ctx: *const d.Ctx, dl: *c.ImDrawList, b: *const tfx.Box, r: Rect, r
 /// Primitivas no próprio nó do layout.
 pub fn node(ctx: *d.Ctx, x: *const tfx.NodeFx, n: *const kdl.Node, r: Rect, key: usize) void {
     const radius = d.pnum(n, "radius", 0);
+    if (x.box) |b| dropShadow(ctx, ctx.dl, b, r, radius);
     if (x.bg) |e| d.rect(ctx.dl, r, e.eval(ctx.th.tokenValues()), radius);
     if (x.box) |b| {
         fill(ctx, ctx.dl, b, r, radius, key);

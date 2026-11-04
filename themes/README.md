@@ -39,7 +39,7 @@ layout {
 
 | Nó | O que faz |
 |---|---|
-| `theme "nome" description=… author=… preview=…` | metadados. `preview` escolhe a miniatura nas configurações: `classic`, `glass`, `terminal`, `bubbles`, `zen`, `mirror`, `office` |
+| `theme "nome" description=… author=… preview=…` | metadados. `preview` escolhe a miniatura nas configurações: `classic`, `glass`, `terminal`, `bubbles`, `zen`, `mirror`, `office`, `desktop` |
 | `palette "wal"` ou `palette "#hex" …` | as 16 cores base (`wal:0` … `wal:15`). Sem isso, usa uma paleta padrão |
 | `colors { token "expressão" … }` | sobrescreve tokens de cor (lista abaixo) |
 | `roles "cor" …` | até 8 cores de cargo (nomes de usuário, ícones de servidor) |
@@ -116,7 +116,8 @@ Contêineres: `row` (horizontal), `column` (vertical), `stack` (um sobre o outro
 | `label` | `text=` `size=` `weight=regular\|medium\|semibold\|bold` `color=token` `align=left\|center\|right`, mais [tipografia de display](#tipografia-de-display-no-label) |
 | `shape` | círculo, anel, arco, retângulo arredondado, linha ([detalhes](#shape-e-rule)) |
 | `rule` | régua lisa, tracejada, dupla, de jornal, com ornamento ([detalhes](#shape-e-rule)) |
-| `starfield` `orbit` `aurora` `topography` `radar` | [fundos procedurais](#fundos-procedurais) (primeiro filho de um `stack`) |
+| `starfield` `orbit` `aurora` `dunes` `topography` `radar` | [fundos procedurais](#fundos-procedurais) (primeiro filho de um `stack`) |
+| `window-controls` | os três botões da janela, que funcionam de verdade: fechar, minimizar, maximizar. `size=12` `gap=8` `color=` `color2=` `color3=` `align=` |
 | `logo` | `variant=ascii\|wordmark` `size=` |
 | `topbar` | barra superior (abas, busca, ajuda) |
 | `crt` | `spacing=3` `strength=0.08` |
@@ -157,6 +158,8 @@ layout { column gradient="@bg @rail" grain="alpha(@text, 0.05)" { … } }
 | `border-top=cor` `border-right=` `border-bottom=` `border-left=` | borda só naquele lado |
 | `border-top-width=2` (idem para os outros lados) | espessura daquele lado (padrão: `border-width`, ou 1) |
 | `hover-bg=cor` | fundo por cima quando o mouse está em cima, com transição |
+| `drop-shadow=cor` `drop-shadow-size=32` `drop-shadow-y=10` | sombra macia e **oca**: não escurece o que está embaixo de um painel translúcido (o `shadow=` antigo escurece) |
+| `corners=left\|right\|top\|bottom` | quais cantos o preenchimento arredonda: uma janela de dois painéis lado a lado |
 | `border=cor` | borda inteira, para usar direto num nó (nos estilos, ela já existe) |
 
 Custo: gradiente de 2 cores são só vértices. Grão, padrão, vinheta e gradiente de 3 cores são texturas
@@ -266,6 +269,7 @@ layout {
 | `starfield` | `color` estrelas de longe, `color2` as de perto | `density=1` |
 | `orbit` | `color` as órbitas, `color2` as luas | `center-x=0.7` `center-y=0.35` `rings=6` |
 | `aurora` | `color` e `color2`, uma para cada cortina | |
+| `dunes` | `color`, `color2`, `color3`: colinas de trás para a frente (o céu é o `gradient` do nó em volta) | |
 | `topography` | `color` | `levels=14` (quantas curvas de nível) |
 | `radar` | `color` anéis, `color2` a varredura | `center-x=0.5` `center-y=0.5` `rings=5` |
 
@@ -363,6 +367,11 @@ options {
 | `grain`, `rule kind=oxford`, `label` com `span` | papel com grão, masthead, fios de jornal | editorial |
 | `aurora`, `border-gradient`, `grain` | luz por trás do vidro fosco | vidro |
 | `pattern=grid`, `radar`, `topography` | retícula de osciloscópio; radar e mapa opcionais | terminal |
+| `dunes`, `window-controls`, `corners`, `drop-shadow`, `guild-bar variant=dock` | mesa de trabalho com janela flutuante, barra lateral translúcida e Dock | cupertino |
+| `topography`, `pattern=diagonal`, `shadow-x` | mapa de túneis, fita de perigo, letreiro com aberração cromática | subsolo |
+| `shape kind=arc`, `topography`, `grain` | enso e areia rastelada | zen |
+| `shape kind=ring`, `pattern=dots`, `rule kind=oxford`, `ornament-text` | furos de fichário, página pontilhada, índice | papel |
+| `aurora`, `pattern=dots`, `drop-shadow` | cartões flutuando sobre um fundo colorido | bolhas |
 
 ## Os temas que vêm junto
 
@@ -376,6 +385,7 @@ options {
 - [`zen.kdl`](zen.kdl): uma coluna central e mais nada
 - [`papel.kdl`](papel.kdl): serifado e espelhado
 - [`escritorio.kdl`](escritorio.kdl): estilo Slack, mostra o `c-…` e o `variant=list`
+- [`cupertino.kdl`](cupertino.kdl): mesa de trabalho estilo Mac, com papel de parede, janela flutuante, semáforo e Dock
 
 Os testes (`zig build test`) carregam todos os temas embutidos e montam o layout de cada um.
 Se você mandar um tema novo num pull request, ele é verificado automaticamente.

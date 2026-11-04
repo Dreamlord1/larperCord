@@ -9,6 +9,7 @@ const Op = R.Op;
 const qa = @import("ui/qa.zig");
 const fx = @import("ui/fx.zig");
 const anim = @import("ui/anim.zig");
+const extra = @import("ui/comp_extra.zig");
 
 fn expect(name: []const u8, f: *const fn (*App) bool) Op {
     return .{ .expect = .{ .name = name, .check = f } };
@@ -53,6 +54,10 @@ fn themeMarks(app: *App) bool {
     if (themeIs(app, "editorial")) {
         return qa.find("display:larperCord") != null and qa.find("rule:oxford") != null and
             qa.find("rule:double") != null and fx.live_entries > 0;
+    }
+    if (themeIs(app, "cupertino")) {
+        return qa.find("backdrop:dunes") != null and qa.find("winctl:close") != null and
+            qa.find("winctl:minimize") != null and qa.find("winctl:zoom") != null;
     }
     if (themeIs(app, "vidro")) return qa.find("backdrop:aurora") != null and fx.live_entries > 0;
     return true;
@@ -101,6 +106,44 @@ fn rememberWakes(_: *App) void {
 fn hoverLit(app: *App) bool {
     return !themeIs(app, "orbital") or fx.hover_seen > 0.9;
 }
+
+// Os botões da janela: fechar conta (no QA não sai de verdade), maximizar pede
+// ao sistema e não pode quebrar a tela. Outros temas não têm a marca: o robô pula.
+var closes0: u32 = 0;
+
+fn rememberCloses(_: *App) void {
+    closes0 = extra.qa_close_requests;
+}
+
+fn tWinClose(app: *App, b: []u8) []const u8 {
+    if (!themeIs(app, "cupertino")) return "";
+    return std.fmt.bufPrint(b, "winctl:close", .{}) catch "";
+}
+
+fn tWinZoom(app: *App, b: []u8) []const u8 {
+    if (!themeIs(app, "cupertino")) return "";
+    return std.fmt.bufPrint(b, "winctl:zoom", .{}) catch "";
+}
+
+fn closeRequested(app: *App) bool {
+    return !themeIs(app, "cupertino") or extra.qa_close_requests == closes0 + 1;
+}
+
+fn stillUsable(app: *App) bool {
+    return app.store.ready and qa.find("composer") != null;
+}
+
+pub const ops_window = [_]Op{
+    .{ .run = rememberCloses },
+    .{ .click = .{ .dyn = tWinClose } },
+    expect("o botão de fechar pede para sair", closeRequested),
+    .{ .click = .{ .dyn = tWinZoom } },
+    .{ .wait = 150 },
+    expect("maximizar não quebra a tela", stillUsable),
+    .{ .click = .{ .dyn = tWinZoom } },
+    .{ .wait = 150 },
+    expect("restaurar não quebra a tela", stillUsable),
+};
 
 pub const ops_static = [_]Op{
     expect("primitivas do tema estão na tela", themeMarks),

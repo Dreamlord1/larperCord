@@ -1069,3 +1069,73 @@ test "plugins: desligar, religar e ready" {
     try std.testing.expect(e.command("/b"));
     try std.testing.expectEqualStrings("b", T.note(T.n_notes - 1));
 }
+
+test "plugins: os exemplos de docs/plugins carregam e funcionam" {
+    const exemplos = @import("plugin_examples");
+    for (exemplos.list) |ex| {
+        var e = T.engine();
+        defer e.deinit();
+        const p = testOne(&e, ex.source);
+        if (p.err()) |msg| {
+            std.debug.print("{s}: {s}\n", .{ ex.name, msg });
+            return error.ExemploQuebrado;
+        }
+        try std.testing.expectEqual(Status.running, p.status());
+    }
+    const Caso = struct { src: []const u8, cmd: []const u8, enviado: ?[]const u8 = null, aviso: ?[]const u8 = null };
+    const f = struct {
+        fn get(name: []const u8) []const u8 {
+            for (exemplos.list) |ex| if (std.mem.eql(u8, ex.name, name)) return ex.source;
+            unreachable;
+        }
+    }.get;
+    const casos = [_]Caso{
+        .{ .src = f("calc.lua"), .cmd = "/conta (1 + 2) ^ 3", .enviado = "`(1 + 2) ^ 3 = 27`" },
+        .{ .src = f("calc.lua"), .cmd = "/calc 10 / 4", .aviso = "10 / 4 = 2.5" },
+        .{ .src = f("calc.lua"), .cmd = "/calc sqrt(16) + 2 * -3", .aviso = "sqrt(16) + 2 * -3 = -2" },
+        .{ .src = f("calc.lua"), .cmd = "/calc 1 / 0", .aviso = "Conta inválida: divisão por zero" },
+        .{ .src = f("calc.lua"), .cmd = "/calc (2", .aviso = "Conta inválida: faltou fechar o parêntese" },
+        .{ .src = f("zoeira.lua"), .cmd = "/mock isso aqui", .enviado = "iSsO aQuI" },
+        .{ .src = f("zoeira.lua"), .cmd = "/palmas isso sim", .enviado = "isso 👏 sim" },
+        .{ .src = f("zoeira.lua"), .cmd = "/contrario açaí", .enviado = "íaça" },
+        .{ .src = f("zoeira.lua"), .cmd = "/vapor ab", .enviado = "ａｂ" },
+        .{ .src = f("zoeira.lua"), .cmd = "/spoiler o fim", .enviado = "||o fim||" },
+        .{ .src = f("zoeira.lua"), .cmd = "/mock", .aviso = "Use assim: /mock isso aqui" },
+        .{ .src = f("dado.lua"), .cmd = "/dado 0d6", .aviso = "Use assim: /dado 2d20+3 (até 50 dados de até 1000 lados)" },
+        .{ .src = f("dado.lua"), .cmd = "/dado banana", .aviso = "Use assim: /dado 2d20+3 (até 50 dados de até 1000 lados)" },
+        .{ .src = f("dado.lua"), .cmd = "/escolhe só uma", .aviso = "Use assim: /escolhe pizza, sushi, lasanha" },
+        .{ .src = f("relogio.lua"), .cmd = "/hora marte", .aviso = "Não conheço \"marte\". Acrescente no começo de relogio.lua" },
+        .{ .src = f("relogio.lua"), .cmd = "/cronometro", .aviso = "⏱ Cronômetro valendo" },
+        .{ .src = f("resumo.lua"), .cmd = "/resumo", .aviso = "Nenhuma mensagem nova desde que o app abriu" },
+    };
+    for (casos) |caso| {
+        var e = T.engine();
+        defer e.deinit();
+        _ = testOne(&e, caso.src);
+        try std.testing.expect(e.command(caso.cmd));
+        if (caso.enviado) |t| {
+            try std.testing.expectEqual(@as(usize, 1), T.n_sent);
+            try std.testing.expectEqualStrings(t, T.sent[0][0..T.sent_len[0]]);
+        }
+        if (caso.aviso) |t| {
+            try std.testing.expectEqual(@as(usize, 1), T.n_notes);
+            try std.testing.expectEqualStrings(t, T.note(0));
+        }
+        try std.testing.expectEqual(@as(usize, 0), T.n_failed);
+    }
+}
+
+test "plugins: dado, moeda e resumo com mensagens" {
+    const exemplos = @import("plugin_examples");
+    var e = T.engine();
+    defer e.deinit();
+    for (exemplos.list) |ex| {
+        if (std.mem.eql(u8, ex.name, "dado.lua")) _ = testOne(&e, ex.source);
+    }
+    try std.testing.expect(e.command("/dado 3d6+2"));
+    try std.testing.expect(e.command("/moeda"));
+    try std.testing.expect(e.command("/escolhe a, b"));
+    try std.testing.expectEqual(@as(usize, 3), T.n_sent);
+    try std.testing.expect(std.mem.indexOf(u8, T.sent[0][0..T.sent_len[0]], "3d6+2") != null);
+    try std.testing.expectEqual(@as(usize, 0), T.n_failed);
+}

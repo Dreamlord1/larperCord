@@ -1,9 +1,11 @@
 // bolhas — mensageiro: servidores como pílulas no topo, canais grandes e a
 // conversa em balões (os seus à direita). Exclusivo: "Entregue ✓✓" e o balão
-// de "digitando" com os três pontinhos.
+// de "digitando" com os três pontinhos. Os cartões flutuam sobre um fundo
+// pontilhado com uma luz colorida atrás.
 theme "bolhas" description="Mensageiro: balões de conversa, \"Entregue ✓✓\" e balão de digitando." description-en="Messenger: chat bubbles, \"Delivered ✓✓\" and a typing bubble." author="larperCord" preview=bubbles
 
 options {
+    option "fundo" label="Fundo colorido" description="Pontinhos e uma luz suave atrás dos cartões." label-en="Colorful backdrop" description-en="Little dots and a soft glow behind the cards." default=#true
     option "entregue" label="Confirmação de entrega" description="Mostra \"Entregue ✓✓\" embaixo da sua última mensagem." label-en="Delivery receipt" description-en="Shows \"Delivered ✓✓\" under your last message." default=#true
     option "digitando" label="Balão de digitando" description="Os três pontinhos aparecem como um balão na conversa." label-en="Typing bubble" description-en="The three dots show up as a bubble in the chat." default=#true
     option "nomes" label="Nomes dos servidores" description="Mostra o nome ao lado do ícone na barra de cima." label-en="Server names" description-en="Shows the name next to the icon in the top bar." default=#true
@@ -66,11 +68,14 @@ fonts ui="Inter" mono="JetBrains Mono" size=15
 metrics radius=12
 
 styles {
-    style "sheet" bg="@surface" radius=24 shadow=18
-    style "bar" bg="@surface" radius=28 shadow=10
+    style "sheet" radius=24 gradient="lighten(@surface, 0.02) @surface" border-gradient="alpha(@accent, 0.22) alpha(@border, 0.6) alpha(@accent, 0.08)" border-gradient-angle=70 drop-shadow="@shadow" drop-shadow-size=30 drop-shadow-y=10
+    style "bar" radius=28 gradient="@surface mix(@surface, @accent, 0.04)" border-gradient="alpha(@accent, 0.22) alpha(@border, 0.6) alpha(@accent, 0.08)" border-gradient-angle=0 drop-shadow="@shadow" drop-shadow-size=20 drop-shadow-y=6
 }
 
 layout {
+    stack gradient="@bg mix(@bg, @accent, 0.10) mix(@bg, @link, 0.08)" gradient-angle=125 {
+    aurora when=fundo seed=31 color="alpha(@accent, 0.26)" color2="alpha(@mention, 0.18)"
+    spacer when=fundo pattern=dots pattern-size=22 pattern-width=1.3 pattern-color="alpha(@accent, 0.16)"
     column padding=16 gap=14 {
         guild-bar height=56 orientation=horizontal labels="$nomes" size=34 style=bar icon-style=soft
         row flex=1 gap=14 {
@@ -90,5 +95,6 @@ layout {
             }
             member-list width=236 style=sheet hide-below=1150
         }
+    }
     }
 }

@@ -1,4 +1,4 @@
-//! Fundos procedurais: `starfield`, `orbit`, `aurora`, `topography`, `radar`.
+//! Fundos procedurais: `starfield`, `orbit`, `aurora`, `dunes`, `topography`, `radar`.
 //! Parados por padrão: tudo sai de máscaras geradas uma vez (`procgen.zig`),
 //! tingidas com os tokens do tema ao desenhar, então claro/escuro e cor de
 //! destaque não geram nada de novo e um tema parado nunca acorda o laço.
@@ -27,6 +27,8 @@ pub fn draw(ctx: *d.Ctx, n: *const kdl.Node, r: Rect) void {
         starfield(ctx, n, r, seed, t);
     } else if (std.mem.eql(u8, name, "aurora")) {
         aurora(ctx, n, r, seed, t);
+    } else if (std.mem.eql(u8, name, "dunes")) {
+        dunes(ctx, n, r, seed, t);
     } else if (std.mem.eql(u8, name, "topography")) {
         // As curvas de nível não têm o que animar: ficam sempre paradas.
         topography(ctx, n, r, seed);
@@ -68,6 +70,16 @@ fn aurora(ctx: *d.Ctx, n: *const kdl.Node, r: Rect, seed: u32, t: f32) void {
         const tex = fx.texture(ctx, .{ .aurora = .{ .layer = @intCast(li), .seed = seed } }) orelse continue;
         const ua = @mod(t * sp, 1);
         // A cortina estica na janela inteira: é suave, escala sem aparecer.
+        c.ImDrawList_AddImageEx(ctx.dl, fx.refOf(tex), d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(ua, 0), d.v(ua + 1, 1), col.u());
+    }
+}
+
+fn dunes(ctx: *d.Ctx, n: *const kdl.Node, r: Rect, seed: u32, t: f32) void {
+    const cols = [3]d.Rgba{ fx.nodeColor(ctx, n, "color", .elevated), fx.nodeColor(ctx, n, "color2", .accent), fx.nodeColor(ctx, n, "color3", .rail) };
+    const speeds = [3]f32{ 0.0012, 0.002, 0.0032 };
+    for (cols, speeds, 0..) |col, sp, li| {
+        const tex = fx.texture(ctx, .{ .dunes = .{ .layer = @intCast(li), .seed = seed } }) orelse continue;
+        const ua = @mod(t * sp, 1);
         c.ImDrawList_AddImageEx(ctx.dl, fx.refOf(tex), d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(ua, 0), d.v(ua + 1, 1), col.u());
     }
 }

@@ -37,6 +37,9 @@ pub const Spec = union(enum) {
     stars: struct { layer: u8, seed: u32, density: u16 },
     aurora: struct { layer: u8, seed: u32 },
     topography: struct { seed: u32, levels: u16 },
+    dunes: struct { layer: u8, seed: u32 },
+    /// Canto de sombra macia; `round` é o raio em milésimos do lado do bloco.
+    shadow: u16,
     orbit: Orbit,
     radar: Radar,
 
@@ -45,11 +48,12 @@ pub const Spec = union(enum) {
     pub fn size(s: Spec) [2]u32 {
         return switch (s) {
             .grain, .vignette => .{ 128, 128 },
+            .shadow => .{ 64, 64 },
             .pattern => |p| .{ p.size, p.size },
             .dash => |p| .{ @as(u32, p.dash) + p.gap, 1 },
             .gradient => .{ 64, 64 },
             .stars => .{ 512, 512 },
-            .aurora => .{ 512, 256 },
+            .aurora, .dunes => .{ 512, 256 },
             .topography => .{ 1024, 1024 },
             .orbit => |o| .{ o.w, o.h },
             .radar => |o| .{ o.w, o.h },
@@ -78,6 +82,8 @@ pub fn render(spec: Spec, px: []u8, gpa: std.mem.Allocator) error{OutOfMemory}!v
         .gradient => |g| gradient(px, sz[0], sz[1], g.c, @as(f32, @floatFromInt(g.ax)) / 1024, @as(f32, @floatFromInt(g.ay)) / 1024),
         .stars => |st| stars(m, st.layer, st.seed, @as(f32, @floatFromInt(st.density)) / 100),
         .aurora => |a| aurora(m, a.layer, a.seed),
+        .dunes => |a| dunes(m, a.layer, a.seed),
+        .shadow => |q| shadowCorner(m, @as(f32, @floatFromInt(q)) / 1000),
         .topography => |t| try topography(m, t.seed, t.levels, gpa),
         .orbit => |o| orbit(m, o),
         .radar => |o| radar(m, o),
@@ -317,6 +323,44 @@ fn aurora(m: Mask, layer: u8, seed: u32) void {
             const top = smoothstep(0, 0.14, v);
             // Um tiquinho de ruído esconde os degraus do alfa baixo.
             const a = glow * rays * profile * top + (dither.f() - 0.5) / 255;
+            m.set(@intCast(xi), @intCast(yi), @intFromFloat(std.math.clamp(a, 0, 1) * 255));
+        }
+    }
+}
+
+/// Canto de uma sombra macia: 0 no canto de fora, cheio onde começa a forma.
+/// Vale para qualquer tamanho com a mesma proporção de raio e desfoque.
+fn shadowCorner(m: Mask, round: f32) void {
+    const blur = @max(1 - round, 0.01);
+    for (0..m.h) |yi| for (0..m.w) |xi| {
+        const dx = 1 - (fl(xi) + 0.5) / fl(m.w);
+        const dy = 1 - (fl(yi) + 0.5) / fl(m.h);
+        const t = std.math.clamp((std.math.hypot(dx, dy) - round) / blur, 0, 1);
+        const k = 1 - t;
+        // Cai como uma gaussiana: forte junto da forma, some sem degrau.
+        m.set(@intCast(xi), @intCast(yi), @intFromFloat(k * k * (3 - 2 * k) * k * 255));
+    };
+}
+
+/// Colinas em camadas, como um papel de parede: crista macia, mais forte no topo
+/// e esmaecendo para baixo. A camada 0 é a do fundo; a 2, a da frente.
+fn dunes(m: Mask, layer: u8, seed: u32) void {
+    var r = Rng.init(seed +% @as(u32, layer) *% 15485863);
+    var ph: [4]f32 = undefined;
+    for (&ph) |*p| p.* = r.f();
+    const bases = [3]f32{ 0.46, 0.62, 0.80 };
+    const amps = [3]f32{ 0.17, 0.14, 0.10 };
+    const i = @min(layer, 2);
+    var dither = Rng.init(seed ^ 0x2f1b9d);
+    for (0..m.h) |yi| {
+        const v = (fl(yi) + 0.5) / fl(m.h);
+        for (0..m.w) |xi| {
+            const u = (fl(xi) + 0.5) / fl(m.w);
+            const edge = bases[i] + amps[i] * wave(u, &.{ 1, 2, 3, 5 }, &ph);
+            const d = v - edge;
+            const cov = smoothstep(-0.006, 0.010, d);
+            const body = 0.58 + 0.42 * @exp(-@max(d, 0) / 0.16);
+            const a = cov * body + (dither.f() - 0.5) * 1.5 / 255;
             m.set(@intCast(xi), @intCast(yi), @intFromFloat(std.math.clamp(a, 0, 1) * 255));
         }
     }
@@ -615,6 +659,27 @@ test "aurora não tem emenda em u" {
         peak = @max(peak, a);
     }
     try testing.expect(peak > 40);
+}
+
+test "canto de sombra: some por fora, cheio por dentro" {
+    const px = try gen(.{ .shadow = 250 });
+    defer testing.allocator.free(px);
+    try testing.expectEqual(@as(u8, 0), alphaAt(px, 64, 0, 0));
+    try testing.expect(alphaAt(px, 64, 63, 63) > 240);
+    // Na borda de baixo da textura (o meio do lado) a queda só depende de y.
+    try testing.expect(alphaAt(px, 64, 63, 40) > alphaAt(px, 64, 63, 20));
+}
+
+test "colinas: céu limpo em cima, cheio embaixo, sem emenda" {
+    const px = try gen(.{ .dunes = .{ .layer = 1, .seed = 4 } });
+    defer testing.allocator.free(px);
+    try testing.expectEqual(@as(u8, 0), alphaAt(px, 512, 100, 3) & 0xf0);
+    try testing.expect(alphaAt(px, 512, 100, 250) > 120);
+    for (0..256) |y| {
+        const a = alphaAt(px, 512, 0, @intCast(y));
+        const b = alphaAt(px, 512, 511, @intCast(y));
+        try testing.expect(@abs(@as(i32, a) - @as(i32, b)) < 64);
+    }
 }
 
 test "curvas de nível têm traço e fundo, e ladrilham" {

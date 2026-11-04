@@ -149,6 +149,7 @@ pub fn shadow(dl: *c.ImDrawList, r: Rect, rounding: f32, size: f32, color: Rgba)
 
 /// Desenha um estilo nomeado do tema (fundo, sombra, borda, brilho no hover).
 pub fn drawStyle(ctx: *Ctx, dl: *c.ImDrawList, st: theme_mod.Style, r: Rect, key: usize) void {
+    if (st.box) |b| fx.dropShadow(ctx, dl, b, r, st.radius);
     if (st.shadow > 0) shadow(dl, r, st.radius, st.shadow, ctx.col(.shadow));
     if (st.bg) |bg| rect(dl, r, bg, st.radius);
     if (st.box) |b| fx.fill(ctx, dl, b, r, st.radius, key);

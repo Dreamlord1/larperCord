@@ -70,10 +70,10 @@ metrics radius=10
 
 styles {
     // A borda pega a luz: forte num canto, quase some no meio do caminho.
-    style "card" bg="@surface" radius=18 glow="alpha(@accent, 0.75)" border-width=1.5 shadow=16 sheen="$brilho" grain="alpha(@text, 0.035)" border-gradient="alpha(@text, 0.26) alpha(@text, 0.05) alpha(@text, 0.14)" border-gradient-angle=75
+    style "card" bg="@surface" radius=18 glow="alpha(@accent, 0.75)" border-width=1.5 drop-shadow="@shadow" drop-shadow-size=26 drop-shadow-y=8 sheen="$brilho" grain="alpha(@text, 0.035)" border-gradient="alpha(@text, 0.26) alpha(@text, 0.05) alpha(@text, 0.14)" border-gradient-angle=75
 }
 styles mode=light {
-    style "card" bg="@surface" radius=18 glow="alpha(@accent, 0.75)" border-width=1.5 shadow=16 sheen="$brilho" grain="alpha(@text, 0.03)" border-gradient="alpha(white, 0.95) alpha(white, 0.35) alpha(white, 0.7)" border-gradient-angle=75
+    style "card" bg="@surface" radius=18 glow="alpha(@accent, 0.75)" border-width=1.5 drop-shadow="@shadow" drop-shadow-size=26 drop-shadow-y=8 sheen="$brilho" grain="alpha(@text, 0.03)" border-gradient="alpha(white, 0.95) alpha(white, 0.35) alpha(white, 0.7)" border-gradient-angle=75
 }
 
 layout {

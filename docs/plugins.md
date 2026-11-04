@@ -34,11 +34,20 @@ nunca vai para o Discord.
 
 Os exemplos completos estão em [`docs/plugins/`](plugins/):
 
-- [`shrug.lua`](plugins/shrug.lua): o comando acima;
-- [`alerta.lua`](plugins/alerta.lua): avisa quando alguém escreve uma palavra da sua lista.
+| Plugin | O que faz |
+|---|---|
+| [`shrug.lua`](plugins/shrug.lua) | `/shrug`: o comando acima |
+| [`alerta.lua`](plugins/alerta.lua) | avisa quando alguém escreve uma palavra da sua lista |
+| [`dado.lua`](plugins/dado.lua) | `/dado 2d20+3`, `/moeda` e `/escolhe pizza, sushi`, com o resultado no canal |
+| [`zoeira.lua`](plugins/zoeira.lua) | `/mock`, `/vapor`, `/palmas`, `/contrario` e `/spoiler` reescrevem o texto |
+| [`calc.lua`](plugins/calc.lua) | `/calc 2+3*4` responde só para você; `/conta` manda no canal. Um analisador feito à mão, bom modelo para sintaxe própria |
+| [`relogio.lua`](plugins/relogio.lua) | `/hora tokyo`, `/horario lisboa` e um `/cronometro` (também em `Ctrl+Alt+T`) |
+| [`resumo.lua`](plugins/resumo.lua) | `/resumo` (ou `Ctrl+Alt+R`): quantas mensagens, quem mais falou e onde, desde que o app abriu |
 
-Para instalar: `mkdir -p ~/.config/larpercord/plugins && cp docs/plugins/*.lua ~/.config/larpercord/plugins/`
-e clique em **Recarregar** (ou abra o app de novo).
+Para instalar: **Configurações → Plugins → Instalar exemplos** copia os que faltam para a sua pasta
+(sem sobrescrever o que você já editou). Ou, à mão:
+`mkdir -p ~/.config/larpercord/plugins && cp docs/plugins/*.lua ~/.config/larpercord/plugins/`
+e **Recarregar**.
 
 ## API
 

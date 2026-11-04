@@ -1,10 +1,12 @@
 // classico — o layout que todo mundo conhece, nas cores do seu pywal.
-// Exclusivo: banner do servidor no topo da lista de canais.
+// Exclusivo: banner do servidor no topo da lista de canais. As superfícies têm
+// um degradê discreto e fios finos: continua familiar, mas sem cara de chapado.
 theme "classico" description="O layout familiar, nas cores do seu wallpaper, com banner do servidor." description-en="The familiar layout, in your wallpaper's colors, with a server banner." author="larperCord" preview=classic
 palette "wal"
 
 options {
     option "banner" label="Banner do servidor" description="Faixa colorida com o nome do servidor no topo dos canais." label-en="Server banner" description-en="A colored strip with the server name above the channels." default=#true
+    option "textura" label="Textura sutil" description="Um grão bem fino nas superfícies, que tira o ar de cor chapada." label-en="Subtle texture" description-en="A very fine grain on the surfaces, so they don't look flat." default=#true
     option "abas" label="Abas de canal" description="Mostra os canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Shows open channels as tabs above the conversation." default=#false
     option "crt" label="Efeito CRT" description="Scanlines discretas por cima de tudo." label-en="CRT effect" description-en="Subtle scanlines over everything." default=#false
 }
@@ -13,19 +15,22 @@ fonts ui="Inter" mono="JetBrains Mono" size=16
 metrics radius=6
 
 styles {
-    style "panel" bg="mix(@sidebar, @rail, 0.5)"
+    style "panel" gradient="mix(@sidebar, @rail, 0.35) mix(@sidebar, @rail, 0.7)" border-top="@border"
+    style "trilho" gradient="@rail mix(@rail, @accent, 0.07)"
+    style "lateral" gradient="lighten(@sidebar, 0.012) mix(@sidebar, @rail, 0.3)"
+    style "conversa" gradient="lighten(@bg, 0.012) @bg"
 }
 
 layout {
     stack {
         row {
-            guild-bar width=72 bg=rail
-            column width=240 bg=sidebar {
+            guild-bar width=72 style=trilho border-right="@border"
+            column width=240 style=lateral border-right="@border" {
                 channel-list flex=1 banner="$banner"
                 user-panel height=52 style=panel
             }
-            column flex=1 bg=bg {
-                header height=48
+            column flex=1 style=conversa {
+                header height=48 border-bottom="@border"
                 tabs height=36 variant=pills when=abas
                 messages flex=1
                 column height=92 padding-x=16 {
@@ -34,8 +39,9 @@ layout {
                     spacer height=22
                 }
             }
-            member-list width=248 bg=sidebar hide-below=1040
+            member-list width=248 style=lateral border-left="@border" hide-below=1040
         }
+        spacer when=textura grain="alpha(@text, 0.018)"
         crt when=crt spacing=4 strength=0.04
     }
 }

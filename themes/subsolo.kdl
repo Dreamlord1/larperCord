@@ -1,9 +1,11 @@
 // subsolo — terminal de hacking underground: preto fóssil, fósforo ácido,
 // ultravioleta, scanlines e servidores como racks. Exclusivo: rack horizontal,
-// logo em ASCII, efeito CRT e opção ultravioleta.
+// logo em ASCII, efeito CRT, opção ultravioleta, mapa de túneis ao fundo, fita de
+// perigo e letreiro com aberração cromática.
 theme "subsolo" description="Terminal de subsolo: preto fóssil, fósforo ácido, ultravioleta e scanlines." description-en="Underground terminal: fossil black, acid phosphor, ultraviolet and scanlines." author="larperCord" preview=terminal
 
 options {
+    option "tuneis" label="Mapa dos túneis" description="Curvas de nível em fósforo atrás dos painéis, paradas." label-en="Tunnel map" description-en="Still phosphor contour lines behind the panels." default=#true
     option "crt" label="Scanlines" description="Linhas de varredura e vinheta, como um monitor de tubo." label-en="Scanlines" description-en="Scanlines and vignette, like a CRT." default=#true
     option "roxo" label="Ultravioleta" description="Troca o verde ácido pelo roxo neon (deep web)." label-en="Ultraviolet" description-en="Swaps acid green for neon purple (deep web)." default=#false
     option "ascii" label="Logo em ASCII" description="O nome do app desenhado no topo da lista de canais." label-en="ASCII logo" description-en="The app name drawn above the channel list." default=#true
@@ -101,23 +103,32 @@ fonts ui="JetBrains Mono" mono="JetBrains Mono" size=14
 metrics radius=0
 
 styles {
-    style "panel" bg="@surface" border="@border" border-width=1 glow="@accent" shadow=14
-    style "rack" bg="@rail" border="@border" border-width=1 glow="@accent"
-    style "prompt" bg="@elevated" border="@border" border-width=1 glow="@accent"
+    // Painel de vidro sujo: o mapa passa um pouco, a borda brilha nas pontas.
+    style "panel" gradient="alpha(mix(@surface, @accent, 0.03), 0.95) alpha(@surface, 0.84)" glow="@accent" border-gradient="@accent alpha(@border, 0.9) @mention" border-gradient-angle=45 inner-shadow="alpha(@accent, 0.05)" inner-shadow-size=16 drop-shadow="@shadow" drop-shadow-size=22 drop-shadow-y=6
+    style "rack" gradient="alpha(@rail, 0.88) alpha(@elevated, 0.92)" border-top="alpha(@accent, 0.55)" border-bottom="@border" hover-bg="alpha(@accent, 0.03)"
+    style "prompt" gradient="@elevated mix(@elevated, @accent, 0.05)" border-top="alpha(@accent, 0.5)" glow="@accent"
 }
 
 layout {
-    stack {
+    stack gradient="@bg mix(@bg, @accent, 0.035) @bg" gradient-angle=70 {
+        topography when=tuneis seed=23 levels=18 color="alpha(@accent, 0.20)"
+        spacer pattern=grid pattern-size=32 pattern-color="alpha(@accent, 0.03)"
         column {
-            topbar height=32 bg=rail when=topo
+            topbar height=32 gradient="alpha(@rail, 0.92) alpha(@rail, 0.8)" when=topo
+            spacer height=5 pattern=diagonal pattern-size=14 pattern-width=4.5 pattern-color="alpha(@accent, 0.55)"
             row height=58 style=rack padding=6 gap=6 {
-                label width=180 hide-below=980 text=":: SUBSOLO // NODE 01" size=11 weight=semibold color=faint
+                column width=186 hide-below=980 {
+                    label height=26 size=15 weight=bold font=mono color=accent text="SUBSOLO" tracking=4 shadow="alpha(@mention, 0.5)" shadow-x=1 shadow-y=0
+                    label height=18 size=9 font=mono color=faint text="// NODE 01 · NÍVEL -3" text-en="// NODE 01 · LEVEL -3" tracking=1
+                }
+                rule width=1 vertical=#true kind=dashed dash=2 gap=3 color=border hide-below=980
                 guild-bar flex=1 orientation=horizontal variant=bar shape=square size=38 icon-style=outline labels=#false home=#true
             }
             row flex=1 padding=6 gap=6 {
                 column width=250 style=panel {
                     logo height=62 variant=ascii size=9 when=ascii
                     logo height=32 variant=wordmark size=15 unless=ascii
+                    rule height=1 kind=dashed dash=2 gap=3 color="alpha(@accent, 0.4)"
                     channel-list flex=1 variant=tree
                     user-panel height=44 variant=tty
                 }
@@ -129,7 +140,7 @@ layout {
                 member-list width=190 style=panel variant=tty hide-below=1120
             }
             tabs height=24 variant=tty bg=elevated when=abas
-            status-bar height=24 variant=tty items="conn theme ping ram frame voice spacer keys clock"
+            status-bar height=24 variant=tty border-top="alpha(@accent, 0.4)" items="conn theme ping ram frame voice spacer keys clock"
         }
         crt when=crt spacing=3 strength=0.06
     }

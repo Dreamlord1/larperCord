@@ -107,7 +107,7 @@ fn onlyHidden(n: *const kdl.Node, hides: []const []const u8) bool {
 
 /// Componentes que só enfeitam: não seguram uma coluna de pé sozinhos.
 const decoration = std.StaticStringMap(void).initComptime(.{
-    .{"label"}, .{"spacer"}, .{"shape"}, .{"rule"}, .{"starfield"}, .{"orbit"}, .{"aurora"}, .{"topography"}, .{"radar"},
+    .{"label"}, .{"spacer"}, .{"shape"}, .{"rule"}, .{"starfield"}, .{"orbit"}, .{"aurora"}, .{"dunes"}, .{"topography"}, .{"radar"},
 });
 
 fn isDecoration(name: []const u8) bool {

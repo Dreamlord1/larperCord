@@ -20,7 +20,7 @@ fn addLua(b: *std.Build, m: *std.Build.Module) void {
     });
 }
 
-const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "subsolo", "orbital", "editorial", "bolhas", "zen", "papel", "escritorio" };
+const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "subsolo", "orbital", "editorial", "bolhas", "zen", "papel", "escritorio", "cupertino" };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -33,6 +33,7 @@ pub fn build(b: *std.Build) void {
     const dcimgui_dir = b.path("third_party/dcimgui");
 
     const builtin_themes = b.createModule(.{ .root_source_file = b.path("themes/builtin.zig") });
+    const plugin_examples = b.createModule(.{ .root_source_file = b.path("docs/plugins/exemplos.zig") });
 
     // Headers C (SDL3, Dear ImGui, fontconfig, libc) traduzidos num módulo Zig.
     const translate = b.addTranslateC(.{
@@ -64,6 +65,7 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("c", translate.createModule());
     mod.addImport("builtin_themes", builtin_themes);
+    mod.addImport("plugin_examples", plugin_examples);
 
     mod.addIncludePath(imgui_dir);
     mod.addIncludePath(imgui_dir.path(b, "backends"));
@@ -187,6 +189,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     test_mod.addImport("builtin_themes", builtin_themes);
+    test_mod.addImport("plugin_examples", plugin_examples);
     addLua(b, test_mod);
     const tests = b.addTest(.{ .root_module = test_mod });
     b.step("test", "Roda os testes").dependOn(&b.addRunArtifact(tests).step);

@@ -5,6 +5,7 @@
 //! crt:    efeito de monitor antigo (linhas de varredura + vinheta), por cima de tudo
 //! shape:  círculo, anel, arco, retângulo arredondado ou linha
 //! rule:   régua (lisa, tracejada, pontilhada, dupla, "oxford") com ornamento
+//! window-controls: fechar, minimizar e maximizar a janela, em três bolinhas
 const std = @import("std");
 const c = @import("c");
 const kdl = @import("../theme/kdl.zig");
@@ -292,5 +293,73 @@ pub fn rule(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             c.ImDrawList_AddConcavePolyFilled(ctx.dl, &pts, 8, oc.u());
         },
         .none => {},
+    }
+}
+
+/// Quantas vezes o botão de fechar foi pedido no QA (que não pode sair de verdade).
+pub var qa_close_requests: u32 = 0;
+
+/// `window-controls size=12 gap=8 color="#ff5f57" color2="#febc2e" color3="#28c840"`
+/// Três botões de verdade: fecha o app, minimiza e maximiza/restaura a janela.
+/// Sem foco ficam apagados; com o mouse em cima mostram o símbolo.
+pub fn windowControls(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
+    const size = d.pnum(n, "size", 12);
+    const gap = d.pnum(n, "gap", 8);
+    const cols = [3]d.Rgba{ fx.nodeColor(ctx, n, "color", .danger), fx.nodeColor(ctx, n, "color2", .idle), fx.nodeColor(ctx, n, "color3", .online) };
+    const tips = [3][2][]const u8{ .{ "Fechar", "Close" }, .{ "Minimizar", "Minimize" }, .{ "Maximizar", "Zoom" } };
+    const marks = [3][]const u8{ "close", "minimize", "zoom" };
+    const win = c.SDL_GetRenderWindow(ctx.images.renderer);
+    const focused = !ctx.io.*.AppFocusLost;
+    const cy = r.y + r.h / 2;
+    const total = size * 3 + gap * 2;
+    const x0 = if (d.is(n, "align", "center", "left")) r.x + (r.w - total) / 2 else if (d.is(n, "align", "right", "left")) r.right() - total else r.x;
+    const group: d.Rect = .{ .x = x0 - 4, .y = cy - size / 2 - 4, .w = total + 8, .h = size + 8 };
+    const hot = ctx.hovering(group);
+    for (0..3) |i| {
+        const cx = x0 + size / 2 + @as(f32, @floatFromInt(i)) * (size + gap);
+        const br: d.Rect = .{ .x = cx - size / 2 - gap / 2, .y = cy - size / 2 - 3, .w = size + gap, .h = size + 6 };
+        const h = d.hit(ctx, 9100 + i, br);
+        qa.mark(br, "winctl:{s}", .{marks[i]});
+        const col = if (focused or hot) cols[i] else ctx.col(.faint).alpha(0.55);
+        d.circle(ctx.dl, cx, cy, size / 2, col);
+        c.ImDrawList_AddCircleEx(ctx.dl, d.v(cx, cy), size / 2 - 0.25, d.Rgba.black.col(0.14), 0, 0.5, 0);
+        if (hot) {
+            const ink = d.Rgba.black.alpha(0.62);
+            const k = size * 0.2;
+            switch (i) {
+                0 => {
+                    d.line(ctx.dl, cx - k, cy - k, cx + k, cy + k, ink, 1.2);
+                    d.line(ctx.dl, cx - k, cy + k, cx + k, cy - k, ink, 1.2);
+                },
+                1 => d.line(ctx.dl, cx - k * 1.3, cy, cx + k * 1.3, cy, ink, 1.4),
+                else => {
+                    d.line(ctx.dl, cx - k * 1.3, cy, cx + k * 1.3, cy, ink, 1.2);
+                    d.line(ctx.dl, cx, cy - k * 1.3, cx, cy + k * 1.3, ink, 1.2);
+                },
+            }
+        }
+        d.tip(ctx, br, i18n.tr(tips[i][0], tips[i][1]), h.hovered);
+        if (!h.clicked) continue;
+        switch (i) {
+            0 => {
+                if (qa.enabled) {
+                    qa_close_requests += 1;
+                } else {
+                    var ev = std.mem.zeroes(c.SDL_Event);
+                    ev.type = c.SDL_EVENT_QUIT;
+                    _ = c.SDL_PushEvent(&ev);
+                }
+            },
+            1 => if (win) |w| {
+                _ = c.SDL_MinimizeWindow(w);
+            },
+            else => if (win) |w| {
+                if (c.SDL_GetWindowFlags(w) & c.SDL_WINDOW_MAXIMIZED != 0) {
+                    _ = c.SDL_RestoreWindow(w);
+                } else {
+                    _ = c.SDL_MaximizeWindow(w);
+                }
+            },
+        }
     }
 }

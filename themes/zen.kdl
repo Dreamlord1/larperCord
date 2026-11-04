@@ -1,9 +1,11 @@
 // zen — foco: uma coluna central, letras maiores, sem avatares. Exclusivo: a
-// faixa de servidores se esconde sozinha e volta quando o mouse chega perto.
+// faixa de servidores se esconde sozinha e volta quando o mouse chega perto. Ao
+// fundo, areia rastelada de jardim zen, um enso e um grão fino.
 theme "zen" description="Foco: coluna central, letras maiores e a navegação que se esconde sozinha." description-en="Focus: a centered column, bigger text and navigation that hides itself." author="larperCord" preview=zen
 palette "wal"
 
 options {
+    option "jardim" label="Jardim de areia" description="Curvas rasteladas e um enso bem discretos atrás da conversa, parados." label-en="Sand garden" description-en="Very discreet raked lines and an enso behind the conversation, still." default=#true
     option "esconder" label="Esconder os servidores" description="A faixa da esquerda some até o mouse chegar perto." label-en="Hide servers" description-en="The left strip disappears until the mouse gets close." default=#true
     option "abas" label="Abas de canal" description="Os canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Open channels as tabs above the conversation." default=#true
     option "status" label="Rodapé" description="Conexão, tema, RAM e relógio bem discretos embaixo." label-en="Footer" description-en="Connection, theme, RAM and clock, tucked away at the bottom." default=#true
@@ -32,12 +34,16 @@ fonts ui="Inter" mono="JetBrains Mono" size=17
 metrics radius=10
 
 layout {
+    stack gradient="lighten(@bg, 0.012) darken(@bg, 0.03)" grain="alpha(@text, 0.022)" {
+    topography when=jardim seed=5 levels=30 color="alpha(@text, 0.045)"
+    shape when=jardim kind=arc size=620 thickness=16 start=-55 sweep=325 color="alpha(@text, 0.035)"
     row {
         guild-bar width=64 size=34 icon-style=soft shape=circle autohide="$esconder"
         column flex=1 {
             tabs height=48 variant=underline max-width=800 when=abas
             column flex=1 max-width=800 {
-                header height=88 variant=minimal inset-x=16
+                header height=84 variant=minimal inset-x=16
+                rule height=9 inset-x=16 color=border ornament=dot ornament-color=muted ornament-size=4 fade=#true
                 messages flex=1 avatar=none spacing=26 unless=avatares
                 messages flex=1 avatar=circle spacing=26 when=avatares
                 column height=104 padding-x=16 {
@@ -48,5 +54,6 @@ layout {
             }
             status-bar height=30 variant=plain when=status items="conn spacer theme ram clock"
         }
+    }
     }
 }

@@ -23,7 +23,7 @@ run "geral (classico)" $bin --qa --theme classico
 for m in escuro claro; do
     QA_SUITE=login QA_PREFIX="$m-" run "login ($m)" $bin --qa --mode "$m"
 done
-for t in classico vidro terminal subsolo orbital editorial bolhas zen papel escritorio; do
+for t in classico vidro terminal subsolo orbital editorial bolhas zen papel escritorio cupertino; do
     for m in escuro claro; do
         QA_SUITE=tema QA_PREFIX="$t-$m-" run "$t ($m)" $bin --qa --theme "$t" --mode "$m"
     done
