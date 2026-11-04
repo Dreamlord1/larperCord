@@ -17,6 +17,7 @@ const popup = @import("popup.zig");
 const side = @import("comp_side.zig");
 const palette = @import("palette.zig");
 const settings = @import("settings.zig");
+const vim = @import("vim.zig");
 const Preview = @import("../theme/manager.zig").Preview;
 
 const extra = @import("comp_extra.zig");
@@ -92,6 +93,7 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
         c.ImGuiWindowFlags_NoBackground | c.ImGuiWindowFlags_NoScrollWithMouse | c.ImGuiWindowFlags_NoNav);
     ctx.dl = c.ImGui_GetWindowDrawList();
     ctx.fg = c.ImGui_GetForegroundDrawList();
+    vim.beforeFrame(ctx.st);
     ctx.win = .{ .x = vp.*.Pos.x, .y = vp.*.Pos.y, .w = vp.*.Size.x, .h = vp.*.Size.y };
 
     d.opt_theme = ctx.th;
@@ -181,7 +183,16 @@ fn shortcuts(ctx: *d.Ctx) void {
     const shift = io.*.KeyShift;
     if (c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and ctx.st.popup == .none and !ctx.st.selection.empty()) ctx.st.selection = .{};
     if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_Comma)) ctx.act(if (ctx.st.settings.open) .close_settings else .open_settings);
-    if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_K)) ctx.act(if (ctx.st.palette.open) .close_palette else .open_palette);
+    if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_K)) {
+        palette.commands_first = false;
+        ctx.act(if (ctx.st.palette.open) .close_palette else .open_palette);
+    }
+    // Ctrl+Shift+P: a mesma paleta, com as ações primeiro.
+    if (ctrl and shift and c.ImGui_IsKeyPressed(c.ImGuiKey_P)) {
+        palette.commands_first = true;
+        ctx.act(if (ctx.st.palette.open) .close_palette else .open_palette);
+    }
+    vim.keys(ctx);
     if (c.ImGui_IsKeyPressed(c.ImGuiKey_F2) or (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_T)))
         ctx.act(.{ .next_theme = if (shift) -1 else 1 });
     if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_Tab)) ctx.act(.{ .next_tab = if (shift) -1 else 1 });

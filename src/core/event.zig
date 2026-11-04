@@ -158,6 +158,9 @@ pub const Action = union(enum) {
     /// Online, ausente, não perturbe ou invisível (offline).
     set_status: types.Status,
     member_role: struct { guild: Id, user: Id, role: Id, add: bool },
+    /// Muda uma configuração (índice em settings_state.fields(); booleano
+    /// 0/1 ou byte) e salva. Usado pela paleta de comandos.
+    set_setting: struct { index: usize, value: u8 },
     accept_friend: Id,
     /// Recusa um pedido, cancela o nosso ou desbloqueia.
     remove_relationship: Id,

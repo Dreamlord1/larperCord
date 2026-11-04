@@ -54,13 +54,16 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   original); **editar** (`↑` na caixa vazia edita a última); **excluir**; **reações**;
   **seleção de texto** com o mouse entre várias mensagens + `Ctrl+C`; **cartão de perfil** com
   "Mensagem @fulano"; seletor de emoji; **mensagens diretas**; menções a você em destaque.
-- **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K`), atalhos de teclado.
+- **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K` / `Ctrl+Shift+P`: canais, DMs,
+  servidores, temas, status, marcar como lido e as opções liga/desliga), atalhos de teclado e
+  navegação estilo vim opcional (`j`/`k`, `gg`/`G`, `J`/`K` troca de canal, `/` busca).
 - **Configurações no estilo Discord** (`Ctrl+,`): 13 páginas, troca de tema com miniaturas,
   cor de destaque/cantos, **cores personalizadas por tema e modo em hex**, escala de fonte,
   modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
   `~/.config/larpercord/settings.kdl`.
 - **Markdown do Discord**: **negrito**, *itálico*, ~~riscado~~, `código`, ||spoiler||, menções
-  `<@id>`/`<#id>`, links e emoji colorido.
+  `<@id>`/`<#id>`, links e emoji colorido; blocos de código com realce pela etiqueta (zig, c/cpp,
+  js/ts, py, rust, go, sh, json, lua…) e botão "Copiar"; prévia acima da caixa enquanto se digita.
 - Mensagens agrupadas, separadores de dia, envio "pendente" confirmado pelo servidor,
   indicador de digitação, rolagem suave com lista virtualizada.
 

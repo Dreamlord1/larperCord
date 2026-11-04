@@ -76,7 +76,8 @@ pub const Toast = struct {
 pub const PaletteItem = struct {
     label: []const u8,
     hint: []const u8 = "",
-    kind: enum { channel, guild, theme, action },
+    /// `setting`: índice em settings_state.fields(); `page`: página das configurações.
+    kind: enum { channel, guild, theme, action, setting, page },
     id: Id = 0,
     index: usize = 0,
     score: i32 = 0,

@@ -1,5 +1,7 @@
-//! Paleta de comandos (Ctrl+K): canais de todos os servidores, servidores,
-//! temas e ações, com busca aproximada. Funciona igual em qualquer tema.
+//! Paleta de comandos (Ctrl+K ou Ctrl+Shift+P): canais de todos os
+//! servidores, mensagens diretas, servidores, temas, ações (status, marcar
+//! como lido, claro/escuro…), páginas das configurações e as opções
+//! liga/desliga, com busca aproximada. Funciona igual em qualquer tema.
 const std = @import("std");
 const c = @import("c");
 const d = @import("draw.zig");
@@ -8,6 +10,123 @@ const fuzzy = @import("fuzzy.zig");
 const icons = @import("icons.zig");
 const state = @import("state.zig");
 const i18n = @import("i18n.zig");
+const settings = @import("settings.zig");
+const S = @import("settings_state.zig");
+const types = @import("../core/types.zig");
+
+/// Ctrl+Shift+P: as ações vêm antes dos canais com a busca vazia.
+pub var commands_first = false;
+
+/// Ação da paleta: rótulo nos dois idiomas e o que fazer (sempre pelas
+/// ações do app, `ctx.act`, ou pelo mesmo estado que o botão da tela muda).
+const Command = struct { pt: []const u8, en: []const u8, run: *const fn (*d.Ctx) void };
+
+fn status(comptime s: types.Status) *const fn (*d.Ctx) void {
+    return struct {
+        fn f(ctx: *d.Ctx) void {
+            ctx.act(.{ .set_status = s });
+        }
+    }.f;
+}
+
+fn colorMode(comptime m: u8) *const fn (*d.Ctx) void {
+    return struct {
+        fn f(ctx: *d.Ctx) void {
+            ctx.act(.{ .set_setting = .{ .index = S.fieldIndex("color_mode"), .value = m } });
+        }
+    }.f;
+}
+
+fn simple(comptime a: @import("../core/event.zig").Action) *const fn (*d.Ctx) void {
+    return struct {
+        fn f(ctx: *d.Ctx) void {
+            ctx.act(a);
+        }
+    }.f;
+}
+
+const commands = [_]Command{
+    .{ .pt = "Configurações", .en = "Settings", .run = simple(.open_settings) },
+    .{ .pt = "Status: Online", .en = "Status: Online", .run = status(.online) },
+    .{ .pt = "Status: Ausente", .en = "Status: Idle", .run = status(.idle) },
+    .{ .pt = "Status: Não perturbe", .en = "Status: Do Not Disturb", .run = status(.dnd) },
+    .{ .pt = "Status: Invisível", .en = "Status: Invisible", .run = status(.offline) },
+    .{ .pt = "Marcar canal como lido", .en = "Mark channel as read", .run = struct {
+        fn f(ctx: *d.Ctx) void {
+            if (ctx.st.activeChannel()) |id| ctx.act(.{ .mark_read = id });
+        }
+    }.f },
+    .{ .pt = "Marcar servidor como lido", .en = "Mark server as read", .run = struct {
+        fn f(ctx: *d.Ctx) void {
+            if (ctx.st.guild != 0) ctx.act(.{ .mark_read = ctx.st.guild });
+        }
+    }.f },
+    .{ .pt = "Marcar tudo como lido", .en = "Mark everything as read", .run = struct {
+        fn f(ctx: *d.Ctx) void {
+            for (ctx.store.guilds.items) |g| ctx.act(.{ .mark_read = g.id });
+            for (ctx.store.channelsOf(0)) |id| ctx.act(.{ .mark_read = id });
+        }
+    }.f },
+    .{ .pt = "Próximo tema", .en = "Next theme", .run = simple(.{ .next_theme = 1 }) },
+    .{ .pt = "Tema anterior", .en = "Previous theme", .run = simple(.{ .next_theme = -1 }) },
+    .{ .pt = "Modo escuro", .en = "Dark mode", .run = colorMode(0) },
+    .{ .pt = "Modo claro", .en = "Light mode", .run = colorMode(1) },
+    .{ .pt = "Claro/escuro: seguir o sistema", .en = "Light/dark: follow system", .run = colorMode(2) },
+    .{ .pt = "Mensagens diretas", .en = "Direct messages", .run = simple(.{ .select_guild = 0 }) },
+    .{ .pt = "Amigos", .en = "Friends", .run = simple(.open_friends) },
+    .{ .pt = "Próxima aba", .en = "Next tab", .run = simple(.{ .next_tab = 1 }) },
+    .{ .pt = "Aba anterior", .en = "Previous tab", .run = simple(.{ .next_tab = -1 }) },
+    .{ .pt = "Fechar aba", .en = "Close tab", .run = struct {
+        fn f(ctx: *d.Ctx) void {
+            ctx.act(.{ .close_tab = ctx.st.tab });
+        }
+    }.f },
+    .{ .pt = "Ir para o fim da conversa", .en = "Jump to present", .run = struct {
+        fn f(ctx: *d.Ctx) void {
+            if (ctx.st.activeChannel()) |id| ctx.st.scrollOf(id).stick_bottom = true;
+        }
+    }.f },
+    .{ .pt = "Anexar arquivo", .en = "Attach file", .run = simple(.pick_files) },
+    .{ .pt = "Mutar / desmutar microfone", .en = "Mute / unmute microphone", .run = simple(.toggle_mute) },
+    .{ .pt = "Ensurdecer / ouvir", .en = "Deafen / undeafen", .run = simple(.toggle_deafen) },
+    .{ .pt = "Sair da call", .en = "Leave call", .run = simple(.leave_voice) },
+};
+
+/// Nomes das opções liga/desliga (os mesmos da tela de configurações).
+/// Uma opção nova que não esteja aqui aparece pelo nome do campo.
+const toggle_names = [_]struct { field: []const u8, pt: []const u8, en: []const u8 }{
+    .{ .field = "compact", .pt = "Modo compacto", .en = "Compact mode" },
+    .{ .field = "show_avatars", .pt = "Mostrar avatares", .en = "Show avatars" },
+    .{ .field = "clock_24h", .pt = "Relógio de 24 horas", .en = "24-hour clock" },
+    .{ .field = "status_ring", .pt = "Status em anel", .en = "Status ring" },
+    .{ .field = "show_member_list", .pt = "Lista de membros", .en = "Member list" },
+    .{ .field = "show_status_bar", .pt = "Barra de status", .en = "Status bar" },
+    .{ .field = "reduce_motion", .pt = "Reduzir movimento", .en = "Reduce motion" },
+    .{ .field = "role_colors", .pt = "Cores dos cargos", .en = "Role colors" },
+    .{ .field = "underline_links", .pt = "Sublinhar links", .en = "Underline links" },
+    .{ .field = "autoplay_gifs", .pt = "Reproduzir GIFs automaticamente", .en = "Automatically play GIFs" },
+    .{ .field = "show_embeds", .pt = "Mostrar imagens de links", .en = "Show images from links" },
+    .{ .field = "show_spoilers", .pt = "Sempre mostrar spoilers", .en = "Always show spoilers" },
+    .{ .field = "md_preview", .pt = "Prévia do markdown", .en = "Markdown preview" },
+    .{ .field = "send_typing", .pt = "Enviar indicador de digitação", .en = "Send typing indicator" },
+    .{ .field = "message_log", .pt = "Registro de mensagens", .en = "Message log" },
+    .{ .field = "gif_hosts", .pt = "Animar GIFs do Tenor e do Giphy", .en = "Animate Tenor and Giphy GIFs" },
+    .{ .field = "streamer_mode", .pt = "Modo streamer", .en = "Streamer Mode" },
+    .{ .field = "desktop_notifs", .pt = "Notificações na área de trabalho", .en = "Desktop notifications" },
+    .{ .field = "taskbar_flash", .pt = "Piscar na barra de tarefas", .en = "Flash taskbar" },
+    .{ .field = "vim_keys", .pt = "Navegação estilo vim", .en = "Vim-style navigation" },
+    .{ .field = "developer_mode", .pt = "Modo desenvolvedor", .en = "Developer Mode" },
+    .{ .field = "hot_reload", .pt = "Recarregar temas ao salvar", .en = "Reload themes on save" },
+};
+
+fn toggleName(field: []const u8) ?[]const u8 {
+    inline for (toggle_names) |t| {
+        // Erro de compilação se o campo sumir das configurações.
+        _ = comptime S.fieldIndex(t.field);
+        if (std.mem.eql(u8, t.field, field)) return i18n.tr(t.pt, t.en);
+    }
+    return null;
+}
 
 fn rebuild(ctx: *d.Ctx) void {
     const p = &ctx.st.palette;
@@ -21,6 +140,8 @@ fn rebuild(ctx: *d.Ctx) void {
         fn f(pal: *state.Palette, alloc: std.mem.Allocator, query: []const u8, item: state.PaletteItem) void {
             var it = item;
             it.score = fuzzy.score(query, item.label) orelse return;
+            // Ctrl+Shift+P com a busca vazia: ações e opções primeiro.
+            if (commands_first and query.len == 0 and (item.kind == .action or item.kind == .setting or item.kind == .page)) it.score += 1;
             pal.items.append(alloc, it) catch {};
         }
     }.f;
@@ -36,19 +157,31 @@ fn rebuild(ctx: *d.Ctx) void {
         const label = std.fmt.allocPrint(a, "{s}", .{g.name}) catch continue;
         add(p, gpa, q, .{ .label = label, .hint = i18n.tr("servidor", "server"), .kind = .guild, .id = g.id });
     }
+    // Mensagens diretas e grupos.
+    for (ctx.store.channelsOf(0)) |id| {
+        const cs = ctx.store.channel(id) orelse continue;
+        if (cs.info.kind != .text) continue;
+        const label = std.fmt.allocPrint(a, "@ {s}", .{cs.info.name}) catch continue;
+        add(p, gpa, q, .{ .label = label, .hint = if (cs.info.group) i18n.tr("grupo", "group") else i18n.tr("mensagem direta", "direct message"), .kind = .channel, .id = id });
+    }
     for (ctx.theme_names, 0..) |name, i| {
         const label = i18n.allocPrint(a, "tema: {s}", "theme: {s}", .{name}) catch continue;
         add(p, gpa, q, .{ .label = label, .hint = if (i == ctx.theme_index) i18n.tr("atual", "current") else i18n.tr("aparência", "appearance"), .kind = .theme, .index = i });
     }
-    const actions = [_]struct { label: []const u8, label_en: []const u8, index: usize }{
-        .{ .label = "Mutar / desmutar microfone", .label_en = "Mute / unmute microphone", .index = 0 },
-        .{ .label = "Ensurdecer / ouvir", .label_en = "Deafen / undeafen", .index = 1 },
-        .{ .label = "Sair da call", .label_en = "Leave call", .index = 2 },
-        .{ .label = "Próximo tema", .label_en = "Next theme", .index = 3 },
-        .{ .label = "Configurações", .label_en = "Settings", .index = 4 },
-        .{ .label = "Aparência e temas", .label_en = "Appearance & themes", .index = 5 },
+    for (commands, 0..) |cmd, i| add(p, gpa, q, .{ .label = i18n.tr(cmd.pt, cmd.en), .hint = i18n.tr("ação", "action"), .kind = .action, .index = i });
+    // Páginas das configurações.
+    for (settings.sections) |sec| for (sec.items) |it| {
+        const label = i18n.allocPrint(a, "Configurações: {s}", "Settings: {s}", .{i18n.tr(it.label, it.label_en)}) catch continue;
+        add(p, gpa, q, .{ .label = label, .hint = i18n.tr("configurações", "settings"), .kind = .page, .index = @intFromEnum(it.page) });
     };
-    for (actions) |ac| add(p, gpa, q, .{ .label = i18n.tr(ac.label, ac.label_en), .hint = i18n.tr("ação", "action"), .kind = .action, .index = ac.index });
+    // Opções liga/desliga: o rótulo diz o que vai acontecer.
+    for (S.fields(), 0..) |f, i| {
+        if (f.kind != .boolean) continue;
+        const on = (S.getByte(&ctx.st.settings, i) orelse continue) != 0;
+        const name = toggleName(f.name) orelse f.name;
+        const label = (if (on) i18n.allocPrint(a, "Desligar: {s}", "Turn off: {s}", .{name}) else i18n.allocPrint(a, "Ligar: {s}", "Turn on: {s}", .{name})) catch continue;
+        add(p, gpa, q, .{ .label = label, .hint = if (on) i18n.tr("ligado agora", "on now") else i18n.tr("desligado agora", "off now"), .kind = .setting, .index = i });
+    }
 
     std.mem.sort(state.PaletteItem, p.items.items, {}, struct {
         fn lt(_: void, x: state.PaletteItem, y: state.PaletteItem) bool {
@@ -66,19 +199,25 @@ fn choose(ctx: *d.Ctx, item: state.PaletteItem) void {
         },
         .guild => ctx.act(.{ .select_guild = item.id }),
         .theme => ctx.act(.{ .set_theme = item.index }),
-        .action => ctx.act(switch (item.index) {
-            0 => .toggle_mute,
-            1 => .toggle_deafen,
-            2 => .leave_voice,
-            3 => .{ .next_theme = 1 },
-            else => .open_settings,
-        }),
+        .action => if (item.index < commands.len) commands[item.index].run(ctx),
+        .page => {
+            // Abrir as configurações já fecha a paleta.
+            ctx.st.settings.page = @enumFromInt(item.index);
+            return ctx.act(.open_settings);
+        },
+        .setting => if (S.getByte(&ctx.st.settings, item.index)) |cur| {
+            const on = cur == 0;
+            ctx.act(.{ .set_setting = .{ .index = item.index, .value = @intFromBool(on) } });
+            const name = toggleName(S.fields()[item.index].name) orelse S.fields()[item.index].name;
+            if (on) ctx.st.showToast(ctx.now_ms, false, "{s}: ligado", "{s}: on", .{name}) else ctx.st.showToast(ctx.now_ms, false, "{s}: desligado", "{s}: off", .{name});
+        },
     }
     ctx.act(.close_palette);
 }
 
 pub fn draw(ctx: *d.Ctx) void {
     const p = &ctx.st.palette;
+    if (!p.open) commands_first = false;
     const k = anim.to(anim.id("palette", 0), if (p.open) 1 else 0, 22);
     if (k < 0.01) return;
     const fg = ctx.fg;
@@ -110,7 +249,7 @@ pub fn draw(ctx: *d.Ctx) void {
         rebuild(ctx);
     }
     c.ImGui_SetNextItemWidth(box.w - 60);
-    if (c.ImGui_InputTextWithHint("##q", i18n.trZ("Ir para canal, servidor, tema ou ação…", "Go to a channel, server, theme or action…").ptr, &p.query, p.query.len, 0)) {
+    if (c.ImGui_InputTextWithHint("##q", i18n.trZ("Ir para canal, servidor, DM, tema, ação ou opção…", "Go to a channel, server, DM, theme, action or option…").ptr, &p.query, p.query.len, 0)) {
         p.selected = 0;
         rebuild(ctx);
     }

@@ -697,6 +697,7 @@ pub const App = struct {
                 st.guild = 0;
                 st.friends = true;
             },
+            .set_setting => |ss| if (settings_state.setByte(&st.settings, ss.index, ss.value)) app.saveSettings(),
             .accept_friend => |u| app.cmd(.{ .relationship = .{ .user = u, .accept = true } }),
             .remove_relationship => |u| app.cmd(.{ .relationship = .{ .user = u, .accept = false } }),
             .select_channel => |ch| {

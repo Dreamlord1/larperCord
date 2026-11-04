@@ -43,6 +43,8 @@ pub const Settings = struct {
     autoplay_gifs: bool = true,
     /// Imagens e GIFs que vêm de links (embeds).
     show_embeds: bool = true,
+    /// Prévia do markdown acima da caixa de texto, quando tem formatação.
+    md_preview: bool = true,
 
     // Privacidade
     send_typing: bool = true,
@@ -61,6 +63,10 @@ pub const Settings = struct {
     // Notificações (DMs e menções)
     desktop_notifs: bool = true,
     taskbar_flash: bool = true,
+
+    // Atalhos
+    /// Navegação estilo vim com a caixa de texto sem foco (ui/vim.zig).
+    vim_keys: bool = false,
 
     // Avançado
     developer_mode: bool = false,
@@ -106,6 +112,34 @@ pub fn fields() []const Field {
         };
     };
     return &S.list;
+}
+
+/// Lê um campo booleano ou de um byte pelo índice em `fields()` (para a
+/// paleta de comandos). Número quebrado não tem como ler assim: null.
+pub fn getByte(s: *const Settings, index: usize) ?u8 {
+    const fs = fields();
+    if (index >= fs.len or fs[index].kind == .float) return null;
+    return (@as([*]const u8, @ptrCast(s)) + fs[index].offset)[0];
+}
+
+/// Muda um campo booleano (0/1) ou de um byte pelo índice em `fields()`.
+pub fn setByte(s: *Settings, index: usize, value: u8) bool {
+    const fs = fields();
+    if (index >= fs.len) return false;
+    const p = @as([*]u8, @ptrCast(s)) + fs[index].offset;
+    switch (fs[index].kind) {
+        .boolean => @as(*bool, @ptrCast(p)).* = value != 0,
+        .byte => p[0] = value,
+        .float => return false,
+    }
+    return true;
+}
+
+/// Índice do campo em `fields()` (para tabelas montadas em tempo de compilação).
+pub fn fieldIndex(comptime name: []const u8) usize {
+    if (!@hasField(Settings, name)) @compileError("configuração inexistente: " ++ name);
+    for (fields(), 0..) |f, i| if (std.mem.eql(u8, f.name, name)) return i;
+    unreachable;
 }
 
 /// Serializa em KDL: `settings theme="vidro" compact=#true font_scale=1.1 …`
@@ -158,4 +192,16 @@ test "configurações vão e voltam pelo KDL" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.2), back.font_scale, 0.001);
     try std.testing.expectEqual(@as(u8, 2), back.language);
     try std.testing.expectEqualStrings("vidro", nodes[0].str("theme").?);
+}
+
+test "campos pelo índice (paleta de comandos)" {
+    var s: Settings = .{};
+    const i = fieldIndex("compact");
+    try std.testing.expectEqual(@as(?u8, 0), getByte(&s, i));
+    try std.testing.expect(setByte(&s, i, 1));
+    try std.testing.expect(s.compact);
+    try std.testing.expect(setByte(&s, fieldIndex("color_mode"), 2));
+    try std.testing.expectEqual(@as(u8, 2), s.color_mode);
+    try std.testing.expect(!setByte(&s, fieldIndex("font_scale"), 1));
+    try std.testing.expect(!s.vim_keys and s.md_preview);
 }
