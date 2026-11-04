@@ -1214,7 +1214,15 @@ fn codeCopied(app: *App) bool {
     const clip = c.SDL_GetClipboardText() orelse return true;
     defer c.SDL_free(clip);
     const t = std.mem.span(clip);
-    return t.len == 0 or std.mem.eql(u8, t, code_body);
+    if (t.len == 0) return true;
+    // A área de transferência do Windows guarda as quebras de linha como \r\n.
+    var i: usize = 0;
+    for (t) |ch| {
+        if (ch == '\r') continue;
+        if (i >= code_body.len or code_body[i] != ch) return false;
+        i += 1;
+    }
+    return i == code_body.len;
 }
 fn actionsFirst(app: *App) bool {
     const items = app.st.palette.items.items;

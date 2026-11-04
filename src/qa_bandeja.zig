@@ -252,7 +252,8 @@ pub const ops = [_]Op{
     expect("a rodinha rola a lista e a página fica parada", listScrolled),
     esc,
     .{ .resize = .{ 900, 260 } },
-    .{ .wait = 100 },
+    // Em máquina sem GPU a janela nova só aparece alguns quadros depois.
+    .{ .wait = 800 },
     click("voz-mic"),
     expect("sem espaço embaixo, abre para cima", listFlipped),
     shot("dropdown-cima"),
