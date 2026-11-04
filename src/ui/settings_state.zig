@@ -114,6 +114,8 @@ pub const Settings = struct {
     voice_key: Text = .{},
     voice_highpass: bool = true,
     voice_gate: bool = false,
+    /// Supressão de ruído: o número de `core/ruido.zig` Mode (0 desligada, 1 RNNoise).
+    voice_denoise: u8 = 1,
     voice_sounds: bool = true,
 
     // Atalhos
@@ -278,6 +280,7 @@ test "configurações de voz vão e voltam (volume acima de 3x e nome com acento
     s.voice_key.set("k:44");
     s.voice_highpass = false;
     s.voice_gate = true;
+    s.voice_denoise = 0;
     s.voice_sounds = false;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.testing.allocator);
@@ -295,6 +298,7 @@ test "configurações de voz vão e voltam (volume acima de 3x e nome com acento
     try std.testing.expect(back.voice_auto and back.voice_ptt and back.voice_gate);
     try std.testing.expect(!back.voice_highpass and !back.voice_sounds);
     try std.testing.expectEqualStrings("k:44", back.voice_key.slice());
+    try std.testing.expectEqual(@as(u8, 0), back.voice_denoise);
     // Arquivo antigo, sem nada disso: os padrões.
     const old = try kdl.parse(arena.allocator(), "settings compact=#true\n", null);
     var fresh: Settings = .{};
@@ -302,6 +306,7 @@ test "configurações de voz vão e voltam (volume acima de 3x e nome com acento
     try std.testing.expectEqual(@as(u8, 100), fresh.voice_in_gain);
     try std.testing.expectEqual(@as(usize, 0), fresh.voice_mic.slice().len);
     try std.testing.expect(fresh.voice_highpass and fresh.voice_sounds and !fresh.voice_ptt);
+    try std.testing.expectEqual(@as(u8, 1), fresh.voice_denoise);
 }
 
 test "campos pelo índice (paleta de comandos)" {

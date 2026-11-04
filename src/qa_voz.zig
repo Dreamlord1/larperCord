@@ -13,6 +13,7 @@ const qa = @import("ui/qa.zig");
 const gw = @import("net/fake_gateway.zig");
 const voz = @import("core/voz.zig");
 const voz_audio = @import("net/voz_audio.zig");
+const ruido = @import("core/ruido.zig");
 const ev = @import("core/event.zig");
 const S = @import("ui/settings_state.zig");
 const platform = @import("platform/window.zig");
@@ -110,8 +111,12 @@ fn resetAll(app: *App) void {
     set.voice_key = .{};
     set.voice_highpass = true;
     set.voice_gate = false;
+    // O tom constante da injeção é justamente o que o supressor tira: as checagens
+    // de nível e de transmissão rodam sem ele, e a seção dele liga por conta própria.
+    set.voice_denoise = 0;
     set.voice_sounds = true;
     sh.qa_tone.store(0, .monotonic);
+    sh.qa_noise.store(0, .monotonic);
     sh.qa_fail_mic.store(false, .monotonic);
     if (app.st.muted) app.handle(.toggle_mute);
     if (app.st.deafened) app.handle(.toggle_deafen);
@@ -289,6 +294,75 @@ fn gateOn(_: *App) bool {
 fn gateOff(_: *App) bool {
     return !sh.gate.load(.monotonic);
 }
+
+// --- Supressão de ruído ------------------------------------------------------
+
+// Branco de 0,05 do fundo de escala: cerca de -31 dB, bem acima do limiar padrão.
+fn noiseOn(_: *App) void {
+    sh.qa_tone.store(0, .monotonic);
+    sh.qa_noise.store(0.05, .monotonic);
+}
+fn noiseOff(_: *App) void {
+    sh.qa_noise.store(0, .monotonic);
+}
+fn denoiseOff(app: *App) bool {
+    return app.st.settings.voice_denoise == 0 and sh.denoise.load(.monotonic) == .off;
+}
+fn denoiseOn(app: *App) bool {
+    return app.st.settings.voice_denoise == 1 and sh.denoise.load(.monotonic) == .rnnoise;
+}
+fn selectorMarks(_: *App) bool {
+    return qa.find("voz-ruido:0") != null and qa.find("voz-ruido:1") != null and qa.find("voz-ruido:2") == null;
+}
+fn noStates(_: *App) bool {
+    return ruido.live.load(.monotonic) == 0;
+}
+fn oneState(_: *App) bool {
+    return ruido.live.load(.monotonic) == 1;
+}
+fn meterNoisy(_: *App) bool {
+    return sh.level_db.load(.monotonic) > -35;
+}
+fn meterClean(_: *App) bool {
+    return sh.level_db.load(.monotonic) < -55;
+}
+fn loopNoisy(_: *App) bool {
+    return sh.test_on.load(.acquire) and sh.loop_db.load(.monotonic) > -35;
+}
+fn loopClean(_: *App) bool {
+    return sh.test_on.load(.acquire) and sh.loop_db.load(.monotonic) < -55;
+}
+fn micKept(_: *App) bool {
+    return sh.mic_opens.load(.monotonic) == opens0;
+}
+fn setDenoiseOn(app: *App) void {
+    app.st.settings.voice_denoise = 1;
+}
+fn setDenoiseOff(app: *App) void {
+    app.st.settings.voice_denoise = 0;
+}
+fn setUnknownMode(app: *App) void {
+    app.st.settings.voice_denoise = 200;
+}
+fn unknownIsDefault(_: *App) bool {
+    return sh.denoise.load(.monotonic) == ruido.Mode.default;
+}
+fn liveWithoutDrop(app: *App) bool {
+    return inCall(app) and sh.mic_opens.load(.monotonic) == opens0;
+}
+fn offTransmits(app: *App) bool {
+    return denoiseOff(app) and noStates(app) and transmitting(app) and liveWithoutDrop(app);
+}
+fn onSilent(app: *App) bool {
+    return denoiseOn(app) and oneState(app) and notTransmitting(app) and liveWithoutDrop(app);
+}
+fn mutedNoState(app: *App) bool {
+    return app.st.muted and noStates(app);
+}
+fn unmutedState(app: *App) bool {
+    return !app.st.muted and oneState(app);
+}
+
 fn soundsOff(_: *App) bool {
     return !sh.sounds.load(.monotonic);
 }
@@ -517,6 +591,35 @@ pub const ops = [_]Op{
     click("toggle:Sons da call"),
     expect("liga os sons", soundsOn),
     run(toneOff),
+
+    s("voz: supressão de ruído"),
+    expect("o seletor mostra só o que funciona", selectorMarks),
+    expect("desligada: o medidor não cria o estado", noStates),
+    run(noiseOn),
+    expect("desligada: o medidor mostra o ruído", meterNoisy),
+    run(markLoop),
+    click("button:Testar microfone"),
+    expect("o teste do microfone toca", testRuns),
+    expect("desligada: o teste devolve o ruído", loopNoisy),
+    run(markOpens),
+    click("voz-ruido:1"),
+    expect("escolher RNNoise vale para o áudio", denoiseOn),
+    expect("o estado nasce quando liga", oneState),
+    expectLong("ligada: o medidor mostra o som limpo", meterClean),
+    expect("ligada: o teste do microfone devolve o som limpo", loopClean),
+    shot("voz-supressao"),
+    click("voz-ruido:0"),
+    expect("desligar vale para o áudio", denoiseOff),
+    expect("desligar solta o estado", noStates),
+    expect("desligada de novo: o ruído volta ao medidor", meterNoisy),
+    expect("desligada de novo: o ruído volta ao teste", loopNoisy),
+    expect("trocar não reabre o microfone", micKept),
+    run(setUnknownMode),
+    expect("número desconhecido no arquivo cai no padrão", unknownIsDefault),
+    run(setDenoiseOff),
+    click("button:Parar teste"),
+    expect("parar o teste", testStopped),
+    run(noiseOff),
     click("settings-close"),
     expect("fechar as configurações", settingsClosed),
     expect("fechar desliga o medidor", leftPage),
@@ -593,6 +696,24 @@ pub const ops = [_]Op{
     run(serverClear),
     expect("o servidor libera: some o aviso", serverCleared),
     expect("liberado, transmite de novo", transmitting),
+
+    s("voz: supressão em plena call"),
+    run(toneOff),
+    run(noiseOn),
+    run(markOpens),
+    expect("desligada: o ruído abre o microfone", offTransmits),
+    run(setDenoiseOn),
+    expectLong("ligada na call: ruído limpo não abre o microfone, sem cair", onSilent),
+    shot("voz-supressao-call"),
+    click("user-btn:0"),
+    expect("mudo solta o estado", mutedNoState),
+    click("user-btn:0"),
+    expect("desmutar cria de novo", unmutedState),
+    run(setDenoiseOff),
+    expectLong("desligada na call: o ruído volta a abrir, sem cair", offTransmits),
+    run(noiseOff),
+    run(toneOn),
+    expect("o tom volta a transmitir", transmitting),
 
     s("voz: trocar em plena call"),
     run(switchDevices),

@@ -20,6 +20,22 @@ fn addLua(b: *std.Build, m: *std.Build.Module) void {
     });
 }
 
+/// RNNoise, a supressão de ruído da voz (third_party/rnnoise; src/core/ruido.zig).
+/// C puro, sem detecção de CPU em tempo de execução. -O2 também no debug do QA,
+/// que escuta o microfone em tempo real; -Wno-cpp cala o aviso dele sobre AVX2.
+fn addRnnoise(b: *std.Build, m: *std.Build.Module) void {
+    m.addIncludePath(b.path("third_party/rnnoise/include"));
+    m.addIncludePath(b.path("third_party/rnnoise/compat"));
+    m.addCSourceFiles(.{
+        .root = b.path("third_party/rnnoise/src"),
+        .files = &.{
+            "celt_lpc.c",    "denoise.c", "kiss_fft.c",             "nnet.c",        "nnet_default.c",
+            "parse_lpcnet_weights.c", "pitch.c",   "rnn.c", "rnnoise_data.c", "rnnoise_tables.c",
+        },
+        .flags = &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined", "-Wno-cpp" },
+    });
+}
+
 const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "subsolo", "orbital", "editorial", "bolhas", "zen", "papel", "escritorio", "cupertino" };
 
 pub fn build(b: *std.Build) void {
@@ -164,6 +180,7 @@ pub fn build(b: *std.Build) void {
         .flags = &.{ "-std=c++17", "-fno-strict-aliasing" },
     });
     addLua(b, mod);
+    addRnnoise(b, mod);
     mod.linkSystemLibrary("sdl3", .{});
     mod.linkSystemLibrary("freetype2", .{});
     mod.linkSystemLibrary("fontconfig", .{});
@@ -191,8 +208,20 @@ pub fn build(b: *std.Build) void {
     test_mod.addImport("builtin_themes", builtin_themes);
     test_mod.addImport("plugin_examples", plugin_examples);
     addLua(b, test_mod);
+    addRnnoise(b, test_mod);
     const tests = b.addTest(.{ .root_module = test_mod });
     b.step("test", "Roda os testes").dependOn(&b.addRunArtifact(tests).step);
+
+    // Custo do supressor de ruído por quadro (sempre otimizado: é o que se mede).
+    const custo_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/ruido_custo.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+    });
+    addRnnoise(b, custo_mod);
+    const custo = b.addExecutable(.{ .name = "ruido-custo", .root_module = custo_mod });
+    b.step("ruido-custo", "Mede o custo do supressor de ruído").dependOn(&b.addRunArtifact(custo).step);
 
     // Um print de cada tema em docs/themes/ (usado no README).
     const snaps = b.step("snapshots", "Gera docs/themes/<tema>.png para cada tema embutido");

@@ -4,6 +4,7 @@
 //! os bipes. A thread de voz (net/voice.zig) e o teste de microfone
 //! (net/voz_audio.zig) usam as mesmas funções, testadas aqui.
 const std = @import("std");
+const ruido = @import("ruido.zig");
 
 pub const rate = 48000;
 pub const frame_ms = 20;
@@ -168,33 +169,58 @@ pub const Cfg = struct {
     auto: bool = false,
     highpass: bool = true,
     gate: bool = false,
+    /// O padrão de quem usa o app está em Settings (`voice_denoise`).
+    denoise: ruido.Mode = .off,
 };
 
 pub const Result = struct {
     rms: f32,
-    /// Nível depois do volume e do passa-altas, antes da porta.
+    /// Nível depois do volume, do passa-altas e do supressor, antes da porta.
     db: f32,
     /// O limiar em uso (o manual ou o aprendido).
     threshold_db: f32,
     voice: bool,
 };
 
-/// Volume -> passa-altas -> nível -> ruído de fundo -> porta. O limiar sai do
-/// mesmo nível que a barra mostra: o que aparece na tela é o que decide.
+/// No automático, com o motor dizendo que não é voz, o nível não abre o
+/// microfone: depois de limpo, o limiar aprendido fica tão baixo que uma batida
+/// na mesa passaria. Com o limiar manual, quem manda é o que a pessoa escolheu.
+pub fn isVoice(db: f32, threshold_db: f32, auto: bool, vad: ?f32) bool {
+    if (db < threshold_db) return false;
+    if (auto) if (vad) |p| return p >= vad_min;
+    return true;
+}
+
+const vad_min: f32 = 0.5;
+
+/// Volume -> passa-altas -> supressor -> nível -> ruído de fundo -> porta. O
+/// limiar sai do mesmo nível que a barra mostra, e esse nível já é o do som
+/// limpo: o que aparece na tela é o que decide, e ruído que o supressor tirou
+/// não abre o microfone.
 pub const Capture = struct {
     hp: HighPass = .{},
+    ns: ruido.Supressor = .{},
     floor: NoiseFloor = .{},
     gate: Gate = .{},
 
     pub fn process(cap: *Capture, pcm: []i16, cfg: Cfg) Result {
         applyGain(pcm, cfg.gain);
         if (cfg.highpass) cap.hp.process(pcm);
+        const ns = cap.ns.process(pcm, cfg.denoise);
+        // Ligou ou desligou no meio: o fundo mudou de patamar de uma vez, e subir
+        // devagar deixaria o ruído abrindo o microfone por muitos segundos.
+        if (ns.switched) cap.floor.frames = 0;
         const rms = rmsOf(pcm);
         const db = dbOf(rms);
         cap.floor.update(db);
         const th = if (cfg.auto) cap.floor.threshold() else cfg.threshold_db;
         if (cfg.gate) cap.gate.process(pcm, db, cap.floor.db + Gate.margin_db);
-        return .{ .rms = rms, .db = db, .threshold_db = th, .voice = db >= th };
+        return .{ .rms = rms, .db = db, .threshold_db = th, .voice = isVoice(db, th, cfg.auto, ns.vad) };
+    }
+
+    /// O microfone parou (mudo, fechou): sem estado do supressor até ele voltar.
+    pub fn release(cap: *Capture) void {
+        cap.ns.release();
     }
 };
 
@@ -524,6 +550,62 @@ test "captura: limiar manual, automático e volume de entrada" {
     tone(&pcm, 1000, 4000, &ph);
     r = auto.process(&pcm, .{ .auto = true });
     try t_expect(r.voice);
+}
+
+test "captura com supressor: ruído limpo não abre o microfone, e trocar não atrapalha" {
+    var cap: Capture = .{};
+    defer cap.release();
+    var seed: u32 = 777;
+    var pcm: [frame_len]i16 = undefined;
+    const noise = struct {
+        fn fill(out: []i16, s: *u32) void {
+            var i: usize = 0;
+            while (i < out.len) : (i += 2) {
+                s.* = s.* *% 1664525 +% 1013904223;
+                const v: i16 = @intFromFloat((@as(f32, @floatFromInt(s.* >> 8)) / (1 << 24) * 2 - 1) * 3000);
+                out[i] = v;
+                out[i + 1] = v;
+            }
+        }
+    };
+    const cfg_off: Cfg = .{ .threshold_db = -48.8 };
+    const cfg_on: Cfg = .{ .threshold_db = -48.8, .denoise = .rnnoise };
+    // Sem o supressor o ruído passa do limiar, e é ele que vai para a call.
+    var r: Result = undefined;
+    for (0..60) |_| {
+        noise.fill(&pcm, &seed);
+        r = cap.process(&pcm, cfg_off);
+    }
+    try t_expect(r.voice);
+    const loud = r.db;
+    // Ligado na mesma captura: o nível (o da barra) é o do som limpo.
+    for (0..60) |_| {
+        noise.fill(&pcm, &seed);
+        r = cap.process(&pcm, cfg_on);
+    }
+    try t_expect(!r.voice);
+    try t_expect(r.db < loud - 20);
+    try std.testing.expectApproxEqAbs(r.db, dbOf(rmsOf(&pcm)), 0.01);
+    // O ruído de fundo reaprende: desligar não deixa o automático aberto por segundos.
+    const quiet_floor = cap.floor.db;
+    for (0..30) |_| {
+        noise.fill(&pcm, &seed);
+        r = cap.process(&pcm, .{ .auto = true });
+    }
+    try t_expect(cap.floor.db > quiet_floor + 20);
+    try t_expect(!r.voice);
+    cap.release();
+    try t_eq(@as(?*anyopaque, null), cap.ns.state);
+}
+
+test "automático com motor: a probabilidade de voz decide junto com o nível" {
+    try t_expect(isVoice(-20, -40, true, 0.9));
+    try t_expect(!isVoice(-20, -40, true, 0.1));
+    try t_expect(!isVoice(-50, -40, true, 0.9));
+    // Sem estimativa (motor desligado ou em transição): só o nível.
+    try t_expect(isVoice(-20, -40, true, null));
+    // Limiar manual: a probabilidade não manda.
+    try t_expect(isVoice(-20, -40, false, 0.1));
 }
 
 test "detecção de voz: rabo de 400 ms" {
