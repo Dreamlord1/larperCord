@@ -24,6 +24,13 @@ const lsp_ops_real = if (has_lsp_qa) @import("qa_lsp.zig").ops_real else [_]Op{}
 
 /// Onde agir: uma marcação (com deslocamento opcional) ou uma marcação
 /// calculada na hora (depende de IDs que só existem durante o teste).
+/// QA_SLOW=N: em máquina lenta (sem GPU, no wine), espera N vezes mais antes de
+/// dar uma etapa por falha.
+fn slowed(ms: i64) i64 {
+    const n = if (c.SDL_getenv("QA_SLOW")) |v| std.fmt.parseInt(i64, std.mem.span(v), 10) catch 1 else 1;
+    return ms * n;
+}
+
 pub const Target = union(enum) {
     mark: Key,
     dyn: *const fn (app: *App, buf: []u8) []const u8,
@@ -3222,14 +3229,14 @@ pub const Runner = struct {
             var buf: [64]u8 = undefined;
             if (targetName(app, t, &buf).len == 0) return r.next();
             const p = resolve(app, t, &buf) orelse {
-                if (now() - r.step_ms > 1500) {
+                if (now() - r.step_ms > slowed(1500)) {
                     r.record(false, "elemento não encontrado: {s}", .{targetName(app, t, &buf)});
                     r.next();
                 }
                 return;
             };
             if (r.scrollTo(app, p)) {
-                if (now() - r.step_ms > 4000) {
+                if (now() - r.step_ms > slowed(4000)) {
                     r.record(false, "não consegui rolar até {s} (y={d:.0})", .{ targetName(app, t, &buf), p[1] });
                     r.next();
                 }
@@ -3284,7 +3291,7 @@ pub const Runner = struct {
                 if (resolve(app, t, &buf)) |p| {
                     r.pos(app, p);
                     r.next();
-                } else if (now() - r.step_ms > 1500) {
+                } else if (now() - r.step_ms > slowed(1500)) {
                     r.record(false, "elemento não encontrado: {s}", .{targetName(app, t, &buf)});
                     r.next();
                 }
@@ -3351,7 +3358,7 @@ pub const Runner = struct {
                 if (e.check(app)) {
                     r.record(true, "{s}", .{e.name});
                     r.next();
-                } else if (now() - r.step_ms > e.timeout_ms) {
+                } else if (now() - r.step_ms > slowed(e.timeout_ms)) {
                     r.record(false, "{s}", .{e.name});
                     r.next();
                 }

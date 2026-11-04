@@ -21,7 +21,38 @@ jobs:
         with:
           version: 0.17.0
       - run: tools/windows_deps.sh
-      - run: zig build -Dtarget=x86_64-windows-gnu
+      - run: zig build -Dtarget=x86_64-windows-gnu -Dqa=true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-qa-build
+          path: zig-out/bin/
+
+  # O QA completo num Windows de verdade (sem GPU, então com folga no tempo).
+  windows-qa:
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-qa-build
+          path: bin
+      - name: QA
+        shell: pwsh
+        env:
+          SDL_VIDEO_DRIVER: windows
+          LARPER_RENDERER: software
+          QA_SLOW: "3"
+        run: |
+          New-Item -ItemType Directory -Force qa-out | Out-Null
+          $p = Start-Process -FilePath bin\larpercord.exe -ArgumentList '--qa','--theme','classico' -NoNewWindow -Wait -PassThru -RedirectStandardOutput qa-out\out.txt -RedirectStandardError qa-out\err.txt
+          Get-Content qa-out\out.txt,qa-out\err.txt -ErrorAction SilentlyContinue | Select-String -Pattern 'passaram|falharam|^\s+- \[|panic' | ForEach-Object { $_.Line }
+          exit $p.ExitCode
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-qa-out
+          path: qa-out/
 
   # O app inteiro (UI, rede, imagens) só compila com as bibliotecas do
   # sistema: roda num Arch, que tem SDL3, libwebp e companhia nos pacotes.
