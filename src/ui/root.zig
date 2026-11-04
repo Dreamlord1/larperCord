@@ -22,6 +22,9 @@ const search = @import("search.zig");
 const Preview = @import("../theme/manager.zig").Preview;
 
 const extra = @import("comp_extra.zig");
+const fx = @import("fx.zig");
+const display = @import("display_text.zig");
+const backdrop = @import("backdrop.zig");
 
 const Component = *const fn (*d.Ctx, *const kdl.Node, d.Rect) void;
 
@@ -39,6 +42,13 @@ const registry = std.StaticStringMap(Component).initComptime(.{
     .{ "logo", extra.logo },
     .{ "topbar", extra.topbar },
     .{ "crt", extra.crt },
+    .{ "shape", extra.shape },
+    .{ "rule", extra.rule },
+    .{ "starfield", backdrop.draw },
+    .{ "orbit", backdrop.draw },
+    .{ "aurora", backdrop.draw },
+    .{ "topography", backdrop.draw },
+    .{ "radar", backdrop.draw },
     .{ "spacer", spacer },
 });
 
@@ -67,6 +77,7 @@ fn profAdd(name: []const u8, us: u64) void {
 
 /// `label text="larperCord" size=14 weight=bold color=accent align=center`
 fn label(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
+    if (ctx.th.nodeFx(n)) |x| if (x.text) |tx| return display.label(ctx, n, r, tx);
     const t = d.pstr(n, "text", "");
     const fam = ctx.familyFor(n);
     const weight = std.meta.stringToEnum(d.Weight, d.pstr(n, "weight", "semibold")) orelse .semibold;
@@ -98,6 +109,7 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
     ctx.win = .{ .x = vp.*.Pos.x, .y = vp.*.Pos.y, .w = vp.*.Size.x, .h = vp.*.Size.y };
 
     d.opt_theme = ctx.th;
+    fx.beginFrame();
     if (ctx.th.layout) |root| {
         const Look = struct {
             fn get(p: *const anyopaque, name: []const u8) ?bool {
@@ -132,13 +144,16 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
             if (p.node.str("bg")) |bg| if (theme_mod.tokenFromName(bg)) |tok|
                 d.rect(ctx.dl, p.rect, ctx.col(tok), d.pnum(p.node, "radius", 0));
             if (ctx.th.style(p.node.str("style"))) |st| d.drawStyle(ctx, ctx.dl, st, p.rect, i);
+            // Primitivas novas no próprio nó (gradiente, grão, borda por lado…).
+            if (base_theme.nodeFx(p.node)) |x| fx.node(ctx, x, p.node, p.rect, i);
             if (p.kind != .component or hidden(ctx, p.node.name)) continue;
             c.ImGui_PushIDPtr(p.node);
             defer c.ImGui_PopID();
             const inner = p.rect.inset(d.pnum(p.node, "inset-x", 0), d.pnum(p.node, "inset-y", 0));
             if (registry.get(p.node.name)) |draw| {
                 const t0 = if (profile) c.SDL_GetTicksNS() else 0;
-                if (inner.w > 4 and inner.h > 4) draw(ctx, p.node, inner);
+                // (Uma régua pode ter 1 pixel de altura.)
+                if ((inner.w > 4 and inner.h > 4) or (draw == &extra.rule and inner.w > 0 and inner.h > 0)) draw(ctx, p.node, inner);
                 if (profile) profAdd(p.node.name, (c.SDL_GetTicksNS() - t0) / 1000);
             } else unknown(ctx, p);
             if (d.pflag(p.node, "autohide", false)) autohide(ctx, p, i);

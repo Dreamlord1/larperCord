@@ -9,6 +9,7 @@
 //!   hide-below        some quando a janela é mais estreita que isso
 //!   style             estilo nomeado desenhado atrás do nó
 //!   when / unless     só aparece com a opção do tema ligada / desligada
+//!                     (`modo-claro` e `modo-escuro` também valem)
 const std = @import("std");
 const kdl = @import("kdl.zig");
 
@@ -99,9 +100,18 @@ fn onlyHidden(n: *const kdl.Node, hides: []const []const u8) bool {
             } else if (!decorative(ch)) return false;
         } else if (isHiddenName(ch.name, hides)) {
             found = true;
-        } else if (!std.mem.eql(u8, ch.name, "label") and !std.mem.eql(u8, ch.name, "spacer")) return false;
+        } else if (!isDecoration(ch.name)) return false;
     }
     return found;
+}
+
+/// Componentes que só enfeitam: não seguram uma coluna de pé sozinhos.
+const decoration = std.StaticStringMap(void).initComptime(.{
+    .{"label"}, .{"spacer"}, .{"shape"}, .{"rule"}, .{"starfield"}, .{"orbit"}, .{"aurora"}, .{"topography"}, .{"radar"},
+});
+
+fn isDecoration(name: []const u8) bool {
+    return decoration.has(name);
 }
 
 /// Contêiner sem nenhum componente de verdade dentro (réguas, títulos).
@@ -109,7 +119,7 @@ fn decorative(n: *const kdl.Node) bool {
     for (n.children) |*ch| {
         if (axisOf(ch.name) != null) {
             if (!decorative(ch)) return false;
-        } else if (!std.mem.eql(u8, ch.name, "label") and !std.mem.eql(u8, ch.name, "spacer")) return false;
+        } else if (!isDecoration(ch.name)) return false;
     }
     return true;
 }
@@ -230,4 +240,21 @@ test "when e unless seguem as opções" {
     try std.testing.expectEqual(@as(usize, 3), out.items.len); // row + a + c
     try std.testing.expectEqualStrings("a", out.items[1].node.name);
     try std.testing.expectEqualStrings("c", out.items[2].node.name);
+}
+
+test "coluna só com enfeites em volta do que foi escondido some junto" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const nodes = try kdl.parse(arena.allocator(), "layout { row { messages; column width=200 { label text=\"x\"; rule height=3; shape; member-list } } }", null);
+    var out: std.ArrayList(Placed) = .empty;
+    defer out.deinit(std.testing.allocator);
+    const Look = struct {
+        fn get(_: *const anyopaque, _: []const u8) ?bool {
+            return false;
+        }
+    };
+    const hides = [_][]const u8{"member-list"};
+    try solveWith(std.testing.allocator, &nodes[0], .{ .x = 0, .y = 0, .w = 500, .h = 100 }, 500, .{ .ctx = &out, .get = Look.get, .hides = &hides }, &out);
+    try std.testing.expectEqual(@as(usize, 2), out.items.len); // row + messages
+    try std.testing.expectEqual(@as(f32, 500), out.items[1].rect.w);
 }

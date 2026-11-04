@@ -1,9 +1,12 @@
-// orbital — console de bordo: grafite esverdeado, tipografia técnica e uma
-// faixa de servidores no rodapé. A identidade vem do sistema de numeração,
-// do composer de comando e da barra superior com o wordmark, não de neon.
+// orbital — console de bordo no meio do nada: campo de estrelas e um sistema de
+// órbitas atrás de painéis translúcidos, tipografia técnica e uma faixa de
+// servidores no rodapé. No claro vira carta celeste: tinta sobre papel.
 theme "orbital" description="Console de bordo: grafite, menta, numeração de sistemas e servidores no rodapé." description-en="Ship console: graphite, mint, system numbering and servers in the bottom strip." author="larperCord" preview=glass
 
 options {
+    option "estrelas" label="Campo de estrelas" description="Estrelas paradas atrás dos painéis (geradas uma vez, não gastam nada)." label-en="Starfield" description-en="Still stars behind the panels (generated once, costs nothing)." default=#true
+    option "orbitas" label="Sistema de órbitas" description="O diagrama de órbitas ao fundo." label-en="Orbit system" description-en="The orbit diagram in the background." default=#true
+    option "movimento" label="Fundo em movimento" description="Estrelas e luas andam bem devagar, a 10 quadros por segundo. Desliga sozinho com \"Reduzir movimento\" e com a janela em segundo plano." label-en="Moving background" description-en="Stars and moons drift very slowly, at 10 frames per second. Turns itself off with \"Reduce motion\" and when the window is in the background." default=#false
     option "telemetria" label="Telemetria no topo" description="Conexão, ping, RAM e relógio na barra superior." label-en="Top telemetry" description-en="Connection, ping, RAM and clock in the top bar." default=#true
     option "abas" label="Abas de canal" description="Canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Open channels as tabs above the conversation." default=#true
     option "topo" label="Barra de busca" description="Mostra a barra de busca e ajuda abaixo do wordmark (Ctrl+K continua funcionando)." label-en="Search bar" description-en="Shows the search/help bar below the wordmark (Ctrl+K still works)." default=#false
@@ -72,35 +75,44 @@ fonts ui="Inter Display" mono="Monaspace Argon" size=14
 metrics radius=8
 
 styles {
-    style "panel" bg="@surface" radius=8 border="@border" border-width=1
+    // Painel de vidro fumê: o fundo passa um pouco, o texto não perde contraste.
+    style "panel" radius=10 gradient="alpha(mix(@surface, @accent, 0.05), 0.90) alpha(@surface, 0.76)" border-gradient="alpha(@accent, 0.60) alpha(@border, 0.9) alpha(@border, 0.45)" border-gradient-angle=70 inner-shadow="alpha(@accent, 0.035)" inner-shadow-size=18 hover-bg="alpha(@accent, 0.012)"
 }
 
 layout {
-    stack {
-        column {
-            row height=36 bg=rail padding-x=16 gap=12 {
-                label width=20 text="◉" size=12 color=accent align=center font=mono
-                label flex=1 text="O R B I T A L" size=11 weight=semibold color=text
-                status-bar flex=1 variant=plain bg=rail when=telemetria items="conn ping ram spacer clock"
+    stack gradient="mix(@bg, @accent, 0.08) @bg @rail" gradient-angle=120 {
+        starfield when=estrelas color="alpha(@muted, 0.75)" color2="alpha(@accent, 0.8)" density=1.1 motion="$movimento"
+        orbit when=orbitas center-x=0.73 center-y=0.40 rings=7 color="alpha(@accent, 0.42)" color2=accent motion="$movimento"
+        column vignette="alpha(@shadow, 0.9)" vignette-size=0.5 {
+            row height=46 gradient="alpha(@rail, 0.66) alpha(@rail, 0.30)" padding-x=16 gap=10 border-bottom="alpha(@accent, 0.38)" {
+                stack width=28 {
+                    shape kind=ring size=22 thickness=1 color="alpha(@accent, 0.35)"
+                    shape kind=arc size=22 thickness=1.6 start=-150 sweep=250 color=accent dot="@text" dot-size=2.4
+                    shape kind=circle size=6 color=accent
+                }
+                label width=210 text="ORBITAL" tracking=8 size=15 weight=bold font=mono text-gradient="@text @accent" text-gradient-angle=0 shadow="alpha(@accent, 0.30)" shadow-blur=2
+                status-bar flex=1 variant=plain when=telemetria items="conn ping ram spacer clock"
+                spacer flex=1 unless=telemetria
             }
-            row height=1 bg="alpha(@accent, 0.42)"
-            topbar height=32 bg=rail when=topo
-            row flex=1 padding=10 gap=10 {
+            topbar height=32 gradient="alpha(@rail, 0.66) alpha(@rail, 0.30)" when=topo
+            row flex=1 padding=14 gap=14 {
                 column width=260 style=panel {
-                    row height=36 {
-                        label width=34 text="01" size=18 weight=semibold color=accent align=center font=mono
-                        label flex=1 text="CANAIS" size=9 weight=semibold color=muted font=mono
+                    label height=38 size=9 color=muted font=mono span-gap=9 {
+                        span "01" size=18 color=accent
+                        span "CANAIS" en="CHANNELS" tracking=3
                     }
-                    row height=1 bg="@border"
+                    rule height=1 kind=dashed dash=3 gap=3 color="alpha(@accent, 0.45)"
                     channel-list flex=1 variant=discord inset-x=4 font=mono
+                    rule height=1 inset-x=12 color=border
                     user-panel height=52 variant=tty inset-x=4
                 }
                 column flex=1 style=panel {
-                    row height=36 {
-                        label width=34 text="02" size=18 weight=semibold color=accent align=center font=mono
-                        label flex=1 text="CANAL" size=9 weight=semibold color=muted font=mono
+                    label height=38 size=9 color=muted font=mono span-gap=9 {
+                        span "02" size=18 color=accent
+                        span "CANAL" en="CHANNEL" tracking=3
                     }
-                    row height=1 bg="@border"
+                    rule height=1 kind=dashed dash=3 gap=3 color="alpha(@accent, 0.45)"
+                    spacer height=6
                     header height=44 variant=minimal inset-x=18
                     tabs height=40 variant=underline when=abas font=mono
                     messages flex=1 variant=cozy avatar=square avatar-size=26 spacing=12
@@ -111,20 +123,21 @@ layout {
                     }
                 }
                 column width=220 style=panel hide-below=1120 {
-                    row height=36 {
-                        label width=34 text="03" size=18 weight=semibold color=accent align=center font=mono
-                        label flex=1 text="TRIPULAÇÃO" size=9 weight=semibold color=muted font=mono
+                    label height=38 size=9 color=muted font=mono span-gap=9 {
+                        span "03" size=18 color=accent
+                        span "TRIPULAÇÃO" en="CREW" tracking=3
                     }
-                    row height=1 bg="@border"
+                    rule height=1 kind=dashed dash=3 gap=3 color="alpha(@accent, 0.45)"
                     member-list flex=1 variant=tty inset-y=4 font=mono
                 }
             }
-            row height=1 bg="alpha(@accent, 0.42)"
-            row height=58 bg=rail padding-x=16 gap=14 {
-                label width=34 text="04" size=18 weight=semibold color=accent align=center font=mono
-                label width=94 text="SERVIDORES" size=9 weight=semibold color=muted font=mono
+            row height=58 gradient="alpha(@rail, 0.30) alpha(@rail, 0.70)" padding-x=16 gap=14 border-top="alpha(@accent, 0.38)" {
+                label width=142 size=9 color=muted font=mono span-gap=9 {
+                    span "04" size=18 color=accent
+                    span "SERVIDORES" en="SERVERS" tracking=2
+                }
                 guild-bar flex=1 orientation=horizontal variant=bar shape=squircle size=28 icon-style=outline labels=#false indicators=#false
-                label width=72 text="DECK 07" size=9 weight=semibold color=muted align=right font=mono
+                label width=86 text="DECK 07" tracking=2 size=9 color=muted align=right font=mono
             }
         }
         crt when=crt spacing=3 strength=0.04

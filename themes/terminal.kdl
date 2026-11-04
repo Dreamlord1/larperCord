@@ -1,11 +1,15 @@
 // terminal — tmux + IRC. Escuro: fósforo âmbar (ou verde). Claro: papel de
-// impressora matricial. Exclusivo: efeito de monitor CRT e logo em ASCII.
+// impressora matricial. Exclusivo: efeito de monitor CRT, logo em ASCII,
+// retícula de osciloscópio e um radar (ou mapa de curvas de nível) opcional.
 theme "terminal" description="tmux + IRC: monoespaçado, canais em árvore, efeito CRT e logo em ASCII." description-en="tmux + IRC: monospace, channel tree, CRT effect and ASCII logo." author="larperCord" preview=terminal
 
 options {
     option "crt" label="Efeito CRT" description="Linhas de varredura e cantos escuros, como um monitor antigo." label-en="CRT effect" description-en="Scanlines and dark corners, like an old monitor." default=#true
     option "ascii" label="Logo em ASCII" description="O nome do app desenhado com caracteres no topo dos canais." label-en="ASCII logo" description-en="The app name drawn in characters above the channels." default=#true
     option "verde" label="Fósforo verde" description="Troca o âmbar pelo verde dos terminais clássicos (modo escuro)." label-en="Green phosphor" description-en="Swaps amber for the green of classic terminals (dark mode)." default=#false
+    option "reticula" label="Retícula" description="A grade fina de osciloscópio atrás do texto." label-en="Graticule" description-en="The fine oscilloscope grid behind the text." default=#true
+    option "radar" label="Radar ao fundo" description="Um radar de fósforo, parado, atrás das janelas." label-en="Radar backdrop" description-en="A still phosphor radar behind the windows." default=#false
+    option "mapa" label="Mapa topográfico" description="Curvas de nível atrás das janelas." label-en="Topographic map" description-en="Contour lines behind the windows." default=#false
     option "abas" label="Abas de canal" description="Mostra os canais abertos em abas no rodapé." label-en="Channel tabs" description-en="Shows open channels as tabs at the bottom." default=#true
 }
 
@@ -86,11 +90,14 @@ fonts ui="JetBrains Mono" mono="JetBrains Mono" size=14
 metrics radius=0
 
 styles {
-    style "box" border="@border" border-width=1 glow="@accent"
+    style "box" border="@border" border-width=1 glow="@accent" inner-shadow="alpha(@accent, 0.05)" inner-shadow-size=10
 }
 
 layout {
     stack {
+        spacer when=reticula pattern=grid pattern-size=24 pattern-color="alpha(@accent, 0.055)"
+        topography when=mapa color="alpha(@accent, 0.20)"
+        radar when=radar center-x=0.56 center-y=0.52 color="alpha(@accent, 0.30)" color2=accent
         column {
             guild-bar height=26 shape=text bg=elevated
             row flex=1 padding=6 gap=6 {

@@ -7,6 +7,7 @@ const theme_mod = @import("../theme/theme.zig");
 const layout = @import("../theme/layout.zig");
 const fonts_mod = @import("fonts.zig");
 const anim = @import("anim.zig");
+const fx = @import("fx.zig");
 const Store = @import("../core/store.zig").Store;
 const Action = @import("../core/event.zig").Action;
 const State = @import("state.zig").State;
@@ -150,6 +151,7 @@ pub fn shadow(dl: *c.ImDrawList, r: Rect, rounding: f32, size: f32, color: Rgba)
 pub fn drawStyle(ctx: *Ctx, dl: *c.ImDrawList, st: theme_mod.Style, r: Rect, key: usize) void {
     if (st.shadow > 0) shadow(dl, r, st.radius, st.shadow, ctx.col(.shadow));
     if (st.bg) |bg| rect(dl, r, bg, st.radius);
+    if (st.box) |b| fx.fill(ctx, dl, b, r, st.radius, key);
     if (st.sheen) {
         // Reflexo de vidro: luz no topo que some até o meio do cartão.
         const top: Rect = .{ .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = @min(r.h * 0.45, 140) };
@@ -162,6 +164,7 @@ pub fn drawStyle(ctx: *Ctx, dl: *c.ImDrawList, st: theme_mod.Style, r: Rect, key
         const bcol = if (st.glow) |g| b.mix(g, hov) else b;
         border(dl, r, bcol, st.radius, st.border_width);
     } else if (st.glow) |g| if (hov > 0.01) border(dl, r, g.alpha(hov), st.radius, st.border_width);
+    if (st.box) |b| fx.edges(ctx, dl, b, r, st.radius);
 }
 
 // --- Texto ----------------------------------------------------------------

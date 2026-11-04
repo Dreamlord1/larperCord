@@ -3,6 +3,8 @@
 //! logo:   variant = ascii | wordmark      (logo do app)
 //! topbar: barra superior com voltar/avançar entre abas, busca e ajuda
 //! crt:    efeito de monitor antigo (linhas de varredura + vinheta), por cima de tudo
+//! shape:  círculo, anel, arco, retângulo arredondado ou linha
+//! rule:   régua (lisa, tracejada, pontilhada, dupla, "oxford") com ornamento
 const std = @import("std");
 const c = @import("c");
 const kdl = @import("../theme/kdl.zig");
@@ -10,6 +12,9 @@ const d = @import("draw.zig");
 const anim = @import("anim.zig");
 const icons = @import("icons.zig");
 const i18n = @import("i18n.zig");
+const fx = @import("fx.zig");
+const qa = @import("qa.zig");
+const procgen = @import("procgen.zig");
 
 const ascii_logo = [_][]const u8{
     "┬  ┌─┐┬─┐┌─┐┌─┐┬─┐┌─┐┌─┐┬─┐┌┬┐",
@@ -113,4 +118,179 @@ pub fn crt(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     c.ImDrawList_AddRectFilledMultiColor(fg, d.v(r.right() - vw, r.y), d.v(r.right(), r.bottom()), 0, edge, edge, 0);
     c.ImDrawList_AddRectFilledMultiColor(fg, d.v(r.x, r.y), d.v(r.right(), r.y + vw), edge, edge, 0, 0);
     c.ImDrawList_AddRectFilledMultiColor(fg, d.v(r.x, r.bottom() - vw), d.v(r.right(), r.bottom()), 0, 0, edge, edge);
+}
+
+const ShapeKind = enum { circle, ring, arc, rounded, line };
+
+/// `shape kind=ring color=accent thickness=1.5 size=16`
+/// `shape kind=arc start=-90 sweep=270 dot="@text" dot-size=2.5`
+/// `shape kind=rounded radius=6 fill="alpha(@accent, 0.1)" color=accent`
+/// `shape kind=line angle=0 cap=#true`
+pub fn shape(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
+    const kind = std.meta.stringToEnum(ShapeKind, d.pstr(n, "kind", "circle")) orelse .circle;
+    if (qa.enabled) qa.mark(r, "shape:{s}", .{@tagName(kind)});
+    const dl = ctx.dl;
+    const col = fx.nodeColor(ctx, n, "color", .accent);
+    const th = d.pnum(n, "thickness", 1.5);
+    const size = d.pnum(n, "size", @min(r.w, r.h));
+    // Onde ela fica dentro do retângulo do nó.
+    const cx = (if (d.is(n, "align", "left", "center")) r.x + size / 2 else if (d.is(n, "align", "right", "center")) r.right() - size / 2 else r.x + r.w / 2) + d.pnum(n, "offset-x", 0);
+    const cy = r.y + r.h / 2 + d.pnum(n, "offset-y", 0);
+    const rad = @max(size / 2 - th / 2, 0.5);
+    switch (kind) {
+        .circle => c.ImDrawList_AddCircleFilled(dl, d.v(cx, cy), size / 2, col.u(), 0),
+        .ring => {
+            if (fx.nodeColorOpt(ctx, n, "fill")) |f| c.ImDrawList_AddCircleFilled(dl, d.v(cx, cy), rad, f.u(), 0);
+            c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), rad, col.u(), 0, th, 0);
+        },
+        .arc => {
+            const a0 = std.math.degreesToRadians(d.pnum(n, "start", -90));
+            const a1 = a0 + std.math.degreesToRadians(d.pnum(n, "sweep", 270));
+            c.ImDrawList_PathClear(dl);
+            c.ImDrawList_PathArcTo(dl, d.v(cx, cy), rad, a0, a1, 0);
+            c.ImDrawList_PathStroke(dl, col.u(), th, 0);
+            // Um ponto na ponta do arco: o satélite do anel.
+            if (fx.nodeColorOpt(ctx, n, "dot")) |dc| d.circle(dl, cx + rad * @cos(a1), cy + rad * @sin(a1), d.pnum(n, "dot-size", th * 1.6), dc);
+        },
+        .rounded => {
+            const w = @min(d.pnum(n, "size", r.w), r.w);
+            const h = @min(d.pnum(n, "size", r.h), r.h);
+            const box: d.Rect = .{ .x = cx - w / 2, .y = cy - h / 2, .w = w, .h = h };
+            const radius = d.pnum(n, "radius", 6);
+            if (fx.nodeColorOpt(ctx, n, "fill")) |f| d.rect(dl, box, f, radius);
+            d.border(dl, box, col, radius, th);
+        },
+        .line => {
+            const ang = std.math.degreesToRadians(d.pnum(n, "angle", 0));
+            // Sem `size`, a linha vai de borda a borda do nó.
+            const half = if (n.num("size") != null) size / 2 else @abs(r.w / 2 * @cos(ang)) + @abs(r.h / 2 * @sin(ang));
+            d.line(dl, cx - half * @cos(ang), cy - half * @sin(ang), cx + half * @cos(ang), cy + half * @sin(ang), col, th);
+        },
+    }
+}
+
+const RuleKind = enum { solid, dashed, dotted, double, oxford };
+const Ornament = enum { none, diamond, dot, ring, star };
+
+/// Um trecho reto da régua, nos dois sentidos. `span` é o comprimento total
+/// (para o `fade`), e o trecho só sabe de onde a onde vai.
+const RuleSeg = struct { from: f32, to: f32 };
+
+fn ruleSegment(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, seg: RuleSeg, kind: RuleKind, vertical: bool, cross: f32, th: f32, col: d.Rgba, fade: bool) void {
+    if (seg.to <= seg.from) return;
+    const dl = ctx.dl;
+    const whole: d.Rect = if (vertical)
+        .{ .x = cross, .y = seg.from, .w = th, .h = seg.to - seg.from }
+    else
+        .{ .x = seg.from, .y = cross, .w = seg.to - seg.from, .h = th };
+    const start = dl.*.VtxBuffer.Size;
+    if (kind == .dashed or kind == .dotted) {
+        // Um quad só, com o tracejado vindo de um ladrilho: não importa o
+        // comprimento da régua, são 4 vértices.
+        const dash: f32 = if (kind == .dotted) th else d.pnum(n, "dash", 6);
+        const gap: f32 = if (kind == .dotted) th * 2 else d.pnum(n, "gap", 4);
+        const side = fx.tileSide(ctx, dash + gap);
+        const period: f32 = @floatFromInt(side);
+        const dash_px: u16 = @intFromFloat(@min(@round(dash), period - 1));
+        const spec: procgen.Spec = .{ .dash = .{ .dash = dash_px, .gap = side - dash_px } };
+        if (fx.texture(ctx, spec)) |tex| {
+            const ua = seg.from / period;
+            const ub = seg.to / period;
+            const p0 = d.v(whole.x, whole.y);
+            const p2 = d.v(whole.right(), whole.bottom());
+            if (vertical) {
+                c.ImDrawList_AddImageQuadEx(dl, fx.refOf(tex), p0, d.v(p2.x, p0.y), p2, d.v(p0.x, p2.y), d.v(ua, 0), d.v(ua, 1), d.v(ub, 1), d.v(ub, 0), col.u());
+            } else {
+                c.ImDrawList_AddImageEx(dl, fx.refOf(tex), p0, p2, d.v(ua, 0), d.v(ub, 1), col.u());
+            }
+        }
+    } else {
+        d.rect(dl, whole, col, 0);
+    }
+    if (fade) fadeVerts(dl, start, r, vertical);
+}
+
+/// A régua some nas duas pontas, a partir de 22% do comprimento.
+fn fadeVerts(dl: *c.ImDrawList, start: c_int, r: d.Rect, vertical: bool) void {
+    const vb = &dl.*.VtxBuffer;
+    if (start >= vb.Size) return;
+    for (vb.Data[@intCast(start)..@intCast(vb.Size)]) |*p| {
+        const t = if (vertical) (p.pos.y - r.y) / @max(r.h, 1) else (p.pos.x - r.x) / @max(r.w, 1);
+        const k = std.math.clamp(@min(t, 1 - t) / 0.22, 0, 1);
+        const a: f32 = @floatFromInt((p.col >> 24) & 0xff);
+        p.col = (p.col & 0x00ff_ffff) | (@as(u32, @intFromFloat(a * k)) << 24);
+    }
+}
+
+/// `rule kind=oxford color=text thickness=1`
+/// `rule kind=dashed dash=6 gap=4 fade=#true`
+/// `rule ornament=diamond ornament-color=accent ornament-size=8`
+/// `rule ornament-text="§" font="Liberation Serif"`
+/// `rule vertical=#true`
+pub fn rule(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
+    const kind = std.meta.stringToEnum(RuleKind, d.pstr(n, "kind", "solid")) orelse .solid;
+    if (qa.enabled) qa.mark(r, "rule:{s}", .{@tagName(kind)});
+    const vertical = d.pflag(n, "vertical", false);
+    const fade = d.pflag(n, "fade", false);
+    const th = d.pnum(n, "thickness", 1);
+    const col = fx.nodeColor(ctx, n, "color", .border);
+    const orn = std.meta.stringToEnum(Ornament, d.pstr(n, "ornament", "none")) orelse .none;
+    const orn_text = n.str("ornament-text");
+    const has_orn = orn != .none or orn_text != null;
+    const osize = d.pnum(n, "ornament-size", 8);
+    const start = if (vertical) r.y else r.x;
+    const end = if (vertical) r.bottom() else r.right();
+    const mid = (start + end) / 2;
+
+    var half_gap: f32 = 0;
+    const fam = ctx.familyFor(n);
+    if (orn_text) |t| {
+        half_gap = d.width(fam.get(.regular), osize, t) / 2 + 8;
+    } else if (has_orn) half_gap = osize / 2 + 8;
+    half_gap = d.pnum(n, "ornament-gap", half_gap);
+    const segs = [2]RuleSeg{ .{ .from = start, .to = if (has_orn) mid - half_gap else end }, .{ .from = mid + half_gap, .to = end } };
+    const n_segs: usize = if (has_orn) 2 else 1;
+
+    const center = if (vertical) r.x + r.w / 2 else r.y + r.h / 2;
+    for (segs[0..n_segs]) |seg| {
+        switch (kind) {
+            .double => {
+                const total = th * 2 + th + 1;
+                const c0 = @round(center - total / 2);
+                ruleSegment(ctx, n, r, seg, .solid, vertical, c0, th, col, fade);
+                ruleSegment(ctx, n, r, seg, .solid, vertical, c0 + th * 2 + 1, th, col, fade);
+            },
+            .oxford => {
+                // Um fio grosso sobre um fino, como nos jornais.
+                const thick = th * 3;
+                const total = thick + 2 + th;
+                const c0 = @round(center - total / 2);
+                ruleSegment(ctx, n, r, seg, .solid, vertical, c0, thick, col, fade);
+                ruleSegment(ctx, n, r, seg, .solid, vertical, c0 + thick + 2, th, col, fade);
+            },
+            else => ruleSegment(ctx, n, r, seg, kind, vertical, @round(center - th / 2), th, col, fade),
+        }
+    }
+    if (!has_orn) return;
+    const oc = fx.nodeColor(ctx, n, "ornament-color", .accent);
+    const ox = if (vertical) center else mid;
+    const oy = if (vertical) mid else center;
+    if (orn_text) |t| {
+        const w = d.width(fam.get(.regular), osize, t);
+        d.text(ctx.dl, fam.get(.regular), osize, ox - w / 2, oy - osize * 0.6, oc, t);
+        return;
+    }
+    const h = osize / 2;
+    switch (orn) {
+        .diamond => c.ImDrawList_AddQuadFilled(ctx.dl, d.v(ox, oy - h), d.v(ox + h, oy), d.v(ox, oy + h), d.v(ox - h, oy), oc.u()),
+        .dot => d.circle(ctx.dl, ox, oy, h, oc),
+        .ring => c.ImDrawList_AddCircleEx(ctx.dl, d.v(ox, oy), h, oc.u(), 0, 1.2, 0),
+        .star => {
+            // Quatro pontas finas, como uma estrela de carta náutica.
+            const k = h * 0.28;
+            const pts = [8]c.ImVec2{ d.v(ox, oy - h), d.v(ox + k, oy - k), d.v(ox + h, oy), d.v(ox + k, oy + k), d.v(ox, oy + h), d.v(ox - k, oy + k), d.v(ox - h, oy), d.v(ox - k, oy - k) };
+            c.ImDrawList_AddConcavePolyFilled(ctx.dl, &pts, 8, oc.u());
+        },
+        .none => {},
+    }
 }

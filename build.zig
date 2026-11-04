@@ -100,6 +100,8 @@ pub fn build(b: *std.Build) void {
     // Só os stubs: as bindings citam ShowDemoWindow, mas o app nunca abre a demo.
     mod.addCSourceFile(.{ .file = b.path("third_party/imgui/imgui_demo.cpp"), .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-DIMGUI_DISABLE_DEMO_WINDOWS" } });
 
+    mod.addCSourceFile(.{ .file = b.path("src/ui/font_metrics.cpp"), .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti" } });
+
     // Decodificador de imagens (PNG/JPEG/GIF) dos anexos; WebP vem da libwebp.
     mod.addIncludePath(b.path("third_party/stb"));
     mod.addCSourceFile(.{ .file = b.path("third_party/stb/stb_image.c"), .flags = &.{"-O2"} });

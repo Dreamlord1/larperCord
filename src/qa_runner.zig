@@ -7,6 +7,7 @@ const std = @import("std");
 const c = @import("c");
 const App = @import("app.zig").App;
 const qa = @import("ui/qa.zig");
+const qa_temas = @import("qa_temas.zig");
 const gw = @import("net/fake_gateway.zig");
 const types = @import("core/types.zig");
 const Id = types.Id;
@@ -2432,6 +2433,7 @@ const ops_theme = [_]Op{
     expect("carrega e mostra a conversa", ready),
     expect("caixa de texto e mensagens na tela", composerVisible),
     .{ .shot = "tema" },
+} ++ qa_temas.ops_static ++ qa_temas.ops_motion ++ [_]Op{
     click("composer"),
     .{ .text = "oi deste tema" },
     key(c.ImGuiKey_Enter),
@@ -2523,8 +2525,10 @@ const ops_theme = [_]Op{
     .{ .shot = "tema-config" },
     key(c.ImGuiKey_Escape),
     expect("Esc fecha as configurações", settingsClosed),
+} ++ qa_temas.ops_resize_before ++ [_]Op{
     .{ .resize = .{ 860, 600 } },
-    .{ .wait = 200 },
+    .{ .wait = 300 },
+} ++ qa_temas.ops_resize_after ++ [_]Op{
     expect("janela pequena: ainda dá pra usar", composerVisible),
     .{ .shot = "tema-pequena" },
     .{ .resize = .{ 1280, 800 } },
