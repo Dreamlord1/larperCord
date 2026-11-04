@@ -18,6 +18,7 @@ const std = @import("std");
 const c = @import("c");
 const accounts = @import("../core/accounts.zig");
 const discord = @import("discord.zig");
+const fsutil = @import("../platform/fsutil.zig");
 const Id = @import("../core/types.zig").Id;
 
 const alloc = std.heap.c_allocator;
@@ -28,44 +29,13 @@ pub var memory_only = false;
 /// Conta da sessão aberta agora (0 = nenhuma ainda).
 pub var session: Id = 0;
 
-fn configDir(buf: []u8) ?[]const u8 {
-    if (c.SDL_getenv("XDG_CONFIG_HOME")) |x| return std.fmt.bufPrint(buf, "{s}/larpercord", .{std.mem.span(x)}) catch null;
-    const home = c.SDL_getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/larpercord", .{std.mem.span(home)}) catch null;
-}
-
 fn listPath(buf: []u8) ?[:0]const u8 {
-    var dbuf: [400]u8 = undefined;
-    const dir = configDir(&dbuf) orelse return null;
-    return std.fmt.bufPrintSentinel(buf, "{s}/accounts", .{dir}, 0) catch null;
+    return fsutil.configPath(buf, "accounts");
 }
 
 fn tokenPath(buf: []u8, id: Id) ?[:0]const u8 {
-    var dbuf: [400]u8 = undefined;
-    const dir = configDir(&dbuf) orelse return null;
-    return std.fmt.bufPrintSentinel(buf, "{s}/tokens/{d}", .{ dir, id }, 0) catch null;
-}
-
-/// Cria a pasta de `path` (só para o dono).
-fn ensureParent(path: [:0]const u8) void {
-    var buf: [512]u8 = undefined;
-    const slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse return;
-    const dir = std.fmt.bufPrintSentinel(&buf, "{s}", .{path[0..slash]}, 0) catch return;
-    if (std.mem.lastIndexOfScalar(u8, dir, '/')) |s2| {
-        var pbuf: [512]u8 = undefined;
-        const parent = std.fmt.bufPrintSentinel(&pbuf, "{s}", .{dir[0..s2]}, 0) catch return;
-        _ = c.mkdir(parent.ptr, 0o700);
-    }
-    _ = c.mkdir(dir.ptr, 0o700);
-}
-
-fn writePrivate(path: [:0]const u8, bytes: []const u8) bool {
-    ensureParent(path);
-    const fd = c.open(path.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_CLOEXEC, @as(c_uint, 0o600));
-    if (fd < 0) return false;
-    defer _ = c.close(fd);
-    _ = c.fchmod(fd, 0o600);
-    return c.write(fd, bytes.ptr, bytes.len) == @as(isize, @intCast(bytes.len));
+    var nbuf: [40]u8 = undefined;
+    return fsutil.configPath(buf, std.fmt.bufPrint(&nbuf, "tokens/{d}", .{id}) catch return null);
 }
 
 pub fn load() void {
@@ -85,7 +55,7 @@ pub fn save() void {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
     list.write(&out, alloc) catch return;
-    _ = writePrivate(path, out.items);
+    _ = fsutil.writePrivate(path, out.items);
 }
 
 fn trimmed(raw: []const u8) ?[:0]u8 {
@@ -138,7 +108,7 @@ pub fn storeToken(id: Id, token: []const u8) Saved {
         }
     }
     const p = path orelse return .failed;
-    return if (writePrivate(p, token)) .file else .failed;
+    return if (fsutil.writePrivate(p, token)) .file else .failed;
 }
 
 /// Apaga o token de uma conta (do chaveiro e do arquivo).

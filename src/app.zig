@@ -32,6 +32,7 @@ const plugin_host = @import("plugins/host.zig");
 const inbox_core = @import("core/inbox.zig");
 const saved_ui = @import("ui/saved.zig");
 const msg_cache = @import("net/msg_cache.zig");
+const fsutil = @import("platform/fsutil.zig");
 const accounts_store = @import("net/accounts_store.zig");
 const app_accounts = @import("app_accounts.zig");
 
@@ -509,9 +510,7 @@ pub const App = struct {
     }
 
     fn settingsPath(buf: []u8) ?[:0]const u8 {
-        if (c.SDL_getenv("XDG_CONFIG_HOME")) |x| return std.fmt.bufPrintSentinel(buf, "{s}/larpercord/settings.kdl", .{std.mem.span(x)}, 0) catch null;
-        const home = c.SDL_getenv("HOME") orelse return null;
-        return std.fmt.bufPrintSentinel(buf, "{s}/.config/larpercord/settings.kdl", .{std.mem.span(home)}, 0) catch null;
+        return fsutil.configPath(buf, "settings.kdl");
     }
 
     /// Lê ~/.config/larpercord/settings.kdl. Retorna o tema salvo, se houver.
@@ -587,11 +586,6 @@ pub const App = struct {
         if (app.opts.shot != null or app.opts.qa) return;
         var buf: [512]u8 = undefined;
         const path = settingsPath(&buf) orelse return;
-        if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
-            var dbuf: [512]u8 = undefined;
-            const dir = std.fmt.bufPrintSentinel(&dbuf, "{s}", .{path[0..slash]}, 0) catch return;
-            _ = c.SDL_CreateDirectory(dir.ptr);
-        }
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(app.gpa);
         settings_state.write(&app.st.settings, app.themes.name(), &out, app.gpa) catch return;
@@ -622,7 +616,9 @@ pub const App = struct {
             }
         }
         guild_color.write(&guild_color.colors, &out, app.gpa) catch return;
-        _ = c.SDL_SaveFile(path.ptr, out.items.ptr, out.items.len);
+        // Só para o dono: tem o proxy (que pode levar usuário:senha), quem
+        // está ignorado e as palavras de alerta.
+        _ = fsutil.writePrivate(path, out.items);
     }
 
     /// drafts.kdl, ao lado do settings.kdl.
@@ -641,11 +637,6 @@ pub const App = struct {
         }
         var buf: [512]u8 = undefined;
         const path = draftsPath(&buf) orelse return;
-        if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
-            var dbuf: [512]u8 = undefined;
-            const dir = std.fmt.bufPrintSentinel(&dbuf, "{s}", .{path[0..slash]}, 0) catch return;
-            _ = c.SDL_CreateDirectory(dir.ptr);
-        }
         app.st.drafts.save(app.gpa, path);
     }
 
@@ -693,8 +684,8 @@ pub const App = struct {
         app.store.markRead(cs.info.id);
         app.st.filtros.clear(&app.store, cs.info.id);
         app.st.focus_input = true;
-        // Trocou de conversa: o que mudou nas outras vai para o disco.
-        msg_cache.flushDirty(&app.store);
+        // Trocou de conversa: a que ficou para trás vai para o disco.
+        msg_cache.leaving(&app.store, cs.info.id);
         if (cs.history == .none) {
             cs.history = .loading;
             // O cache do disco aparece na hora; o histórico chega por cima.
@@ -1516,10 +1507,11 @@ pub const App = struct {
                         } else app.st.showToast(now(), true, "{s}", "{s}", .{app.themes.last_error orelse i18n.tr("erro no tema", "theme error")}),
                         .tick => {
                             pending = @max(pending, 1);
-                            // O relógio já acorda o app: aproveita para gravar o cache.
+                            // O relógio já acorda o app: aproveita para gravar o cache
+                            // (umas poucas por vez; sobrando, volta no próximo tique).
                             if (now() - app.cache_flush_ms >= 60_000) {
                                 app.cache_flush_ms = now();
-                                msg_cache.flushDirty(&app.store);
+                                if (msg_cache.flushSome(&app.store, 4)) app.cache_flush_ms -= 50_000;
                             }
                         },
                         .media => bg_dirty = true,
@@ -1636,6 +1628,10 @@ pub const App = struct {
                 const tf = c.SDL_GetTicksNS();
                 root.frame(&ctx, &app.placed, app.themes.previews.items);
                 plugin_host.pollKeys(app);
+                // Um clique pode ter mexido no Store direto (marcar como não lida
+                // pelo menu): a caixa de entrada confere no próximo quadro.
+                const rel = &app.io.*.MouseReleased;
+                if (rel[0] or rel[1] or rel[2]) app.store.rev +%= 1;
                 if (app.opts.stats) prof_frame += (c.SDL_GetTicksNS() - tf) / 1000;
             }
             if (app.login.visible()) {

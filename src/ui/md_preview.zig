@@ -21,6 +21,13 @@ var styled = false;
 /// Espaço ocupado da última vez que foi desenhada: a lista de mensagens
 /// encolhe por ele, como faz com a bandeja de arquivos.
 var space: f32 = 0;
+/// Muda quando o texto muda.
+var text_gen: u32 = 0;
+/// Altura do texto já medida: só mede de novo quando o texto, a largura ou
+/// a fonte mudam (o desenho, por si, já faz o layout uma vez por quadro).
+const HeightKey = struct { gen: u32, wrap: f32, size: f32, line_h: f32, fam: usize, theme: u8, spoilers: bool };
+var h_key: ?HeightKey = null;
+var h_val: f32 = 0;
 
 const max_lines = 8;
 
@@ -29,6 +36,7 @@ fn sync(st: *const State) void {
     if (cur.len == text_len and std.mem.eql(u8, cur, text[0..text_len])) return;
     @memcpy(text[0..cur.len], cur);
     text_len = cur.len;
+    text_gen +%= 1;
     if (spans.len > 0) std.heap.c_allocator.free(spans);
     spans = md.parse(std.heap.c_allocator, text[0..text_len]) catch &.{};
     // Link sozinho não conta: aparece igual ao que se digitou.
@@ -70,8 +78,12 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, x: f32, bottom: f32,
     const pad: f32 = 12;
     const head: f32 = 20;
     const wrap = @max(40, w - pad * 2);
-    const m = rich.layout(null, ctx.store, ctx.th, spans, 0, 0, wrap, o, ctx.mouse);
-    const text_h = @min(m.h, o.line_h * max_lines);
+    const key: HeightKey = .{ .gen = text_gen, .wrap = wrap, .size = size, .line_h = o.line_h, .fam = @intFromPtr(fam), .theme = ctx.st.theme_gen, .spoilers = o.reveal_spoilers };
+    if (h_key == null or !std.meta.eql(h_key.?, key)) {
+        h_val = rich.layout(null, ctx.store, ctx.th, spans, 0, 0, wrap, o, ctx.mouse).h;
+        h_key = key;
+    }
+    const text_h = @min(h_val, o.line_h * max_lines);
     const h = head + text_h + pad;
     space = h + gap;
     const r: d.Rect = .{ .x = x, .y = bottom - h, .w = w, .h = h };

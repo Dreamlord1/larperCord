@@ -380,6 +380,24 @@ fn videoRestarted(_: *App) bool {
     const v = video.info();
     return v.playing and !v.ended and v.pos_ms < 1500;
 }
+var video_channel: Id = 0;
+fn rememberVideoChannel(app: *App) void {
+    video_channel = app.st.activeChannel() orelse 0;
+}
+fn tOtherChannel(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "channel:{d}", .{if (video_channel == ch(5)) ch(4) else ch(5)});
+}
+fn tVideoChannel(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "channel:{d}", .{video_channel});
+}
+/// Fora da tela: pausa e o app pede um quadro para daqui a 30 s (soltar a
+/// memória do vídeo mesmo dormindo).
+fn videoWakeToRelease(app: *App) bool {
+    const v = video.info();
+    if (!v.active) return !hasFfmpeg();
+    return app.st.activeChannel() != video_channel and !v.playing and
+        @import("ui/anim.zig").next_wake_ms <= v.drawn_ms + 30_001;
+}
 fn videoClosed(_: *App) bool {
     return !video.info().active;
 }
@@ -1226,6 +1244,49 @@ fn cacheReplaced(app: *App) bool {
     const sc = app.st.scrollOf(cs.info.id);
     return !cs.cached and cs.history == .loaded and cs.messages.items.len > 0 and sc.stick_bottom;
 }
+/// Uma mensagem nova no canal aberto (como se viesse do Discord): a
+/// conversa muda e, ao trocar de canal, tem que ir para o disco.
+var cache_left: struct { ch: Id = 0, id: Id = 0 } = .{};
+fn cacheTouchActive(app: *App) void {
+    const cs = active(app) orelse return;
+    const last = lastMsg(app, 0) orelse return;
+    const content = std.heap.c_allocator.dupe(u8, "qa: a conversa que ficou para trás vai para o disco") catch return;
+    const id = types.makeSnowflake(gw.nowMs(), 0x3c000);
+    app.events.push(.{ .message_create = .{ .id = id, .channel = cs.info.id, .author = last.msg.author, .timestamp = @divTrunc(gw.nowMs(), 1000), .content = content } });
+    @import("platform/window.zig").Window.wake(app.win.wake_type, .gateway);
+    cache_left = .{ .ch = cs.info.id, .id = id };
+}
+fn cacheTouched(app: *App) bool {
+    const cs = app.store.channel(cache_left.ch) orelse return false;
+    return app.store.find(cs, cache_left.id) != null;
+}
+fn cacheLeftSaved(app: *App) bool {
+    if (app.st.activeChannel() == cache_left.ch) return false;
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    const dec = msg_cache.readChannel(arena.allocator(), cache_left.ch) orelse return false;
+    for (dec.entries) |e| if (e.msg.id == cache_left.id) return true;
+    return false;
+}
+/// Gravação de arquivo privado (configurações, rascunhos, salvas, cache, token):
+/// arquivo 600, pasta nossa 700, troca sem sobrar .tmp, e regravar por cima.
+fn privateWrite(_: *App) bool {
+    const fsutil = @import("platform/fsutil.zig");
+    const p = "qa-out/privado/larpercord/sub/x.kdl";
+    if (!fsutil.writePrivate(p, "um") or !fsutil.writePrivate(p, "dois")) return false;
+    var st: c.struct_stat = undefined;
+    if (c.stat(p, &st) != 0 or st.st_mode & 0o777 != 0o600 or st.st_size != 4) return false;
+    if (c.stat("qa-out/privado/larpercord/sub", &st) != 0 or st.st_mode & 0o777 != 0o700) return false;
+    if (c.stat("qa-out/privado/larpercord", &st) != 0 or st.st_mode & 0o777 != 0o700) return false;
+    return c.stat(p ++ ".tmp", &st) != 0;
+}
+var disk_reads_before: u32 = 0;
+fn searchMarkReads(_: *App) void {
+    disk_reads_before = search.disk_reads;
+}
+fn searchNoReread(_: *App) bool {
+    return !search.scanning and search.found_disk > 0 and search.disk_reads == disk_reads_before;
+}
 fn searchOpen(_: *App) bool {
     return search.open and qa.find("search-input") != null;
 }
@@ -1380,6 +1441,30 @@ fn firstGroupRead(app: *App) bool {
     if (app.store.channel(saved_id)) |cs| return !cs.info.unread;
     if (app.store.guild(saved_id)) |g| return g.mentions == 0;
     return false;
+}
+var inbox_builds: u32 = 0;
+fn inboxMarkBuilds(_: *App) void {
+    inbox_builds = @import("ui/inbox.zig").rebuilds;
+}
+fn inboxIdle(_: *App) bool {
+    return @import("ui/inbox.zig").rebuilds == inbox_builds;
+}
+/// Como o menu "Marcar como não lida" faz: direto no Store, sem evento.
+var unread_dm: Id = 0;
+fn markDmUnreadRaw(app: *App) void {
+    var it = app.store.channels.valueIterator();
+    while (it.next()) |cs| {
+        if (cs.*.info.guild != 0 or cs.*.info.kind != .text) continue;
+        for (cs.*.messages.items) |m| if (m.msg.id != 0 and m.msg.author != app.store.me) {
+            cs.*.info.unread = true;
+            unread_dm = cs.*.info.id;
+            return;
+        };
+    }
+}
+fn dmBackInInbox(_: *App) bool {
+    var b: [48]u8 = undefined;
+    return unread_dm != 0 and qa.find(markFmt(&b, "inbox-open:{d}", .{unread_dm})) != null;
 }
 fn inboxEmpty(app: *App) bool {
     if (qa.find("inbox-empty") == null or app.st.popup != .inbox) return false;
@@ -1782,6 +1867,12 @@ const ops = [_]Op{
     .{ .expect = .{ .name = "o vídeo chega ao fim e para no último quadro", .check = videoEnded, .timeout_ms = 5000 } },
     .{ .click = .{ .dyn = tVideoPlay } },
     expect("play no fim recomeça do começo", videoRestarted),
+    .{ .run = rememberVideoChannel },
+    .{ .click = .{ .dyn = tOtherChannel } },
+    expect("fora da tela, o vídeo pausa e o app acorda em 30 s para soltá-lo", videoWakeToRelease),
+    .{ .click = .{ .dyn = tVideoChannel } },
+    .{ .run = jumpToVideo },
+    .{ .wait = 500 },
     .{ .click = .{ .dyn = tVideoClose } },
     expect("o X fecha o vídeo e volta a prévia", videoClosed),
     .{ .run = jumpToMp4Gif },
@@ -1839,6 +1930,61 @@ const ops = [_]Op{
     click("jump-bottom"),
     expect("o botão de ir ao fim volta para a última mensagem", atBottom),
 
+    s("cache em disco"),
+    expect("arquivo privado: 600, pasta 700, troca inteira", privateWrite),
+    click("guild:500000"),
+    click("channel:500005"),
+    expect("pronto", ready),
+    .{ .run = cacheTouchActive },
+    expect("mensagem nova chega na conversa", cacheTouched),
+    click("channel:500006"),
+    expect("trocar de canal grava a conversa que ficou para trás", cacheLeftSaved),
+    click("channel:500005"),
+    expect("pronto", ready),
+    .{ .run = cacheFlush },
+    expect("a conversa vai para o disco (no máximo 200 por canal)", cacheHasActive),
+    .{ .run = cacheReopen },
+    expect("reabrir mostra o cache na hora", cacheShown),
+    .{ .shot = "47-cache" },
+    .{ .expect = .{ .name = "o histórico de verdade substitui o cache sem pular a rolagem", .check = cacheReplaced, .timeout_ms = 4000 } },
+
+    s("busca local"),
+    ctrl(c.ImGuiKey_F),
+    expect("Ctrl+F abre a busca", searchOpen),
+    .{ .shot = "48-busca-vazia" },
+    .{ .text = "from:ana" },
+    expect("from:ana só acha mensagens da ana", searchFromAna),
+    .{ .shot = "49-busca" },
+    .{ .run = searchClear },
+    .{ .wait = 100 },
+    .{ .text = "has:imagem" },
+    expect("has:imagem só acha mensagens com imagem", searchImages),
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha a busca", searchClosed),
+    click("header-find"),
+    expect("a lupa do cabeçalho abre a busca", searchOpen),
+    key(c.ImGuiKey_Escape),
+    .{ .run = unloadMemes },
+    ctrl(c.ImGuiKey_F),
+    .{ .text = "in:memes" },
+    expect("canal fora da memória: a busca acha no cache em disco", searchFromDisk),
+    .{ .shot = "50-busca-disco" },
+    .{ .run = searchMarkReads },
+    key(c.ImGuiKey_Escape),
+    ctrl(c.ImGuiKey_F),
+    .{ .text = "in:memes" },
+    expect("reabrir a busca usa o que já leu do disco (não lê de novo)", searchNoReread),
+    expect("e acha o mesmo no cache", searchFromDisk),
+    click("search-result:0"),
+    .{ .expect = .{ .name = "clicar no resultado abre o canal e pula até a mensagem", .check = searchJumped, .timeout_ms = 4000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Privacidade"),
+    expect("Privacidade tem a opção do cache", privacyPage),
+    .{ .shot = "51-privacidade" },
+    .{ .click = .{ .dyn = tClearCache } },
+    expect("Apagar cache apaga os arquivos", cacheEmpty),
+    key(c.ImGuiKey_Escape),
+
     s("plugins"),
     .{ .run = writePlugins },
     ctrl(c.ImGuiKey_Comma),
@@ -1895,6 +2041,9 @@ const ops = [_]Op{
     expect("o botão do cabeçalho abre a caixa de entrada", inboxOpen),
     .{ .expect = .{ .name = "DMs e menções não lidas aparecem com prévia", .check = inboxHasPreview, .timeout_ms = 3000 } },
     .{ .expect = .{ .name = "a menção no #anúncios (nunca aberto) está na lista", .check = inboxHasAnnouncement, .timeout_ms = 3000 } },
+    .{ .run = inboxMarkBuilds },
+    .{ .wait = 300 },
+    expect("parada, a caixa de entrada não se refaz a cada quadro", inboxIdle),
     .{ .shot = "40-caixa-de-entrada" },
     .{ .run = clearToast },
     .{ .click = .{ .dyn = tInboxAnnouncement } },
@@ -1907,6 +2056,11 @@ const ops = [_]Op{
     click("inbox-readall"),
     expect("marcar tudo como lido esvazia a caixa", inboxEmpty),
     .{ .shot = "41-caixa-vazia" },
+    .{ .run = markDmUnreadRaw },
+    click("inbox-tab:unread"),
+    expect("DM marcada como não lida pelo menu (direto no Store) volta para a caixa", dmBackInInbox),
+    click("inbox-readall"),
+    expect("e sai de novo ao marcar tudo como lido", inboxEmpty),
     click("inbox-tab:mentions"),
     .{ .expect = .{ .name = "aba Menções traz as menções recentes", .check = mentionsShown, .timeout_ms = 3000 } },
     .{ .shot = "42-mencoes" },
@@ -2593,6 +2747,8 @@ pub const Runner = struct {
         h.update(std.mem.asBytes(&@as(u32, app.store.relationships.count())));
         // Alertas, filtro, ignorados e modo foco (core/filtros.zig).
         h.update(std.mem.asBytes(&app.st.filtros.gen));
+        h.update(std.mem.asBytes(&@as(u32, app.st.filtros.revealed.count())));
+        h.update(std.mem.asBytes(&@as(u32, app.st.filtros.mentions.count())));
         // Opções do tema e cargos de quem está com o cartão aberto.
         const th = app.themes.theme_();
         for (th.options) |o| h.update(&.{@intFromBool(th.option(o.name) orelse o.default)});

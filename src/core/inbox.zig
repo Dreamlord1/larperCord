@@ -59,10 +59,20 @@ pub fn mentionsMe(store: *const Store, guild: Id, m: *const StoredMessage) bool 
     return std.mem.indexOf(u8, t, "@everyone") != null or std.mem.indexOf(u8, t, "@here") != null;
 }
 
+/// `mentionsMe` com cache na mensagem: só olha de novo quando o texto ou os
+/// nossos cargos mudam.
+pub fn mentionsMeCached(store: *const Store, guild: Id, m: *StoredMessage) bool {
+    const key = (store.me_rev *% 2654435761 ^ @as(u32, @truncate(@intFromPtr(m.msg.content.ptr) ^ m.msg.content.len))) | 1;
+    if (m.mm_key == key) return m.mm;
+    m.mm_key = key;
+    m.mm = mentionsMe(store, guild, m);
+    return m.mm;
+}
+
 /// Junta as não lidas de um canal, da mais nova para trás. Para no marcador
 /// de leitura ou na nossa última mensagem (responder é ter lido); canal
 /// nunca lido nesta sessão não tem marcador e vale só a segunda regra.
-fn collect(store: *const Store, cs: *const ChannelState, only_mentions: bool, g: *Group) void {
+fn collect(store: *const Store, cs: *ChannelState, only_mentions: bool, g: *Group) void {
     const items = cs.messages.items;
     var tmp: [per_group]Id = undefined;
     var k: usize = 0;
@@ -75,7 +85,7 @@ fn collect(store: *const Store, cs: *const ChannelState, only_mentions: bool, g:
         if (cs.read_id != 0 and m.msg.id <= cs.read_id) break;
         if (m.msg.author == store.me) break;
         if (m.msg.system != .none or m.deleted) continue;
-        if (only_mentions and !mentionsMe(store, cs.info.guild, m)) continue;
+        if (only_mentions and !mentionsMeCached(store, cs.info.guild, m)) continue;
         g.total += 1;
         if (g.latest == 0) g.latest = m.msg.id;
         if (k < per_group) {
@@ -138,25 +148,10 @@ pub fn build(store: *const Store, muted: *const std.AutoHashMapUnmanaged(Id, voi
     }.lt);
 }
 
-/// Muda quando algo que a caixa de entrada mostra pode ter mudado (só os
-/// canais não lidos entram na conta; é barato o bastante para todo quadro).
+/// Muda quando algo que a caixa de entrada mostra pode ter mudado
+/// (`Store.rev`, mais quantos canais estão silenciados): de graça a cada quadro.
 pub fn signature(store: *const Store, muted_count: u32) u64 {
-    var h = std.hash.Wyhash.init(store.me);
-    var it = store.channels.valueIterator();
-    while (it.next()) |p| {
-        const cs = p.*;
-        if (!cs.info.unread) continue;
-        h.update(std.mem.asBytes(&cs.info.id));
-        h.update(std.mem.asBytes(&cs.version));
-        h.update(std.mem.asBytes(&cs.read_id));
-        h.update(std.mem.asBytes(&@as(u32, @intCast(cs.messages.items.len))));
-    }
-    for (store.guilds.items) |g| if (g.mentions > 0) {
-        h.update(std.mem.asBytes(&g.id));
-        h.update(std.mem.asBytes(&g.mentions));
-    };
-    h.update(std.mem.asBytes(&muted_count));
-    return h.final();
+    return @as(u64, store.rev) << 32 | muted_count;
 }
 
 /// Canais da caixa de entrada que ainda não têm histórico (para a prévia):
@@ -235,7 +230,7 @@ pub fn buildMentions(store: *const Store, out: *Mentions) void {
             const m = &cs.messages.items[i];
             if (m.msg.id == 0) continue;
             if (types.snowflakeTime(m.msg.id) <= store.mentions_ms) break;
-            if (m.msg.author == store.me or !mentionsMe(store, cs.info.guild, m)) continue;
+            if (m.msg.author == store.me or !mentionsMeCached(store, cs.info.guild, m)) continue;
             const dup = for (refs[0..nr]) |r| {
                 if (r.id == m.msg.id) break true;
             } else false;
@@ -271,8 +266,7 @@ pub fn mentionsSignature(store: *const Store) u64 {
     var h = std.hash.Wyhash.init(store.me);
     h.update(std.mem.asBytes(&store.mentions_ms));
     h.update(std.mem.asBytes(&@as(u32, @intCast(store.recent_mentions.items.len))));
-    var it = store.channels.valueIterator();
-    while (it.next()) |p| h.update(std.mem.asBytes(&p.*.version));
+    h.update(std.mem.asBytes(&store.rev));
     return h.final();
 }
 

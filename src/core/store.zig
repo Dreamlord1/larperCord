@@ -37,6 +37,9 @@ pub const StoredMessage = struct {
     /// Cache das palavras de alerta/filtro que o texto contém (core/filtros.zig).
     flt_key: u32 = 0,
     flt: u8 = 0,
+    /// Cache de "fala com a gente" (core/inbox.zig `mentionsMe`).
+    mm_key: u32 = 0,
+    mm: bool = false,
     /// Veio do cache em disco (ver `loadCached`), não do servidor.
     from_cache: bool = false,
 
@@ -133,6 +136,12 @@ pub const Store = struct {
     /// Chamado antes de uma conversa sair da memória (o cache em disco
     /// guarda o que ela tinha).
     on_evict: ?*const fn (*Store, *ChannelState) void = null,
+    /// Muda quando algo que a caixa de entrada mostra pode ter mudado
+    /// (mensagens, não lidas, marcador de leitura, menções dos servidores):
+    /// ela só se refaz quando isto muda, sem olhar todos os canais a cada quadro.
+    rev: u32 = 0,
+    /// Muda quando nós ou os nossos cargos mudam (invalida `mm` das mensagens).
+    me_rev: u32 = 1,
 
     pub fn init(gpa: std.mem.Allocator) Store {
         return .{ .gpa = gpa };
@@ -452,9 +461,15 @@ pub const Store = struct {
 
     /// Aplica um evento vindo da rede. O Store assume as alocações do evento.
     pub fn apply(s: *Store, ev: Event, now_ms: i64) !void {
+        // O que chega o tempo todo e não aparece na caixa de entrada não conta.
+        switch (ev) {
+            .typing_start, .presence_update, .voice_state, .voice_speaking, .voice_status, .latency, .status, .notice, .member_list, .profile, .relationship, .note, .app_icon => {},
+            else => s.rev +%= 1,
+        }
         switch (ev) {
             .ready => |r| {
                 s.me = r.me;
+                s.me_rev +%= 1;
                 if (r.username) |x| {
                     if (s.me_username) |old| ev_alloc.free(old);
                     s.me_username = x;
@@ -759,14 +774,17 @@ pub const Store = struct {
                     };
                 };
             },
-            .member_info => |mi| try s.members.put(s.gpa, .{ mi.guild, mi.user }, mi.info),
+            .member_info => |mi| try s.putMember(mi.guild, mi.user, mi.info),
             .my_roles => |mr| {
                 const gop = try s.my_roles.getOrPut(s.gpa, mr.guild);
                 if (gop.found_existing) ev_alloc.free(gop.value_ptr.*);
                 gop.value_ptr.* = mr.roles;
             },
             .role_delete => |rid| if (s.roles.fetchRemove(rid)) |kv| ev_alloc.free(kv.value.name),
-            .member_remove => |mr| _ = s.members.remove(.{ mr.guild, mr.user }),
+            .member_remove => |mr| {
+                if (mr.user == s.me) s.me_rev +%= 1;
+                _ = s.members.remove(.{ mr.guild, mr.user });
+            },
             .guild_folders => |list| {
                 freeFolders(s.folders);
                 s.folders = list;
@@ -872,7 +890,19 @@ pub const Store = struct {
         };
         // Guarda cor e cargos de quem apareceu (nome nas mensagens, perfil).
         for (items.items) |it| if (it == .member)
-            try s.members.put(s.gpa, .{ guild_id, it.member.user }, it.member.info);
+            try s.putMember(guild_id, it.member.user, it.member.info);
+    }
+
+    /// Os nossos cargos mudaram: menções a cargo podem ter mudado.
+    fn putMember(s: *Store, guild_id: Id, user_id: Id, info: types.MemberInfo) !void {
+        if (user_id == s.me) {
+            const same = if (s.members.get(.{ guild_id, user_id })) |old| std.mem.eql(Id, old.roleSlice(), info.roleSlice()) else false;
+            if (!same) {
+                s.me_rev +%= 1;
+                s.rev +%= 1;
+            }
+        }
+        try s.members.put(s.gpa, .{ guild_id, user_id }, info);
     }
 
     pub fn memberList(s: *const Store, guild_id: Id) ?*MemberList {
@@ -1146,6 +1176,7 @@ pub const Store = struct {
         cs.history = .loaded;
         cs.cached = true;
         cs.version +%= 1;
+        s.rev +%= 1;
     }
 
     /// Mostra na hora uma mensagem que acabamos de enviar.
@@ -1161,6 +1192,7 @@ pub const Store = struct {
         });
         s.trim(cs);
         cs.version +%= 1;
+        s.rev +%= 1;
     }
 
     /// Teto de mensagens na memória somando todos os canais. Passando dele,
@@ -1194,6 +1226,7 @@ pub const Store = struct {
         cs.older = .idle;
         cs.cached = false;
         cs.version +%= 1;
+        s.rev +%= 1;
     }
 
     fn trim(s: *Store, cs: *ChannelState) void {
@@ -1221,6 +1254,7 @@ pub const Store = struct {
 
     pub fn markRead(s: *Store, channel_id: Id) void {
         const cs = s.channel(channel_id) orelse return;
+        s.rev +%= 1;
         cs.info.unread = false;
         // Marcador: a última que já veio do servidor (a pendente não tem ID).
         var i = cs.messages.items.len;
