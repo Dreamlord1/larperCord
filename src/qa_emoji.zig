@@ -71,7 +71,7 @@ fn showJumbo(app: *App) void {
     const sc = app.st.scrollOf(geral);
     sc.stick_bottom = false;
     sc.anchor_id = 0;
-    sc.target = @max(sc.target - 420, 0);
+    sc.target = @max(sc.target - 640, 0);
     sc.pos = sc.target;
 }
 
