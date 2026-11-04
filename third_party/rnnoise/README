@@ -1,0 +1,26 @@
+RNNoise 0.2 (https://github.com/xiph/rnnoise, licença BSD de 3 cláusulas: ver COPYING)
+Pacote oficial da versão: https://github.com/xiph/rnnoise/releases/download/v0.2/rnnoise-0.2.tar.gz
+sha256 90fce4b00b9ff24c08dbfe31b82ffd43bae383d85c5535676d28b0a2b11c0d37
+
+O projeto não publica hash desse pacote: o sha256 acima é o do arquivo baixado
+em 2026-11-04, não uma conferência contra um valor publicado. O que deu para
+cruzar, entre duas fontes oficiais:
+- denoise.c, rnn.c, nnet.c, vec_avx.h e rnnoise.h são iguais aos da tag v0.2
+  (commit 904a876dce1f9ab8860c0a5000ed151f9f6eef58);
+- os 43 vetores de pesos de src/rnnoise_data.c têm os mesmos valores do modelo
+  0b50c45 (o de model_version na tag v0.2), baixado à parte de
+  https://media.xiph.org/rnnoise/models/rnnoise_data-0b50c45.tar.gz
+  sha256 4ac81c5c0884ec4bd5907026aaae16209b7b76cd9d7f71af582094a2f98f4b43
+  Lá sobram só as cópias em float dos pesos quantizados, que o pacote já tirou.
+
+Modelo: o grande do pacote, compilado dentro do executável (1,4 MB de pesos).
+Nada é lido do disco nem da rede em tempo de execução.
+
+Só os arquivos usados, sem alterações. Ficaram de fora o treinamento, o
+exemplo, o autotools e a detecção de CPU em tempo de execução (src/x86, menos
+x86_arch_macros.h, que o vec.h inclui). Sem assembly: o vetor é escolhido na
+compilação, por intrínsecas, pelas opções do alvo (AVX2, AVX, SSE2 ou NEON).
+vec_neon.h e o caminho sem vetor do vec.h pedem um os_support.h que o pacote não
+traz: compat/os_support.h é nosso, tem só a macro que eles usam, e x86-64 não o lê.
+
+README.upstream é o README do pacote.
