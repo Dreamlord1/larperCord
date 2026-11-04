@@ -49,6 +49,7 @@ pub fn draw(p: anytype) void {
     p.note(i18n.tr("Sem arquivos, programas nem rede: só string, table, math, utf8 e os.time/os.date.", "No files, programs or network: only string, table, math, utf8 and os.time/os.date."));
     p.note(i18n.tr("Um plugin travado é parado pelo limite de instruções; erros aparecem aqui.", "A stuck plugin is stopped by the instruction limit; errors show up here."));
     p.note(i18n.tr("larper.send só manda quando você usa um comando ou atalho do plugin.", "larper.send only sends when you use one of the plugin's commands or keybinds."));
+    p.note(i18n.tr("larper.lsp só propõe um servidor: ele roda se você ligar em Erros no código.", "larper.lsp only proposes a server: it runs if you turn it on under Code diagnostics."));
     _ = ctx;
 }
 
@@ -106,6 +107,10 @@ fn summary(buf: []u8, pl: *const engine.Plugin) []const u8 {
         put(buf, &n, k.label());
     }
     if (pl.n_message > 0) put(buf, &n, i18n.tr(" · lê mensagens", " · reads messages"));
+    for (pl.lsp.items) |*srv| {
+        put(buf, &n, " · LSP ");
+        put(buf, &n, srv.lang.slice());
+    }
     var kb: [32]u8 = undefined;
     put(buf, &n, std.fmt.bufPrint(&kb, " · {d} KB", .{pl.mem / 1024}) catch "");
     return buf[0..n];

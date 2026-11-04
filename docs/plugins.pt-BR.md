@@ -117,6 +117,21 @@ aberto), uma tabela com `id` (como `larper.channel()` ou `msg.channel`) ou o ID 
 O canal aberto (`{ id, name }`) e o servidor dele (`{ id, name }`). `nil` quando não há canal aberto
 (tela de amigos) ou, no caso de `guild()`, numa mensagem direta.
 
+### `larper.lsp(linguagem, argv)`
+
+Propõe um servidor de linguagem para os blocos de código da caixa de texto
+([erros no código](lsp.pt-BR.md)): `linguagem` é a etiqueta do bloco ou uma chave de linguagem daquela
+página (`"zig"`, `"python"`, `"haskell"`), e `argv` é o programa com os argumentos, sem shell.
+
+```lua
+larper.lsp("haskell", {"haskell-language-server-wrapper", "--lsp"})
+```
+
+Isso não roda nada. A proposta aparece em Configurações → Erros no código, desligada, com o comando
+inteiro. Ela só roda depois que você liga, para aquele plugin, linguagem e comando exatos; mudar o
+comando desliga de novo. O plugin nunca vê o que você digita nem o que o servidor responde. Um plugin
+pode propor até 8 servidores; chamar de novo para a mesma linguagem troca a proposta.
+
 ### `print(...)`
 
 Vai para o log do app (`[nome.lua] …` no terminal), não para a interface.
@@ -128,7 +143,8 @@ Cada plugin roda num Lua 5.4 separado (um não enxerga o outro), na thread da in
 - **Bibliotecas**: só `string`, `table`, `math`, `utf8` e as funções básicas, mais `os.time`,
   `os.date`, `os.clock` e `os.difftime`. Não existem `io`, `os.execute`/`os.remove`/`os.getenv`,
   `require`, `package`, `debug`, `coroutine`, `load`, `loadfile`, `dofile`, `collectgarbage` nem
-  `string.dump`: um plugin não lê nem grava arquivos, não roda programas e não acessa a rede.
+  `string.dump`: um plugin não lê nem grava arquivos, não roda programas e não acessa a rede. O único
+  jeito de um programa subir é propor com `larper.lsp`, e isso depende da sua aprovação.
 - **Instruções**: cada chamada (carregar o arquivo, um evento, um comando, um atalho) pode rodar
   até ~5 milhões de instruções. Passou disso, o plugin é **parado** e o erro aparece na página
   (um `while true do end` não congela o app). `pcall` não segura esse erro.

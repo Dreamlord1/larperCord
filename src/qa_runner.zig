@@ -15,6 +15,12 @@ const Id = types.Id;
 
 const Key = []const u8;
 
+// O QA roda em debug (tools/qa.sh). O servidor de mentira e o roteiro do LSP são
+// pesados para o pouco que a função pesa, e ficam fora do executável de quem usa.
+const has_lsp_qa = @import("builtin").mode == .debug;
+const lsp_ops = if (has_lsp_qa) @import("qa_lsp.zig").ops else [_]Op{};
+const lsp_ops_quit = if (has_lsp_qa) @import("qa_lsp.zig").ops_quit else [_]Op{};
+
 /// Onde agir: uma marcação (com deslocamento opcional) ou uma marcação
 /// calculada na hora (depende de IDs que só existem durante o teste).
 pub const Target = union(enum) {
@@ -2284,7 +2290,7 @@ const ops = [_]Op{
     .{ .sweep = &.{ "toggle:", "button:" } },
     key(c.ImGuiKey_Escape),
 
-} ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ [_]Op{
+} ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ lsp_ops ++ [_]Op{
     s("caixa de entrada"),
     click("guild:500000"),
     click("channel:500005"),
@@ -2535,6 +2541,8 @@ const ops_leitura = [_]Op{
     expect("app conecta e carrega o histórico", ready),
 } ++ @import("qa_leitura.zig").startup ++ @import("qa_leitura.zig").ops;
 const ops_voz = [_]Op{ expect("pronto", ready), click("guild:500000") } ++ @import("qa_voz.zig").ops;
+const ops_lsp = [_]Op{expect("pronto", ready)} ++ lsp_ops;
+const ops_lsp_quit = [_]Op{expect("pronto", ready)} ++ lsp_ops_quit;
 
 const ops_voice = [_]Op{
     s("voz"),
@@ -2843,6 +2851,8 @@ fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "voice")) return &ops_voice;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "leitura")) return &ops_leitura;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "voz")) return &ops_voz;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp")) return &ops_lsp;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp-quit")) return &ops_lsp_quit;
     const scene = std.mem.span(c.SDL_getenv("QA_SCENE") orelse return &ops);
     if (std.mem.eql(u8, scene, "ctrl")) return &ops_ctrl;
     if (std.mem.eql(u8, scene, "nome")) return &ops_nome;

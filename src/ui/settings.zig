@@ -33,6 +33,7 @@ pub const sections = [_]Section{
     } },
     .{ .title = "LARPERCORD", .title_en = "LARPERCORD", .items = &.{
         .{ .page = .desempenho, .label = "Desempenho", .label_en = "Performance" },
+        .{ .page = .lsp, .label = "Erros no código", .label_en = "Code diagnostics" },
         .{ .page = .plugins, .label = "Plugins", .label_en = "Plugins" },
         .{ .page = .sobre, .label = "Sobre", .label_en = "About" },
     } },
@@ -659,6 +660,7 @@ fn page(p: *Page, previews: []const Preview) void {
         .voz => @import("settings_voz.zig").draw(p),
         .conta => account(p),
         .desempenho => performance(p),
+        .lsp => @import("settings_lsp.zig").draw(p),
         .plugins => @import("plugins_page.zig").draw(p),
         .sobre => about(p),
     }

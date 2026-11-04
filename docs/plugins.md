@@ -117,6 +117,22 @@ with an `id` (like `larper.channel()` or `msg.channel`) or the ID as a string.
 The open channel (`{ id, name }`) and its server (`{ id, name }`). `nil` when no channel is open
 (friends screen) or, for `guild()`, in a direct message.
 
+### `larper.lsp(lang, argv)`
+
+Proposes a language server for code blocks in the message box
+([code diagnostics](lsp.md)): `lang` is the block tag or a language key from that page (`"zig"`,
+`"python"`, `"haskell"`), and `argv` is the program and its arguments, with no shell involved.
+
+```lua
+larper.lsp("haskell", {"haskell-language-server-wrapper", "--lsp"})
+```
+
+This does not run anything. The proposal appears under Settings → Code diagnostics, off, with the
+full command. It only runs after you turn it on, for that plugin, language and exact command;
+changing the command turns it off again. The plugin never sees what you type or what the server
+answers. A plugin can propose up to 8 servers; calling this again for the same language replaces
+the proposal.
+
 ### `print(...)`
 
 Goes to the app's log (`[name.lua] …` in the terminal), not to the interface.
@@ -128,7 +144,8 @@ Each plugin runs in its own Lua 5.4 (one can't see another), on the interface th
 - **Libraries**: only `string`, `table`, `math`, `utf8` and the basic functions, plus `os.time`,
   `os.date`, `os.clock` and `os.difftime`. There is no `io`, `os.execute`/`os.remove`/`os.getenv`,
   `require`, `package`, `debug`, `coroutine`, `load`, `loadfile`, `dofile`, `collectgarbage` or
-  `string.dump`: a plugin can't read or write files, run programs or access the network.
+  `string.dump`: a plugin can't read or write files, run programs or access the network. The one
+  way to get a program started is proposing it with `larper.lsp`, which needs your approval.
 - **Instructions**: each call (loading the file, an event, a command, a keybind) can run
   up to ~5 million instructions. Go past that and the plugin is **stopped** and the error shows on
   its page (a `while true do end` doesn't freeze the app). `pcall` can't catch this error.
