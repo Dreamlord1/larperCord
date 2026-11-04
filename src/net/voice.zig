@@ -332,6 +332,7 @@ const Worker = struct {
 
     fn connectWs(w: *Worker, url: [:0]const u8) bool {
         const h = c.curl_easy_init() orelse return false;
+        sys.curlTls(h);
         w.ws = h;
         _ = c.curl_easy_setopt(h, c.CURLOPT_URL, url.ptr);
         _ = c.curl_easy_setopt(h, c.CURLOPT_NOSIGNAL, @as(c_long, 1));

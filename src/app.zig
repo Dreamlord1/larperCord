@@ -43,6 +43,7 @@ const accounts_store = @import("net/accounts_store.zig");
 const app_accounts = @import("app_accounts.zig");
 const voz_audio = @import("net/voz_audio.zig");
 const lsp_net = @import("net/lsp.zig");
+const updater = @import("net/updater.zig");
 const lsp_ui = @import("ui/lsp_ui.zig");
 const mem_tune = @import("platform/mem_tune.zig");
 
@@ -111,6 +112,8 @@ pub const App = struct {
     images: images.Cache = undefined,
     /// Arquivos escolhidos no seletor (o SDL pode responder de outra thread).
     picked: Queue([:0]u8) = undefined,
+    /// "Reiniciar": para o laço, fecha tudo e o `main` abre uma cópia nova.
+    restart_wanted: bool = false,
     /// Já tem um aviso da rede na fila do SDL: os próximos eventos só entram
     /// na fila de eventos, sem acordar a janela de novo.
     gw_signaled: std.atomic.Value(bool) = .init(false),
@@ -238,6 +241,9 @@ pub const App = struct {
         app.picked = try Queue([:0]u8).init(std.heap.c_allocator);
         plugin_host.init(app);
         setupLsp(opts.qa);
+        updater.setup(&lspWake);
+        updater.offline = opts.qa;
+        updater.cleanLeftovers();
         timeline.mark(.create_fim);
         return app;
     }
@@ -1269,6 +1275,9 @@ pub const App = struct {
             },
             .delete_thread => |id| app.cmd(.{ .delete_thread = id }),
             .pick_image => app.pickImage(),
+            .restart => if (app.opts.qa) st.showToast(now(), false, "reiniciando", "restarting", .{}) else {
+                app.restart_wanted = true;
+            },
             .edit_place => |e| {
                 // A interface aloca em gpa; a rede libera com o alocador dela.
                 const ca = std.heap.c_allocator;
@@ -1969,6 +1978,7 @@ pub const App = struct {
     var prof_vtx: u64 = 0;
 
     pub fn run(app: *App) bool {
+        if (!app.opts.qa and app.opts.shot == null and app.st.settings.check_updates) updater.check();
         const Runner = if (qa_mod.compiled) @import("qa_runner.zig").Runner else struct {
             fail: u32 = 0,
             fn tick(_: *@This(), _: *App) bool {
@@ -2107,6 +2117,8 @@ pub const App = struct {
                 }
                 if (picked.items.len > 0) pending = 3;
             }
+            if (app.restart_wanted) running = false;
+            if (updater.takeNotice()) app.st.showToast(now(), false, "atualização disponível: veja em Configurações → Atualizações", "update available: see Settings → Updates", .{});
             const now_ms = now();
             // Nada venceu ainda: não há por que redesenhar.
             if (timed_out and pending == 0 and !bg_dirty and !was_active and now_ms < due) continue;

@@ -14,7 +14,7 @@ pub const Window = struct {
 
     pub fn init(title: [*:0]const u8, w: c_int, h: c_int) !Window {
         preferNvidiaEgl();
-        _ = c.SDL_SetAppMetadata("larperCord", "0.2.0", "dev.larpercord");
+        _ = c.SDL_SetAppMetadata("larperCord", (@import("build_options").version ++ "\x00").ptr, "dev.larpercord");
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) return error.SdlInit;
         var flags = c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | c.SDL_WINDOW_TRANSPARENT;
         // LARPER_HIDDEN=1: janela escondida (medir desempenho com a GPU de verdade).

@@ -98,7 +98,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // Fechou a janela: o processo termina de qualquer jeito, mesmo que uma
     // thread de rede demore a largar (nunca fica rodando escondido).
     _ = c.SDL_DetachThread(c.SDL_CreateThread(watchdog, "quit", null));
+    const restart = app.restart_wanted;
     app.destroy();
+    if (restart) @import("net/updater.zig").spawnSelf();
     if (!ok) std.process.exit(1);
 }
 

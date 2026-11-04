@@ -204,6 +204,7 @@ pub const Gateway = struct {
         @import("../ui/images.zig").curlGlobalInit();
         timeline.mark(.curl);
         g.rest = c.curl_easy_init();
+        if (g.rest) |r| sys.curlTls(r);
         defer if (g.rest) |h| c.curl_easy_cleanup(h);
         var backoff: u32 = 2000;
         while (!g.stopping) {
@@ -399,6 +400,7 @@ pub const Gateway = struct {
         }
 
         const h = c.curl_easy_init() orelse return .retry;
+        sys.curlTls(h);
         g.ws = h;
         var url_buf: [512]u8 = undefined;
         const base = if (g.resume_len > 0) g.resume_base[0..@as(usize, g.resume_len)] else gateway_host;
@@ -2519,6 +2521,7 @@ pub const Gateway = struct {
             var rate: RateInfo = .{};
             var resp: Response = .{ .status = 0, .body = .empty };
             c.curl_easy_reset(h);
+            sys.curlTls(h);
             _ = c.curl_easy_setopt(h, c.CURLOPT_URL, url.ptr);
             _ = c.curl_easy_setopt(h, c.CURLOPT_HTTPHEADER, headers);
             _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, web_user_agent.ptr);

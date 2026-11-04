@@ -256,6 +256,39 @@ pub fn credDelete(target: [*:0]const u8) void {
     if (windows) _ = c.CredDeleteA(target, c.CRED_TYPE_GENERIC, 0);
 }
 
+/// No Windows confia nos certificados do sistema (não há pacote de CAs junto).
+pub fn curlTls(h: *c.CURL) void {
+    if (windows) _ = c.curl_easy_setopt(h, c.CURLOPT_SSL_OPTIONS, @as(c_long, c.CURLSSLOPT_NATIVE_CA));
+}
+
+/// Troca um arquivo possivelmente em uso. O Windows não deixa sobrescrever o
+/// executável aberto, mas deixa renomeá-lo: o velho vira `.old` até o próximo início.
+pub fn replaceRunning(from: [*:0]const u8, to: [*:0]const u8) bool {
+    if (windows) {
+        var pb: [1200]u8 = undefined;
+        const old = std.fmt.bufPrintSentinel(&pb, "{s}.old", .{std.mem.span(to)}, 0) catch return false;
+        _ = c.DeleteFileA(old.ptr);
+        if (exists(to) and c.MoveFileExA(to, old.ptr, c.MOVEFILE_REPLACE_EXISTING) == 0) return false;
+        if (c.MoveFileExA(from, to, c.MOVEFILE_REPLACE_EXISTING | c.MOVEFILE_WRITE_THROUGH) != 0) return true;
+        _ = c.MoveFileExA(old.ptr, to, c.MOVEFILE_REPLACE_EXISTING);
+        return false;
+    }
+    _ = c.chmod(from, 0o755);
+    // Guarda o velho para poder voltar se outro arquivo falhar.
+    var pb: [1200]u8 = undefined;
+    const old = std.fmt.bufPrintSentinel(&pb, "{s}.old", .{std.mem.span(to)}, 0) catch return false;
+    _ = c.unlink(old.ptr);
+    _ = c.link(to, old.ptr);
+    return c.rename(from, to) == 0;
+}
+
+/// Desfaz `replaceRunning`.
+pub fn restoreOld(to: [*:0]const u8) void {
+    var pb: [1200]u8 = undefined;
+    const old = std.fmt.bufPrintSentinel(&pb, "{s}.old", .{std.mem.span(to)}, 0) catch return;
+    _ = replaceFile(old.ptr, to);
+}
+
 /// Memória própria do processo, em KB.
 pub fn privateKb() u32 {
     if (!windows) return 0;

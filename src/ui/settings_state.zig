@@ -19,6 +19,8 @@ pub const Page = enum {
     desempenho,
     lsp,
     plugins,
+    atualizacoes,
+    novidades,
     sobre,
 };
 
@@ -72,6 +74,9 @@ pub const Settings = struct {
     md_preview: bool = true,
     /// Canal com não lidas abre na primeira delas, como no Discord (senão, no fim).
     open_at_unread: bool = true,
+
+    /// Pergunta ao GitHub se há versão nova ao abrir o app.
+    check_updates: bool = true,
 
     // Privacidade
     send_typing: bool = true,

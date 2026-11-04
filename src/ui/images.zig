@@ -594,6 +594,7 @@ pub fn fetch(curl: *?*c.CURL, url: [:0]const u8, sink: Sink, stop: *std.atomic.V
     if (curl.* == null) {
         curlGlobalInit();
         curl.* = c.curl_easy_init();
+        if (curl.*) |h| @import("../platform/sys.zig").curlTls(h);
     }
     const h = curl.* orelse return false;
     // Redirecionamentos seguidos à mão: cada destino passa pelo allowedHost
@@ -604,6 +605,7 @@ pub fn fetch(curl: *?*c.CURL, url: [:0]const u8, sink: Sink, stop: *std.atomic.V
     while (true) : (hops += 1) {
         var t: Transfer = .{ .sink = sink, .h = h };
         c.curl_easy_reset(h);
+        @import("../platform/sys.zig").curlTls(h);
         _ = c.curl_easy_setopt(h, c.CURLOPT_URL, cur_url.ptr);
         _ = c.curl_easy_setopt(h, c.CURLOPT_NOSIGNAL, @as(c_long, 1));
         _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, "Mozilla/5.0 (X11; Linux x86_64) larperCord/0.1");

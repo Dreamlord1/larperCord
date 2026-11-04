@@ -282,6 +282,7 @@ pub const Action = union(enum) {
     delete_thread: Id,
     edit_place: EditPlace,
     pick_image,
+    restart,
     react: struct { id: Id, emoji: types.Reaction },
     open_dm: Id,
     send_dm: struct { user: Id, text: []const u8 },

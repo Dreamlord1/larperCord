@@ -686,6 +686,25 @@ fn groupRenamed(app: *App) bool {
 fn qaPickIcon(_: *App) void {
     edit_place.qaPick("qa-out/06-selecao.png");
 }
+const updater_qa = @import("net/updater.zig");
+fn updateAvailable(_: *App) void {
+    updater_qa.qaSet(.available, "v9.9.9");
+}
+fn updateShownAvailable(_: *App) bool {
+    return qa.find("update-status:available") != null;
+}
+fn updateShownReady(_: *App) bool {
+    return qa.find("update-status:ready") != null;
+}
+fn updateShownCurrent(_: *App) bool {
+    return qa.find("update-status:up_to_date") != null;
+}
+fn changelogShown(_: *App) bool {
+    return qa.find("changelog") != null;
+}
+fn toastRestart(app: *App) bool {
+    return std.mem.indexOf(u8, app.st.toast.text(), "reiniciando") != null;
+}
 fn composerEditing(app: *App) bool {
     return app.st.editing != 0;
 }
@@ -1814,6 +1833,28 @@ const ops = [_]Op{
     ctrl(c.ImGuiKey_C),
     expect("Ctrl+C copia a seleção", toastCopied),
     key(c.ImGuiKey_Escape),
+
+    s("atualizações e novidades"),
+    .{ .key = .{ .key = c.ImGuiKey_Comma, .ctrl = true } },
+    .{ .wait = 300 },
+    click("settings:Atualizações"),
+    .{ .wait = 150 },
+    click("button:Verificar atualizações"),
+    expect("verificar mostra que está na última versão", updateShownCurrent),
+    .{ .run = updateAvailable },
+    expect("versão nova aparece com o número", updateShownAvailable),
+    .{ .wait = 100 },
+    .{ .shot = "06c-atualizacao" },
+    click("button:Baixar e instalar"),
+    expect("instalar pede para reiniciar", updateShownReady),
+    click("button:Reiniciar o larperCord"),
+    expect("reiniciar (no QA só avisa)", toastRestart),
+    click("settings:Novidades"),
+    expect("a página de novidades mostra o changelog", changelogShown),
+    .{ .wait = 100 },
+    .{ .shot = "06d-novidades" },
+    key(c.ImGuiKey_Escape),
+    .{ .wait = 350 },
 
     s("editar servidor e grupo"),
     click("guild:500000"),

@@ -58,6 +58,8 @@ pub fn build(b: *std.Build) void {
     const qa = b.option(bool, "qa", "Inclui o robô de QA (--qa); padrão: só no debug") orelse !release;
     const build_options = b.addOptions();
     build_options.addOption(bool, "qa", qa);
+    // -Dversion: só para testar a atualização a partir de uma versão velha.
+    build_options.addOption([]const u8, "version", b.option([]const u8, "version", "Versão gravada no executável") orelse @import("src/core/version.zig").number);
 
     const imgui_dir = b.path("third_party/imgui");
     const dcimgui_dir = b.path("third_party/dcimgui");
@@ -103,6 +105,8 @@ pub fn build(b: *std.Build) void {
         .unwind_tables = if (release and target.result.os.tag != .windows) .none else null,
     });
     mod.addOptions("build_options", build_options);
+    mod.addAnonymousImport("changelog_en", .{ .root_source_file = b.path("CHANGELOG.md") });
+    mod.addAnonymousImport("changelog_pt", .{ .root_source_file = b.path("CHANGELOG.pt-BR.md") });
     mod.addImport("c", translate.createModule());
     mod.addImport("builtin_themes", builtin_themes);
     mod.addImport("plugin_examples", plugin_examples);

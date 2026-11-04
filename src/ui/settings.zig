@@ -35,6 +35,8 @@ pub const sections = [_]Section{
         .{ .page = .desempenho, .label = "Desempenho", .label_en = "Performance" },
         .{ .page = .lsp, .label = "Erros no código", .label_en = "Code diagnostics" },
         .{ .page = .plugins, .label = "Plugins", .label_en = "Plugins" },
+        .{ .page = .atualizacoes, .label = "Atualizações", .label_en = "Updates" },
+        .{ .page = .novidades, .label = "Novidades", .label_en = "What's new" },
         .{ .page = .sobre, .label = "Sobre", .label_en = "About" },
     } },
 };
@@ -662,6 +664,8 @@ fn page(p: *Page, previews: []const Preview) void {
         .desempenho => performance(p),
         .lsp => @import("settings_lsp.zig").draw(p),
         .plugins => @import("plugins_page.zig").draw(p),
+        .atualizacoes => @import("settings_update.zig").draw(p),
+        .novidades => @import("settings_update.zig").changelog(p),
         .sobre => about(p),
     }
 }
@@ -886,7 +890,8 @@ fn about(p: *Page) void {
     p.y += 40;
     p.note(i18n.tr("Cliente de Discord nativo: Zig + SDL3 + Dear ImGui + FreeType.", "Native Discord client: Zig + SDL3 + Dear ImGui + FreeType."));
     p.note(i18n.tr("Temas em KDL que reorganizam a interface inteira, recarregados ao salvar.", "KDL themes that rearrange the whole interface, reloaded on save."));
-    p.note(i18n.tr("Versão 0.4.0 · voz com E2EE (DAVE), mixer por pessoa e Opus 48 kHz.", "Version 0.4.0 · voice with E2EE (DAVE), per-person mixer and 48 kHz Opus."));
+    var about_buf: [96]u8 = undefined;
+    p.note(i18n.fmt(&about_buf, "Versão {s} · voz com E2EE (DAVE), mixer por pessoa e Opus 48 kHz.", "Version {s} · voice with E2EE (DAVE), per-person mixer and Opus 48 kHz.", .{@import("build_options").version}));
     p.note(i18n.tr("Cliente não oficial: usar contas de usuário fora do app oficial vai contra os termos do Discord.", "Unofficial client: using user accounts outside the official app is against Discord's terms."));
     p.divider();
     p.heading(i18n.tr("Feito com", "Built with"));
