@@ -218,6 +218,19 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
         return;
     }
     if (sp.flags.block) {
+        // Linha fora da área visível (bloco comprido, rolado): não desenha.
+        // Acima dela o realce ainda anda (um comentário aberto continua na
+        // linha de baixo); abaixo, nada.
+        const clip_lo = c.ImDrawList_GetClipRectMin(dl);
+        const clip_hi = c.ImDrawList_GetClipRectMax(dl);
+        if (y >= clip_hi.y) return;
+        if (y + lh <= clip_lo.y) {
+            if (sp.lang != .none) {
+                var lx = syntax.Lexer.init(sp.lang, s, syn);
+                while (lx.next()) |_| {}
+            }
+            return;
+        }
         // Linhas encostadas formam a caixa do bloco.
         d.rect(dl, .{ .x = x, .y = y, .w = w, .h = lh }, if (o.on_accent) d.Rgba.black.alpha(0.18) else th.c(.code_bg), 0);
         c.ImDrawList_PushClipRect(dl, d.v(x, y), d.v(x + w - pad, y + lh), true);
@@ -225,11 +238,12 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
         if (sp.lang == .none) {
             d.text(dl, font, size, x + pad + 4, ty, plain, s);
         } else {
-            // Um pedaço por token, cada um na cor do seu tipo.
+            // Um pedaço por token, cada um na cor do seu tipo. Passou da borda:
+            // só lê o resto da linha (o realce da próxima depende dele).
             var lx = syntax.Lexer.init(sp.lang, s, syn);
             var tx = x + pad + 4;
             while (lx.next()) |t| {
-                if (tx > x + w) break;
+                if (tx > x + w) continue;
                 d.text(dl, font, size, tx, ty, tokenColor(th, t.kind, plain, o.on_accent), t.text);
                 tx += d.width(font, size, t.text);
             }

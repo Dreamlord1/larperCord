@@ -285,12 +285,14 @@ pub fn shutdown() void {
 }
 
 /// Uma vez por quadro, depois de desenhar: o vídeo que não apareceu neste
-/// quadro (rolou para fora, trocou de canal) pausa; 30 s fora, é solto.
+/// quadro (rolou para fora, trocou de canal) pausa; 30 s fora, é solto
+/// (download, quadros e textura). O app pode estar dormindo: pede um quadro
+/// para essa hora, senão a memória só voltaria no próximo evento.
 pub fn endFrame(now_ms: i64) void {
     const p = if (cur) |*pp| pp else return;
     if (!p.drawn) {
         if (p.playing) setPlaying(p, false);
-        if (now_ms - p.last_drawn_ms > 30_000) stop();
+        if (now_ms - p.last_drawn_ms > 30_000) stop() else anim.at(p.last_drawn_ms + 30_001);
         return;
     }
     p.drawn = false;
@@ -302,7 +304,7 @@ pub fn qaState() u64 {
     return p.key ^ (@as(u64, @intFromBool(p.playing)) << 1) ^ (@as(u64, @intFromBool(p.muted)) << 2);
 }
 
-pub const Info = struct { active: bool = false, playing: bool = false, ended: bool = false, failed: bool = false, ready: bool = false, w: u32 = 0, h: u32 = 0, pos_ms: f64 = 0, duration_ms: i64 = 0, shown: u32 = 0, decoded: u32 = 0, has_audio: bool = false, muted: bool = false, audio_queued: i32 = 0 };
+pub const Info = struct { active: bool = false, playing: bool = false, ended: bool = false, failed: bool = false, ready: bool = false, w: u32 = 0, h: u32 = 0, pos_ms: f64 = 0, duration_ms: i64 = 0, shown: u32 = 0, decoded: u32 = 0, has_audio: bool = false, muted: bool = false, audio_queued: i32 = 0, drawn_ms: i64 = 0 };
 
 pub fn info() Info {
     const p = cur orelse return .{};
@@ -324,6 +326,7 @@ pub fn info() Info {
         .has_audio = sh.audio != null,
         .muted = p.muted,
         .audio_queued = if (sh.audio) |s| c.SDL_GetAudioStreamQueued(s) else 0,
+        .drawn_ms = p.last_drawn_ms,
     };
 }
 
@@ -655,6 +658,10 @@ fn dlWrite(ud: *anyopaque, chunk: []const u8, total: i64) bool {
         sh.too_big = true;
         return false;
     }
+    // Tamanho conhecido: reserva tudo de uma vez (sem realocar e copiar o
+    // que já veio a cada pedaço, com o decodificador esperando o mutex).
+    if (total > 0 and sh.data.capacity < @as(usize, @intCast(total)))
+        sh.data.ensureTotalCapacityPrecise(alloc, @intCast(total)) catch {};
     sh.data.appendSlice(alloc, chunk) catch return false;
     sh.total = total;
     c.SDL_BroadcastCondition(sh.cond);

@@ -380,6 +380,24 @@ fn videoRestarted(_: *App) bool {
     const v = video.info();
     return v.playing and !v.ended and v.pos_ms < 1500;
 }
+var video_channel: Id = 0;
+fn rememberVideoChannel(app: *App) void {
+    video_channel = app.st.activeChannel() orelse 0;
+}
+fn tOtherChannel(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "channel:{d}", .{if (video_channel == ch(5)) ch(4) else ch(5)});
+}
+fn tVideoChannel(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "channel:{d}", .{video_channel});
+}
+/// Fora da tela: pausa e o app pede um quadro para daqui a 30 s (soltar a
+/// memória do vídeo mesmo dormindo).
+fn videoWakeToRelease(app: *App) bool {
+    const v = video.info();
+    if (!v.active) return !hasFfmpeg();
+    return app.st.activeChannel() != video_channel and !v.playing and
+        @import("ui/anim.zig").next_wake_ms <= v.drawn_ms + 30_001;
+}
 fn videoClosed(_: *App) bool {
     return !video.info().active;
 }
@@ -1817,6 +1835,12 @@ const ops = [_]Op{
     .{ .expect = .{ .name = "o vídeo chega ao fim e para no último quadro", .check = videoEnded, .timeout_ms = 5000 } },
     .{ .click = .{ .dyn = tVideoPlay } },
     expect("play no fim recomeça do começo", videoRestarted),
+    .{ .run = rememberVideoChannel },
+    .{ .click = .{ .dyn = tOtherChannel } },
+    expect("fora da tela, o vídeo pausa e o app acorda em 30 s para soltá-lo", videoWakeToRelease),
+    .{ .click = .{ .dyn = tVideoChannel } },
+    .{ .run = jumpToVideo },
+    .{ .wait = 500 },
     .{ .click = .{ .dyn = tVideoClose } },
     expect("o X fecha o vídeo e volta a prévia", videoClosed),
     .{ .run = jumpToMp4Gif },
