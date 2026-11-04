@@ -309,6 +309,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
 
     c.ImGui_SetNextWindowScroll(d.v(-1, sc.pos));
     const dl = d.beginRegion(ctx, region, r, c.ImGuiWindowFlags_NoScrollWithMouse);
+    const fade_start = dl.*.VtxBuffer.Size;
     const s = c.ImGui_GetScrollY();
     // Arrastando a barra de rolagem (só a desta conversa: um clique nas
     // configurações ou num popup por cima não conta).
@@ -399,6 +400,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     if (!st.selection.empty() and st.selection.channel == ch_id and ctx.io.*.KeyCtrl and c.ImGui_IsKeyPressed(c.ImGuiKey_C) and !ctx.io.*.WantTextInput) {
         if (popup.selectionText(ctx)) |txt| ctx.act(.{ .copy = txt });
     }
+    channelFade(ctx, dl, fade_start, region, ch_id, r);
     // Voltar para o fim: desenhado dentro da própria região (fica por baixo
     // das configurações e de menus) e com o clique direto pelo mouse.
     if (!sc.stick_bottom) {
@@ -415,6 +417,27 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         }
     }
     c.ImGui_EndChild();
+}
+
+/// Trocou de canal (em cada painel): a conversa nova entra com um fade curto
+/// e sobe alguns pixels, em vez de aparecer de supetão.
+var fades: [4]struct { region: usize = 0, ch: Id = 0, t0: i64 = 0 } = @splat(.{});
+
+fn channelFade(ctx: *d.Ctx, dl: *c.ImDrawList, start: c_int, region: [*:0]const u8, ch: Id, r: d.Rect) void {
+    if (anim.instant) return;
+    const key = @intFromPtr(region);
+    const slot = for (&fades) |*f| {
+        if (f.region == key or f.region == 0) break f;
+    } else &fades[0];
+    if (slot.region != key or slot.ch != ch) {
+        // Primeira vez deste painel: sem animação (o app acabou de abrir).
+        const first = slot.region != key;
+        slot.* = .{ .region = key, .ch = ch, .t0 = if (first) 0 else ctx.now_ms };
+    }
+    const k = d.easeOut(@as(f32, @floatFromInt(ctx.now_ms - slot.t0)) / 160);
+    if (k >= 1) return;
+    anim.active = true;
+    d.transformVerts(dl, start, d.v(r.x, r.y), 1, 10 * (1 - k), 0.25 + 0.75 * k);
 }
 
 /// Altura de uma mensagem recolhida: só uma linha (e o separador do dia).

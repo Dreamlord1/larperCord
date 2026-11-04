@@ -308,3 +308,25 @@ pub fn endRegion(ctx: *Ctx, content_bottom: f32, x: f32) void {
     c.ImGui_Dummy(v(1, 1));
     c.ImGui_EndChild();
 }
+
+/// Anima o que já foi desenhado em `dl` desde o vértice `start`: escala a
+/// partir de `origin`, desloca `dy` na vertical e multiplica a opacidade.
+/// Barato (só mexe nos vértices do quadro) e vale para qualquer coisa
+/// desenhada ali, inclusive os campos de texto do ImGui.
+pub fn transformVerts(dl: *c.ImDrawList, start: c_int, origin: c.ImVec2, scale: f32, dy: f32, alpha: f32) void {
+    const vb = &dl.*.VtxBuffer;
+    if (start >= vb.Size) return;
+    const a_mul = std.math.clamp(alpha, 0, 1);
+    for (vb.Data[@intCast(start)..@intCast(vb.Size)]) |*p| {
+        p.pos.x = origin.x + (p.pos.x - origin.x) * scale;
+        p.pos.y = origin.y + (p.pos.y - origin.y) * scale + dy;
+        const a: f32 = @floatFromInt((p.col >> 24) & 0xff);
+        p.col = (p.col & 0x00ff_ffff) | (@as(u32, @intFromFloat(a * a_mul)) << 24);
+    }
+}
+
+/// Curva de saída suave (rápido no começo, assenta no fim).
+pub fn easeOut(t: f32) f32 {
+    const u = 1 - std.math.clamp(t, 0, 1);
+    return 1 - u * u * u;
+}

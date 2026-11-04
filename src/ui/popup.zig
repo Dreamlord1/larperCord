@@ -88,6 +88,47 @@ pub fn close(ctx: *d.Ctx) void {
 var shown_key: u64 = 0;
 pub var appearing = false;
 
+// --- Animação de abertura -------------------------------------------------
+// Cada popup entra com um fade e um leve zoom/deslize. As listas de desenho
+// do popup (a janela e as regiões com rolagem de dentro dele) são anotadas
+// aqui e transformadas depois de desenhadas, enquanto a animação dura.
+
+var open_t0: i64 = 0;
+var tracked: [6]struct { dl: *c.ImDrawList, start: c_int } = undefined;
+var n_tracked: usize = 0;
+var anim_rect: d.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+
+/// Anota uma lista de desenho para entrar na animação de abertura.
+pub fn track(dl: *c.ImDrawList) void {
+    if (n_tracked == tracked.len) return;
+    tracked[n_tracked] = .{ .dl = dl, .start = dl.*.VtxBuffer.Size };
+    n_tracked += 1;
+}
+
+/// Progresso da abertura (0..1, já com a curva) para quem quiser usar.
+pub fn openK(ctx: *const d.Ctx, dur_ms: f32) f32 {
+    if (anim.instant) return 1;
+    return d.easeOut(@as(f32, @floatFromInt(ctx.now_ms - open_t0)) / dur_ms);
+}
+
+fn animateOpen(ctx: *d.Ctx) void {
+    defer n_tracked = 0;
+    const Look = struct { dur: f32, scale: f32, dy: f32, corner: bool };
+    const look: Look = switch (ctx.st.popup) {
+        .menu => .{ .dur = 120, .scale = 0.97, .dy = -6, .corner = true },
+        .profile => .{ .dur = 170, .scale = 0.94, .dy = 10, .corner = false },
+        .profile_full => .{ .dur = 220, .scale = 0.96, .dy = 18, .corner = false },
+        else => .{ .dur = 150, .scale = 0.96, .dy = 8, .corner = false },
+    };
+    const k = openK(ctx, look.dur);
+    if (k >= 1) return;
+    anim.active = true;
+    const r = anim_rect;
+    const origin = if (look.corner) d.v(r.x, r.y) else d.v(r.x + r.w / 2, r.y + r.h / 2);
+    const scale = look.scale + (1 - look.scale) * k;
+    for (tracked[0..n_tracked]) |t| d.transformVerts(t.dl, t.start, origin, scale, look.dy * (1 - k), k);
+}
+
 fn popupKey(p: state.Popup) u64 {
     return switch (p) {
         .none => 0,
@@ -108,7 +149,10 @@ pub fn beginWindow(id: [*:0]const u8, r: d.Rect) *c.ImDrawList {
     if (appearing) c.ImGui_SetNextWindowFocus();
     _ = c.ImGui_Begin(id, null, c.ImGuiWindowFlags_NoDecoration | c.ImGuiWindowFlags_NoBackground |
         c.ImGuiWindowFlags_NoSavedSettings | c.ImGuiWindowFlags_NoMove | c.ImGuiWindowFlags_NoScrollWithMouse);
-    return c.ImGui_GetWindowDrawList();
+    const dl = c.ImGui_GetWindowDrawList();
+    if (n_tracked == 0) anim_rect = r;
+    track(dl);
+    return dl;
 }
 
 /// Mantém o retângulo dentro da janela.
@@ -125,6 +169,8 @@ pub fn draw(ctx: *d.Ctx) void {
     const k = popupKey(ctx.st.popup);
     appearing = k != shown_key;
     shown_key = k;
+    n_tracked = 0;
+    if (appearing) open_t0 = ctx.now_ms;
     if (ctx.st.popup == .none) return;
     // Fundo que captura cliques fora.
     c.ImGui_SetNextWindowPos(d.v(ctx.win.x, ctx.win.y), 0);
@@ -135,6 +181,8 @@ pub fn draw(ctx: *d.Ctx) void {
     c.ImGui_SetCursorScreenPos(d.v(ctx.win.x, ctx.win.y));
     _ = c.ImGui_InvisibleButton("##bd", d.v(ctx.win.w, ctx.win.h), c.ImGuiButtonFlags_MouseButtonLeft | c.ImGuiButtonFlags_MouseButtonRight);
     const outside = c.ImGui_IsItemClickedEx(0) or c.ImGui_IsItemClickedEx(1);
+    // O perfil grande escurece o resto da tela (entrando junto com ele).
+    if (ctx.st.popup == .profile_full) d.rect(c.ImGui_GetWindowDrawList(), ctx.win, d.Rgba.black.alpha(0.5 * openK(ctx, 220)), 0);
     c.ImGui_End();
     if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null and (outside or appearing)) std.debug.print("[popup] appearing={} outside={} mouse={d:.0},{d:.0}\n", .{ appearing, outside, ctx.mouse.x, ctx.mouse.y });
     // Esc com uma anotação aberta só cancela a edição (ui/saved.zig).
@@ -153,6 +201,7 @@ pub fn draw(ctx: *d.Ctx) void {
         .saved => saved_ui.draw(ctx),
         .none => {},
     }
+    animateOpen(ctx);
 }
 
 // --- Menu de contexto -------------------------------------------------------

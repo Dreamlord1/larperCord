@@ -449,7 +449,7 @@ fn roles(col: *Col, uid: Id, gid: Id) void {
             const hb = col.hit(130 + ci, rr);
             if (col.dl) |dl| {
                 qa.mark(rr, "role-pick:{d}", .{rid});
-                if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 4);
+                d.rect(dl, rr, ctx.col(.hover).alpha(anim.to(anim.id("pf-hover", col.ids + 10000 + ci), if (hb.hovered) 1 else 0, 22)), 4);
                 d.circle(dl, rr.x + 12, rr.y + 12, 4, if (rl.color != 0) d.Rgba.hex(rl.color) else ctx.col(.faint));
                 _ = d.textClipped(dl, fam.get(.medium), 13, rr.x + 24, d.centerY(rr, 13), ctx.col(.text), rl.name, rr.w - 30);
             }
@@ -491,7 +491,7 @@ fn connections(col: *Col, pf: ?types.Profile) void {
         const hb = if (cn.url.len > 0) col.hit(150 + i, r) else no_hit;
         if (col.dl) |dl| {
             if (cn.url.len > 0) qa.mark(r, "profile-conn:{s}", .{cn.kind});
-            if (hb.hovered) d.rect(dl, r.inset(-4, 0), ctx.col(.hover), 5);
+            d.rect(dl, r.inset(-4, 0), ctx.col(.hover).alpha(anim.to(anim.id("pf-hover", col.ids + 20000 + i), if (hb.hovered) 1 else 0, 22)), 5);
             const look = connectionLook(cn.kind);
             const ir: d.Rect = .{ .x = r.x, .y = r.y + 3, .w = 22, .h = 22 };
             d.rect(dl, ir, d.Rgba.hex(look.color), 6);
@@ -540,7 +540,7 @@ fn note(col: *Col, uid: Id) void {
         const hb = col.hit(170, r);
         if (col.dl) |dl| {
             qa.mark(r, "profile-note", .{});
-            if (hb.hovered) d.rect(dl, r, ctx.col(.hover), 5);
+            d.rect(dl, r, ctx.col(.hover).alpha(anim.to(anim.id("pf-hover", col.ids + 30000), if (hb.hovered) 1 else 0, 22)), 5);
             if (cur.len > 0)
                 _ = d.textClipped(dl, ctx.ui.get(.regular), 13.5, r.x + 6, d.centerY(r, 13.5), ctx.col(.text), cur, r.w - 12)
             else
@@ -703,6 +703,9 @@ fn body(col: *Col, uid: Id, pf: ?types.Profile, gid: Id) void {
 
 // --- Perfil grande ----------------------------------------------------------------
 
+/// Quando a aba do perfil grande mudou (o conteúdo novo entra com fade).
+var tab_t0: i64 = 0;
+
 pub fn full(ctx: *d.Ctx, uid: Id) void {
     if (ctx.store.user(uid) == null) return popup.close(ctx);
     ctx.act(.{ .want_profile = uid });
@@ -726,6 +729,7 @@ pub fn full(ctx: *d.Ctx, uid: Id) void {
     {
         d.rect(dl, left, ctx.col(.surface), radius);
         const ldl = d.beginRegion(ctx, "##pf-left", left, c.ImGuiWindowFlags_NoScrollbar);
+        popup.track(ldl);
         const o = c.ImGui_GetCursorScreenPos();
         const banner_h: f32 = 140;
         const top = header(ctx, ldl, .{ .x = o.x, .y = o.y, .w = left.w, .h = 0 }, uid, pf, banner_h, 120, radius, 2000);
@@ -756,6 +760,8 @@ pub fn full(ctx: *d.Ctx, uid: Id) void {
     const own = uid == ctx.store.me;
     var tx = right.x;
     const tf = ctx.ui.get(.semibold);
+    var sel_x: f32 = right.x;
+    var sel_w: f32 = 0;
     for (tabs, 0..) |t, i| {
         if (own and i > 0) break;
         const tw = d.width(tf, 14, t);
@@ -763,14 +769,28 @@ pub fn full(ctx: *d.Ctx, uid: Id) void {
         const hb = d.hit(ctx, 2100 + i, tr);
         qa.mark(tr, "profile-tab:{d}", .{i});
         const on = ctx.st.profile_tab == i;
-        d.text(dl, tf, 14, tx, right.y + 4, if (on or hb.hovered) ctx.col(.text) else ctx.col(.muted), t);
-        if (on) d.rect(dl, .{ .x = tx, .y = right.y + 27, .w = tw, .h = 2 }, ctx.col(.accent), 1);
-        if (hb.clicked) ctx.st.profile_tab = @intCast(i);
+        // A cor do nome da aba acompanha o marcador.
+        const hk = anim.to(anim.id("pf-tab", i), if (on) 1 else if (hb.hovered) 0.6 else 0, 20);
+        d.text(dl, tf, 14, tx, right.y + 4, ctx.col(.muted).mix(ctx.col(.text), hk), t);
+        if (on) {
+            sel_x = tx;
+            sel_w = tw;
+        }
+        if (hb.clicked and !on) {
+            ctx.st.profile_tab = @intCast(i);
+            tab_t0 = ctx.now_ms;
+        }
         tx += tw + 24;
     }
+    // O marcador desliza até a aba escolhida.
+    const ux = anim.to(anim.id("pf-tab-x", 0), sel_x - right.x, 22);
+    const uw = anim.to(anim.id("pf-tab-w", 0), sel_w, 22);
+    if (uw > 1) d.rect(dl, .{ .x = right.x + ux, .y = right.y + 27, .w = uw, .h = 2 }, ctx.col(.accent), 1);
     d.line(dl, right.x, right.y + 30, right.right(), right.y + 30, ctx.col(.border), 1);
     const content: d.Rect = .{ .x = right.x, .y = right.y + 40, .w = right.w, .h = right.h - 40 };
     const cdl = d.beginRegion(ctx, "##pf-right", content, 0);
+    popup.track(cdl);
+    const cdl_start = cdl.*.VtxBuffer.Size;
     const o = c.ImGui_GetCursorScreenPos();
     var col: Col = .{ .ctx = ctx, .dl = cdl, .x = o.x, .w = content.w - 12, .y = o.y, .ids = 4000 };
     switch (if (own) 0 else ctx.st.profile_tab) {
@@ -788,6 +808,12 @@ pub fn full(ctx: *d.Ctx, uid: Id) void {
                 col.text(.medium, 14, ctx.col(.faint), msg);
             }
         },
+    }
+    // Troca de aba: o conteúdo novo entra com um fade e sobe um pouco.
+    const tk = if (anim.instant) 1 else d.easeOut(@as(f32, @floatFromInt(ctx.now_ms - tab_t0)) / 180);
+    if (tk < 1) {
+        anim.active = true;
+        d.transformVerts(cdl, cdl_start, d.v(content.x, content.y), 1, 8 * (1 - tk), tk);
     }
     d.endRegion(ctx, col.y + 12, content.x);
 
@@ -853,7 +879,7 @@ fn mutualFriends(col: *Col, pf: ?types.Profile) void {
         const hb = col.hit(200 + i, r);
         if (col.dl) |dl| {
             qa.mark(r, "profile-friend:{d}", .{fid});
-            if (hb.hovered) d.rect(dl, r, ctx.col(.hover), 6);
+            d.rect(dl, r, ctx.col(.hover).alpha(anim.to(anim.id("pf-hover", col.ids + 40000 + i), if (hb.hovered) 1 else 0, 22)), 6);
             w.avatar(ctx, dl, r.x + 26, r.y + 24, 36, fid, .circle, null, 1);
             d.circle(dl, r.x + 39, r.y + 37, 6, ctx.col(.overlay));
             d.circle(dl, r.x + 39, r.y + 37, 4, w.statusColor(ctx, u.status));
@@ -878,7 +904,7 @@ fn mutualGuilds(col: *Col, pf: ?types.Profile) void {
         const hb = col.hit(400 + i, r);
         if (col.dl) |dl| {
             qa.mark(r, "profile-guild:{d}", .{gid});
-            if (hb.hovered) d.rect(dl, r, ctx.col(.hover), 6);
+            d.rect(dl, r, ctx.col(.hover).alpha(anim.to(anim.id("pf-hover", col.ids + 50000 + i), if (hb.hovered) 1 else 0, 22)), 6);
             const ir: d.Rect = .{ .x = r.x + 8, .y = r.y + 6, .w = 40, .h = 40 };
             var ib: [160]u8 = undefined;
             const url = if (g.icon) |ic| w.cdnUrl(&ib, .guild, gid, ic) else "";
