@@ -39,6 +39,8 @@ pub const Manager = struct {
     entries: std.ArrayList(Entry) = .empty,
     names: std.ArrayList([]const u8) = .empty,
     previews: std.ArrayList(Preview) = .empty,
+    /// As miniaturas interpretam todos os temas: só quando alguém for vê-las.
+    previews_stale: bool = true,
     preview_arena: std.heap.ArenaAllocator = .init(std.heap.c_allocator),
     dirs: std.ArrayList([:0]const u8) = .empty,
     current: usize = 0,
@@ -107,7 +109,7 @@ pub const Manager = struct {
         for (builtin_themes.list) |b| try m.put(.{ .name = try m.gpa.dupe(u8, b.name), .builtin = b.source });
         for (m.dirs.items) |dir| try m.scanDir(dir);
         for (m.entries.items) |e| try m.names.append(m.gpa, e.name);
-        m.buildPreviews();
+        m.previews_stale = true;
         if (keep) |k| m.current = m.indexOf(k) orelse 0;
     }
 
@@ -123,7 +125,9 @@ pub const Manager = struct {
     }
 
     /// Carrega cada tema só para tirar as cores da miniatura.
-    fn buildPreviews(m: *Manager) void {
+    pub fn ensurePreviews(m: *Manager) void {
+        if (!m.previews_stale) return;
+        m.previews_stale = false;
         m.previews.clearRetainingCapacity();
         _ = m.preview_arena.reset(.retain_capacity);
         const a = m.preview_arena.allocator();
@@ -188,7 +192,7 @@ pub const Manager = struct {
     pub fn setMode(m: *Manager, mode: theme.Mode) bool {
         if (m.mode == mode) return true;
         m.mode = mode;
-        m.buildPreviews();
+        m.previews_stale = true;
         return m.load(m.current);
     }
 

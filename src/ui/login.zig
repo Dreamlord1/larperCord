@@ -163,9 +163,6 @@ fn outCubic(x: f32) f32 {
     const u = 1 - x;
     return 1 - u * u * u;
 }
-fn inOutCubic(x: f32) f32 {
-    return if (x < 0.5) 4 * x * x * x else 1 - std.math.pow(f32, -2 * x + 2, 3) / 2;
-}
 fn outBack(x: f32, s: f32) f32 {
     const u = x - 1;
     return 1 + (s + 1) * u * u * u + s * u * u;

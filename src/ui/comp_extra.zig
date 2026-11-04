@@ -129,7 +129,7 @@ const ShapeKind = enum { circle, ring, arc, rounded, line };
 /// `shape kind=line angle=0 cap=#true`
 pub fn shape(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const kind = std.meta.stringToEnum(ShapeKind, d.pstr(n, "kind", "circle")) orelse .circle;
-    if (qa.enabled) qa.mark(r, "shape:{s}", .{@tagName(kind)});
+    if (qa.on()) qa.mark(r, "shape:{s}", .{@tagName(kind)});
     const dl = ctx.dl;
     const col = fx.nodeColor(ctx, n, "color", .accent);
     const th = d.pnum(n, "thickness", 1.5);
@@ -230,7 +230,7 @@ fn fadeVerts(dl: *c.ImDrawList, start: c_int, r: d.Rect, vertical: bool) void {
 /// `rule vertical=#true`
 pub fn rule(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const kind = std.meta.stringToEnum(RuleKind, d.pstr(n, "kind", "solid")) orelse .solid;
-    if (qa.enabled) qa.mark(r, "rule:{s}", .{@tagName(kind)});
+    if (qa.on()) qa.mark(r, "rule:{s}", .{@tagName(kind)});
     const vertical = d.pflag(n, "vertical", false);
     const fade = d.pflag(n, "fade", false);
     const th = d.pnum(n, "thickness", 1);
@@ -342,7 +342,7 @@ pub fn windowControls(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         if (!h.clicked) continue;
         switch (i) {
             0 => {
-                if (qa.enabled) {
+                if (qa.on()) {
                     qa_close_requests += 1;
                 } else {
                     var ev = std.mem.zeroes(c.SDL_Event);

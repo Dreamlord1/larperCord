@@ -25,6 +25,7 @@ pub const Fonts = struct {
     atlas: *c.ImFontAtlas,
     families: std.ArrayList(*Family) = .empty,
     maps: std.StringHashMapUnmanaged([]u8) = .empty,
+    faces: std.ArrayList(struct { data: [*]u8, index: c_int, font: *c.ImFont }) = .empty,
     emoji: ?[]u8 = null,
     /// Fonte reserva para símbolos que a fonte principal não tem (⌁ ▣ ◐ ♪ …).
     symbols: ?struct { data: []u8, index: c_int } = null,
@@ -67,10 +68,19 @@ pub const Fonts = struct {
             const m = resolve(name, s.w, s.slant) orelse return error.FontNotFound;
             defer std.heap.c_allocator.free(m.path);
             const data = try f.mapPath(m.path);
-            fam.faces[i] = try f.add(data, m.index);
+            fam.faces[i] = try f.faceFor(data, m.index);
         }
         try f.families.append(f.gpa, fam);
         return fam;
+    }
+
+    /// O mesmo arquivo pode atender vários pesos e famílias (a família não tem
+    /// aquele peso, ou "monospace" é a fonte de outro nome): uma fonte só no atlas.
+    fn faceFor(f: *Fonts, data: []u8, index: c_int) !*c.ImFont {
+        for (f.faces.items) |e| if (e.data == data.ptr and e.index == index) return e.font;
+        const font = try f.add(data, index);
+        try f.faces.append(f.gpa, .{ .data = data.ptr, .index = index, .font = font });
+        return font;
     }
 
     fn add(f: *Fonts, data: []u8, index: c_int) !*c.ImFont {

@@ -4,7 +4,7 @@
 const std = @import("std");
 const c = @import("c");
 
-pub const Wake = enum(i32) { gateway = 1, theme = 2, tick = 3, media = 4 };
+pub const Wake = enum(i32) { gateway = 1, theme = 2, tick = 3, media = 4, token = 5 };
 
 pub const Window = struct {
     window: *c.SDL_Window,
@@ -31,10 +31,6 @@ pub const Window = struct {
         c.SDL_DestroyRenderer(win.renderer);
         c.SDL_DestroyWindow(win.window);
         c.SDL_Quit();
-    }
-
-    pub fn rendererName(win: *const Window) []const u8 {
-        return std.mem.span(c.SDL_GetRendererName(win.renderer));
     }
 
     /// Pode ser chamado de qualquer thread.

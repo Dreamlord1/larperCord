@@ -12,6 +12,8 @@ const accounts_store = @import("net/accounts_store.zig");
 const msg_cache = @import("net/msg_cache.zig");
 const i18n = @import("ui/i18n.zig");
 const nowMs = @import("net/fake_gateway.zig").nowMs;
+const c = @import("c");
+const platform = @import("platform/window.zig");
 
 /// De onde veio o token da conexão atual (decide o que guardar no READY).
 /// `env`: LARPER_TOKEN, nunca guardado. `legacy`: a entrada única de antes
@@ -22,23 +24,77 @@ pub var token_source: TokenSource = .none;
 /// Conta oferecida no "Voltar"/"Entrar como" da tela de login.
 pub var prev_account: types.Id = 0;
 
-/// Token para entrar sem passar pelo login: LARPER_TOKEN, a conta usada
-/// da última vez (ou outra guardada) e, por fim, a entrada antiga.
-pub fn startupToken() ?[:0]u8 {
-    if (discord.envToken()) |t| {
-        token_source = .env;
-        return t;
-    }
+/// LARPER_TOKEN: não precisa perguntar a ninguém.
+pub fn envStartupToken() ?[:0]u8 {
+    const t = discord.envToken() orelse return null;
+    token_source = .env;
+    return t;
+}
+
+/// A busca no chaveiro roda em outra thread (o `secret-tool` não pode segurar
+/// a primeira tela). Ela só mexe nestes campos e na cópia da lista.
+const Lookup = struct {
+    list: accounts.List = .{},
+    wake_type: u32 = 0,
+    token: ?[:0]u8 = null,
+    source: TokenSource = .none,
+};
+var lookup: Lookup = .{};
+var lookup_running = false;
+/// Ainda vale usar a resposta? (Deixa de valer se a pessoa agiu antes dela.)
+var lookup_wanted = false;
+
+/// A conta usada da última vez (ou outra guardada) e, por fim, a entrada antiga.
+pub fn startStartupLookup(wake_type: u32) void {
+    lookup = .{ .list = accounts_store.list, .wake_type = wake_type };
+    lookup_running = true;
+    lookup_wanted = true;
+    if (c.SDL_CreateThread(lookupMain, "token", null)) |t| {
+        // Desligada: um chaveiro travado não segura o encerramento do app.
+        c.SDL_DetachThread(t);
+    } else _ = lookupMain(null);
+}
+
+fn lookupMain(_: ?*anyopaque) callconv(.c) c_int {
     var id: types.Id = 0;
-    if (accounts_store.startupToken(&id)) |t| {
-        token_source = .{ .saved = id };
-        return t;
+    if (accounts_store.startupTokenFrom(&lookup.list, &id)) |t| {
+        lookup.token = t;
+        lookup.source = .{ .saved = id };
+    } else if (discord.loadSavedToken()) |t| {
+        lookup.token = t;
+        lookup.source = .legacy;
     }
-    if (discord.loadSavedToken()) |t| {
-        token_source = .legacy;
-        return t;
+    platform.Window.wake(lookup.wake_type, .token);
+    return 0;
+}
+
+pub fn abandonStartupLookup() void {
+    lookup_wanted = false;
+}
+
+/// A resposta do chaveiro chegou (na thread da UI).
+pub fn finishStartupLookup(app: *App) void {
+    if (!lookup_running) return;
+    lookup_running = false;
+    const token = lookup.token;
+    lookup.token = null;
+    if (token) |t| {
+        if (!lookup_wanted or app.net != .none) return discardToken(t);
+        token_source = lookup.source;
+        app.startReal(t) catch {
+            discardToken(t);
+            return app.login.begin(.form);
+        };
+        if (app.login.phase != .connecting) app.login.setPhase(.connecting);
+    } else if (lookup_wanted and app.login.phase == .connecting and app.net == .none) {
+        // Tinha conta na lista, mas o token dela sumiu.
+        app.login.begin(.form);
     }
-    return null;
+}
+
+fn discardToken(t: [:0]u8) void {
+    std.crypto.secureZero(u8, t);
+    std.heap.c_allocator.free(t);
 }
 
 pub fn handle(app: *App, a: ev.Action) void {

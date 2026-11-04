@@ -63,7 +63,7 @@ fn rescan(ctx: *anyopaque) void {
                 if (std.mem.indexOfScalar(u8, n, '/') != null or n.len > 120) continue;
                 list.append(a, a.dupe(u8, n) catch continue) catch continue;
             }
-            std.mem.sort([]const u8, list.items, {}, struct {
+            @import("../core/sort.zig").stable([]const u8, list.items, {}, struct {
                 fn lt(_: void, x: []const u8, y: []const u8) bool {
                     return std.mem.lessThan(u8, x, y);
                 }

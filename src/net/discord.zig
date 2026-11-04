@@ -2,7 +2,8 @@
 //! Implementa a mesma interface do gateway falso: recebe `Command` e entrega
 //! `Event` no `Sink`, então o resto do app não sabe a diferença.
 //!
-//! sufixo 00 00 FF FF, RESUME, IDENTIFY de cliente web e os mesmos cabeçalhos.
+//! Fala como o cliente web do Discord: zlib-stream com sufixo 00 00 FF FF,
+//! RESUME, IDENTIFY de navegador e os cabeçalhos dele.
 //!
 //! Cuidados:
 //!  - o token nunca vai para log, erro ou arquivo; é zerado ao sair;
@@ -19,6 +20,7 @@ const Queue = @import("queue.zig").Queue;
 const Sink = @import("fake_gateway.zig").Sink;
 const nowMs = @import("fake_gateway.zig").nowMs;
 const j = @import("jsonx.zig");
+const timeline = @import("../platform/timeline.zig");
 const i18n = @import("../ui/i18n.zig");
 const image_uri = @import("../core/image_uri.zig");
 const media_url = @import("media_url.zig");
@@ -36,10 +38,10 @@ const api = "https://discord.com/api/v10";
 const gateway_host = "wss://gateway.discord.gg";
 /// Query do gateway: JSON + compressão zlib-stream (a mesma do cliente oficial).
 const gateway_query = "v=10&encoding=json&compress=zlib-stream";
-/// confundido com spam. Os valores abaixo são os mesmos que ele usa.
-const web_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.87 Safari/537.36";
+/// Identifica-se como o cliente web do Discord (o mesmo navegador nos dois).
+const web_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
 const identity_props =
-    \\{"os":"Windows","browser":"Chrome","device":"","system_locale":"en-US","has_client_mods":false,"browser_user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.87 Safari/537.36","browser_version":"67.0.3396.87","os_version":"10","referrer":"","referring_domain":"","referrer_current":"","referring_domain_current":"","release_channel":"stable","client_build_number":363557,"client_event_source":null}
+    \\{"os":"Windows","browser":"Chrome","device":"","system_locale":"en-US","has_client_mods":false,"browser_user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36","browser_version":"152.0.0.0","os_version":"10","referrer":"","referring_domain":"","referrer_current":"","referring_domain_current":"","release_channel":"stable","client_build_number":661871,"client_event_source":null}
 ;
 const client_state_json =
     \\{"guild_hashes":{},"highest_last_message_id":"0","read_state_version":0,"user_guild_settings_version":-1,"user_settings_version":-1}
@@ -122,6 +124,12 @@ pub const Gateway = struct {
     hello_until: i64 = 0,
     /// Último bloqueio longo avisado (para não repetir o aviso a cada comando).
     block_noticed: i64 = 0,
+    /// Quando o pacote em andamento começou e acabou de chegar e de descomprimir
+    /// (--stats: a linha do tempo só sabe que era o READY depois de ler).
+    frame_t0: u64 = 0,
+    frame_t1: u64 = 0,
+    frame_t2: u64 = 0,
+    frame_len: usize = 0,
     /// Acorda o poll do gateway quando chega comando (leitura, escrita).
     wake_pipe: [2]c_int = .{ -1, -1 },
 
@@ -198,6 +206,10 @@ pub const Gateway = struct {
     }
 
     fn run(g: *Gateway) void {
+        timeline.mark(.gateway);
+        // Aqui, não na thread da UI: carregar o OpenSSL leva dezenas de ms.
+        @import("../ui/images.zig").curlGlobalInit();
+        timeline.mark(.curl);
         g.rest = c.curl_easy_init();
         defer if (g.rest) |h| c.curl_easy_cleanup(h);
         var backoff: u32 = 2000;
@@ -339,10 +351,13 @@ pub const Gateway = struct {
             }
             // Ping/pong são tratados pelo libcurl; não são payload do gateway.
             if (meta.*.flags & (c.CURLWS_PING | c.CURLWS_PONG) != 0) continue;
-            if (got > 0) g.frame.appendSlice(alloc, buf[0..got]) catch {
-                g.ws_end = .retry;
-                return;
-            };
+            if (got > 0) {
+                if (g.frame.items.len == 0) g.frame_t0 = timeline.now();
+                g.frame.appendSlice(alloc, buf[0..got]) catch {
+                    g.ws_end = .retry;
+                    return;
+                };
+            }
             if (meta.*.bytesleft == 0 and meta.*.flags & c.CURLWS_CONT == 0) {
                 // O Discord fecha cada payload com 00 00 FF FF. Se ainda
                 // não veio, guarda o pedaço e espera o resto.
@@ -382,6 +397,7 @@ pub const Gateway = struct {
             g.z_on = false;
         }
         g.z = std.mem.zeroes(c.z_stream);
+        // MAX_WBITS + 32 = aceita zlib e gzip.
         if (c.inflateInit2_(&g.z, c.MAX_WBITS + 32, c.ZLIB_VERSION, @sizeOf(c.z_stream)) != c.Z_OK) return .retry;
         g.z_on = true;
         defer {
@@ -401,6 +417,7 @@ pub const Gateway = struct {
         useProxy(h);
         g.abortable(h);
         if (c.curl_easy_perform(h) != c.CURLE_OK) return .retry;
+        timeline.mark(.websocket);
         var sock: c.curl_socket_t = -1;
         _ = c.curl_easy_getinfo(h, c.CURLINFO_ACTIVESOCKET, &sock);
         // `seq` e `session_id` sobrevivem à queda: é isso que permite o RESUME.
@@ -469,11 +486,14 @@ pub const Gateway = struct {
     }
 
     /// Descomprime uma mensagem inteira do zlib-stream e entrega ao gateway.
-    /// usa exatamente esse sufixo para saber quando o pacote está completo.
+    /// O Discord fecha cada payload com 00 00 FF FF (Z_SYNC_FLUSH): é esse
+    /// sufixo que diz quando o pacote está completo.
     fn inflateFrame(g: *Gateway) ?End {
         const buf = g.frame.items;
         if (!g.z_on or buf.len < 4) return null;
         if (!std.mem.eql(u8, buf[buf.len - 4 ..], "\x00\x00\xff\xff")) return null;
+        g.frame_t1 = timeline.now();
+        g.frame_len = buf.len;
         g.zout.clearRetainingCapacity();
         g.z.next_in = buf.ptr;
         g.z.avail_in = @intCast(buf.len);
@@ -497,6 +517,7 @@ pub const Gateway = struct {
         }
         g.frame.clearRetainingCapacity();
         if (g.zout.items.len == 0) return null;
+        g.frame_t2 = timeline.now();
         const end = g.onPayload(g.zout.items);
         g.zout.clearRetainingCapacity();
         g.shrinkBuffers();
@@ -610,15 +631,18 @@ pub const Gateway = struct {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
         const root = std.json.parseFromSliceLeaky(Value, arena.allocator(), text, .{}) catch return null;
+        const parsed_at = timeline.now();
         const op = j.int(j.get(root, "op")) orelse return null;
         switch (op) {
             10 => {
                 const d = j.get(root, "d") orelse return null;
+                timeline.mark(.hello);
                 g.hb_interval = j.int(j.get(d, "heartbeat_interval")) orelse 41250;
                 g.scheduleHeartbeat();
                 // Se já existe sessão, o cliente oficial retoma (RESUME);
                 // só abre uma nova quando não há nada para retomar.
                 g.beginSession();
+                timeline.mark(.identify);
             },
             11 => {
                 g.acked = true;
@@ -642,7 +666,16 @@ pub const Gateway = struct {
                 if (j.int(j.get(root, "s"))) |s| g.seq = s;
                 const t = j.str(j.get(root, "t")) orelse return null;
                 const d = j.get(root, "d") orelse return null;
+                const is_ready = timeline.enabled and std.mem.eql(u8, t, "READY");
+                if (is_ready) {
+                    timeline.markAt(.ready_1o_byte, g.frame_t0);
+                    timeline.markAt(.ready_ultimo_byte, g.frame_t1);
+                    timeline.markAt(.ready_inflate, g.frame_t2);
+                    timeline.markAt(.ready_json, parsed_at);
+                    timeline.readySizes(g.frame_len, text.len);
+                }
                 g.dispatch(t, d, arena.allocator()) catch {};
+                if (is_ready) timeline.mark(.ready_eventos);
             },
             else => {},
         }
@@ -773,7 +806,7 @@ pub const Gateway = struct {
             tmp[n] = .{ .id = rid, .pos = info.pos, .color = info.color };
             n += 1;
         }
-        std.mem.sort(R, tmp[0..n], {}, struct {
+        @import("../core/sort.zig").stable(R, tmp[0..n], {}, struct {
             fn f(_: void, a: R, b: R) bool {
                 return a.pos > b.pos;
             }
@@ -882,7 +915,8 @@ pub const Gateway = struct {
         } });
     }
 
-    /// Pede a lista de membros de um servidor vista de um canal (op 14,
+    /// Pede a lista de membros de um servidor vista de um canal (op 14):
+    /// os primeiros 100 itens, com presença e "digitando".
     /// Numa thread, a lista é a do canal pai (`channel`) e `thread` pede também
     /// quem está nela, em THREAD_MEMBER_LIST_UPDATE.
     fn subscribe(g: *Gateway, guild: Id, channel: Id, thread: Id) void {
@@ -2283,7 +2317,7 @@ pub const Gateway = struct {
                 return (self.last.get(a.id) orelse 0) > (self.last.get(b.id) orelse 0);
             }
         };
-        std.mem.sort(types.Channel, chs[first_dm..], Ctx{ .last = &last }, Ctx.lt);
+        @import("../core/sort.zig").stable(types.Channel, chs[first_dm..], Ctx{ .last = &last }, Ctx.lt);
     }
 
     /// Canais de um servidor na ordem do Discord: soltos primeiro, depois
@@ -2318,7 +2352,7 @@ pub const Gateway = struct {
                 return if (a.pos != b.pos) a.pos < b.pos else a.id < b.id;
             }
         }.f;
-        std.mem.sort(Ch, tmp.items, {}, lt);
+        @import("../core/sort.zig").stable(Ch, tmp.items, {}, lt);
         var pos: u16 = 0;
         const push = struct {
             fn f(o: *std.ArrayList(types.Channel), g: Id, ch: Ch, p: *u16) !void {
@@ -2456,6 +2490,7 @@ pub const Gateway = struct {
         var auth_buf: [256]u8 = undefined;
         defer std.crypto.secureZero(u8, &auth_buf);
         const auth = std.fmt.bufPrintSentinel(&auth_buf, "Authorization: {s}", .{g.token}, 0) catch return null;
+        // Os cabeçalhos do cliente web.
         var props_buf: [1024]u8 = undefined;
         const props = superProperties(&props_buf);
         var super_buf: [1200]u8 = undefined;
@@ -3290,7 +3325,7 @@ pub const Gateway = struct {
             if (try g.message(items[i])) |m| try list.append(alloc, m);
         }
         // A ordem de `after` e `around` não é garantida; a lista conta com ela.
-        if (kind == .around or kind == .newer) std.mem.sort(types.Message, list.items, {}, struct {
+        if (kind == .around or kind == .newer) @import("../core/sort.zig").stable(types.Message, list.items, {}, struct {
             fn lt(_: void, a: types.Message, b: types.Message) bool {
                 return a.id < b.id;
             }
@@ -3360,25 +3395,6 @@ pub fn loadSavedToken() ?[:0]u8 {
 fn tokenFilePath(buf: []u8) ?[:0]const u8 {
     const home = c.SDL_getenv("HOME") orelse return null;
     return std.fmt.bufPrintSentinel(buf, "{s}/.config/larpercord/token", .{std.mem.span(home)}, 0) catch null;
-}
-
-/// Guarda o token para os próximos inícios: no chaveiro do sistema
-/// (`secret-tool`, pela entrada padrão, então ele não aparece no `ps`) ou,
-/// sem chaveiro, em ~/.config/larpercord/token com permissão 600.
-/// Retorna onde guardou.
-pub fn saveToken(token: []const u8) enum { keyring, file, failed } {
-    if (c.popen("secret-tool store --label=larperCord service larpercord 2>/dev/null", "w")) |f| {
-        const wrote = c.fwrite(token.ptr, 1, token.len, f);
-        if (c.pclose(f) == 0 and wrote == token.len) {
-            // Não deixa uma cópia velha no arquivo.
-            var pbuf: [512]u8 = undefined;
-            if (tokenFilePath(&pbuf)) |p| _ = c.unlink(p.ptr);
-            return .keyring;
-        }
-    }
-    var pbuf: [512]u8 = undefined;
-    const path = tokenFilePath(&pbuf) orelse return .failed;
-    return if (@import("../platform/fsutil.zig").writePrivate(path, token)) .file else .failed;
 }
 
 /// "Sair": apaga o token do chaveiro e do arquivo.

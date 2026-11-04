@@ -1708,7 +1708,7 @@ const ops = [_]Op{
     expect("app conecta e carrega o histórico", ready),
     expect("abre com 3 abas e #geral ativo", threeTabs),
     .{ .shot = "01-inicio" },
-} ++ @import("qa_leitura.zig").startup ++ [_]Op{
+} ++ @import("qa_leve.zig").startup ++ @import("qa_leitura.zig").startup ++ [_]Op{
     s("navegação"),
     click("channel:500006"),
     expect("clicar num canal abre ele na aba", onMemes),
@@ -2522,6 +2522,7 @@ const ops = [_]Op{
     .{ .shot = "45-contas" },
     click("account:7001"),
     .{ .expect = .{ .name = "trocar de conta desconecta e entra na outra", .check = switchedB, .timeout_ms = 6000 } },
+    expect("a conversa aparece sem esperar animação do login", @import("qa_leve.zig").loginGone),
     .{ .wait = 900 },
     click("me"),
     click("menu:Adicionar conta"),

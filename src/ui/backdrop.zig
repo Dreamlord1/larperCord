@@ -17,7 +17,7 @@ const qa = @import("qa.zig");
 const Rect = d.Rect;
 
 pub fn draw(ctx: *d.Ctx, n: *const kdl.Node, r: Rect) void {
-    if (qa.enabled) qa.mark(r, "backdrop:{s}", .{n.name});
+    if (qa.on()) qa.mark(r, "backdrop:{s}", .{n.name});
     const moving = fx.motionAllowed(ctx, n);
     // Segundos desde sempre: só importa em quem se mexe.
     const t: f32 = if (moving) @floatCast(@as(f64, @floatFromInt(@mod(ctx.now_ms, 3_600_000))) / 1000) else 0;

@@ -3,7 +3,7 @@
 //! Tudo roda numa thread própria, criada só quando alguém entra numa call.
 //! Fora de uma call este módulo não consome CPU: o app nem inicializa o áudio.
 //!
-//! discord.js e a documentação do Discord/DAVE (https://daveprotocol.com):
+//! O protocolo segue a documentação do Discord e do DAVE (https://daveprotocol.com):
 //!   - WebSocket v8 com heartbeat (seq_ack) e RESUME quando a conexão cai;
 //!   - IP discovery (pacote de 74 bytes) e Select Protocol;
 //!   - RTP com aead_xchacha20_poly1305_rtpsize;
@@ -337,7 +337,7 @@ const Worker = struct {
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECT_ONLY, @as(c_long, 2));
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, 4000));
         _ = c.curl_easy_setopt(h, c.CURLOPT_HTTP_VERSION, @as(c_long, c.CURL_HTTP_VERSION_1_1));
-        _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, @as([*c]const u8, @ptrCast("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.87 Safari/537.36")));
+        _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, @as([*c]const u8, @ptrCast("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")));
         const rc = c.curl_easy_perform(h);
         if (rc != c.CURLE_OK) {
             std.log.warn("voz: curl {d}: {s}", .{ rc, c.curl_easy_strerror(rc) });
@@ -922,7 +922,8 @@ const Worker = struct {
     }
 
     /// O anel verde em volta da gente. O Discord não precisa saber de cada
-    /// cliente oficial); mandar "parei" fazia o servidor descartar o começo
+    /// fala: o op 5 vai uma vez só, quando a sessão abre (como o cliente
+    /// oficial); mandar "parei" fazia o servidor descartar o começo
     /// da próxima fala, que chega pelo UDP antes do "voltei" pelo WebSocket.
     fn setSpeaking(w: *Worker, on: bool) void {
         w.v.emit(.{ .voice_speaking = .{ .user = w.v.user, .speaking = on } });

@@ -145,7 +145,7 @@ pub fn build(store: *const Store, muted: *const std.AutoHashMapUnmanaged(Id, voi
         out.groups[out.n] = .{ .channel = 0, .guild = gd.id, .total = gd.mentions };
         out.n += 1;
     }
-    std.mem.sort(Group, out.groups[0..out.n], {}, struct {
+    @import("sort.zig").stable(Group, out.groups[0..out.n], {}, struct {
         fn lt(_: void, a: Group, b: Group) bool {
             if (a.latest != b.latest) return a.latest > b.latest;
             return a.channel > b.channel;
@@ -246,7 +246,7 @@ pub fn buildMentions(store: *const Store, out: *Mentions) void {
             nr += 1;
         }
     }
-    std.mem.sort(Ref, refs[0..nr], {}, struct {
+    @import("sort.zig").stable(Ref, refs[0..nr], {}, struct {
         fn lt(_: void, a: Ref, b: Ref) bool {
             return a.id > b.id;
         }

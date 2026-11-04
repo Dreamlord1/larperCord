@@ -20,6 +20,8 @@ pub const Family = fonts_mod.Family;
 
 pub const Stats = struct {
     ram_kb: u32 = 0,
+    /// Alguém desenhou o número desde o último tique (ler o /proc custa).
+    ram_seen: bool = false,
     frame_us: u32 = 0,
     theme_count: usize = 0,
 };
@@ -40,7 +42,7 @@ pub const Ctx = struct {
     mouse: c.ImVec2,
     now_ms: i64,
     actions: *std.ArrayList(Action),
-    stats: *const Stats,
+    stats: *Stats,
     images: *@import("images.zig").Cache,
     win: Rect,
     /// Algum elemento clicável está sob o mouse neste quadro.
