@@ -18,6 +18,7 @@ const sections = [_]Section{
     .{ .title = "CONFIGURAÇÕES DE USUÁRIO", .title_en = "USER SETTINGS", .items = &.{
         .{ .page = .conta, .label = "Minha conta", .label_en = "My Account" },
         .{ .page = .privacidade, .label = "Privacidade", .label_en = "Privacy" },
+        .{ .page = .filtros, .label = "Alertas e filtros", .label_en = "Alerts & Filters" },
     } },
     .{ .title = "CONFIGURAÇÕES DO APLICATIVO", .title_en = "APP SETTINGS", .items = &.{
         .{ .page = .aparencia, .label = "Aparência", .label_en = "Appearance" },
@@ -516,6 +517,7 @@ fn page(p: *Page, previews: []const Preview) void {
             p.heading(i18n.tr("Imagens", "Images"));
             p.toggle(i18n.tr("Reproduzir GIFs automaticamente", "Automatically play GIFs"), i18n.tr("Desligado, o GIF anda quando o mouse passa por cima.", "When off, a GIF plays while you hover it."), &s.autoplay_gifs);
             p.toggle(i18n.tr("Mostrar imagens de links", "Show images from links"), i18n.tr("Imagens e GIFs de links mandados na conversa.", "Images and GIFs from links posted in chat."), &s.show_embeds);
+            p.toggle(i18n.tr("Modo economia", "Data saver"), i18n.tr("Imagens, fotos de perfil e anexos só baixam quando você clica. Bom em rede ruim.", "Images, profile pictures and attachments only download when you click. Good on bad networks."), &s.data_saver);
             p.heading(i18n.tr("Conteúdo", "Content"));
             p.toggle(i18n.tr("Sempre mostrar spoilers", "Always show spoilers"), i18n.tr("Revela o texto ||escondido|| sem precisar clicar.", "Reveals ||hidden|| text without clicking."), &s.show_spoilers);
         },
@@ -558,6 +560,7 @@ fn page(p: *Page, previews: []const Preview) void {
             p.toggle(i18n.tr("Modo desenvolvedor", "Developer Mode"), i18n.tr("Mostra o ID das mensagens e põe \"Copiar ID\" nos menus.", "Shows message IDs and adds \"Copy ID\" to menus."), &s.developer_mode);
             p.toggle(i18n.tr("Recarregar temas ao salvar", "Reload themes on save"), i18n.tr("Salvar um .kdl em themes/ ou ~/.config/larpercord/themes aplica na hora.", "Saving a .kdl in themes/ or ~/.config/larpercord/themes applies it right away."), &s.hot_reload);
         },
+        .filtros => @import("settings_filtros.zig").page(ctx, p.dl, p.x, &p.y, p.w),
         .conta => account(p),
         .desempenho => performance(p),
         .sobre => about(p),

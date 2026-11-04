@@ -34,6 +34,9 @@ pub const StoredMessage = struct {
     day: i64 = std.math.minInt(i64),
     reactions: [8]types.Reaction = @splat(.{}),
     n_reactions: u8 = 0,
+    /// Cache das palavras de alerta/filtro que o texto contém (core/filtros.zig).
+    flt_key: u32 = 0,
+    flt: u8 = 0,
 
     pub fn reactionSlice(m: *const StoredMessage) []const types.Reaction {
         return m.reactions[0..m.n_reactions];

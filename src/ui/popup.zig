@@ -132,6 +132,11 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "Perfil", .en = "Profile", .id = 20 });
             add(&items, &n, .{ .label = "Mencionar", .en = "Mention", .id = 21 });
             if (id != ctx.store.me) add(&items, &n, .{ .label = "Mensagem", .en = "Message", .id = 22 });
+            // Ignorar não bloqueia: as mensagens só ficam recolhidas aqui.
+            if (id != ctx.store.me) add(&items, &n, if (ctx.st.filtros.isIgnored(id))
+                .{ .label = "Deixar de ignorar", .en = "Unignore", .id = 26 }
+            else
+                .{ .label = "Ignorar", .en = "Ignore", .id = 26 });
             add(&items, &n, .{ .label = "Copiar nome de usuário", .en = "Copy Username", .id = 24, .sep = true });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do usuário", .en = "Copy User ID", .id = 25 });
         },
@@ -147,6 +152,18 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "◐  Ausente", .en = "◐  Idle", .id = 81 });
             add(&items, &n, .{ .label = "⊘  Não perturbe", .en = "⊘  Do Not Disturb", .id = 82 });
             add(&items, &n, .{ .label = "○  Invisível", .en = "○  Invisible", .id = 83 });
+            if (ctx.st.filtros.focusOn(ctx.now_ms)) {
+                add(&items, &n, .{ .label = "Sair do modo foco", .en = "End Focus Mode", .id = 85, .sep = true });
+            } else {
+                add(&items, &n, .{ .label = "Modo foco: 15 min", .en = "Focus mode: 15 min", .id = 86, .sep = true });
+                add(&items, &n, .{ .label = "Modo foco: 30 min", .en = "Focus mode: 30 min", .id = 87 });
+                add(&items, &n, .{ .label = "Modo foco: 1 h", .en = "Focus mode: 1 h", .id = 88 });
+                add(&items, &n, .{ .label = "Modo foco: até desligar", .en = "Focus mode: until I turn it off", .id = 89 });
+            }
+            add(&items, &n, if (ctx.st.settings.data_saver)
+                .{ .label = "Desligar modo economia", .en = "Turn Off Data Saver", .id = 90 }
+            else
+                .{ .label = "Ligar modo economia", .en = "Turn On Data Saver", .id = 90 });
             add(&items, &n, .{ .label = "Ver perfil", .en = "View Profile", .id = 84, .sep = true });
         },
         .guild => {
@@ -239,6 +256,31 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         8, 25, 44, 63 => copyFmt(ctx, "{d}", .{id}),
         80, 81, 82, 83 => ctx.act(.{ .set_status = @enumFromInt(item - 80) }),
         84 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y - 200 } },
+        85 => {
+            st.filtros.endFocus(ctx.store);
+            st.showToast(ctx.now_ms, false, "modo foco desligado", "focus mode off", .{});
+        },
+        86, 87, 88, 89 => {
+            st.filtros.startFocus(ctx.now_ms, ([_]u32{ 15, 30, 60, 0 })[item - 86]);
+            st.showToast(ctx.now_ms, false, "modo foco: só DMs e menções notificam", "focus mode: only DMs and mentions notify", .{});
+        },
+        90 => {
+            st.settings.data_saver = !st.settings.data_saver;
+            st.filtros.save = true;
+            if (st.settings.data_saver)
+                st.showToast(ctx.now_ms, false, "modo economia: imagens só ao clicar", "data saver: images load on click", .{})
+            else
+                st.showToast(ctx.now_ms, false, "modo economia desligado", "data saver off", .{});
+        },
+        26 => {
+            const on = !st.filtros.isIgnored(id);
+            st.filtros.setIgnored(st.gpa, id, on);
+            const name = if (ctx.store.user(id)) |u| u.name else "?";
+            if (on)
+                st.showToast(ctx.now_ms, false, "{s} ignorado: as mensagens ficam recolhidas", "ignoring {s}: their messages are collapsed", .{name})
+            else
+                st.showToast(ctx.now_ms, false, "{s} não é mais ignorado", "no longer ignoring {s}", .{name});
+        },
         9 => ctx.act(.{ .delete_message = id }),
         20 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y } },
         21 => if (ctx.store.user(id)) |u| {
@@ -435,8 +477,14 @@ fn profile(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
         const ar: d.Rect = .{ .x = r.x + 16, .y = acy - 40, .w = 80, .h = 80 };
         const hb = d.hit(ctx, 902, ar);
         qa.mark(ar, "profile-avatar", .{});
-        d.tip(ctx, ar, i18n.tr("Ver foto", "View picture"), hb.hovered and u.avatar != null);
-        if (hb.clicked) if (u.avatar) |h| {
+        var sb: [160]u8 = undefined;
+        const small = if (u.avatar) |h| w.cdnUrl(&sb, .avatar, uid, h) else "";
+        // Modo economia: o primeiro clique só baixa a foto.
+        const held_back = small.len > 0 and ctx.images.blocked(small);
+        d.tip(ctx, ar, if (held_back) i18n.tr("Carregar foto", "Load picture") else i18n.tr("Ver foto", "View picture"), hb.hovered and u.avatar != null);
+        if (hb.clicked and held_back) {
+            ctx.images.allow(small);
+        } else if (hb.clicked) if (u.avatar) |h| {
             var zb: [192]u8 = undefined;
             const big = if (std.mem.startsWith(u8, h, "demo:")) h else std.fmt.bufPrint(&zb, "https://cdn.discordapp.com/avatars/{d}/{s}.png?size=1024", .{ uid, h }) catch "";
             att.openImage(ctx, big, u.name, 1024, 1024);

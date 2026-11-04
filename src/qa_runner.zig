@@ -15,7 +15,7 @@ const Key = []const u8;
 
 /// Onde agir: uma marcação (com deslocamento opcional) ou uma marcação
 /// calculada na hora (depende de IDs que só existem durante o teste).
-const Target = union(enum) {
+pub const Target = union(enum) {
     mark: Key,
     dyn: *const fn (app: *App, buf: []u8) []const u8,
     /// Ponto dentro da marcação: frações da largura/altura.
@@ -23,7 +23,7 @@ const Target = union(enum) {
     dyn_at: struct { f: *const fn (app: *App, buf: []u8) []const u8, fx: f32, fy: f32 },
 };
 
-const Op = union(enum) {
+pub const Op = union(enum) {
     section: []const u8,
     click: Target,
     rclick: Target,
@@ -833,7 +833,7 @@ const ops = [_]Op{
     expect("ver mensagens antigas mostra o botão de ir ao fim", jumpBottomShown),
     click("jump-bottom"),
     expect("o botão de ir ao fim volta para a última mensagem", atBottom),
-
+} ++ @import("qa_alertas.zig").ops ++ [_]Op{
     s("clicar em tudo: servidor"),
     .{ .run = toClassico },
     .{ .wait = 200 },
@@ -865,6 +865,10 @@ const ops = [_]Op{
     .{ .sweep = &.{"toggle:"} },
     click("settings:Avançado"),
     .{ .sweep = &.{"toggle:"} },
+    .{ .run = @import("qa_alertas.zig").ignoreOne },
+    click("settings:Alertas e filtros"),
+    .{ .sweep = &.{ "word-remove:", "unignore:", "seg:", "button:" } },
+    .{ .run = @import("qa_alertas.zig").focusReset },
     click("settings:Idioma"),
     .{ .sweep = &.{"radio:"} },
     .{ .sweep = &.{"settings:"} },
@@ -1309,6 +1313,8 @@ pub const Runner = struct {
         h.update(std.mem.asBytes(&@as(u32, st.collapsed.count())));
         h.update(std.mem.asBytes(&@as(u32, st.muted_channels.count())));
         h.update(std.mem.asBytes(&@as(u32, app.store.relationships.count())));
+        // Alertas, filtro, ignorados e modo foco (core/filtros.zig).
+        h.update(std.mem.asBytes(&app.st.filtros.gen));
         // Opções do tema e cargos de quem está com o cartão aberto.
         const th = app.themes.theme_();
         for (th.options) |o| h.update(&.{@intFromBool(th.option(o.name) orelse o.default)});

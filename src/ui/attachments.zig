@@ -108,7 +108,12 @@ fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale:
         look = ctx.images.getEx(url, r.w * scale, r.h * scale, play);
     }
     var playing = false;
-    switch (look) {
+    // Modo economia: no lugar da imagem, um "clique para carregar".
+    const held_back = look == .failed and ctx.images.blocked(url);
+    if (held_back) {
+        savedPlaceholder(ctx, dl, r, a.size, alpha);
+        qa.mark(r, "att-blocked:{d}", .{msg_id});
+    } else switch (look) {
         .ready => |t| {
             playing = t.animated and play;
             c.ImDrawList_AddImageRounded(dl, t.ref, d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(alpha), radius, 0);
@@ -146,10 +151,29 @@ fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale:
     }
     if (hb.clicked) {
         // Vídeo abre no navegador (ainda não tocamos vídeo aqui).
-        if (a.video and a.link.len > 0) openUrl(a.link) else open(ctx, a, url);
+        if (held_back) {
+            ctx.images.allow(url);
+        } else if (a.video and a.link.len > 0) openUrl(a.link) else open(ctx, a, url);
     }
-    if (a.video) d.tip(ctx, r, i18n.tr("Abrir o vídeo no navegador", "Open video in browser"), hb.hovered);
+    if (held_back) d.tip(ctx, r, i18n.tr("Modo economia: clique para baixar", "Data saver: click to download"), hb.hovered);
+    if (a.video and !held_back) d.tip(ctx, r, i18n.tr("Abrir o vídeo no navegador", "Open video in browser"), hb.hovered);
     if (hb.right and msg_id != 0) ctx.popup(.{ .menu = .{ .kind = .message, .id = msg_id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+}
+
+/// Lugar reservado de uma imagem que o modo economia ainda não baixou.
+pub fn savedPlaceholder(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, size: u64, alpha: f32) void {
+    const radius: f32 = 8;
+    const hovered = ctx.hovering(r);
+    d.rect(dl, r, ctx.col(.elevated).mix(ctx.col(.text), if (hovered) 0.04 else 0).alpha(alpha), radius);
+    d.border(dl, r, ctx.col(.accent).alpha(0.45 * alpha), radius, 1);
+    pictureIcon(dl, r.x + r.w / 2, r.y + r.h / 2 - (if (r.h > 60) @as(f32, 12) else 0), ctx.col(.muted).alpha(alpha));
+    if (r.h <= 60) return;
+    const f = ctx.ui.get(.medium);
+    var buf: [64]u8 = undefined;
+    var sb: [32]u8 = undefined;
+    const msg = if (size > 0) i18n.fmt(&buf, "clique para carregar · {s}", "click to load · {s}", .{formatSize(&sb, size)}) else i18n.tr("clique para carregar", "click to load");
+    const tw = d.width(f, 13, msg);
+    if (tw < r.w - 8) d.text(dl, f, 13, r.x + (r.w - tw) / 2, r.y + r.h / 2 + 8, ctx.col(.muted).alpha(alpha), msg);
 }
 
 fn fileCard(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, alpha: f32, hid: usize) void {
@@ -200,6 +224,8 @@ fn open(ctx: *d.Ctx, a: *const Attachment, url: []const u8) void {
 
 /// Abre uma imagem em tela cheia (anexo, embed, foto de perfil…).
 pub fn openImage(ctx: *d.Ctx, url: []const u8, name: []const u8, w: u16, h: u16) void {
+    // Abrir em tela cheia é pedir a imagem (vale também no modo economia).
+    ctx.images.allow(url);
     var v: state.Viewer = .{ .w = w, .h = h };
     const n = @min(url.len, v.url.len);
     @memcpy(v.url[0..n], url[0..n]);

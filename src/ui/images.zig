@@ -120,6 +120,10 @@ pub const Cache = struct {
     /// nessa hora em vez de redesenhar sem parar). Zerado a cada quadro.
     next_frame_ms: i64 = std.math.maxInt(i64),
     evicted_ms: i64 = 0,
+    /// Modo economia (atualizado a cada quadro pelo app): o que ainda não
+    /// está no cache só baixa depois de um clique (`allow`).
+    data_saver: bool = false,
+    allowed: std.StringHashMapUnmanaged(void) = .empty,
 
     pub fn init(renderer: *c.SDL_Renderer, wake_type: u32) !Cache {
         return .{
@@ -153,6 +157,9 @@ pub const Cache = struct {
             alloc.free(e.key_ptr.*);
         }
         cache.map.deinit(alloc);
+        var ait = cache.allowed.keyIterator();
+        while (ait.next()) |k| alloc.free(k.*);
+        cache.allowed.deinit(alloc);
         cache.jobs.deinit();
         cache.results.deinit();
     }
@@ -165,6 +172,20 @@ pub const Cache = struct {
 
     pub fn getStill(cache: *Cache, url: []const u8, max_w: f32, max_h: f32) Lookup {
         return cache.getEx(url, max_w, max_h, false);
+    }
+
+    /// No modo economia, `url` ainda espera um clique para baixar (quem
+    /// desenha mostra um "clique para carregar" no lugar).
+    pub fn blocked(cache: *const Cache, url: []const u8) bool {
+        if (!cache.data_saver or std.mem.startsWith(u8, url, "file://")) return false;
+        return !cache.allowed.contains(url);
+    }
+
+    /// Libera `url` no modo economia (o clique no lugar da imagem).
+    pub fn allow(cache: *Cache, url: []const u8) void {
+        if (url.len == 0 or cache.allowed.contains(url) or cache.allowed.count() >= 4096) return;
+        const owned = alloc.dupe(u8, url) catch return;
+        cache.allowed.put(alloc, owned, {}) catch alloc.free(owned);
     }
 
     pub fn getEx(cache: *Cache, url: []const u8, max_w: f32, max_h: f32, play: bool) Lookup {
@@ -181,6 +202,8 @@ pub const Cache = struct {
                 .ready => .{ .ready = .{ .ref = .{ ._TexData = null, ._TexID = @intFromPtr(cache.frameOf(e, play)) }, .w = e.w, .h = e.h, .animated = e.frames.len > 1 } },
             };
         }
+        // Modo economia: nada de rede até a pessoa pedir.
+        if (cache.blocked(url)) return .failed;
         const owned = alloc.dupe(u8, key) catch return .failed;
         cache.map.put(alloc, owned, .{ .used_ms = cache.now_ms }) catch {
             alloc.free(owned);

@@ -144,6 +144,8 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
     const bright = (selected or hb.hovered or ch.unread or in_voice) and !muted_ch;
     const name_col = if (selected) ctx.col(.text) else if (bright) ctx.col(.text).mix(ctx.col(.muted), 0.15) else if (muted_ch) ctx.col(.faint) else ctx.col(.muted);
     const fs = ctx.th.font_size;
+    // Menções e palavras de alerta não lidas (core/filtros.zig).
+    const pings = if (selected) 0 else ctx.st.filtros.count(ch.id);
 
     switch (variant) {
         .discord => {
@@ -157,6 +159,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             _ = d.textClipped(dl, nf, fs, rr.x + 34, d.centerY(rr, fs), name_col, ch.name, rr.w - 42);
             if (ch.unread and !selected)
                 d.rectFlags(dl, .{ .x = r.x, .y = rr.y + 12, .w = 4, .h = 8 }, ctx.col(.text), 4, c.ImDrawFlags_RoundRight);
+            if (pings > 0) badgeAt(ctx, dl, fam, rr.right() - 6, rr.y + rr.h / 2, pings);
         },
         .pills => {
             const pr = rr;
@@ -174,7 +177,9 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             }
             const tc = if (on) ctx.col(.accent_text) else name_col;
             _ = d.textClipped(dl, fam.get(if (ch.unread or on) .semibold else .medium), fs - 1, pr.x + 42, d.centerY(pr, fs - 1), tc, ch.name, pr.w - 60);
-            if (ch.unread and !on) d.circle(dl, pr.right() - 14, pr.y + pr.h / 2, 4, ctx.col(.accent));
+            if (pings > 0) {
+                badgeAt(ctx, dl, fam, pr.right() - 8, pr.y + pr.h / 2, pings);
+            } else if (ch.unread and !on) d.circle(dl, pr.right() - 14, pr.y + pr.h / 2, 4, ctx.col(.accent));
         },
         .tree => {
             if (selected) d.rect(dl, rr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
@@ -184,7 +189,11 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             const t = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ branch, sigil, ch.name }) catch ch.name;
             const tc = if (selected) ctx.col(.accent_text) else name_col;
             _ = d.textClipped(dl, fam.get(if (ch.unread or selected) .bold else .regular), fs - 1, rr.x + 4, d.centerY(rr, fs - 1), tc, t, rr.w - 24);
-            if (ch.unread and !selected) d.text(dl, fam.get(.bold), fs - 1, rr.right() - 14, d.centerY(rr, fs - 1), ctx.col(.accent), "●");
+            if (pings > 0) {
+                var pb: [12]u8 = undefined;
+                const pt = std.fmt.bufPrint(&pb, "({d})", .{pings}) catch "";
+                d.text(dl, fam.get(.bold), fs - 1, rr.right() - 6 - d.width(fam.get(.bold), fs - 1, pt), d.centerY(rr, fs - 1), ctx.col(.danger), pt);
+            } else if (ch.unread and !selected) d.text(dl, fam.get(.bold), fs - 1, rr.right() - 14, d.centerY(rr, fs - 1), ctx.col(.accent), "●");
         },
     }
 
@@ -238,9 +247,15 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         voicePanel(ctx, fam, vr, vc, tty);
     }
     const me = ctx.store.user(ctx.store.me) orelse return;
+    var mb: [80]u8 = undefined;
+    const modes = modeLine(ctx, &mb);
+    if (modes != null) qa.mark(pr, "mode-line", .{});
     if (tty) {
-        var buf: [96]u8 = undefined;
-        const t = std.fmt.bufPrint(&buf, "{s} {s}", .{ w.statusGlyph(me.status), me.name }) catch "";
+        var buf: [160]u8 = undefined;
+        const t = if (modes) |ml|
+            std.fmt.bufPrint(&buf, "{s} {s} [{s}]", .{ w.statusGlyph(me.status), me.name, ml }) catch ""
+        else
+            std.fmt.bufPrint(&buf, "{s} {s}", .{ w.statusGlyph(me.status), me.name }) catch "";
         const tr: d.Rect = .{ .x = pr.x + 4, .y = pr.y + 2, .w = pr.w - 80, .h = pr.h - 4 };
         const hb = d.hit(ctx, 1, tr);
         qa.mark(tr, "me", .{});
@@ -256,12 +271,16 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         d.rect(ctx.dl, card, ctx.col(.hover).alpha(anim.to(anim.id("me", 0), if (hb.hovered) 1 else 0, 24)), ctx.th.radius);
         w.avatar(ctx, ctx.dl, card.x + 20, card.y + 18, 32, me.id, .circle, ctx.col(.rail), 1);
         _ = d.textClipped(ctx.dl, fam.get(.semibold), 14, card.x + 44, card.y + 2, ctx.col(.text), me.name, card.w - 48);
-        _ = d.textClipped(ctx.dl, fam.get(.regular), 12, card.x + 44, card.y + 19, ctx.col(.muted), switch (me.status) {
+        // Foco/economia ligados aparecem no lugar do status (o menu tem como sair).
+        if (modes) |ml| {
+            _ = d.textClipped(ctx.dl, fam.get(.semibold), 12, card.x + 44, card.y + 19, ctx.col(.accent), ml, card.w - 48);
+        } else _ = d.textClipped(ctx.dl, fam.get(.regular), 12, card.x + 44, card.y + 19, ctx.col(.muted), switch (me.status) {
             .online => "Online",
             .idle => i18n.tr("Ausente", "Idle"),
             .dnd => i18n.tr("Não perturbe", "Do Not Disturb"),
             .offline => i18n.tr("Invisível", "Invisible"),
         }, card.w - 48);
+        if (modes != null) d.tip(ctx, card, i18n.tr("Clique para mudar ou sair", "Click to change or turn off"), hb.hovered);
     }
 
     // Mudo, ensurdecer, configurações.
@@ -305,6 +324,25 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         }
         if (active) d.line(ctx.dl, cx - 9, cy - 9, cx + 9, cy + 9, ctx.col(.danger), 2.2);
     }
+}
+
+/// "Foco · 23 min · economia" quando o modo foco ou o de economia estão
+/// ligados (null quando nenhum está).
+fn modeLine(ctx: *d.Ctx, buf: []u8) ?[]const u8 {
+    const f = &ctx.st.filtros;
+    const focus = f.focusOn(ctx.now_ms);
+    const saver = ctx.st.settings.data_saver;
+    if (!focus and !saver) return null;
+    var tb: [32]u8 = undefined;
+    const left: []const u8 = if (!focus) "" else if (f.focusLeftMin(ctx.now_ms)) |mins| blk: {
+        // Acorda na hora de acabar (o relógio só acorda a cada minuto).
+        anim.at(f.focus_until);
+        break :blk i18n.fmt(&tb, "Foco · {d} min", "Focus · {d} min", .{mins});
+    } else i18n.tr("Foco", "Focus");
+    const out = if (focus and saver)
+        i18n.fmt(buf, "{s} · economia", "{s} · saver", .{left})
+    else if (focus) i18n.fmt(buf, "{s}", "{s}", .{left}) else i18n.tr("Modo economia", "Data saver");
+    return out;
 }
 
 /// Altura da faixa "Voz conectada" (a lista de canais reserva esse espaço).
@@ -443,7 +481,10 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
                 _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, rr.y + 3, tc, name, rr.w - 60);
                 _ = d.textClipped(dl, fam.get(.regular), 12, rr.x + 46, rr.y + 22, if (on) tc.alpha(0.8) else ctx.col(.faint), a, rr.w - 60);
             } else _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, d.centerY(rr, fs - 1), tc, name, rr.w - 60);
-            if (cs.info.unread and !selected) d.circle(dl, rr.right() - 12, rr.y + rr.h / 2, 4, ctx.col(.danger));
+            const dm_pings = if (selected) 0 else ctx.st.filtros.count(id);
+            if (dm_pings > 0) {
+                badgeAt(ctx, dl, fam, rr.right() - 6, rr.y + rr.h / 2, dm_pings);
+            } else if (cs.info.unread and !selected) d.circle(dl, rr.right() - 12, rr.y + rr.h / 2, 4, ctx.col(.danger));
         }
         y += row_h;
     }

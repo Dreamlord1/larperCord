@@ -128,7 +128,11 @@ pub const App = struct {
         var saved_theme: ?[]const u8 = null;
         var settings_arena = std.heap.ArenaAllocator.init(gpa);
         defer settings_arena.deinit();
-        if (opts.shot == null and !opts.qa) saved_theme = app.loadSettings(settings_arena.allocator());
+        if (opts.shot == null and !opts.qa) {
+            saved_theme = app.loadSettings(settings_arena.allocator());
+            var dbuf: [512]u8 = undefined;
+            if (draftsPath(&dbuf)) |p| app.st.drafts.load(gpa, p);
+        }
         app.themes.mode = app.wantedMode();
         // Já aqui: os dados da demonstração saem no idioma da interface.
         i18n.set(if (opts.qa) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language));
@@ -167,6 +171,11 @@ pub const App = struct {
 
     pub fn destroy(app: *App) void {
         _ = c.SDL_RemoveTimer(app.timer);
+        // O que estava na caixa de texto vira o rascunho do canal.
+        _ = app.st.drafts.switchTo(app.gpa, 0, &app.st.input, app.st.editing == 0);
+        app.saveDrafts();
+        app.st.drafts.deinit(app.gpa);
+        app.st.filtros.deinit(app.gpa);
         app.asked_profiles.deinit(app.gpa);
         var colors_it = app.theme_colors.iterator();
         while (colors_it.next()) |e| app.gpa.free(e.key_ptr.*);
@@ -316,6 +325,8 @@ pub const App = struct {
 
     /// Volta ao estado de antes do login: sem conta, sem abas, sem nada.
     fn resetSession(app: *App) void {
+        _ = app.st.drafts.switchTo(app.gpa, 0, &app.st.input, app.st.editing == 0);
+        app.st.filtros.resetSession();
         app.asked_profiles.clearRetainingCapacity();
         app.clearUploads();
         app.st.viewer = null;
@@ -484,6 +495,8 @@ pub const App = struct {
                 // `theme-options "terminal" crt=#false ascii=#true`
                 const name = (n.arg(0) orelse continue).asString() orelse continue;
                 for (n.props) |p| if (p.value.asBool()) |v| app.themes.choose(name, p.key, v);
+            } else if (app.st.filtros.applyNode(app.gpa, n, now())) {
+                // Palavras de alerta, filtro, ignorados e foco (core/filtros.zig).
             } else if (std.mem.eql(u8, n.name, "theme-colors")) {
                 // `theme-colors "vidro" mode=dark bg="#101014" accent="#ff00aa"`
                 const name = (n.arg(0) orelse continue).asString() orelse continue;
@@ -526,6 +539,8 @@ pub const App = struct {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(app.gpa);
         settings_state.write(&app.st.settings, app.themes.name(), &out, app.gpa) catch return;
+        app.st.filtros.save = false;
+        app.st.filtros.write(&out, app.gpa) catch return;
         var it = app.themes.choices.iterator();
         while (it.next()) |e| {
             out.print(app.gpa, "theme-options \"{s}\"", .{e.key_ptr.*}) catch return;
@@ -549,6 +564,30 @@ pub const App = struct {
             }
         }
         _ = c.SDL_SaveFile(path.ptr, out.items.ptr, out.items.len);
+    }
+
+    /// drafts.kdl, ao lado do settings.kdl.
+    fn draftsPath(buf: []u8) ?[:0]const u8 {
+        var sb: [512]u8 = undefined;
+        const p = settingsPath(&sb) orelse return null;
+        const slash = std.mem.lastIndexOfScalar(u8, p, '/') orelse return null;
+        return std.fmt.bufPrintSentinel(buf, "{s}/drafts.kdl", .{p[0..slash]}, 0) catch null;
+    }
+
+    fn saveDrafts(app: *App) void {
+        if (!app.st.drafts.dirty) return;
+        if (app.opts.shot != null or app.opts.qa) {
+            app.st.drafts.dirty = false;
+            return;
+        }
+        var buf: [512]u8 = undefined;
+        const path = draftsPath(&buf) orelse return;
+        if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
+            var dbuf: [512]u8 = undefined;
+            const dir = std.fmt.bufPrintSentinel(&dbuf, "{s}", .{path[0..slash]}, 0) catch return;
+            _ = c.SDL_CreateDirectory(dir.ptr);
+        }
+        app.st.drafts.save(app.gpa, path);
     }
 
     fn loadNodeFonts(app: *App, n: *const kdl.Node) void {
@@ -593,6 +632,7 @@ pub const App = struct {
 
     fn afterOpen(app: *App, cs: anytype) void {
         app.store.markRead(cs.info.id);
+        app.st.filtros.clear(&app.store, cs.info.id);
         app.st.focus_input = true;
         if (cs.history == .none) {
             cs.history = .loading;
@@ -648,6 +688,28 @@ pub const App = struct {
         app.st.scrollOf(ch).stick_bottom = true;
         const copy = ca.dupe(u8, out.items) catch return;
         app.cmd(.{ .send_message = .{ .channel = ch, .content = copy, .nonce = app.st.nonce, .reply_to = reply_to, .files = files } });
+    }
+
+    /// Trocou de canal: o texto da caixa vira o rascunho do anterior e o
+    /// rascunho do novo volta para a caixa (uma edição em andamento é cancelada).
+    fn syncDraft(app: *App) void {
+        const st = &app.st;
+        const ch = st.activeChannel() orelse 0;
+        if (!st.drafts.switchTo(app.gpa, ch, &st.input, st.editing == 0)) return;
+        st.input_sync = true;
+        st.editing = 0;
+        st.reply_to = 0;
+        app.saveDrafts();
+    }
+
+    /// Depois de editar uma mensagem, a caixa volta com o rascunho do canal.
+    fn restoreDraft(app: *App) void {
+        const st = &app.st;
+        const text = if (st.activeChannel()) |ch| st.drafts.get(ch) orelse "" else "";
+        const n = @min(text.len, st.input.len - 1);
+        @memcpy(st.input[0..n], text[0..n]);
+        @memset(st.input[n..], 0);
+        st.input_sync = true;
     }
 
     fn firstTextChannel(app: *App, guild: types.Id) ?types.Id {
@@ -725,18 +787,20 @@ pub const App = struct {
                 const ch = st.activeChannel() orelse return;
                 app.sendTo(ch, text, st.reply_to);
                 st.reply_to = 0;
+                st.drafts.remove(app.gpa, ch);
             },
             .reply => |id| {
                 st.reply_to = id;
                 if (st.editing != 0) {
                     st.editing = 0;
-                    @memset(&st.input, 0);
-                    st.input_sync = true;
+                    app.restoreDraft();
                 }
                 st.focus_input = true;
             },
             .edit_message => |id| {
                 const f = app.store.findAny(id) orelse return;
+                // O que estava sendo escrito fica guardado durante a edição.
+                if (st.editing == 0) if (st.activeChannel()) |ch| st.drafts.put(app.gpa, ch, std.mem.sliceTo(&st.input, 0));
                 const n = @min(f.m.msg.content.len, st.input.len - 1);
                 @memcpy(st.input[0..n], f.m.msg.content[0..n]);
                 st.input[n] = 0;
@@ -749,6 +813,7 @@ pub const App = struct {
                 defer app.gpa.free(text);
                 const id = st.editing;
                 st.editing = 0;
+                app.restoreDraft();
                 const f = app.store.findAny(id) orelse return;
                 const ch = f.cs.info.id;
                 if (std.mem.eql(u8, f.m.msg.content, text)) return;
@@ -757,10 +822,7 @@ pub const App = struct {
                 app.cmd(.{ .edit_message = .{ .channel = ch, .id = id, .content = copy } });
             },
             .cancel_compose => {
-                if (st.editing != 0) {
-                    @memset(&st.input, 0);
-                    st.input_sync = true;
-                }
+                if (st.editing != 0) app.restoreDraft();
                 st.editing = 0;
                 st.reply_to = 0;
             },
@@ -806,10 +868,14 @@ pub const App = struct {
             .mark_read => |id| {
                 if (app.store.channel(id)) |cs| {
                     cs.info.unread = false;
+                    st.filtros.clear(&app.store, id);
                 } else if (app.store.guild(id)) |g| {
                     g.unread = false;
+                    for (app.store.channelsOf(id)) |ch| {
+                        app.store.markRead(ch);
+                        st.filtros.clear(&app.store, ch);
+                    }
                     g.mentions = 0;
-                    for (app.store.channelsOf(id)) |ch| app.store.markRead(ch);
                 }
             },
             .typing => |id| {
@@ -901,7 +967,8 @@ pub const App = struct {
                 app.last_notice_len = n;
             }
             if (e == .status and e.status == .failed) failed = true;
-            if (e == .message_create and app.store.ready) app.notify(e.message_create);
+            // Antes de o Store ficar com a mensagem (se o canal não existe, ele a libera).
+            const quiet: ?types.Id = if (e == .message_create and app.store.ready) app.incoming(e.message_create) else null;
             if (app.opts.stats) switch (e) {
                 .status => |st| std.log.info("conexão: {t}", .{st}),
                 .notice => |n| std.log.info("aviso: {s}", .{n}),
@@ -910,6 +977,7 @@ pub const App = struct {
                 else => {},
             };
             app.store.apply(e, now()) catch {};
+            if (quiet) |ch| app.st.filtros.quiet(app.gpa, &app.store, ch);
         }
         if (!was_ready and app.store.ready) {
             app.onReady();
@@ -957,17 +1025,36 @@ pub const App = struct {
             };
         }
         // Marca como lido o que chega no canal aberto.
-        if (app.st.activeChannel()) |ch| app.store.markRead(ch);
+        if (app.st.activeChannel()) |ch| {
+            app.store.markRead(ch);
+            app.st.filtros.clear(&app.store, ch);
+        }
+    }
+
+    /// Mensagem de outra pessoa chegando: ignorada/filtrada não notifica nem
+    /// conta; DM, menção ou palavra de alerta conta no canal e notifica.
+    /// Retorna o canal que o modo foco deixa sem "não lido" por enquanto.
+    fn incoming(app: *App, m: types.Message) ?types.Id {
+        const f = &app.st.filtros;
+        if (m.author == app.store.me) return null;
+        const cs = app.store.channel(m.channel) orelse return null;
+        const verdict = f.judge(m.author, m.content, cs.info.guild == 0, mentionsMe(m.content, app.store.me));
+        if (verdict == .important) {
+            f.bump(app.gpa, &app.store, m.channel);
+            if (!app.st.muted_channels.contains(m.channel)) {
+                f.notified +%= 1;
+                app.notify(m, cs);
+            }
+        }
+        if (verdict != .important and f.focusOn(now()) and !cs.info.unread and app.st.activeChannel() != m.channel) return m.channel;
+        return null;
     }
 
     /// DM ou menção chegando sem a pessoa olhando: a janela pisca na barra
     /// de tarefas e sai uma notificação do sistema (notify-send).
-    fn notify(app: *App, m: types.Message) void {
-        if (app.opts.qa or app.store.demo or m.author == app.store.me) return;
+    fn notify(app: *App, m: types.Message, cs: *const @import("core/store.zig").ChannelState) void {
+        if (app.opts.qa or app.store.demo) return;
         const set = &app.st.settings;
-        const cs = app.store.channel(m.channel) orelse return;
-        if (app.st.muted_channels.contains(m.channel)) return;
-        if (cs.info.guild != 0 and !mentionsMe(m.content, app.store.me)) return;
         const focused = (c.SDL_GetWindowFlags(app.win.window) & c.SDL_WINDOW_INPUT_FOCUS) != 0;
         if (focused and app.st.activeChannel() == m.channel) return;
         if (set.taskbar_flash and !focused) _ = c.SDL_FlashWindow(app.win.window, c.SDL_FLASH_UNTIL_FOCUSED);
@@ -1276,6 +1363,14 @@ pub const App = struct {
             @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
             app.store.keep_log = set.message_log;
             widgets.hour12 = !set.clock_24h;
+            app.images.data_saver = set.data_saver;
+            // Modo foco venceu: o que chegou nos outros canais volta como não lido.
+            if (app.st.filtros.focus_until != 0 and !app.st.filtros.focusOn(now_ms)) app.st.filtros.endFocus(&app.store);
+            if (app.st.filtros.save) {
+                app.st.filtros.save = false;
+                app.saveSettings();
+            }
+            if (app.store.ready) app.syncDraft();
             const key = set.layoutKey();
             if (key != app.layout_key) {
                 app.layout_key = key;

@@ -131,6 +131,10 @@ pub const State = struct {
     jump: Id = 0,
     jump_until_ms: i64 = 0,
     muted_channels: std.AutoHashMapUnmanaged(Id, void) = .empty,
+    /// Palavras de alerta, filtro, ignorados e modo foco (core/filtros.zig).
+    filtros: @import("../core/filtros.zig").Filtros = .{},
+    /// Rascunho de cada canal (ui/rascunhos.zig).
+    drafts: @import("rascunhos.zig").Drafts = .{},
     toast: Toast = .{},
     viewer: ?Viewer = null,
     uploads: std.ArrayList(Upload) = .empty,
