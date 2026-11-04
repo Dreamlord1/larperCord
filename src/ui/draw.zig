@@ -20,6 +20,8 @@ pub const Family = fonts_mod.Family;
 
 pub const Stats = struct {
     ram_kb: u32 = 0,
+    /// Alguém desenhou o número desde o último tique (ler o /proc custa).
+    ram_seen: bool = false,
     frame_us: u32 = 0,
     theme_count: usize = 0,
 };

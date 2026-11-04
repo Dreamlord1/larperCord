@@ -121,6 +121,8 @@ const Upload = struct {
     end: u32 = 0,
 };
 
+const trim_after_bytes = 4 * 1024 * 1024;
+
 pub const Cache = struct {
     renderer: *c.SDL_Renderer,
     wake_type: u32,
@@ -147,6 +149,10 @@ pub const Cache = struct {
     /// está no cache só baixa depois de um clique (`allow`).
     data_saver: bool = false,
     allowed: std.StringHashMapUnmanaged(void) = .empty,
+    /// Bytes de imagem soltos desde a última devolução ao sistema.
+    freed_bytes: usize = 0,
+    /// O app olha isto depois de `pump` e pede a devolução.
+    trim_due: bool = false,
 
     pub fn init(renderer: *c.SDL_Renderer, wake_type: u32) !Cache {
         return .{
@@ -289,6 +295,11 @@ pub const Cache = struct {
             for (batch.items) |r| freeResult(r);
         };
         const worked = cache.backlog.items.len > 0 or cache.uploading != null;
+        // Passou a rajada: bastante memória foi solta nas arenas das threads.
+        if (!worked and cache.freed_bytes >= trim_after_bytes) {
+            cache.freed_bytes = 0;
+            cache.trim_due = true;
+        }
         const t0 = c.SDL_GetTicksNS();
         while (true) {
             if (cache.uploading == null) {
@@ -343,6 +354,7 @@ pub const Cache = struct {
         // Acabou (ou o SDL não criou mais: fica com o que deu).
         const done = u.*;
         cache.uploading = null;
+        cache.freed_bytes +|= @as(usize, px.w) * @as(usize, px.h) * 4 * px.frames.len;
         defer freeResult(done.r);
         const e = cache.map.getPtr(done.r.key) orelse {
             for (done.frames[0..done.n]) |f| c.SDL_DestroyTexture(f.tex);

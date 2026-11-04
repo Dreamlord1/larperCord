@@ -287,6 +287,7 @@ pub fn statusBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             .ping => std.fmt.bufPrint(b, "⌁ {d} ms", .{ctx.store.latency_ms}) catch "",
             .ram => blk: {
                 color = ctx.col(.accent).mix(ctx.col(.text), 0.3);
+                @atomicStore(bool, &ctx.stats.ram_seen, true, .monotonic);
                 break :blk std.fmt.bufPrint(b, "▣ {d}.{d} MB", .{ ctx.stats.ram_kb / 1024, (ctx.stats.ram_kb % 1024) * 10 / 1024 }) catch "";
             },
             .frame => i18n.fmt(b, "⚡ {d}.{d:0>2} ms/quadro", "⚡ {d}.{d:0>2} ms/frame", .{ ctx.stats.frame_us / 1000, (ctx.stats.frame_us % 1000) / 10 }),

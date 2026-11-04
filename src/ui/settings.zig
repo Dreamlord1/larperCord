@@ -860,6 +860,7 @@ fn performance(p: *Page) void {
     p.title(i18n.tr("Desempenho", "Performance"));
     p.note(i18n.tr("Números ao vivo deste processo.", "Live numbers from this process."));
     var buf: [96]u8 = undefined;
+    @atomicStore(bool, &ctx.stats.ram_seen, true, .monotonic);
     const stats = [_]struct { label: []const u8, value: []const u8 }{
         .{ .label = "RAM (PSS)", .value = std.fmt.bufPrint(buf[0..32], "{d}.{d} MB", .{ ctx.stats.ram_kb / 1024, (ctx.stats.ram_kb % 1024) * 10 / 1024 }) catch "" },
         .{ .label = i18n.tr("Tempo de CPU por quadro", "CPU time per frame"), .value = std.fmt.bufPrint(buf[32..64], "{d}.{d:0>2} ms", .{ ctx.stats.frame_us / 1000, (ctx.stats.frame_us % 1000) / 10 }) catch "" },

@@ -41,6 +41,7 @@ const fsutil = @import("platform/fsutil.zig");
 const accounts_store = @import("net/accounts_store.zig");
 const app_accounts = @import("app_accounts.zig");
 const voz_audio = @import("net/voz_audio.zig");
+const mem_tune = @import("platform/mem_tune.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -493,8 +494,13 @@ pub const App = struct {
 
     fn tick(data: ?*anyopaque, _: c.SDL_TimerID, interval: u32) callconv(.c) u32 {
         const app: *App = @ptrCast(@alignCast(data.?));
-        const kb = platform.selfPssKb();
+        // Aqui, e não na thread da UI: varrer as arenas leva milissegundos.
+        if (app.trim_wanted.swap(false, .acq_rel)) mem_tune.trim();
+        // O número da RAM: só se está na tela. Varrer o mapa de memória do
+        // processo leva milissegundos, e o tique roda mesmo com tudo parado.
+        const ram_seen = @atomicRmw(bool, &app.stats.ram_seen, .Xchg, false, .monotonic);
         const prev = @atomicLoad(u32, &app.stats.ram_kb, .monotonic);
+        const kb = if (ram_seen) platform.selfPssKb() else prev;
         const S = struct {
             var last_minute: i64 = 0;
         };
@@ -554,7 +560,8 @@ pub const App = struct {
         // O fontconfig guarda o cache de todas as fontes do sistema (~MBs);
         // ele se reinicia sozinho se outro tema pedir uma família nova.
         c.FcFini();
-        _ = c.malloc_trim(0);
+        // Na abertura o tique faz isso depois (e junto com o que vier a seguir).
+        app.trim_wanted.store(true, .release);
         app.st.theme_gen +%= 1;
     }
 
@@ -2016,6 +2023,10 @@ pub const App = struct {
                 defer picked.deinit(std.heap.c_allocator);
                 app.picked.drain(&picked);
                 for (picked.items) |p| {
+            if (app.images.trim_due) {
+                app.images.trim_due = false;
+                app.trim_wanted.store(true, .release);
+            }
                     defer std.heap.c_allocator.free(p);
                     if (app.store.ready) app.attachFile(p);
                 }
