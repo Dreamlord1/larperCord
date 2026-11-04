@@ -161,4 +161,6 @@ pub const Action = union(enum) {
     accept_friend: Id,
     /// Recusa um pedido, cancela o nosso ou desbloqueia.
     remove_relationship: Id,
+    /// "Cor do servidor": destaque enquanto o servidor está aberto; null limpa.
+    set_guild_color: struct { guild: Id, rgb: ?u32 },
 };

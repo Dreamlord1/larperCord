@@ -9,10 +9,11 @@ pub var enabled = false;
 
 const Mark = struct { key: [56]u8, len: u8, rect: layout.Rect };
 
-var marks: [1024]Mark = undefined;
+// Com a tela dividida, até três conversas marcam ao mesmo tempo.
+var marks: [2048]Mark = undefined;
 var count: usize = 0;
 /// Marcações do quadro anterior (o robô lê estas, já completas).
-var prev: [1024]Mark = undefined;
+var prev: [2048]Mark = undefined;
 var prev_count: usize = 0;
 
 pub fn beginFrame() void {
@@ -22,11 +23,22 @@ pub fn beginFrame() void {
     count = 0;
 }
 
+/// Prefixo das marcações desenhadas agora ("pane1/" num painel lateral da
+/// tela dividida): o mesmo elemento em duas conversas não se confunde.
+var scope_buf: [12]u8 = undefined;
+var scope_len: usize = 0;
+
+pub fn setScope(comptime fmt: []const u8, args: anytype) void {
+    if (!enabled) return;
+    scope_len = if (std.fmt.bufPrint(&scope_buf, fmt, args)) |t| t.len else |_| 0;
+}
+
 pub fn mark(r: layout.Rect, comptime fmt: []const u8, args: anytype) void {
     if (!enabled or count >= marks.len) return;
     var m: Mark = .{ .key = undefined, .len = 0, .rect = r };
-    const s = std.fmt.bufPrint(&m.key, fmt, args) catch return;
-    m.len = @intCast(s.len);
+    @memcpy(m.key[0..scope_len], scope_buf[0..scope_len]);
+    const s = std.fmt.bufPrint(m.key[scope_len..], fmt, args) catch return;
+    m.len = @intCast(scope_len + s.len);
     marks[count] = m;
     count += 1;
 }

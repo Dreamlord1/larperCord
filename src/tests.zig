@@ -15,6 +15,7 @@ test {
     _ = @import("theme/layout.zig");
     _ = @import("ui/fuzzy.zig");
     _ = @import("ui/settings_state.zig");
+    _ = @import("ui/guild_color.zig");
     _ = @import("net/jsonx.zig");
     _ = @import("net/media_url.zig");
     _ = @import("net/settings_proto.zig");

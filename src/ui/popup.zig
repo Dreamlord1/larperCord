@@ -14,6 +14,8 @@ const Id = types.Id;
 const rich = @import("rich.zig");
 const att = @import("attachments.zig");
 const icons = @import("icons.zig");
+const mosaic = @import("mosaic.zig");
+const guild_color = @import("guild_color.zig");
 
 pub const emojis = [_][]const u8{
     "😂", "😭", "💀", "🔥", "❤️", "👍", "👎", "👀", "🎉", "😍", "🙏", "😎",
@@ -138,6 +140,8 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         .channel => {
             add(&items, &n, .{ .label = "Marcar como lido", .en = "Mark As Read", .id = 40 });
             add(&items, &n, .{ .label = "Abrir em nova aba", .en = "Open in New Tab", .id = 41 });
+            // Tela dividida: o canal ao lado do que está aberto (até 3).
+            if (mosaic.canOpenBeside(ctx, id)) add(&items, &n, .{ .label = "Abrir ao lado", .en = "Open to the Side", .id = 45 });
             add(&items, &n, .{ .label = if (ctx.st.muted_channels.contains(id)) "Reativar notificações" else "Silenciar canal", .en = if (ctx.st.muted_channels.contains(id)) "Unmute Channel" else "Mute Channel", .id = 42 });
             add(&items, &n, .{ .label = "Copiar link", .en = "Copy Link", .id = 43, .sep = true });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do canal", .en = "Copy Channel ID", .id = 44 });
@@ -157,12 +161,14 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
 
     const row_h: f32 = 32;
     const quick_h: f32 = if (kind == .message) 46 else 0;
+    // "Cor do servidor": uma fileira de cores no fim do menu do servidor.
+    const colors_h: f32 = if (kind == .guild and ctx.store.guild(id) != null) 62 else 0;
     var seps: f32 = 0;
     for (items[0..n]) |it| {
         if (it.sep) seps += 9;
     }
     const mw: f32 = 220;
-    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + 12;
+    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + colors_h + 12;
     const r = fit(ctx, x + 2, y + 2, mw, mh);
     const k = anim.to(anim.id("menu", @intFromEnum(kind)), 1, 30);
     const dl = beginWindow("##menu", r);
@@ -205,6 +211,37 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         d.text(dl, fam.get(.medium), 14, ir.x + 10, d.centerY(ir, 14), tc, i18n.tr(it.label, it.en));
         if (hb.clicked) return choose(ctx, kind, id, it.id, r);
         yy += row_h;
+    }
+    if (colors_h > 0) guildColors(ctx, dl, id, r, yy);
+}
+
+/// Fileira "Cor do servidor": a primeira bolinha volta para a cor de sempre,
+/// as outras são a paleta de destaque das configurações.
+fn guildColors(ctx: *d.Ctx, dl: *c.ImDrawList, guild: Id, r: d.Rect, y: f32) void {
+    const palette = &@import("../app.zig").App.accents;
+    const fam = ctx.ui;
+    d.line(dl, r.x + 10, y + 4, r.right() - 10, y + 4, ctx.col(.border), 1);
+    d.text(dl, fam.get(.semibold), 12, r.x + 16, y + 12, ctx.col(.muted), i18n.tr("Cor do servidor", "Server Color"));
+    const cur = guild_color.get(guild);
+    const step = (r.w - 24) / @as(f32, @floatFromInt(palette.len + 1));
+    for (0..palette.len + 1) |i| {
+        const cx = r.x + 12 + step * (@as(f32, @floatFromInt(i)) + 0.5);
+        const cy = y + 44;
+        const sr: d.Rect = .{ .x = cx - step / 2, .y = cy - 11, .w = step, .h = 22 };
+        const hb = d.hit(ctx, 300 + i, sr);
+        qa.mark(sr, "guild-color:{d}", .{i});
+        const sel = if (i == 0) cur == null else cur == palette[i - 1];
+        if (sel or hb.hovered) c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 10.5, (if (sel) ctx.col(.text) else ctx.col(.muted)).u(), 0, 1.5, 0);
+        if (i == 0) {
+            // Sem cor própria: anel com um risco.
+            c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 7, ctx.col(.faint).u(), 0, 1.5, 0);
+            d.line(dl, cx - 4.5, cy + 4.5, cx + 4.5, cy - 4.5, ctx.col(.faint), 1.5);
+            d.tip(ctx, sr, i18n.tr("Cor de sempre", "Default color"), hb.hovered);
+        } else d.circle(dl, cx, cy, 7.5, d.Rgba.hex(palette[i - 1]));
+        if (hb.clicked) {
+            ctx.act(.{ .set_guild_color = .{ .guild = guild, .rgb = if (i == 0) null else palette[i - 1] } });
+            return close(ctx);
+        }
     }
 }
 
@@ -251,6 +288,7 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             st.tabs.append(st.gpa, id) catch {};
             ctx.act(.{ .focus_tab = st.tabs.items.len - 1 });
         },
+        45 => mosaic.openBeside(ctx, id),
         42 => if (st.muted_channels.contains(id)) {
             _ = st.muted_channels.remove(id);
         } else st.muted_channels.put(st.gpa, id, {}) catch {},

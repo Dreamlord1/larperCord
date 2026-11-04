@@ -26,6 +26,7 @@ const widgets = @import("ui/widgets.zig");
 const settings_state = @import("ui/settings_state.zig");
 const kdl = @import("theme/kdl.zig");
 const custom = @import("theme/custom.zig");
+const guild_color = @import("ui/guild_color.zig");
 const theme_mod = @import("theme/theme.zig");
 
 pub const Options = struct {
@@ -484,6 +485,8 @@ pub const App = struct {
                 // `theme-options "terminal" crt=#false ascii=#true`
                 const name = (n.arg(0) orelse continue).asString() orelse continue;
                 for (n.props) |p| if (p.value.asBool()) |v| app.themes.choose(name, p.key, v);
+            } else if (std.mem.eql(u8, n.name, "guild-color")) {
+                guild_color.load(&guild_color.colors, std.heap.c_allocator, n);
             } else if (std.mem.eql(u8, n.name, "theme-colors")) {
                 // `theme-colors "vidro" mode=dark bg="#101014" accent="#ff00aa"`
                 const name = (n.arg(0) orelse continue).asString() orelse continue;
@@ -548,6 +551,7 @@ pub const App = struct {
                 out.append(app.gpa, '\n') catch return;
             }
         }
+        guild_color.write(&guild_color.colors, &out, app.gpa) catch return;
         _ = c.SDL_SaveFile(path.ptr, out.items.ptr, out.items.len);
     }
 
@@ -845,6 +849,10 @@ pub const App = struct {
             },
             .set_theme_color => |cc| app.setThemeColor(cc.slot, cc.rgba),
             .reset_theme_colors => app.resetThemeColors(),
+            .set_guild_color => |gc| {
+                guild_color.set(gc.guild, gc.rgb);
+                app.saveSettings();
+            },
             .next_theme => |delta| {
                 const n: i32 = @intCast(app.themes.entries.items.len);
                 app.setTheme(@intCast(@mod(@as(i32, @intCast(app.themes.current)) + delta, n)));
@@ -1016,12 +1024,13 @@ pub const App = struct {
 
     /// O tema do quadro: o atual, ou uma cópia com a cor de destaque e os
     /// cantos escolhidos nas configurações (vale para todos os temas).
-    fn customTheme(app: *App) *const theme_mod.Theme {
+    pub fn customTheme(app: *App) *const theme_mod.Theme {
         const base = app.themes.theme_();
         const set = &app.st.settings;
         const ovs = app.theme_colors.getPtr(app.themes.name());
         const has_colors = if (ovs) |o| o.atConst(app.themes.mode).any() else false;
-        if (set.accent == 0 and set.corners == 0 and !has_colors) return base;
+        const gcol = guild_color.get(app.st.guild);
+        if (set.accent == 0 and set.corners == 0 and !has_colors and gcol == null) return base;
         app.th_custom = base.*;
         if (set.accent > 0 and set.accent <= accents.len) {
             const col = d.Rgba.hex(accents[set.accent - 1]);
@@ -1038,6 +1047,8 @@ pub const App = struct {
         }
         // Cores personalizadas do tema/modo têm a palavra final.
         if (ovs) |o| custom.apply(&app.th_custom, o.atConst(app.themes.mode));
+        // A cor do servidor aberto vale por cima de tudo (é a escolha mais específica).
+        if (gcol) |rgb| guild_color.apply(&app.th_custom, rgb);
         return &app.th_custom;
     }
 
@@ -1287,6 +1298,8 @@ pub const App = struct {
             qa_mod.beginFrame();
             if (app.store.ready) {
                 const th = app.customTheme();
+                // Trocou de servidor (ou de cor do servidor): seleção e cursor do texto acompanham.
+                if (guild_color.changed(app.st.guild)) app.applyImGuiColors(th);
                 var ctx: d.Ctx = .{
                     .th = th,
                     .theme_name = app.themes.name(),

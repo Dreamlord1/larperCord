@@ -538,6 +538,95 @@ fn toDemoStart(app: *App) void {
     app.st.editing = 0;
 }
 
+// --- Tela dividida e cor do servidor ------------------------------------------
+
+const mosaic = @import("ui/mosaic.zig");
+const guild_color = @import("ui/guild_color.zig");
+
+fn inside(a: @import("theme/layout.zig").Rect, b: @import("theme/layout.zig").Rect) bool {
+    return a.x >= b.x - 1 and a.right() <= b.right() + 1 and a.y >= b.y - 1;
+}
+fn sideMenuItem(_: *App) bool {
+    return qa.find("menu:Abrir ao lado") != null;
+}
+fn twoPanes(app: *App) bool {
+    const p = &mosaic.panes;
+    return p.count == 2 and p.ids[0] == ch(4) and p.ids[1] == ch(6) and p.focus == 1 and app.st.activeChannel() == ch(6);
+}
+/// Cada painel desenha o seu histórico, lado a lado, e as marcações do
+/// painel lateral não se confundem com as do focado.
+fn panesDrawn(_: *App) bool {
+    const p0 = qa.find("pane:0") orelse return false;
+    const p1 = qa.find("pane:1") orelse return false;
+    if (p1.x < p0.right() or p0.w < 200 or @abs(p0.w - p1.w) > 2) return false;
+    const side = qa.find("pane0/msg-index:0") orelse return false;
+    const main = qa.find("msg-index:0") orelse return false;
+    const first = qa.findFirst("msg-index:0") orelse return false;
+    return inside(side, p0) and inside(main, p1) and first.x == main.x;
+}
+fn lastIn(app: *App, id: Id) ?*@import("core/store.zig").StoredMessage {
+    const cs = app.store.channel(id) orelse return null;
+    if (cs.messages.items.len == 0) return null;
+    return &cs.messages.items[cs.messages.items.len - 1];
+}
+fn mineIn(app: *App, id: Id, text: []const u8) bool {
+    const m = lastIn(app, id) orelse return false;
+    return m.msg.author == app.store.me and std.mem.eql(u8, m.msg.content, text);
+}
+fn sentRight(app: *App) bool {
+    return mineIn(app, ch(6), "do painel da direita") and !mineIn(app, ch(4), "do painel da direita");
+}
+fn focusLeft(app: *App) bool {
+    return mosaic.panes.focus == 0 and mosaic.panes.count == 2 and app.st.activeChannel() == ch(4);
+}
+fn sentLeft(app: *App) bool {
+    return mineIn(app, ch(4), "do painel da esquerda") and mineIn(app, ch(6), "do painel da direita");
+}
+fn threePanes(app: *App) bool {
+    const p = &mosaic.panes;
+    return p.count == 3 and p.ids[2] == ch(7) and p.focus == 2 and app.st.activeChannel() == ch(7) and qa.find("pane:2") != null;
+}
+fn scrollLeftUp(app: *App) void {
+    const sc = app.st.scrollOf(ch(4));
+    sc.stick_bottom = false;
+    sc.target = 0;
+}
+fn ownScroll(app: *App) bool {
+    // Só o painel da esquerda saiu do fim: o botão aparece só nele.
+    return qa.find("pane0/jump-bottom") != null and qa.find("jump-bottom") == null and qa.find("pane1/jump-bottom") == null and
+        app.st.scrollOf(ch(6)).stick_bottom and app.st.scrollOf(ch(7)).stick_bottom;
+}
+fn leftAtBottom(app: *App) bool {
+    return app.st.scrollOf(ch(4)).stick_bottom and app.st.activeChannel() == ch(4) and mosaic.panes.focus == 0;
+}
+fn focusThird(app: *App) bool {
+    return mosaic.panes.focus == 2 and app.st.activeChannel() == ch(7);
+}
+fn closedThird(app: *App) bool {
+    const p = &mosaic.panes;
+    return p.count == 2 and p.ids[0] == ch(4) and p.ids[1] == ch(6) and app.st.activeChannel() == ch(6) and qa.find("pane:2") == null;
+}
+fn singleView(app: *App) bool {
+    return !mosaic.on() and app.st.activeChannel() == ch(4) and qa.find("pane:0") == null and qa.find("msg-index:0") != null;
+}
+fn colorRow(_: *App) bool {
+    return qa.find("guild-color:0") != null and qa.find("guild-color:8") != null;
+}
+const red: u32 = 0xED4245;
+fn accentIs(app: *App, rgb: u32) bool {
+    const want = @import("theme/color.zig").Rgba.hex(rgb);
+    return std.meta.eql(app.customTheme().c(.accent), want);
+}
+fn guildRed(app: *App) bool {
+    return app.st.guild == 500000 and guild_color.get(500000) == red and accentIs(app, red) and app.st.popup == .none;
+}
+fn otherGuildPlain(app: *App) bool {
+    return app.st.guild == 501000 and !accentIs(app, red);
+}
+fn guildPlain(app: *App) bool {
+    return app.st.guild == 500000 and guild_color.get(500000) == null and !accentIs(app, red);
+}
+
 const long_text = "Mensagem longa do QA pra testar a quebra de linha: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 😂🔥🎉 `código inline` **negrito** *itálico* ~~riscado~~ ||spoiler|| https://ziglang.org fim.";
 
 const ops = [_]Op{
@@ -833,6 +922,56 @@ const ops = [_]Op{
     expect("ver mensagens antigas mostra o botão de ir ao fim", jumpBottomShown),
     click("jump-bottom"),
     expect("o botão de ir ao fim volta para a última mensagem", atBottom),
+
+    s("tela dividida"),
+    click("guild:500000"),
+    click("channel:500005"),
+    .{ .rclick = .{ .mark = "channel:500007" } },
+    expect("menu do canal tem \"Abrir ao lado\"", sideMenuItem),
+    click("menu:Abrir ao lado"),
+    expect("Abrir ao lado divide a tela em dois painéis", twoPanes),
+    expect("cada painel mostra o histórico do seu canal", panesDrawn),
+    .{ .shot = "35-tela-dividida" },
+    click("composer"),
+    .{ .text = "do painel da direita" },
+    key(c.ImGuiKey_Enter),
+    expect("a caixa de texto envia para o painel focado", sentRight),
+    click("pane-focus:0"),
+    expect("clicar no título do outro painel foca ele", focusLeft),
+    click("composer"),
+    .{ .text = "do painel da esquerda" },
+    key(c.ImGuiKey_Enter),
+    expect("e a mensagem vai para o canal dele", sentLeft),
+    .{ .rclick = .{ .mark = "channel:500008" } },
+    click("menu:Abrir ao lado"),
+    expect("um terceiro painel ao lado", threePanes),
+    .{ .shot = "36-tres-paineis" },
+    .{ .run = scrollLeftUp },
+    .{ .wait = 300 },
+    expect("cada painel tem a sua rolagem", ownScroll),
+    click("pane0/jump-bottom"),
+    expect("o botão de ir ao fim do painel lateral rola ele (e foca)", leftAtBottom),
+    .{ .click = .{ .at = .{ .key = "pane:2", .fx = 0.5, .fy = 0.5 } } },
+    expect("clicar dentro de um painel foca ele", focusThird),
+    .{ .sweep = &.{"pane-"} },
+    click("pane-close:2"),
+    expect("o X fecha o painel (e o foco vai para o vizinho)", closedThird),
+    click("pane-close:1"),
+    expect("sobrando um, volta a ser uma conversa só", singleView),
+
+    s("cor do servidor"),
+    .{ .rclick = .{ .mark = "guild:500000" } },
+    expect("menu do servidor mostra as cores", colorRow),
+    .{ .shot = "37-cor-do-servidor" },
+    click("guild-color:4"),
+    expect("escolher a cor pinta o destaque do servidor", guildRed),
+    click("guild:501000"),
+    expect("outro servidor fica com a cor de sempre", otherGuildPlain),
+    click("guild:500000"),
+    expect("voltar ao servidor volta a cor dele", guildRed),
+    .{ .rclick = .{ .mark = "guild:500000" } },
+    click("guild-color:0"),
+    expect("a primeira bolinha tira a cor", guildPlain),
 
     s("clicar em tudo: servidor"),
     .{ .run = toClassico },
@@ -1240,6 +1379,7 @@ pub const Runner = struct {
         voice: ?Id,
         muted: bool,
         deafened: bool,
+        panes: mosaic.Panes,
     };
 
     fn capture(app: *App) Base {
@@ -1257,6 +1397,7 @@ pub const Runner = struct {
             .voice = st.voice,
             .muted = st.muted,
             .deafened = st.deafened,
+            .panes = mosaic.panes,
         };
     }
 
@@ -1281,6 +1422,7 @@ pub const Runner = struct {
         st.voice = b.voice;
         st.muted = b.muted;
         st.deafened = b.deafened;
+        mosaic.panes = b.panes;
         st.open_folders.clearRetainingCapacity();
         st.collapsed.clearRetainingCapacity();
         if (app.themes.current != b.theme) app.actions.append(app.gpa, .{ .set_theme = b.theme }) catch {};
@@ -1305,6 +1447,7 @@ pub const Runner = struct {
         h.update(std.mem.asBytes(&st.toast.until_ms));
         h.update(std.mem.asBytes(&st.jump));
         h.update(std.mem.asBytes(&app.themes.current));
+        h.update(std.mem.asBytes(&mosaic.panes));
         h.update(std.mem.asBytes(&@as(u32, st.open_folders.count())));
         h.update(std.mem.asBytes(&@as(u32, st.collapsed.count())));
         h.update(std.mem.asBytes(&@as(u32, st.muted_channels.count())));
