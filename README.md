@@ -210,10 +210,10 @@ gateway falso pelo real não toca na interface.
 - [x] Gateway real (WebSocket, heartbeat, reconexão) e REST respeitando o rate limit
 - [x] RESUME de sessão e zlib-stream
 - [x] Presenças, membros e eventos de servidor/canal (GUILD_CREATE, CHANNEL_*)
-- [ ] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
+- [x] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
 - [ ] Permissões por canal (esconder o que não dá pra ler), threads e fóruns
 - [ ] Notificações nativas via D-Bus
-- [ ] Voz (DAVE/MLS + Opus + RNNoise)
+- [x] Voz (DAVE/MLS + Opus)
 - [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB
 - [ ] Componentes de tema escritos em Lua (sandbox)
 
