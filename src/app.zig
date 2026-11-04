@@ -27,6 +27,8 @@ const settings_state = @import("ui/settings_state.zig");
 const kdl = @import("theme/kdl.zig");
 const custom = @import("theme/custom.zig");
 const theme_mod = @import("theme/theme.zig");
+const inbox_core = @import("core/inbox.zig");
+const saved_ui = @import("ui/saved.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -180,6 +182,7 @@ pub const App = struct {
         app.clearUploads();
         app.picked.deinit();
         app.images.deinit();
+        app.st.saved.deinit(app.gpa);
         app.store.deinit();
         app.themes.deinit();
         c.cImGui_ImplSDLRenderer3_Shutdown();
@@ -319,6 +322,8 @@ pub const App = struct {
         app.asked_profiles.clearRetainingCapacity();
         app.clearUploads();
         app.st.viewer = null;
+        app.st.saved.clear(app.gpa);
+        app.st.saved.owner = 0;
         app.store.deinit();
         app.store = Store.init(app.gpa);
         const st = &app.st;
@@ -804,8 +809,8 @@ pub const App = struct {
             },
             .jump_to => |id| st.jump = id,
             .mark_read => |id| {
-                if (app.store.channel(id)) |cs| {
-                    cs.info.unread = false;
+                if (app.store.channel(id) != null) {
+                    app.store.markRead(id);
                 } else if (app.store.guild(id)) |g| {
                     g.unread = false;
                     g.mentions = 0;
@@ -874,6 +879,44 @@ pub const App = struct {
                 _ = st.uploads.orderedRemove(i);
             },
             .paste_image => app.pasteImage(),
+            .toggle_inbox => {
+                st.palette.open = false;
+                if (st.popup == .inbox) {
+                    st.popup = .none;
+                    st.focus_input = true;
+                    return;
+                }
+                st.popup = .{ .inbox = .{} };
+                // Prévia das DMs não lidas que ainda não foram abertas.
+                var want: [6]types.Id = undefined;
+                for (inbox_core.prefetch(&app.store, &st.muted_channels, &want)) |id| app.cmd(.{ .fetch_history = id });
+            },
+            .toggle_saved => {
+                st.palette.open = false;
+                st.popup = if (st.popup == .saved) .none else .saved;
+                if (st.popup == .none) st.focus_input = true;
+            },
+            .fetch_mentions => if (app.store.mentions_state != .loading) {
+                app.store.mentions_state = .loading;
+                app.cmd(.fetch_mentions);
+            },
+            .save_message => |id| switch (st.saved.add(app.gpa, &app.store, id, @divTrunc(now(), 1000)) catch .missing) {
+                .added => {
+                    app.persistSaved();
+                    st.showToast(now(), false, "mensagem salva ✓ (Ctrl+Shift+S mostra as salvas)", "message saved ✓ (Ctrl+Shift+S shows them)", .{});
+                },
+                .already => st.showToast(now(), false, "essa mensagem já está nas salvas", "that message is already saved", .{}),
+                .full => st.showToast(now(), true, "limite de {d} mensagens salvas", "limit of {d} saved messages", .{@import("core/saved.zig").max_items}),
+                .missing => {},
+            },
+            .unsave_message => |id| if (st.saved.remove(app.gpa, id)) {
+                app.persistSaved();
+                st.showToast(now(), false, "removida das salvas", "removed from saved", .{});
+            },
+            .saved_note => |sn| {
+                defer app.gpa.free(sn.text);
+                if (st.saved.setNote(app.gpa, sn.id, sn.text) catch false) app.persistSaved();
+            },
             .logout => {
                 app.saveSettings();
                 if (!app.opts.qa) discord.forgetToken();
@@ -1062,7 +1105,14 @@ pub const App = struct {
         app.applyImGuiColors(app.customTheme());
     }
 
+    /// Mensagens salvas no arquivo (os prints não gravam nada).
+    fn persistSaved(app: *App) void {
+        if (app.opts.shot == null) saved_ui.persist(&app.st.saved, app.gpa);
+    }
+
     fn onReady(app: *App) void {
+        // As salvas desta conta (o QA e os prints começam sem nenhuma).
+        saved_ui.load(&app.st.saved, app.gpa, app.store.me, !app.opts.qa and app.opts.shot == null);
         // O status escolhido da última vez (o Discord começa em online).
         if (app.st.settings.my_status != 0) app.handle(.{ .set_status = @enumFromInt(@min(app.st.settings.my_status, 3)) });
         if (!app.store.demo) {

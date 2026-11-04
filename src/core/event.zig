@@ -75,6 +75,8 @@ pub const Event = union(enum) {
     profile: struct { user: Id, profile: types.Profile },
     /// Amizade/pedido/bloqueio (`none` = deixou de existir).
     relationship: struct { user: Id, kind: types.Relationship },
+    /// Menções recentes (GET /users/@me/mentions), para a caixa de entrada.
+    recent_mentions: []types.Message,
 };
 
 pub const Connection = enum { connecting, ready, reconnecting, failed, offline };
@@ -103,6 +105,8 @@ pub const Command = union(enum) {
     member_role: struct { guild: Id, user: Id, role: Id, add: bool },
     /// Nosso status (offline = invisível), pelo gateway (op 3).
     set_status: types.Status,
+    /// As 25 menções mais recentes (só leitura), chegam como `recent_mentions`.
+    fetch_mentions,
     shutdown,
 };
 
@@ -161,4 +165,14 @@ pub const Action = union(enum) {
     accept_friend: Id,
     /// Recusa um pedido, cancela o nosso ou desbloqueia.
     remove_relationship: Id,
+    /// Abre/fecha a caixa de entrada (Ctrl+I) e as mensagens salvas.
+    toggle_inbox,
+    toggle_saved,
+    /// Busca (de novo) as menções recentes da aba "Menções".
+    fetch_mentions,
+    /// Mensagens salvas: só locais (nada vai para o Discord).
+    save_message: Id,
+    unsave_message: Id,
+    /// Troca a anotação (texto alocado com o gpa da interface).
+    saved_note: struct { id: Id, text: []const u8 },
 };

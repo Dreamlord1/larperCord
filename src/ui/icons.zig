@@ -82,3 +82,30 @@ pub fn members(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
     c.ImDrawList_AddCircleFilled(dl, v(cx + 5, cy - 3), 2.8, col, 0);
     arc(dl, cx + 6, cy + 6.5, 4.5, pi * 1.25, 2 * pi, col, 2);
 }
+
+/// Caixa de entrada: uma bandeja com a abertura no meio.
+pub fn inbox(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
+    const th: f32 = 1.8;
+    line(dl, cx - 8, cy - 6, cx + 8, cy - 6, col, th);
+    line(dl, cx - 8, cy - 6, cx - 8, cy + 7, col, th);
+    line(dl, cx + 8, cy - 6, cx + 8, cy + 7, col, th);
+    line(dl, cx - 8, cy + 7, cx + 8, cy + 7, col, th);
+    line(dl, cx - 8, cy + 1, cx - 3.5, cy + 1, col, th);
+    line(dl, cx + 3.5, cy + 1, cx + 8, cy + 1, col, th);
+    line(dl, cx - 3.5, cy + 1, cx - 2, cy + 3.5, col, th);
+    line(dl, cx + 2, cy + 3.5, cx + 3.5, cy + 1, col, th);
+    line(dl, cx - 2, cy + 3.5, cx + 2, cy + 3.5, col, th);
+}
+
+/// Marcador de página (mensagens salvas). `filled` = já salva.
+pub fn bookmark(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32, filled: bool) void {
+    const pts = [_]c.ImVec2{ v(cx - 5.5, cy - 8), v(cx + 5.5, cy - 8), v(cx + 5.5, cy + 8), v(cx, cy + 3.5), v(cx - 5.5, cy + 8) };
+    if (filled) {
+        // O recorte de baixo deixa o polígono côncavo: vai em triângulos.
+        c.ImDrawList_AddTriangleFilled(dl, pts[0], pts[1], pts[2], col);
+        c.ImDrawList_AddTriangleFilled(dl, pts[0], pts[2], pts[3], col);
+        c.ImDrawList_AddTriangleFilled(dl, pts[0], pts[3], pts[4], col);
+        return;
+    }
+    c.ImDrawList_AddPolyline(dl, &pts[0], pts.len, col, 1.8, c.ImDrawFlags_Closed);
+}

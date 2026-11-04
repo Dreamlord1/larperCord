@@ -186,6 +186,9 @@ fn shortcuts(ctx: *d.Ctx) void {
         ctx.act(.{ .next_theme = if (shift) -1 else 1 });
     if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_Tab)) ctx.act(.{ .next_tab = if (shift) -1 else 1 });
     if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_W)) ctx.act(.{ .close_tab = ctx.st.tab });
+    // Caixa de entrada e mensagens salvas (ui/inbox.zig, ui/saved.zig).
+    if (ctrl and !shift and c.ImGui_IsKeyPressed(c.ImGuiKey_I) and !ctx.st.settings.open) ctx.act(.toggle_inbox);
+    if (ctrl and shift and c.ImGui_IsKeyPressed(c.ImGuiKey_S) and !ctx.st.settings.open) ctx.act(.toggle_saved);
     if (io.*.KeyAlt) {
         const keys = [_]c_int{ c.ImGuiKey_1, c.ImGuiKey_2, c.ImGuiKey_3, c.ImGuiKey_4, c.ImGuiKey_5, c.ImGuiKey_6, c.ImGuiKey_7, c.ImGuiKey_8, c.ImGuiKey_9 };
         for (keys, 0..) |k, i| if (c.ImGui_IsKeyPressed(k)) ctx.act(.{ .focus_tab = i });

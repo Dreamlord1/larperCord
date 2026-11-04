@@ -57,6 +57,9 @@ pub const ChannelState = struct {
     voice_members: std.ArrayList(Id) = .empty,
     /// Muda sempre que a lista de mensagens muda (invalida offsets na UI).
     version: u32 = 0,
+    /// Marcador de leitura: a última mensagem quando o canal foi lido
+    /// (0 = não foi lido nesta sessão). A caixa de entrada usa.
+    read_id: Id = 0,
 };
 
 /// Lista de membros de um servidor, no formato do Discord: posições fixas
@@ -102,6 +105,11 @@ pub const Store = struct {
     /// Perfis completos já buscados (e a bio já interpretada).
     profiles: std.AutoHashMapUnmanaged(Id, types.Profile) = .empty,
     bios: std.AutoHashMapUnmanaged(Id, []const markdown.Span) = .empty,
+    /// Menções recentes (GET /users/@me/mentions), da mais nova para a mais
+    /// antiga, e quando chegaram (as que vierem depois entram pela conversa).
+    recent_mentions: std.ArrayList(StoredMessage) = .empty,
+    mentions_state: History = .none,
+    mentions_ms: i64 = 0,
 
     pub fn init(gpa: std.mem.Allocator) Store {
         return .{ .gpa = gpa };
@@ -133,6 +141,8 @@ pub const Store = struct {
         var bi = s.bios.valueIterator();
         while (bi.next()) |b| s.gpa.free(b.*);
         s.bios.deinit(s.gpa);
+        for (s.recent_mentions.items) |*m| s.freeMessage(m);
+        s.recent_mentions.deinit(s.gpa);
         var gc = s.guild_channels.valueIterator();
         while (gc.next()) |l| l.deinit(s.gpa);
         s.guild_channels.deinit(s.gpa);
@@ -660,6 +670,25 @@ pub const Store = struct {
                     _ = s.relationships.remove(r.user);
                 } else try s.relationships.put(s.gpa, r.user, r.kind);
             },
+            .recent_mentions => |list| {
+                defer ev_alloc.free(list);
+                for (s.recent_mentions.items) |*m| s.freeMessage(m);
+                s.recent_mentions.clearRetainingCapacity();
+                for (list, 0..) |m, i| {
+                    const sm = s.stored(m) catch |err| {
+                        for (list[i..]) |rest| freeRaw(rest);
+                        return err;
+                    };
+                    try s.recent_mentions.append(s.gpa, sm);
+                }
+                std.mem.sort(StoredMessage, s.recent_mentions.items, {}, struct {
+                    fn lt(_: void, a: StoredMessage, b: StoredMessage) bool {
+                        return a.msg.id > b.msg.id;
+                    }
+                }.lt);
+                s.mentions_state = .loaded;
+                s.mentions_ms = now_ms;
+            },
         }
     }
 
@@ -962,7 +991,17 @@ pub const Store = struct {
     }
 
     pub fn markRead(s: *Store, channel_id: Id) void {
-        if (s.channel(channel_id)) |cs| cs.info.unread = false;
+        const cs = s.channel(channel_id) orelse return;
+        cs.info.unread = false;
+        // Marcador: a última que já veio do servidor (a pendente não tem ID).
+        var i = cs.messages.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (cs.messages.items[i].msg.id != 0) {
+                cs.read_id = @max(cs.read_id, cs.messages.items[i].msg.id);
+                return;
+            }
+        }
     }
 };
 

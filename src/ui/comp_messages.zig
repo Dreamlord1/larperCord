@@ -260,13 +260,16 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     if (cs.older == .idle and msgs.len > 0 and sc.pos >= 0 and sc.pos < r.h * 0.6 + 200) ctx.act(.{ .load_older = ch_id });
     // Pulo para uma mensagem (clique numa resposta).
     if (st.jump != 0) {
-        for (msgs, 0..) |m, i| if (m.msg.id == st.jump) {
+        const found = for (msgs, 0..) |m, i| {
+            if (m.msg.id != st.jump) continue;
             sc.target = std.math.clamp(st.offsets.items[i] - r.h / 3, 0, max_scroll);
             sc.stick_bottom = false;
             flash_id = st.jump;
             flash_until = ctx.now_ms + 1600;
-            break;
-        };
+            break true;
+        } else false;
+        // Veio da caixa de entrada ou das salvas e é mais antiga que o carregado.
+        if (!found) st.showToast(ctx.now_ms, false, "essa mensagem é antiga e não está carregada; role para cima para ver", "that message is old and isn't loaded; scroll up to see it", .{});
         st.jump = 0;
     }
     const hovered = ctx.hovering(r) and ctx.st.popup == .none;

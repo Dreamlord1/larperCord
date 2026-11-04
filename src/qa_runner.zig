@@ -540,6 +540,157 @@ fn toDemoStart(app: *App) void {
 
 const long_text = "Mensagem longa do QA pra testar a quebra de linha: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 😂🔥🎉 `código inline` **negrito** *itálico* ~~riscado~~ ||spoiler|| https://ziglang.org fim.";
 
+// --- Caixa de entrada e mensagens salvas ---------------------------------------
+
+const saved_core = @import("core/saved.zig");
+const saved_ui = @import("ui/saved.zig");
+
+fn inboxOpen(app: *App) bool {
+    return app.st.popup == .inbox and qa.find("inbox-tab:unread") != null;
+}
+fn firstMark(prefix: []const u8, b: []u8) []const u8 {
+    var keys: [1][56]u8 = undefined;
+    var lens: [1]u8 = undefined;
+    if (qa.keysWith(&.{prefix}, &keys, &lens) == 0) return "";
+    const k = keys[0][0..lens[0]];
+    @memcpy(b[0..k.len], k);
+    return b[0..k.len];
+}
+fn idOf(name: []const u8) Id {
+    const colon = std.mem.lastIndexOfScalar(u8, name, ':') orelse return 0;
+    return std.fmt.parseInt(Id, name[colon + 1 ..], 10) catch 0;
+}
+fn inboxHasPreview(_: *App) bool {
+    var b: [64]u8 = undefined;
+    return firstMark("inbox-msg:", &b).len > 0;
+}
+/// A menção no fim do #anúncios do primeiro servidor (demonstração).
+fn announcement(app: *App) ?Id {
+    const cs = app.store.channel(ch(2)) orelse return null;
+    var i = cs.messages.items.len;
+    while (i > 0) {
+        i -= 1;
+        const m = &cs.messages.items[i];
+        if (m.msg.author == 1001 and std.mem.indexOf(u8, m.msg.content, "<@1000>") != null) return m.msg.id;
+    }
+    return null;
+}
+fn inboxHasAnnouncement(app: *App) bool {
+    const id = announcement(app) orelse return false;
+    var b: [64]u8 = undefined;
+    return qa.find(markFmt(&b, "inbox-msg:{d}", .{id})) != null and qa.find(markFmt(&b, "inbox-open:{d}", .{ch(2)})) != null;
+}
+fn tInboxAnnouncement(app: *App, b: []u8) []const u8 {
+    const id = announcement(app) orelse return "";
+    return markFmt(b, "inbox-msg:{d}", .{id});
+}
+fn noOldToast(app: *App) bool {
+    return std.mem.indexOf(u8, app.st.toast.text(), "carregada") == null;
+}
+fn jumpedToMention(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return cs.info.id == ch(2) and cs.history == .loaded and app.st.popup == .none and app.st.jump == 0 and !cs.info.unread and noOldToast(app);
+}
+fn announcementGone(_: *App) bool {
+    var b: [64]u8 = undefined;
+    return qa.find(markFmt(&b, "inbox-open:{d}", .{ch(2)})) == null and qa.find("inbox-tab:unread") != null;
+}
+fn tInboxReadFirst(_: *App, b: []u8) []const u8 {
+    const k = firstMark("inbox-read:", b);
+    saved_id = idOf(k);
+    return k;
+}
+fn firstGroupRead(app: *App) bool {
+    if (app.store.channel(saved_id)) |cs| return !cs.info.unread;
+    if (app.store.guild(saved_id)) |g| return g.mentions == 0;
+    return false;
+}
+fn inboxEmpty(app: *App) bool {
+    if (qa.find("inbox-empty") == null or app.st.popup != .inbox) return false;
+    var it = app.store.channels.valueIterator();
+    while (it.next()) |cs| if (cs.*.info.guild == 0 and cs.*.info.unread) return false;
+    for (app.store.guilds.items) |g| if (g.mentions > 0) return false;
+    return true;
+}
+fn mentionsShown(app: *App) bool {
+    var b: [64]u8 = undefined;
+    return app.store.mentions_state == .loaded and app.store.recent_mentions.items.len > 0 and firstMark("inbox-mention:", &b).len > 0;
+}
+fn tFirstMention(_: *App, b: []u8) []const u8 {
+    const k = firstMark("inbox-mention:", b);
+    saved_id = idOf(k);
+    return k;
+}
+fn oldMentionOpened(app: *App) bool {
+    const cs = active(app) orelse return false;
+    const want = for (app.store.recent_mentions.items) |m| {
+        if (m.msg.id == saved_id) break m.msg.channel;
+    } else return false;
+    return cs.info.id == want and cs.history == .loaded and app.st.popup == .none and app.st.jump == 0 and !noOldToast(app);
+}
+fn rememberOther(app: *App) void {
+    if (lastOther(app)) |m| saved_id = m.msg.id;
+}
+fn tHoverSaved(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "msg:{d}", .{saved_id});
+}
+fn oneSaved(app: *App) bool {
+    return app.st.saved.items.items.len == 1 and app.st.saved.find(saved_id) != null;
+}
+fn noneSaved(app: *App) bool {
+    return app.st.saved.items.items.len == 0;
+}
+fn savedOpen(app: *App) bool {
+    var b: [64]u8 = undefined;
+    return app.st.popup == .saved and qa.find(markFmt(&b, "saved-open:{d}", .{saved_id})) != null;
+}
+fn tSavedNote(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "saved-note:{d}", .{saved_id});
+}
+fn tSavedOpen(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "saved-open:{d}", .{saved_id});
+}
+fn tSavedRemove(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "saved-remove:{d}", .{saved_id});
+}
+fn noteEditing(app: *App) bool {
+    return saved_ui.isEditing() and app.st.popup == .saved and qa.find("saved-note-input") != null;
+}
+fn noteCancelled(app: *App) bool {
+    const it = app.st.saved.find(saved_id) orelse return false;
+    return !saved_ui.isEditing() and app.st.popup == .saved and std.mem.eql(u8, it.note, qa_note);
+}
+/// O que está gravado no arquivo de salvas da conta (qa-out/).
+fn savedOnDisk(app: *App) ?saved_core.List {
+    var buf: [256]u8 = undefined;
+    const p = saved_ui.filePath(&buf, app.store.me) orelse return null;
+    var size: usize = 0;
+    const data = c.SDL_LoadFile(p.ptr, &size) orelse return null;
+    defer c.SDL_free(data);
+    var l: saved_core.List = .{};
+    l.read(app.gpa, @as([*]const u8, @ptrCast(data))[0..size]) catch return null;
+    return l;
+}
+const qa_note = "lembrar de responder";
+fn noteSaved(app: *App) bool {
+    const it = app.st.saved.find(saved_id) orelse return false;
+    if (saved_ui.isEditing() or !std.mem.eql(u8, it.note, qa_note)) return false;
+    var disk = savedOnDisk(app) orelse return false;
+    defer disk.deinit(app.gpa);
+    const f = disk.find(saved_id) orelse return false;
+    return std.mem.eql(u8, f.note, qa_note) and f.channel == ch(4) and f.content.len > 0;
+}
+fn jumpedToSaved(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return cs.info.id == ch(4) and app.st.popup == .none and app.st.jump == 0 and noOldToast(app);
+}
+fn savedEmptyOnDisk(app: *App) bool {
+    if (app.st.saved.items.items.len != 0 or qa.find("saved-empty") == null) return false;
+    var disk = savedOnDisk(app) orelse return false;
+    defer disk.deinit(app.gpa);
+    return disk.items.items.len == 0;
+}
+
 const ops = [_]Op{
     s("início"),
     expect("app conecta e carrega o histórico", ready),
@@ -834,12 +985,80 @@ const ops = [_]Op{
     click("jump-bottom"),
     expect("o botão de ir ao fim volta para a última mensagem", atBottom),
 
+    s("caixa de entrada"),
+    click("guild:500000"),
+    click("channel:500005"),
+    click("header-inbox"),
+    expect("o botão do cabeçalho abre a caixa de entrada", inboxOpen),
+    .{ .expect = .{ .name = "DMs e menções não lidas aparecem com prévia", .check = inboxHasPreview, .timeout_ms = 3000 } },
+    .{ .expect = .{ .name = "a menção no #anúncios (nunca aberto) está na lista", .check = inboxHasAnnouncement, .timeout_ms = 3000 } },
+    .{ .shot = "40-caixa-de-entrada" },
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tInboxAnnouncement } },
+    .{ .expect = .{ .name = "clicar na menção abre o canal e rola até ela", .check = jumpedToMention, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_I),
+    expect("Ctrl+I abre a caixa de entrada", inboxOpen),
+    expect("o canal lido sai da lista", announcementGone),
+    .{ .click = .{ .dyn = tInboxReadFirst } },
+    expect("✓ marca um canal como lido", firstGroupRead),
+    click("inbox-readall"),
+    expect("marcar tudo como lido esvazia a caixa", inboxEmpty),
+    .{ .shot = "41-caixa-vazia" },
+    click("inbox-tab:mentions"),
+    .{ .expect = .{ .name = "aba Menções traz as menções recentes", .check = mentionsShown, .timeout_ms = 3000 } },
+    .{ .shot = "42-mencoes" },
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tFirstMention } },
+    .{ .expect = .{ .name = "menção antiga abre o canal e avisa que não está carregada", .check = oldMentionOpened, .timeout_ms = 3000 } },
+
+    s("mensagens salvas"),
+    click("guild:500000"),
+    click("channel:500005"),
+    .{ .run = rememberOther },
+    .{ .rclick = .{ .dyn = tHoverSaved } },
+    click("menu:Salvar mensagem"),
+    expect("salvar pelo menu do botão direito", oneSaved),
+    .{ .key = .{ .key = c.ImGuiKey_S, .ctrl = true, .shift = true } },
+    expect("Ctrl+Shift+S abre as salvas", savedOpen),
+    .{ .shot = "43-salvas" },
+    .{ .click = .{ .dyn = tSavedNote } },
+    expect("clicar em \"Adicionar anotação\" abre a edição", noteEditing),
+    .{ .text = qa_note },
+    key(c.ImGuiKey_Enter),
+    expect("Enter salva a anotação (e ela vai para o arquivo)", noteSaved),
+    .{ .shot = "44-salvas-anotacao" },
+    .{ .click = .{ .dyn = tSavedNote } },
+    expect("editar a anotação de novo", noteEditing),
+    .{ .text = " (rascunho)" },
+    key(c.ImGuiKey_Escape),
+    expect("Esc cancela a edição sem fechar a tela", noteCancelled),
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tSavedOpen } },
+    expect("Ir para a mensagem abre o canal nela", jumpedToSaved),
+    click("header-saved"),
+    expect("o botão do cabeçalho abre as salvas", savedOpen),
+    .{ .click = .{ .dyn = tSavedRemove } },
+    expect("Remover tira das salvas e do arquivo", savedEmptyOnDisk),
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha as salvas", popupClosed),
+    .{ .rclick = .{ .dyn = tHoverSaved } },
+    click("menu:Salvar mensagem"),
+    expect("salvar de novo", oneSaved),
+    .{ .rclick = .{ .dyn = tHoverSaved } },
+    click("menu:Remover dos salvos"),
+    expect("o menu de uma salva oferece remover", noneSaved),
+
     s("clicar em tudo: servidor"),
     .{ .run = toClassico },
     .{ .wait = 200 },
     click("guild:500000"),
     .{ .wait = 300 },
-    .{ .sweep = &.{ "guild:", "folder:", "category:", "channel:", "member:", "voice-member:", "user-btn:", "header-search", "header-members", "tab:", "tab-plus", "status-theme", "chip:", "chip-add:", "att:", "me", "composer-emoji", "guild-header" } },
+    .{ .sweep = &.{ "guild:", "folder:", "category:", "channel:", "member:", "voice-member:", "user-btn:", "header-search", "header-members", "header-inbox", "header-saved", "tab:", "tab-plus", "status-theme", "chip:", "chip-add:", "att:", "me", "composer-emoji", "guild-header" } },
+    s("clicar em tudo: caixa de entrada"),
+    ctrl(c.ImGuiKey_I),
+    .{ .wait = 200 },
+    .{ .sweep = &.{"inbox-tab:"} },
+    key(c.ImGuiKey_Escape),
     s("clicar em tudo: mensagens diretas"),
     click("guild:0"),
     click("friends"),
@@ -1031,6 +1250,11 @@ const ops_theme = [_]Op{
     .{ .text = "zig" },
     key(c.ImGuiKey_Enter),
     expect("paleta abre o canal", onZig),
+    ctrl(c.ImGuiKey_I),
+    expect("Ctrl+I abre a caixa de entrada", inboxOpen),
+    .{ .shot = "tema-caixa" },
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha a caixa de entrada", popupClosed),
     ctrl(c.ImGuiKey_Comma),
     expect("Ctrl+, abre as configurações", settingsOpen),
     click("settings:Aparência"),
@@ -1346,7 +1570,7 @@ pub const Runner = struct {
         if (std.mem.startsWith(u8, name, "friends-tab:")) return std.mem.eql(u8, name["friends-tab:".len..], @tagName(@as(enum { online, all, pending, blocked }, @enumFromInt(st.friends_tab))));
         if (std.mem.eql(u8, name, "friends")) return st.friends;
         // Opções de escolha única: clicar na já escolhida não muda nada.
-        for ([_][]const u8{ "seg:", "radio:", "accent:", "theme-card:", "settings:" }) |p| if (std.mem.startsWith(u8, name, p)) return true;
+        for ([_][]const u8{ "seg:", "radio:", "accent:", "theme-card:", "settings:", "inbox-tab:" }) |p| if (std.mem.startsWith(u8, name, p)) return true;
         return false;
     }
 

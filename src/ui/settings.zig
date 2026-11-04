@@ -544,6 +544,8 @@ fn page(p: *Page, previews: []const Preview) void {
             p.keyRow(i18n.tr("Aba anterior", "Previous tab"), "Ctrl+Shift+Tab");
             p.keyRow(i18n.tr("Ir para a aba N", "Go to tab N"), "Alt+1…9");
             p.keyRow(i18n.tr("Fechar aba", "Close tab"), "Ctrl+W");
+            p.keyRow(i18n.tr("Caixa de entrada", "Inbox"), "Ctrl+I");
+            p.keyRow(i18n.tr("Mensagens salvas", "Saved messages"), "Ctrl+Shift+S");
             p.keyRow(i18n.tr("Abrir canal em nova aba", "Open channel in a new tab"), i18n.tr("Ctrl+Clique", "Ctrl+Click"));
             p.keyRow(i18n.tr("Fechar aba com o mouse", "Close tab with the mouse"), i18n.tr("Botão do meio", "Middle click"));
         },
