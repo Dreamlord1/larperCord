@@ -1622,6 +1622,10 @@ pub const App = struct {
                 const tf = c.SDL_GetTicksNS();
                 root.frame(&ctx, &app.placed, app.themes.previews.items);
                 plugin_host.pollKeys(app);
+                // Um clique pode ter mexido no Store direto (marcar como não lida
+                // pelo menu): a caixa de entrada confere no próximo quadro.
+                const rel = &app.io.*.MouseReleased;
+                if (rel[0] or rel[1] or rel[2]) app.store.rev +%= 1;
                 if (app.opts.stats) prof_frame += (c.SDL_GetTicksNS() - tf) / 1000;
             }
             if (app.login.visible()) {

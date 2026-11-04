@@ -19,12 +19,15 @@ const Id = types.Id;
 
 var model: core.Model = .{};
 var mentions: core.Mentions = .{};
+/// Quantas vezes a aba "Não lidas" foi refeita (o QA confere que parada não refaz).
+pub var rebuilds: u32 = 0;
 
 fn refresh(ctx: *d.Ctx) void {
     const sig = core.signature(ctx.store, ctx.st.muted_channels.count());
     if (model.built and sig == model.sig) return;
     core.build(ctx.store, &ctx.st.muted_channels, &model);
     model.sig = sig;
+    rebuilds += 1;
 }
 
 /// Quantos canais/servidores estão na aba "Não lidas" (o número do botão).

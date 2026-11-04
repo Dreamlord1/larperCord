@@ -221,6 +221,8 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     const top_h: f32 = 52;
     var total: f32 = 8 + top_h;
     const filt = &st.filtros;
+    // Sem ignorados nem filtro (o comum), nada fica recolhido: nem pergunta.
+    const any_hide = filt.ignored.count() > 0 or filt.filter.items.len > 0;
     var prev_hidden = false;
     for (msgs, 0..) |*m, i| {
         var flags: u8 = 0;
@@ -238,7 +240,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         if (m.msg.system != .none) flags &= ~(flag_group | flag_reply);
         // Depois de uma recolhida (ignorado/filtro), começa um grupo novo.
         if (prev_hidden) flags |= flag_group;
-        const hide = filt.hides(m, ctx.store.me);
+        const hide = any_hide and filt.hides(m, ctx.store.me);
         prev_hidden = hide;
         if (hide) flags |= flag_hidden;
         st.groups.items[i] = flags;

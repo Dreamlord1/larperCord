@@ -48,7 +48,8 @@ pub const Filtros = struct {
     focus_until: i64 = 0,
     /// Canais que teriam ficado "não lidos" durante o foco.
     focus_quiet: std.AutoHashMapUnmanaged(Id, void) = .empty,
-    /// Muda a cada alteração (invalida o cache das mensagens; o QA confere).
+    /// Muda quando as listas ou o foco mudam (invalida o cache `flt` de todas
+    /// as mensagens; o QA confere). Contadores e "mostrar" não mexem nele.
     gen: u32 = 1,
     /// Notificações que saíram (o QA confere; o notify-send não roda nele).
     notified: u32 = 0,
@@ -71,7 +72,6 @@ pub const Filtros = struct {
         f.revealed.clearRetainingCapacity();
         f.mentions.clearRetainingCapacity();
         f.focus_quiet.clearRetainingCapacity();
-        f.changed(false);
     }
 
     fn changed(f: *Filtros, persist: bool) void {
@@ -127,7 +127,6 @@ pub const Filtros = struct {
 
     pub fn reveal(f: *Filtros, gpa: std.mem.Allocator, msg: Id) void {
         f.revealed.put(gpa, msg, {}) catch return;
-        f.changed(false);
     }
 
     /// Palavras de alerta/filtro que a mensagem contém (com cache: só
@@ -183,7 +182,6 @@ pub const Filtros = struct {
         if (store.channel(ch)) |cs| if (cs.info.guild != 0) if (store.guild(cs.info.guild)) |g| {
             g.mentions +|= 1;
         };
-        f.changed(false);
     }
 
     /// Canal lido: zera o contador (e tira a parte dele do servidor).
@@ -193,7 +191,6 @@ pub const Filtros = struct {
         if (store.channel(ch)) |cs| if (cs.info.guild != 0) if (store.guild(cs.info.guild)) |g| {
             g.mentions -|= kv.value;
         };
-        f.changed(false);
     }
 
     // --- Modo foco -------------------------------------------------------------
@@ -214,6 +211,7 @@ pub const Filtros = struct {
         while (it.next()) |ch| if (store.channel(ch.*)) |cs| {
             cs.info.unread = true;
         };
+        store.rev +%= 1;
         f.focus_quiet.clearRetainingCapacity();
         f.focus_until = 0;
         f.changed(true);
@@ -230,6 +228,7 @@ pub const Filtros = struct {
     pub fn quiet(f: *Filtros, gpa: std.mem.Allocator, store: *store_mod.Store, ch: Id) void {
         const cs = store.channel(ch) orelse return;
         cs.info.unread = false;
+        store.rev +%= 1;
         f.focus_quiet.put(gpa, ch, {}) catch {};
     }
 

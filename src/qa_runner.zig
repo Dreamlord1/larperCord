@@ -1410,6 +1410,30 @@ fn firstGroupRead(app: *App) bool {
     if (app.store.guild(saved_id)) |g| return g.mentions == 0;
     return false;
 }
+var inbox_builds: u32 = 0;
+fn inboxMarkBuilds(_: *App) void {
+    inbox_builds = @import("ui/inbox.zig").rebuilds;
+}
+fn inboxIdle(_: *App) bool {
+    return @import("ui/inbox.zig").rebuilds == inbox_builds;
+}
+/// Como o menu "Marcar como não lida" faz: direto no Store, sem evento.
+var unread_dm: Id = 0;
+fn markDmUnreadRaw(app: *App) void {
+    var it = app.store.channels.valueIterator();
+    while (it.next()) |cs| {
+        if (cs.*.info.guild != 0 or cs.*.info.kind != .text) continue;
+        for (cs.*.messages.items) |m| if (m.msg.id != 0 and m.msg.author != app.store.me) {
+            cs.*.info.unread = true;
+            unread_dm = cs.*.info.id;
+            return;
+        };
+    }
+}
+fn dmBackInInbox(_: *App) bool {
+    var b: [48]u8 = undefined;
+    return unread_dm != 0 and qa.find(markFmt(&b, "inbox-open:{d}", .{unread_dm})) != null;
+}
 fn inboxEmpty(app: *App) bool {
     if (qa.find("inbox-empty") == null or app.st.popup != .inbox) return false;
     var it = app.store.channels.valueIterator();
@@ -1961,6 +1985,9 @@ const ops = [_]Op{
     expect("o botão do cabeçalho abre a caixa de entrada", inboxOpen),
     .{ .expect = .{ .name = "DMs e menções não lidas aparecem com prévia", .check = inboxHasPreview, .timeout_ms = 3000 } },
     .{ .expect = .{ .name = "a menção no #anúncios (nunca aberto) está na lista", .check = inboxHasAnnouncement, .timeout_ms = 3000 } },
+    .{ .run = inboxMarkBuilds },
+    .{ .wait = 300 },
+    expect("parada, a caixa de entrada não se refaz a cada quadro", inboxIdle),
     .{ .shot = "40-caixa-de-entrada" },
     .{ .run = clearToast },
     .{ .click = .{ .dyn = tInboxAnnouncement } },
@@ -1973,6 +2000,11 @@ const ops = [_]Op{
     click("inbox-readall"),
     expect("marcar tudo como lido esvazia a caixa", inboxEmpty),
     .{ .shot = "41-caixa-vazia" },
+    .{ .run = markDmUnreadRaw },
+    click("inbox-tab:unread"),
+    expect("DM marcada como não lida pelo menu (direto no Store) volta para a caixa", dmBackInInbox),
+    click("inbox-readall"),
+    expect("e sai de novo ao marcar tudo como lido", inboxEmpty),
     click("inbox-tab:mentions"),
     .{ .expect = .{ .name = "aba Menções traz as menções recentes", .check = mentionsShown, .timeout_ms = 3000 } },
     .{ .shot = "42-mencoes" },
@@ -2659,6 +2691,8 @@ pub const Runner = struct {
         h.update(std.mem.asBytes(&@as(u32, app.store.relationships.count())));
         // Alertas, filtro, ignorados e modo foco (core/filtros.zig).
         h.update(std.mem.asBytes(&app.st.filtros.gen));
+        h.update(std.mem.asBytes(&@as(u32, app.st.filtros.revealed.count())));
+        h.update(std.mem.asBytes(&@as(u32, app.st.filtros.mentions.count())));
         // Opções do tema e cargos de quem está com o cartão aberto.
         const th = app.themes.theme_();
         for (th.options) |o| h.update(&.{@intFromBool(th.option(o.name) orelse o.default)});

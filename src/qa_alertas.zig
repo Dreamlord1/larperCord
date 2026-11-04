@@ -126,6 +126,14 @@ fn tShowAna(_: *App, b: []u8) []const u8 {
 fn anaRevealed(app: *App) bool {
     return app.st.filtros.revealed.contains(alert_id) and qa.find(mk(&buf1, "msgtext:{d}", .{alert_id})) != null;
 }
+var gen0: u32 = 0;
+fn markGen(app: *App) void {
+    gen0 = app.st.filtros.gen;
+}
+/// Mostrar uma, contar menção ou ler um canal não refaz o cache de todas.
+fn genKept(app: *App) bool {
+    return app.st.filtros.gen == gen0;
+}
 
 // --- Filtro ---------------------------------------------------------------------------
 
@@ -281,8 +289,10 @@ pub const ops = [_]Op{
     .{ .shot = "42-ignorado" },
     .{ .run = injectFromIgnored },
     expect("quem foi ignorado não notifica nem conta", ignoredSilent),
+    .{ .run = markGen },
     .{ .click = .{ .dyn = tShowAna } },
     expect("\"mostrar\" revela a mensagem recolhida", anaRevealed),
+    expect("\"mostrar\" não refaz o cache das palavras de todas as mensagens", genKept),
 
     s("filtro de palavras"),
     click("user-btn:2"),
