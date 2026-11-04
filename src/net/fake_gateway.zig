@@ -39,6 +39,8 @@ pub const Gateway = struct {
     /// Começo da sessão: o histórico de um canal é sempre o mesmo dentro
     /// dela (mesmos IDs, como no Discord), mesmo pedido de novo.
     epoch_ms: i64 = 0,
+    /// Threads e posts da demonstração: o que cada uma tem de conversa.
+    threads: std.AutoHashMapUnmanaged(Id, DemoThread) = .empty,
 
     pub fn start(g: *Gateway) !void {
         g.thread = c.SDL_CreateThread(threadMain, "gateway", g) orelse return error.SdlThread;
@@ -68,10 +70,16 @@ pub const Gateway = struct {
             const rs = try alloc.alloc(types.Role, 1);
             rs[0] = .{ .id = guildId(1), .guild = guildId(1), .name = try alloc.dupe(u8, "@everyone"), .permissions = types.perm.view_channel | types.perm.send_messages | types.perm.read_history | types.perm.connect };
             g.emit(.{ .roles = .{ .guild = guildId(1), .roles = rs } });
+            // Igual no servidor das threads sem permissão: nada de responder
+            // nelas nem de criar novas (ver `demoThreads`).
+            const rs2 = try alloc.alloc(types.Role, 1);
+            rs2[0] = .{ .id = guildId(locked_guild), .guild = guildId(locked_guild), .name = try alloc.dupe(u8, "@everyone"), .permissions = rs[0].permissions };
+            g.emit(.{ .roles = .{ .guild = guildId(locked_guild), .roles = rs2 } });
         }
         for (relations, 0..) |rel, i| g.emit(.{ .relationship = .{ .user = rel.user, .kind = rel.kind, .since_ms = nowMs() - @as(i64, @intCast(i + 1)) * 97 * 86_400_000 } });
         try g.demoActivities();
         g.emit(.{ .guild_folders = try demoFolders() });
+        try g.demoThreads();
         g.emit(.{ .status = .ready });
         g.next_live_ms = nowMs() + 6000;
         if (c.SDL_getenv("LARPER_FLOOD")) |f| {
@@ -110,6 +118,48 @@ pub const Gateway = struct {
                 .fetch_history => |ch| {
                     g.hot_channel = ch;
                     try g.history_replies.append(alloc, .{ .at_ms = nowMs() + 140, .channel = ch });
+                },
+                .fetch_threads => |ft| try g.threadsPage(ft.channel, ft.guild, ft.archived, ft.offset),
+                .create_thread => |ct| {
+                    // Como no Discord: a thread tem o ID da mensagem que a abriu.
+                    try g.threads.put(alloc, ct.message, .{ .count = 0, .members = 1 });
+                    g.emit(.{ .channel_upsert = .{
+                        .id = ct.message,
+                        .guild = guildOfChannel(ct.channel),
+                        .parent = ct.channel,
+                        .name = ct.name,
+                        .topic = try alloc.dupe(u8, ""),
+                        .thread = .{ .owner = me_id, .joined = true, .joined_known = true, .member_count = 1 },
+                    } });
+                    g.emit(.{ .thread_open = ct.message });
+                },
+                .create_post => |cp| {
+                    const id = types.makeSnowflake(nowMs(), g.rng.random().int(u22));
+                    try g.threads.put(alloc, id, .{ .count = 0, .members = 1 });
+                    g.emit(.{ .channel_upsert = .{
+                        .id = id,
+                        .guild = guildOfChannel(cp.forum),
+                        .parent = cp.forum,
+                        .name = cp.name,
+                        .topic = try alloc.dupe(u8, ""),
+                        .thread = .{ .owner = me_id, .joined = true, .joined_known = true, .member_count = 1, .tags = cp.tags },
+                    } });
+                    g.emit(.{ .message_create = .{ .id = id, .channel = id, .author = me_id, .timestamp = @divTrunc(nowMs(), 1000), .content = cp.content } });
+                    g.emit(.{ .thread_open = id });
+                },
+                .join_thread => |jt| {
+                    g.emit(.{ .thread_joined = .{ .thread = jt.thread, .joined = jt.join } });
+                    const list = try alloc.alloc(Id, 1);
+                    list[0] = me_id;
+                    g.emit(.{ .thread_members = if (jt.join) .{ .thread = jt.thread, .added = list } else .{ .thread = jt.thread, .removed = list } });
+                },
+                .fetch_thread_members => |tid| {
+                    const n: usize = if (g.threads.get(tid)) |t| t.members else 0;
+                    // Sem ninguém na lista: a interface usa a do canal pai.
+                    if (n == 0) continue;
+                    const list = try alloc.alloc(Id, n);
+                    for (list, 0..) |*u, i| u.* = users[1 + (i + tid % 5) % 7].id;
+                    g.emit(.{ .thread_members = .{ .thread = tid, .replace = true, .added = list } });
                 },
                 .typing => {},
                 .fetch_older => |o| {
@@ -175,6 +225,103 @@ pub const Gateway = struct {
             cmds.clearRetainingCapacity();
             try g.tick(nowMs());
         }
+    }
+
+    /// Threads ativas, como o Discord manda ao abrir o servidor: duas abertas
+    /// de mensagens do #zig (o cartão aparece nelas) e uma solta; no servidor
+    /// sem permissões, uma no #geral (sem poder responder) e uma no #bugs
+    /// (trancado, porque o pai é).
+    fn demoThreads(g: *Gateway) !void {
+        const zig = channelId(thread_guild, 9);
+        const msgs = try buildHistory(zig, g.epoch_ms);
+        defer freeMessages(msgs);
+        const n = msgs.len;
+        const specs = [_]struct { id: Id, name: []const u8, en: []const u8, parent: Id, guild: usize, count: u32, members: u8, joined: bool, unread: bool, first: ?*const types.Message = null, secs: i64 = 0 }{
+            .{ .id = msgs[n - 8].id, .name = "quem dá free nisso?", .en = "who frees this?", .parent = zig, .guild = thread_guild, .count = 7, .members = 3, .joined = true, .unread = false, .first = &msgs[n - 8] },
+            .{ .id = msgs[n - 34].id, .name = "migração para o zig 0.17", .en = "moving to zig 0.17", .parent = zig, .guild = thread_guild, .count = 12, .members = 0, .joined = false, .unread = true, .first = &msgs[n - 34] },
+            .{ .id = 0, .name = "benchmarks do cliente", .en = "client benchmarks", .parent = zig, .guild = thread_guild, .count = 4, .members = 2, .joined = false, .unread = false, .secs = 3 * 3600 },
+            .{ .id = 0, .name = "dúvida sobre o tema", .en = "question about the theme", .parent = channelId(locked_guild, 4), .guild = locked_guild, .count = 5, .members = 2, .joined = false, .unread = false, .secs = 2 * 3600 },
+            .{ .id = 0, .name = "bug secreto", .en = "secret bug", .parent = channelId(locked_guild, 11), .guild = locked_guild, .count = 2, .members = 0, .joined = false, .unread = false, .secs = 5 * 3600 },
+        };
+        for ([_]usize{ thread_guild, locked_guild }) |gi| {
+            var list: std.ArrayList(types.Channel) = .empty;
+            var joined: std.ArrayList(Id) = .empty;
+            var parents: std.ArrayList(Id) = .empty;
+            for (specs, 0..) |t, si| {
+                if (t.guild != gi) continue;
+                const id = if (t.id != 0) t.id else types.makeSnowflake(g.epoch_ms - t.secs * 1000, 0x2f0000 + si);
+                var rec: DemoThread = .{ .count = t.count, .members = t.members };
+                if (t.first) |m| {
+                    rec.first_author = m.author;
+                    rec.first_text = try alloc.dupe(u8, m.content);
+                }
+                try g.threads.put(alloc, id, rec);
+                try list.append(alloc, .{
+                    .id = id,
+                    .guild = guildId(gi),
+                    .parent = t.parent,
+                    .name = try alloc.dupe(u8, pick(t.name, t.en)),
+                    .topic = try alloc.dupe(u8, ""),
+                    .unread = t.unread,
+                    .thread = .{ .owner = 1001, .joined = t.joined, .joined_known = true, .message_count = t.count, .member_count = t.members, .last_message = types.makeSnowflake(g.epoch_ms - 240_000 - @as(i64, @intCast(si)) * 700_000, 0x2e0000 + si) },
+                });
+                if (std.mem.indexOfScalar(Id, parents.items, t.parent) == null) try parents.append(alloc, t.parent);
+                if (t.joined) try joined.append(alloc, id);
+            }
+            g.emit(.{ .thread_list_sync = .{ .guild = guildId(gi), .parents = try parents.toOwnedSlice(alloc), .threads = try list.toOwnedSlice(alloc), .joined = try joined.toOwnedSlice(alloc) } });
+        }
+    }
+
+    /// Uma página de threads de um canal da demonstração: nos fóruns, os
+    /// posts; num canal de texto, só as arquivadas (as ativas vieram no sync).
+    fn threadsPage(g: *Gateway, channel: Id, guild: Id, archived: bool, offset: u32) !void {
+        const forum = isDemoForum(channel);
+        const total: u32 = if (forum) (if (archived) @as(u32, 8) else 60) else if (archived and channel == channelId(thread_guild, 9)) 6 else 0;
+        const page: u32 = if (archived) 50 else 25;
+        const first = @min(offset, total);
+        const last = @min(first + page, total);
+        const threads = try alloc.alloc(types.Channel, last - first);
+        const previews = try alloc.alloc(types.ThreadPreview, last - first);
+        var joined: std.ArrayList(Id) = .empty;
+        const tags = demoTags(channel);
+        for (first..last) |i| {
+            const post = demo_posts[i % demo_posts.len];
+            // Um post a cada 7 h para trás; as arquivadas, depois de todas as ativas.
+            const age: i64 = @intCast((i + (if (archived) @as(usize, 80) else 0)) * 7 + 1);
+            const t_ms = g.epoch_ms - age * 3_600_000;
+            const id = types.makeSnowflake(t_ms, 0x100000 + (channel % 512) * 256 + i + (if (archived) @as(usize, 128) else 0));
+            const replies: u32 = @intCast((i * 13 + 3) % 40);
+            const author = users[1 + (i * 3) % 7].id;
+            try g.threads.put(alloc, id, .{ .count = @min(replies, 12), .members = @intCast(i % 4), .first_author = author, .first_text = try alloc.dupe(u8, pick(post.body, post.body_en)) });
+            var applied: []Id = &.{};
+            if (forum) {
+                applied = try alloc.alloc(Id, 1 + i % 2);
+                for (applied, 0..) |*a, k| a.* = tags[(i + k) % tags.len];
+            }
+            const title = pick(post.title, post.title_en);
+            threads[i - first] = .{
+                .id = id,
+                .guild = guild,
+                .parent = channel,
+                .name = if (i < demo_posts.len) try alloc.dupe(u8, title) else try std.fmt.allocPrint(alloc, "{s} ({d})", .{ title, i / demo_posts.len + 1 }),
+                .topic = try alloc.dupe(u8, ""),
+                .thread = .{
+                    .owner = author,
+                    .archived = archived,
+                    .locked = archived and i == 2,
+                    .joined = !archived and i % 9 == 4,
+                    .joined_known = true,
+                    .message_count = replies,
+                    .member_count = @intCast(i % 4 + 1),
+                    .last_message = types.makeSnowflake(t_ms + @as(i64, @intCast((i * 37) % 300)) * 60_000, 0x80000 + i),
+                    .archive_ts = if (archived) @divTrunc(t_ms, 1000) else 0,
+                    .tags = applied,
+                },
+            };
+            previews[i - first] = .{ .thread = id, .author = author, .text = try alloc.dupe(u8, pick(post.body, post.body_en)) };
+            if (!archived and i % 9 == 4) try joined.append(alloc, id);
+        }
+        g.emit(.{ .threads_page = .{ .channel = channel, .archived = archived, .threads = threads, .previews = previews, .joined = try joined.toOwnedSlice(alloc), .more = last < total } });
     }
 
     /// Jogos da demonstração (com tempo de jogo, para o cartão de perfil).
@@ -283,6 +430,12 @@ pub const Gateway = struct {
         while (i < g.history_replies.items.len) {
             const r = g.history_replies.items[i];
             if (r.at_ms <= now) {
+                // Thread ou post: uma conversa curta, que tem começo.
+                if (g.threads.get(r.channel)) |t| {
+                    g.emit(.{ .history = .{ .channel = r.channel, .messages = try buildThreadHistory(r.channel, t, g.epoch_ms), .more = false } });
+                    _ = g.history_replies.orderedRemove(i);
+                    continue;
+                }
                 const msgs = try buildHistory(r.channel, g.epoch_ms);
                 g.emit(.{ .history = .{ .channel = r.channel, .messages = msgs, .more = msgs.len > 0 } });
                 // Algumas reações nas mensagens recentes.
@@ -426,6 +579,69 @@ const guilds = [_]GuildSeed{
 
 const ChannelSeed = struct { name: []const u8, kind: types.ChannelKind = .text, unread: bool = false, topic: []const u8 = "", name_en: ?[]const u8 = null, topic_en: ?[]const u8 = null };
 
+/// O que o gateway falso sabe de uma thread para montar a conversa dela.
+const DemoThread = struct {
+    count: u32,
+    /// Quantas pessoas estão nela (0 = a lista de membros cai na do pai).
+    members: u8,
+    /// A primeira mensagem: a que abriu a thread, ou o texto do post.
+    first_author: Id = 0,
+    first_text: []const u8 = "",
+};
+
+/// Fórum e canal de mídia entram na categoria "geral", depois do #música, com
+/// IDs novos fora da faixa do `channel_tree`: nenhum canal antigo muda de ID.
+pub fn forumId(guild_index: usize) Id {
+    return channelId(guild_index, 30);
+}
+pub fn mediaId(guild_index: usize) Id {
+    return channelId(guild_index, 31);
+}
+/// Threads e fóruns ficam em servidores próprios ("Faculdade 2026" e "Lo-fi &
+/// café"): os dois primeiros seguem iguais, sem linhas a mais na lista.
+pub const thread_guild = 5;
+/// Aqui só vale o @everyone: as threads herdam a falta de permissão.
+pub const locked_guild = 7;
+
+fn isDemoForum(ch: Id) bool {
+    return ch == forumId(thread_guild) or ch == mediaId(thread_guild) or ch == mediaId(locked_guild);
+}
+
+fn guildOfChannel(ch: Id) Id {
+    return guildId(@intCast((ch - guildId(0)) / 1000));
+}
+
+const demo_tags = [_]struct { name: []const u8, en: []const u8, emoji: []const u8 = "" }{
+    .{ .name = "Dúvida", .en = "Question", .emoji = "❓" },
+    .{ .name = "Tema", .en = "Theme", .emoji = "🎨" },
+    .{ .name = "Bug", .en = "Bug", .emoji = "🐛" },
+    .{ .name = "Resolvido", .en = "Solved", .emoji = "✅" },
+};
+
+fn demoTags(forum: Id) [demo_tags.len]Id {
+    var out: [demo_tags.len]Id = undefined;
+    for (&out, 0..) |*t, i| t.* = forum * 10 + i;
+    return out;
+}
+
+fn demoForumTags(forum: Id) ![]const types.ForumTag {
+    const list = try alloc.alloc(types.ForumTag, demo_tags.len);
+    const ids = demoTags(forum);
+    for (demo_tags, 0..) |t, i| list[i] = .{ .id = ids[i], .name = try alloc.dupe(u8, pick(t.name, t.en)), .emoji = try alloc.dupe(u8, t.emoji) };
+    return list;
+}
+
+const demo_posts = [_]struct { title: []const u8, title_en: []const u8, body: []const u8, body_en: []const u8 }{
+    .{ .title = "Como trocar a fonte só das mensagens?", .title_en = "How do I change the font only for messages?", .body = "Queria usar uma fonte monoespaçada na conversa e deixar o resto como está. Dá para fazer pelo tema?", .body_en = "I'd like a monospaced font in the chat and leave the rest alone. Can a theme do that?" },
+    .{ .title = "Tema escuro com fundo de estrelas", .title_en = "Dark theme with a starry background", .body = "Fiz um tema com o starfield e cores frias. Segue o arquivo, aceito sugestões de contraste.", .body_en = "Made a theme with the starfield and cold colors. File attached, contrast suggestions welcome." },
+    .{ .title = "A barra lateral some ao redimensionar", .title_en = "The sidebar disappears when resizing", .body = "Em janelas muito estreitas a lista de canais desaparece e não volta. Alguém mais vê isso?", .body_en = "In very narrow windows the channel list vanishes and doesn't come back. Anyone else?" },
+    .{ .title = "Plugin de lembretes em Lua", .title_en = "Reminder plugin in Lua", .body = "Escrevi um /lembrar que manda uma mensagem depois de um tempo. Está no meu repositório.", .body_en = "Wrote a /remind that sends a message after a while. It's in my repo." },
+    .{ .title = "Qual o menor uso de memória que vocês já viram?", .title_en = "What's the lowest memory usage you've seen?", .body = "Aqui fica em 41 MB parado. Curioso para saber o de vocês, com qual driver e quantos servidores.", .body_en = "Mine idles at 41 MB. Curious about yours, with which driver and how many servers." },
+    .{ .title = "Atalho para responder à última mensagem", .title_en = "Shortcut to reply to the last message", .body = "Existe? Procurei nas configurações e só achei o de editar.", .body_en = "Is there one? I looked in the settings and only found the edit one." },
+    .{ .title = "Guia: montando um tema do zero", .title_en = "Guide: building a theme from scratch", .body = "Passo a passo do layout em KDL até as cores, com os erros mais comuns no caminho.", .body_en = "Step by step from the KDL layout to the colors, with the usual mistakes along the way." },
+    .{ .title = "Voz cortando no Wayland", .title_en = "Voice cutting out on Wayland", .body = "O microfone corta a cada poucos segundos no Hyprland. No X11 não acontece.", .body_en = "The mic cuts out every few seconds on Hyprland. It doesn't happen on X11." },
+};
+
 const channel_tree = [_]ChannelSeed{
     .{ .name = "informações", .kind = .category, .name_en = "info" },
     .{ .name = "regras", .topic = "leia antes de postar", .name_en = "rules", .topic_en = "read before posting" },
@@ -465,16 +681,21 @@ pub fn channelId(guild_index: usize, i: usize) Id {
     return guildId(guild_index) + 1 + @as(Id, i);
 }
 
-/// No segundo servidor, o #bugs só a moderação vê e no AFK ninguém entra.
+/// No segundo servidor (e no das threads sem permissão), o #bugs só a
+/// moderação vê e no AFK ninguém entra.
 fn demoOverwrites(gi: usize, ci: usize) ![]const types.Overwrite {
-    if (gi != 1) return &.{};
+    if (gi != 1 and gi != locked_guild) return &.{};
     const deny: u64 = switch (ci) {
         11 => types.perm.view_channel,
         15 => types.perm.connect,
         else => return &.{},
     };
+    return demoDeny(gi, deny);
+}
+
+fn demoDeny(gi: usize, deny: u64) ![]const types.Overwrite {
     const o = try alloc.alloc(types.Overwrite, 1);
-    o[0] = .{ .id = guildId(1), .deny = deny };
+    o[0] = .{ .id = guildId(gi), .deny = deny };
     return o;
 }
 
@@ -520,7 +741,7 @@ fn buildReady() !ev.Ready {
         // O primeiro servidor é nosso (dá para mexer em cargos e mensagens).
         .owner = if (i == 0) me_id else 1001,
     };
-    const chs = try alloc.alloc(types.Channel, guilds.len * channel_tree.len + 7);
+    const chs = try alloc.alloc(types.Channel, guilds.len * channel_tree.len + 7 + 3);
     var n: usize = 0;
     for (0..guilds.len) |gi| {
         var parent: ?Id = null;
@@ -539,6 +760,26 @@ fn buildReady() !ev.Ready {
                 .overwrites = try demoOverwrites(gi, ci),
             };
             n += 1;
+            // Depois do #música: um fórum e um canal de mídia.
+            if (ci == 7 and (gi == thread_guild or gi == locked_guild)) for ([_]Id{ forumId(gi), mediaId(gi) }) |fid| {
+                // No servidor sem permissões, só o canal de mídia.
+                if (gi == locked_guild and fid == forumId(gi)) continue;
+                const media = fid == mediaId(gi);
+                chs[n] = .{
+                    .id = fid,
+                    .guild = guildId(gi),
+                    .parent = parent,
+                    .kind = .forum,
+                    .media = media,
+                    .name = try alloc.dupe(u8, if (media) pick("capturas", "screenshots") else pick("ajuda", "help")),
+                    .topic = try alloc.dupe(u8, if (media) pick("mostre o seu tema", "show off your theme") else pick("um post por dúvida, com o que você já tentou", "one post per question, with what you've tried")),
+                    .position = @intCast(ci),
+                    .tags = try demoForumTags(fid),
+                    // No canal de mídia de lá ninguém posta.
+                    .overwrites = if (gi == locked_guild) try demoDeny(gi, types.perm.send_messages) else &.{},
+                };
+                n += 1;
+            };
         }
     }
     for (0..6) |i| {
@@ -633,6 +874,41 @@ fn buildOlder(channel: Id, before: Id) ![]types.Message {
             .content = try alloc.dupe(u8, phrase(r.uintLessThan(usize, phrases.len))),
         };
         t -= if (r.uintLessThan(u8, 6) == 0) r.intRangeLessThan(i64, 3600, 40000) else r.intRangeLessThan(i64, 20, 600);
+    }
+    return msgs;
+}
+
+/// Devolve uma lista de mensagens que ninguém assumiu.
+fn freeMessages(msgs: []types.Message) void {
+    for (msgs) |m| {
+        alloc.free(m.content);
+        types.freeAttachments(alloc, m.attachments);
+        types.freeEmbeds(alloc, m.embeds);
+    }
+    alloc.free(msgs);
+}
+
+/// A conversa de uma thread: a mensagem que a abriu (ou o texto do post, com
+/// o ID da própria thread) e respostas de lá até agora.
+fn buildThreadHistory(id: Id, t: DemoThread, now_ms: i64) ![]types.Message {
+    var prng = std.Random.DefaultPrng.init(id *% 0x9E3779B97F4A7C15);
+    const r = prng.random();
+    const has_first = t.first_text.len > 0;
+    const n: usize = t.count + @intFromBool(has_first);
+    const msgs = try alloc.alloc(types.Message, n);
+    const start = @divTrunc(types.snowflakeTime(id), 1000);
+    const now_s = @divTrunc(now_ms, 1000);
+    const step: i64 = @max(@divTrunc(now_s - start, @as(i64, @intCast(n + 1))), 1);
+    for (msgs, 0..) |*m, i| {
+        const ts = start + step * @as(i64, @intCast(i));
+        const first = has_first and i == 0;
+        m.* = .{
+            .id = if (first) id else types.makeSnowflake((ts + 1) * 1000, demoSeq(id, i)),
+            .channel = id,
+            .author = if (first) t.first_author else users[r.uintLessThan(usize, 8)].id,
+            .timestamp = ts,
+            .content = try alloc.dupe(u8, if (first) t.first_text else phrase(r.uintLessThan(usize, phrases.len))),
+        };
     }
     return msgs;
 }

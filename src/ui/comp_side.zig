@@ -52,6 +52,20 @@ pub fn memberList(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         return d.endRegion(ctx, rows.y, r.x);
     }
 
+    // Thread: quem está nela. Sem saber (ou vazia), a lista do canal pai.
+    if (cs.info.thread != null) {
+        const inside = ctx.store.threadMembers(ch_id);
+        if (inside.len > 0) {
+            var hb: [48]u8 = undefined;
+            rows.heading(i18n.fmt(&hb, "NA THREAD — {d}", "IN THREAD — {d}", .{inside.len}));
+            // Quem está online primeiro, sem ordenar a cada quadro.
+            for ([_]bool{ true, false }) |want_on| for (inside) |uid| {
+                const on = if (ctx.store.user(uid)) |u| u.status != .offline else false;
+                if (on == want_on) rows.member(uid, false);
+            };
+            return d.endRegion(ctx, rows.y, r.x);
+        }
+    }
     const ml = ctx.store.memberList(cs.info.guild) orelse return loading(&rows);
     if (!ml.synced) return loading(&rows);
     var offline = false;

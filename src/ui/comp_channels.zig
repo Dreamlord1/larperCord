@@ -15,6 +15,7 @@ const w = @import("widgets.zig");
 const icons = @import("icons.zig");
 const i18n = @import("i18n.zig");
 const types = @import("../core/types.zig");
+const threads = @import("comp_threads.zig");
 const Id = types.Id;
 
 const Variant = enum { discord, tree, pills };
@@ -79,6 +80,7 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const vis_bottom = r.bottom() + 64;
     var collapsed_cat = false;
     var cat_id: Id = 0;
+    const open_parent = threads.openParent(ctx);
     for (ids, 0..) |id, idx| {
         const cs = ctx.store.channel(id) orelse continue;
         const ch = &cs.info;
@@ -95,14 +97,22 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         }
         const selected = ctx.st.activeChannel() == id;
         const in_voice = ctx.st.voice == id;
-        if (collapsed_cat and !selected and !in_voice) continue;
+        // Thread aberta dentro de uma categoria recolhida: o pai fica à vista.
+        if (collapsed_cat and !selected and !in_voice and open_parent != id) continue;
         const row_h = rowHeight(ctx, variant, cs);
         if (y + row_h < vis_top or y > vis_bottom) {
             y += row_h;
-            continue;
+        } else {
+            const last = idx + 1 >= ids.len or (ctx.store.channel(ids[idx + 1]) orelse cs).info.kind == .category;
+            y = row(ctx, dl, fam, variant, cs, idx, r, y, last);
         }
-        const last = idx + 1 >= ids.len or (ctx.store.channel(ids[idx + 1]) orelse cs).info.kind == .category;
-        y = row(ctx, dl, fam, variant, cs, idx, r, y, last);
+        // As threads ativas logo abaixo do pai. Cada canal custa uma busca no
+        // índice; só as que aparecem são desenhadas.
+        y = threads.rows(ctx, dl, fam, switch (variant) {
+            .discord => .discord,
+            .tree => .tree,
+            .pills => .pills,
+        }, ch, r, y, vis_top, vis_bottom, collapsed_cat, open_parent);
     }
     d.endRegion(ctx, y + 12, r.x);
 }
@@ -151,7 +161,7 @@ fn rowHeight(ctx: *d.Ctx, variant: Variant, cs: anytype) f32 {
 
 fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: anytype, idx: usize, r: d.Rect, y: f32, last: bool) f32 {
     const ch = &cs.info;
-    const selected = ch.kind == .text and ctx.st.activeChannel() == ch.id;
+    const selected = (ch.kind == .text or ch.kind == .forum) and ctx.st.activeChannel() == ch.id;
     const in_voice = ch.kind == .voice and ctx.st.voice == ch.id;
     const row_h: f32 = switch (variant) {
         .tree => 24,
@@ -164,7 +174,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
     qa.mark(rr, "channel:{d}", .{ch.id});
     if (hb.right) ctx.popup(.{ .menu = .{ .kind = .channel, .id = ch.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
     if (hb.clicked or hb.middle) switch (ch.kind) {
-        .text => ctx.act(.{ .select_channel = ch.id }),
+        .text, .forum => ctx.act(.{ .select_channel = ch.id }),
         .voice => ctx.act(.{ .toggle_voice = ch.id }),
         .category => {},
     };
@@ -190,6 +200,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             const ic = ctx.col(.faint).mix(ctx.col(.muted), if (bright) 0.5 else 0);
             if (locked) icons.lock(dl, rr.x + 18, rr.y + rr.h / 2 - 2, ic.u()) else switch (ch.kind) {
                 .voice => icons.speaker(dl, rr.x + 18, rr.y + rr.h / 2, ic.u()),
+                .forum => (if (ch.media) &icons.media else &icons.forum)(dl, rr.x + 18, rr.y + rr.h / 2, ic.u()),
                 else => d.text(dl, fam.get(.medium), 20, rr.x + 10, rr.y + 3.5, ic, "#"),
             }
             const nf = if (ch.unread and !selected) fam.get(.semibold) else fam.get(.medium);
@@ -207,6 +218,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             const ink = if (on) ctx.col(.accent_text) else ctx.col(.muted);
             if (locked) icons.lock(dl, pr.x + 20, pr.y + pr.h / 2 - 2, ink.u()) else switch (ch.kind) {
                 .voice => icons.speaker(dl, pr.x + 21, pr.y + pr.h / 2, ink.u()),
+                .forum => (if (ch.media) &icons.media else &icons.forum)(dl, pr.x + 20, pr.y + pr.h / 2, ink.u()),
                 else => {
                     const hw = d.width(fam.get(.bold), 14, "#");
                     d.text(dl, fam.get(.bold), 14, pr.x + 20 - hw / 2, d.centerY(pr, 14), ink, "#");
@@ -222,7 +234,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             if (selected) d.rect(dl, rr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
             var buf: [96]u8 = undefined;
             const branch = if (last) "└" else "├";
-            const sigil = if (locked) "×" else if (ch.kind == .voice) "♪" else "#";
+            const sigil = if (locked) "×" else if (ch.kind == .voice) "♪" else if (ch.kind == .forum) "≡" else "#";
             const t = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ branch, sigil, ch.name }) catch ch.name;
             const tc = if (selected) ctx.col(.accent_text) else name_col;
             _ = d.textClipped(dl, fam.get(if (ch.unread or selected) .bold else .regular), fs - 1, rr.x + 4, d.centerY(rr, fs - 1), tc, t, rr.w - 24);
@@ -576,7 +588,7 @@ pub fn groupIcon(ctx: *d.Ctx, dl: *c.ImDrawList, ch: *const types.Channel, cx: f
     icons.members(dl, cx - 1, cy, d.Rgba.white.u());
 }
 
-fn badgeAt(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, right: f32, cy: f32, count: u16) void {
+pub fn badgeAt(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, right: f32, cy: f32, count: u16) void {
     var buf: [8]u8 = undefined;
     const t = std.fmt.bufPrint(&buf, "{d}", .{count}) catch "";
     const tw = d.width(fam.get(.bold), 11, t);

@@ -23,6 +23,8 @@ const vim = @import("vim.zig");
 const popup = @import("popup.zig");
 const mosaic = @import("mosaic.zig");
 const sigil = @import("comp_chat.zig").sigil;
+const threads = @import("comp_threads.zig");
+const forum = @import("forum.zig");
 const store_mod = @import("../core/store.zig");
 const types = @import("../core/types.zig");
 const i18n = @import("i18n.zig");
@@ -162,6 +164,7 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     var text_h = textH(g, m, t);
     text_h += att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
     text_h += emb.block(ctx, null, m, 0, 0, g.wrap, 1);
+    text_h += threads.cardHeight(ctx, m);
     if (m.failed) text_h += g.line_h;
     const group = flags & flag_group != 0;
     const day = flags & flag_day != 0;
@@ -195,6 +198,7 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     m.height = h;
     m.natural_w = @max(@max(t.w, if (m.msg.edited) t.last_x + editedW(g) else 0), att.blockWidth(m.msg.attachments, g.wrap));
     if (m.msg.embeds.len > 0) m.natural_w = @max(m.natural_w, @min(g.wrap, 520));
+    if (m.msg.thread != 0) m.natural_w = @max(m.natural_w, @min(g.wrap, threads.card_w));
     if (reply and g.variant == .bubbles) m.natural_w = @max(m.natural_w, 180);
     if (m.failed) m.natural_w = @max(m.natural_w, failedW(g));
     return h;
@@ -235,6 +239,8 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
 /// região do ImGui (um por painel: os IDs dos botões ficam separados).
 pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*:0]const u8) void {
     const cs = ctx.store.channel(ch_id) orelse return;
+    // Fórum não tem conversa: a lista de posts entra no lugar.
+    if (cs.info.kind == .forum) return forum.page(ctx, n, r, cs, region);
     const g = geometry(ctx, n, r);
     ctx.hot = false;
     vim.page_h = r.h;
@@ -561,6 +567,8 @@ fn topOfChannel(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, cs: anytype, r: d.Rect, 
             var buf: [128]u8 = undefined;
             const t = if (cs.info.guild == 0)
                 i18n.fmt(&buf, "Este é o começo da conversa com {s}.", "This is the beginning of your conversation with {s}.", .{cs.info.name})
+            else if (cs.info.thread != null)
+                i18n.fmt(&buf, "Este é o começo da thread {s}", "This is the start of the thread {s}", .{cs.info.name})
             else
                 i18n.fmt(&buf, "Este é o começo de #{s}.", "This is the start of #{s}.", .{cs.info.name});
             _ = d.textClipped(dl, fam.get(.semibold), 15, x, y + h / 2 - 10, ctx.col(.muted), t, r.w - g.content_x - 16);
@@ -882,6 +890,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             att.draw(ctx, dl, m, tx, y + th, g.wrap, alpha);
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
             ah += emb.block(ctx, dl, m, tx, y + th + ah, g.wrap, alpha);
+            ah += threads.card(ctx, dl, m, tx, y + th + ah, g.wrap);
             if (m.failed) failedRow(ctx, dl, g, m, tx, y + th + ah);
             if (m.n_reactions > 0) reactions(ctx, dl, m, tx, y + th + ah, under, false, 0);
             if (ctx.st.settings.developer_mode and under) {
@@ -934,6 +943,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             att.draw(ctx, dl, m, r.x + g.content_x, y + th, g.wrap, alpha);
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
             ah += emb.block(ctx, dl, m, r.x + g.content_x, y + th + ah, g.wrap, alpha);
+            ah += threads.card(ctx, dl, m, r.x + g.content_x, y + th + ah, g.wrap);
             if (m.failed) failedRow(ctx, dl, g, m, r.x + g.content_x, y + th + ah);
             if (m.n_reactions > 0) reactions(ctx, dl, m, r.x + g.content_x, y + th + ah - 2, under, false, 0);
             if (show_bar) toolbar(ctx, dl, m, r.right() - 12, row.y - 2);
@@ -980,7 +990,8 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             if (m.msg.content.len > 0) qa.mark(.{ .x = br.x + 14, .y = ty, .w = @max(t.w, 4), .h = t.h }, "msgtext:{d}", .{m.msg.id});
             att.draw(ctx, dl, m, br.x + 14, ty + textH(g, m, t), g.wrap, alpha);
             const below = textH(g, m, t) + att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
-            const eh = emb.block(ctx, dl, m, br.x + 14, ty + below, g.wrap, alpha);
+            var eh = emb.block(ctx, dl, m, br.x + 14, ty + below, g.wrap, alpha);
+            eh += threads.card(ctx, dl, m, br.x + 14, ty + below + eh, g.wrap);
             if (m.failed) failedRow(ctx, dl, g, m, br.x + 14, ty + below + eh);
             if (m.n_reactions > 0) reactions(ctx, dl, m, br.x, br.bottom(), under, self, br.right());
             if (ctx.hovering(br)) {
@@ -1053,12 +1064,18 @@ const composer_max_lines = 10;
 
 pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     if (ctx.st.friends) return;
+    const ch_id = ctx.st.activeChannel() orelse return;
+    const cs = ctx.store.channel(ch_id) orelse return;
+    // No lugar da caixa: "Novo post" num fórum, o aviso numa thread sem permissão.
+    if (cs.info.kind == .forum or (cs.info.thread != null and !ctx.store.canSend(&cs.info))) {
+        composer_extra = 0;
+        vim.composer_active = false;
+        return forum.composerBand(ctx, n, r_in, cs);
+    }
     const grown = composer_extra;
     const r: d.Rect = .{ .x = r_in.x, .y = r_in.y - grown, .w = r_in.w, .h = r_in.h + grown };
     const fam = ctx.familyFor(n);
     const variant = d.pstr(n, "variant", "box");
-    const ch_id = ctx.st.activeChannel() orelse return;
-    const cs = ctx.store.channel(ch_id) orelse return;
     const dl = ctx.dl;
     const st = ctx.st;
     const prompt = std.mem.eql(u8, variant, "prompt");
@@ -1206,7 +1223,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const hint = if (prompt) "" else if (cs.info.guild == 0)
         i18n.fmtZ(&hint_buf, "Conversar com @{s}", "Message @{s}", .{cs.info.name})
     else
-        i18n.fmtZ(&hint_buf, "Conversar em #{s}", "Message #{s}", .{cs.info.name});
+        i18n.fmtZ(&hint_buf, "Conversar em {s}{s}", "Message {s}{s}", .{ sigil(&cs.info), cs.info.name });
     // A caixa vazia mostra a dica (a multilinha do ImGui não tem).
     if (st.input[0] == 0 and hint.len > 0) d.text(dl, fam.get(.regular), fs, input_x + c.ImGui_GetStyle().*.FramePadding.x, input_y + 4, ctx.col(.faint), hint);
     // Enter envia; Shift+Enter (ou Ctrl+Enter) abre uma linha nova.

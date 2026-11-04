@@ -53,7 +53,21 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const sx = r.right() - 16 - search_w;
     const tx = r.x + 42 + name_w + 14;
     // Da direita para a esquerda: busca, membros, buscar mensagens, salvas, caixa de entrada.
-    if (ch.topic.len > 0 and sx - tx > 186) {
+    // Numa thread, no lugar do tópico: o canal pai, e clicar volta para ele.
+    const parent_cs = if (ch.thread != null and ch.parent != null) ctx.store.channel(ch.parent.?) else null;
+    if (parent_cs) |pcs| {
+        if (sx - tx > 186) {
+            var pb: [120]u8 = undefined;
+            const lbl = d.printClip(&pb, "{s}{s}", .{ sigil(&pcs.info), pcs.info.name });
+            d.rect(dl, .{ .x = tx, .y = r.y + r.h / 2 - 10, .w = 1, .h = 20 }, ctx.col(.border).mix(ctx.col(.text), 0.05), 0);
+            const room = sx - tx - 178;
+            const pr: d.Rect = .{ .x = tx + 14, .y = r.y + r.h / 2 - 12, .w = @min(d.width(fam.get(.regular), 14, lbl), room), .h = 24 };
+            const ph = d.hit(ctx, 6, pr);
+            qa.mark(pr, "header-parent", .{});
+            if (ph.clicked) ctx.act(.{ .select_channel = pcs.info.id });
+            _ = d.textClipped(dl, fam.get(.regular), 14, pr.x, d.centerY(r, 14), if (ph.hovered) ctx.col(.text) else ctx.col(.muted), lbl, room);
+        }
+    } else if (ch.topic.len > 0 and sx - tx > 186) {
         d.rect(dl, .{ .x = tx, .y = r.y + r.h / 2 - 10, .w = 1, .h = 20 }, ctx.col(.border).mix(ctx.col(.text), 0.05), 0);
         _ = d.textClipped(dl, fam.get(.regular), 14, tx + 14, d.centerY(r, 14), ctx.col(.muted), ch.topic, sx - tx - 178);
     }
@@ -198,5 +212,7 @@ pub fn tabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
 }
 
 pub fn sigil(ch: *const types.Channel) []const u8 {
+    if (ch.thread != null) return "↳";
+    if (ch.kind == .forum) return "≡";
     return if (ch.guild == 0) "@" else "#";
 }

@@ -56,6 +56,35 @@ pub const History = enum { none, loading, loaded, failed };
 
 pub const Typing = struct { user: Id, until_ms: i64 };
 
+/// Páginas de threads já buscadas de um canal (ativas ou arquivadas).
+pub const ThreadPage = struct {
+    state: History = .none,
+    more: bool = true,
+    /// Quantas já vieram: é assim que as ativas paginam.
+    offset: u32 = 0,
+    /// A mais antiga já vista (s): é assim que as arquivadas paginam.
+    before: i64 = 0,
+};
+
+/// Quantas threads um canal mostra na lista de canais (o resto: "mais N").
+pub const thread_rows_cap = 6;
+
+/// As threads de um canal pai. Refeito só quando algo muda (`dirty`), para a
+/// lista de canais não varrer nada a cada quadro.
+pub const ThreadIndex = struct {
+    /// Todas as que conhecemos, ativas e arquivadas. Mais recente primeiro
+    /// depois de `Store.threadIndex`.
+    all: std.ArrayList(Id) = .empty,
+    dirty: bool = true,
+    /// O recorte da lista de canais (fórum: só as nossas e as não lidas).
+    shown: [thread_rows_cap]Id = @splat(0),
+    n_shown: u8 = 0,
+    /// Ativas de um canal de texto que não couberam em `shown`.
+    more: u32 = 0,
+    /// Alguma das mostradas não foi lida.
+    unread: bool = false,
+};
+
 pub const ChannelState = struct {
     info: types.Channel,
     messages: std.ArrayList(StoredMessage) = .empty,
@@ -78,6 +107,14 @@ pub const ChannelState = struct {
     read_id: Id = 0,
     /// Mostrando o cache do disco enquanto o histórico de verdade não chega.
     cached: bool = false,
+    /// Threads deste canal buscadas sob demanda (ui/forum.zig).
+    active_page: ThreadPage = .{},
+    archived_page: ThreadPage = .{},
+    /// Post de fórum: a primeira mensagem, para a lista (ev_alloc; vazio = não veio).
+    preview: []const u8 = "",
+    preview_author: Id = 0,
+    /// Thread: quem está nela já foi pedido nesta sessão.
+    members_asked: bool = false,
 };
 
 /// Lista de membros de um servidor, no formato do Discord: posições fixas
@@ -111,7 +148,13 @@ pub const Store = struct {
     guilds: std.ArrayList(types.Guild) = .empty,
     channels: std.AutoHashMapUnmanaged(Id, *ChannelState) = .empty,
     /// Canais de cada servidor, na ordem de exibição (categorias incluídas).
+    /// Threads não entram aqui: ficam em `threads`, por canal pai.
     guild_channels: std.AutoHashMapUnmanaged(Id, std.ArrayList(Id)) = .empty,
+    threads: std.AutoHashMapUnmanaged(Id, ThreadIndex) = .empty,
+    /// Quem está em cada thread (só as que já abrimos).
+    thread_members: std.AutoHashMapUnmanaged(Id, std.ArrayList(Id)) = .empty,
+    /// Muda quando alguma lista de threads muda (invalida a lista do fórum).
+    threads_rev: u32 = 0,
     /// Cargos de todos os servidores (o ID do cargo é único no Discord).
     roles: std.AutoHashMapUnmanaged(Id, types.Role) = .empty,
     member_lists: std.AutoHashMapUnmanaged(Id, MemberList) = .empty,
@@ -165,9 +208,16 @@ pub const Store = struct {
             cs.*.typing.deinit(s.gpa);
             cs.*.voice_members.deinit(s.gpa);
             freeChannelInfo(&cs.*.info);
+            ev_alloc.free(cs.*.preview);
             s.gpa.destroy(cs.*);
         }
         s.channels.deinit(s.gpa);
+        var thi = s.threads.valueIterator();
+        while (thi.next()) |ti| ti.all.deinit(s.gpa);
+        s.threads.deinit(s.gpa);
+        var tmi = s.thread_members.valueIterator();
+        while (tmi.next()) |tm| tm.deinit(s.gpa);
+        s.thread_members.deinit(s.gpa);
         var ri = s.roles.valueIterator();
         while (ri.next()) |r| ev_alloc.free(r.name);
         s.roles.deinit(s.gpa);
@@ -276,6 +326,12 @@ pub const Store = struct {
         ev_alloc.free(ch.topic);
         if (ch.recipients.len > 0) ev_alloc.free(ch.recipients);
         if (ch.icon) |i| ev_alloc.free(i);
+        if (ch.thread) |t| if (t.tags.len > 0) ev_alloc.free(t.tags);
+        for (ch.tags) |t| {
+            ev_alloc.free(t.name);
+            if (t.emoji.len > 0) ev_alloc.free(t.emoji);
+        }
+        if (ch.tags.len > 0) ev_alloc.free(ch.tags);
     }
 
     /// Troca o avatar e a decoração guardados pelos novos, se vieram
@@ -333,7 +389,11 @@ pub const Store = struct {
     }
 
     /// Mensagem pronta para guardar: o markdown já interpretado.
-    fn stored(s: *Store, m: types.Message) !StoredMessage {
+    fn stored(s: *Store, m_in: types.Message) !StoredMessage {
+        var m = m_in;
+        // A thread aberta de uma mensagem tem o ID dela: vale também para o
+        // que volta do cache em disco. (Um post de fórum é a própria conversa.)
+        if (m.thread == 0 and m.id != m.channel and s.channels.contains(m.id)) m.thread = m.id;
         return .{ .msg = m, .spans = try markdown.parse(s.gpa, m.content), .embed_spans = try s.parseEmbeds(m.embeds) };
     }
 
@@ -392,9 +452,23 @@ pub const Store = struct {
         try s.guilds.append(s.gpa, g);
     }
 
-    fn mergeChannel(s: *Store, ch: types.Channel) !void {
+    fn mergeChannel(s: *Store, ch_in: types.Channel) !void {
+        var ch = ch_in;
+        var was_known = false;
         if (s.channels.get(ch.id)) |cs| {
+            was_known = true;
             const unread = cs.info.unread or ch.unread;
+            // THREAD_UPDATE não repete tudo: fica com o que ele não trouxe.
+            if (cs.info.thread) |old| if (ch.thread) |*t| {
+                if (!t.joined_known) {
+                    t.joined = old.joined;
+                    t.joined_known = old.joined_known;
+                }
+                t.last_message = @max(t.last_message, old.last_message);
+                if (t.member_count == 0) t.member_count = old.member_count;
+            };
+            // Mudou de pai (não acontece no Discord, mas a lista não pode mentir).
+            if (cs.info.thread != null and cs.info.parent != ch.parent) s.dropFromIndex(ch.id, cs.info.parent);
             freeChannelInfo(&cs.info);
             cs.info = ch;
             cs.info.unread = unread;
@@ -403,6 +477,7 @@ pub const Store = struct {
             cs.* = .{ .info = ch };
             try s.channels.put(s.gpa, ch.id, cs);
         }
+        if (ch.thread != null) return s.indexThread(ch.id, ch.parent, was_known);
         const gop = try s.guild_channels.getOrPut(s.gpa, ch.guild);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         if (std.mem.indexOfScalar(Id, gop.value_ptr.items, ch.id) == null) {
@@ -410,15 +485,82 @@ pub const Store = struct {
         }
     }
 
+    /// Thread nova ou atualizada: entra na lista do pai, e a mensagem que a
+    /// abriu passa a mostrar o cartão.
+    fn indexThread(s: *Store, id: Id, parent: ?Id, was_known: bool) !void {
+        const pid = parent orelse return;
+        const gop = try s.threads.getOrPut(s.gpa, pid);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        if (!was_known or std.mem.indexOfScalar(Id, gop.value_ptr.all.items, id) == null) {
+            try gop.value_ptr.all.append(s.gpa, id);
+            if (s.channel(pid)) |pcs| if (s.find(pcs, id)) |m| {
+                m.msg.thread = id;
+                m.layout_w = -1;
+                pcs.version +%= 1;
+            };
+        }
+        s.touchThreads(pid);
+    }
+
+    fn touchThreads(s: *Store, parent: ?Id) void {
+        s.threads_rev +%= 1;
+        if (s.threads.getPtr(parent orelse return)) |ti| ti.dirty = true;
+    }
+
+    fn dropFromIndex(s: *Store, id: Id, parent: ?Id) void {
+        const ti = s.threads.getPtr(parent orelse return) orelse return;
+        if (std.mem.indexOfScalar(Id, ti.all.items, id)) |i| _ = ti.all.orderedRemove(i);
+        s.touchThreads(parent);
+    }
+
+    /// Mensagem nova numa thread: contagem, "última há…" e a prévia do post.
+    fn noteThreadMessage(s: *Store, cs: *ChannelState, m: types.Message) void {
+        const t = if (cs.info.thread) |*t| t else return;
+        // A primeira mensagem de um post não conta (o Discord também não).
+        if (m.id != cs.info.id) t.message_count +|= 1;
+        t.last_message = @max(t.last_message, m.id);
+        if (m.id == cs.info.id and cs.preview.len == 0) {
+            if (ev_alloc.dupe(u8, m.content)) |text| {
+                cs.preview = text;
+                cs.preview_author = m.author;
+            } else |_| {}
+        }
+        s.touchThreads(cs.info.parent);
+    }
+
     fn removeChannel(s: *Store, id: Id) void {
         const kv = s.channels.fetchRemove(id) orelse return;
         const cs = kv.value;
+        const parent = cs.info.parent;
+        const is_thread = cs.info.thread != null;
         for (cs.messages.items) |*m| s.freeMessage(m);
         cs.messages.deinit(s.gpa);
         cs.typing.deinit(s.gpa);
         cs.voice_members.deinit(s.gpa);
         freeChannelInfo(&cs.info);
+        ev_alloc.free(cs.preview);
         s.gpa.destroy(cs);
+        if (s.thread_members.fetchRemove(id)) |tm| {
+            var list = tm.value;
+            list.deinit(s.gpa);
+        }
+        // Foi embora junto com as threads dele.
+        if (s.threads.fetchRemove(id)) |ti| {
+            var idx = ti.value;
+            for (idx.all.items) |tid| s.removeChannel(tid);
+            idx.all.deinit(s.gpa);
+            s.threads_rev +%= 1;
+        }
+        if (is_thread) {
+            s.dropFromIndex(id, parent);
+            // O cartão some da mensagem que abriu a thread.
+            if (parent) |pid| if (s.channel(pid)) |pcs| for (pcs.messages.items) |*m| if (m.msg.thread == id) {
+                m.msg.thread = 0;
+                m.layout_w = -1;
+                pcs.version +%= 1;
+            };
+            return;
+        }
         var it = s.guild_channels.valueIterator();
         while (it.next()) |list| {
             if (std.mem.indexOfScalar(Id, list.items, id)) |i| _ = list.orderedRemove(i);
@@ -431,6 +573,12 @@ pub const Store = struct {
             for (list.items) |ch| s.removeChannel(ch);
             list.deinit(s.gpa);
         }
+        // Thread de um canal que não conhecemos (sem acesso) também vai embora.
+        var orphans: std.ArrayList(Id) = .empty;
+        defer orphans.deinit(s.gpa);
+        var oit = s.channels.valueIterator();
+        while (oit.next()) |cs| if (cs.*.info.guild == id and id != 0) orphans.append(s.gpa, cs.*.info.id) catch {};
+        for (orphans.items) |ch| s.removeChannel(ch);
         for (s.guilds.items, 0..) |g, i| {
             if (g.id != id) continue;
             freeGuildInfo(g);
@@ -485,11 +633,66 @@ pub const Store = struct {
         return if (s.guild_channels.get(guild_id)) |l| l.items else &.{};
     }
 
+    /// Todas as threads conhecidas de um canal, sem ordem garantida.
+    pub fn threadsOf(s: *const Store, parent: Id) []const Id {
+        return if (s.threads.getPtr(parent)) |ti| ti.all.items else &.{};
+    }
+
+    /// O índice de um canal pai, pronto para a lista de canais: a mais recente
+    /// primeiro e o recorte refeito se algo mudou. Sem mudança, não custa nada.
+    pub fn threadIndex(s: *Store, parent: Id) ?*ThreadIndex {
+        const ti = s.threads.getPtr(parent) orelse return null;
+        if (ti.dirty) s.refreshIndex(parent, ti);
+        return ti;
+    }
+
+    /// Mais recente primeiro: a última mensagem, ou o ID (a criação) sem nenhuma.
+    pub fn threadActivity(info: *const types.Channel) Id {
+        return @max(info.id, if (info.thread) |t| t.last_message else 0);
+    }
+
+    fn refreshIndex(s: *Store, parent: Id, ti: *ThreadIndex) void {
+        ti.dirty = false;
+        const Sort = struct {
+            s: *const Store,
+            fn key(c: @This(), id: Id) Id {
+                return if (c.s.channel(id)) |cs| threadActivity(&cs.info) else 0;
+            }
+            fn lt(c: @This(), a: Id, b: Id) bool {
+                return c.key(a) > c.key(b);
+            }
+        };
+        std.mem.sort(Id, ti.all.items, Sort{ .s = s }, Sort.lt);
+        // Num fórum, cada post seria uma linha: só as nossas e as não lidas.
+        const forum = if (s.channel(parent)) |p| p.info.kind == .forum else false;
+        ti.n_shown = 0;
+        ti.more = 0;
+        ti.unread = false;
+        for (ti.all.items) |id| {
+            const cs = s.channel(id) orelse continue;
+            const t = cs.info.thread orelse continue;
+            if (t.archived) continue;
+            if (forum and !t.joined and !cs.info.unread) continue;
+            if (ti.n_shown == ti.shown.len) {
+                if (!forum) ti.more += 1;
+                continue;
+            }
+            ti.shown[ti.n_shown] = id;
+            ti.n_shown += 1;
+            ti.unread = ti.unread or cs.info.unread;
+        }
+    }
+
+    /// Quem está na thread (vazio = não sabemos: a lista do pai vale).
+    pub fn threadMembers(s: *const Store, thread: Id) []const Id {
+        return if (s.thread_members.getPtr(thread)) |l| l.items else &.{};
+    }
+
     /// Aplica um evento vindo da rede. O Store assume as alocações do evento.
     pub fn apply(s: *Store, ev: Event, now_ms: i64) !void {
         // O que chega o tempo todo e não aparece na caixa de entrada não conta.
         switch (ev) {
-            .typing_start, .presence_update, .voice_state, .voice_speaking, .voice_status, .latency, .status, .notice, .member_list, .profile, .relationship, .note, .app_icon => {},
+            .typing_start, .presence_update, .voice_state, .voice_speaking, .voice_status, .latency, .status, .notice, .member_list, .profile, .relationship, .note, .app_icon, .thread_members, .thread_joined, .thread_open, .threads_page => {},
             else => s.rev +%= 1,
         }
         switch (ev) {
@@ -793,6 +996,10 @@ pub const Store = struct {
                     s.freeMessage(m);
                     _ = cs.messages.orderedRemove(i);
                     cs.version +%= 1;
+                    if (cs.info.thread) |*t| {
+                        t.message_count -|= 1;
+                        s.touchThreads(cs.info.parent);
+                    }
                     return;
                 };
             },
@@ -894,7 +1101,93 @@ pub const Store = struct {
                 s.mentions_state = .loaded;
                 s.mentions_ms = now_ms;
             },
+            .thread_list_sync => |sy| {
+                defer {
+                    ev_alloc.free(sy.threads);
+                    ev_alloc.free(sy.joined);
+                    if (sy.parents) |p| ev_alloc.free(p);
+                }
+                // A que não veio não está mais ativa. Fica como arquivada, não
+                // some: pode estar aberta numa aba.
+                var alive: std.AutoHashMapUnmanaged(Id, void) = .empty;
+                defer alive.deinit(s.gpa);
+                for (sy.threads) |ch| try alive.put(s.gpa, ch.id, {});
+                if (sy.parents) |list| {
+                    for (list) |p| s.archiveMissing(p, &alive);
+                } else for (s.channelsOf(sy.guild)) |p| s.archiveMissing(p, &alive);
+                for (sy.threads) |ch| try s.mergeChannel(ch);
+                for (sy.joined) |id| s.setJoined(id, true);
+            },
+            .threads_page => |pg| {
+                defer {
+                    ev_alloc.free(pg.threads);
+                    ev_alloc.free(pg.joined);
+                    ev_alloc.free(pg.previews);
+                }
+                for (pg.threads) |ch| try s.mergeChannel(ch);
+                for (pg.joined) |id| s.setJoined(id, true);
+                for (pg.previews) |p| {
+                    const cs = s.channel(p.thread) orelse {
+                        ev_alloc.free(p.text);
+                        continue;
+                    };
+                    ev_alloc.free(cs.preview);
+                    cs.preview = p.text;
+                    cs.preview_author = p.author;
+                }
+                s.threads_rev +%= 1;
+                const cs = s.channel(pg.channel) orelse return;
+                const page = if (pg.archived) &cs.archived_page else &cs.active_page;
+                if (pg.failed) {
+                    page.state = .failed;
+                    return;
+                }
+                page.state = .loaded;
+                page.more = pg.more;
+                page.offset += @intCast(pg.threads.len);
+                for (pg.threads) |ch| if (ch.thread) |t| {
+                    if (t.archive_ts != 0 and (page.before == 0 or t.archive_ts < page.before)) page.before = t.archive_ts;
+                };
+            },
+            .thread_joined => |tj| s.setJoined(tj.thread, tj.joined),
+            .thread_members => |tm| {
+                defer {
+                    ev_alloc.free(tm.added);
+                    ev_alloc.free(tm.removed);
+                }
+                const cs = s.channel(tm.thread) orelse return;
+                const gop = try s.thread_members.getOrPut(s.gpa, tm.thread);
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                const list = gop.value_ptr;
+                if (tm.replace) list.clearRetainingCapacity();
+                for (tm.added) |u| if (std.mem.indexOfScalar(Id, list.items, u) == null) try list.append(s.gpa, u);
+                for (tm.removed) |u| if (std.mem.indexOfScalar(Id, list.items, u)) |i| {
+                    _ = list.orderedRemove(i);
+                };
+                if (cs.info.thread) |*t| t.member_count = tm.count orelse @intCast(list.items.len);
+                if (std.mem.indexOfScalar(Id, tm.added, s.me) != null) s.setJoined(tm.thread, true);
+                if (std.mem.indexOfScalar(Id, tm.removed, s.me) != null) s.setJoined(tm.thread, false);
+            },
+            // Quem abre é o app (só depois de o canal estar aqui).
+            .thread_open => {},
         }
+    }
+
+    fn setJoined(s: *Store, thread: Id, joined: bool) void {
+        const cs = s.channel(thread) orelse return;
+        const t = if (cs.info.thread) |*t| t else return;
+        t.joined = joined;
+        t.joined_known = true;
+        s.touchThreads(cs.info.parent);
+    }
+
+    fn archiveMissing(s: *Store, parent: Id, alive: *const std.AutoHashMapUnmanaged(Id, void)) void {
+        for (s.threadsOf(parent)) |id| {
+            if (alive.contains(id)) continue;
+            const cs = s.channel(id) orelse continue;
+            if (cs.info.thread) |*t| t.archived = true;
+        }
+        s.touchThreads(parent);
     }
 
     fn applyMemberList(s: *Store, guild_id: Id, list_id: u64, online: u32, total: u32, ops: []const types.MemberOp) !void {
@@ -1030,6 +1323,8 @@ pub const Store = struct {
     pub fn channelPermissions(s: *const Store, ch: *const types.Channel) u64 {
         const all = std.math.maxInt(u64);
         if (ch.guild == 0) return all;
+        // Thread não tem exceções próprias: vale o que vale no canal pai.
+        if (ch.thread != null) if (ch.parent) |pid| if (s.channel(pid)) |pcs| return s.channelPermissions(&pcs.info);
         if (s.roles.get(ch.guild) == null) return all;
         var p = s.permissions(ch.guild);
         if (p & types.perm.administrator != 0 or p == all) return all;
@@ -1061,7 +1356,24 @@ pub const Store = struct {
     }
 
     pub fn canSend(s: *const Store, ch: *const types.Channel) bool {
-        return s.channelPermissions(ch) & types.perm.send_messages != 0;
+        const p = s.channelPermissions(ch);
+        // Numa thread a permissão é outra; trancada, só quem gerencia threads.
+        if (ch.thread) |t| {
+            if (p & types.perm.send_messages_in_threads == 0) return false;
+            return !t.locked or p & types.perm.manage_threads != 0;
+        }
+        return p & types.perm.send_messages != 0;
+    }
+
+    /// "Criar thread" a partir de uma mensagem deste canal.
+    pub fn canCreateThread(s: *const Store, ch: *const types.Channel) bool {
+        if (ch.guild == 0 or ch.thread != null or ch.kind != .text) return false;
+        return s.channelPermissions(ch) & types.perm.create_public_threads != 0;
+    }
+
+    /// Post novo: num fórum, quem pode "enviar mensagens" é quem pode postar.
+    pub fn canPost(s: *const Store, forum: *const types.Channel) bool {
+        return forum.kind == .forum and s.channelPermissions(forum) & types.perm.send_messages != 0;
     }
 
     pub fn can(s: *const Store, guild_id: Id, bit: u64) bool {
@@ -1215,6 +1527,7 @@ pub const Store = struct {
         // Já temos (o histórico trouxe antes de o evento ser lido, ou um
         // RESUME repetiu): duas cópias deixariam um fantasma ao apagar.
         if (m.id != 0 and s.find(cs, m.id) != null) return freeRaw(m);
+        s.noteThreadMessage(cs, m);
         // Quem mandou parou de digitar.
         for (cs.typing.items, 0..) |ty, i| if (ty.user == m.author) {
             _ = cs.typing.swapRemove(i);
@@ -1372,7 +1685,10 @@ pub const Store = struct {
 
     pub fn markRead(s: *Store, channel_id: Id) void {
         const cs = s.channel(channel_id) orelse return;
-        if (cs.info.unread) s.rev +%= 1;
+        if (cs.info.unread) {
+            s.rev +%= 1;
+            if (cs.info.thread != null) s.touchThreads(cs.info.parent);
+        }
         cs.info.unread = false;
         // Marcador: a última que já veio do servidor (a pendente não tem ID).
         var i = cs.messages.items.len;
@@ -1696,4 +2012,80 @@ test "quem está lendo lá em cima não perde mensagens; cortadas voltam a ser b
     try s.apply(.{ .message_create = .{ .id = 21, .channel = 10, .author = 2, .timestamp = 1, .content = try c_alloc.dupe(u8, "x") } }, 0);
     try std.testing.expect(cs.messages.items.len < 21);
     try std.testing.expect(cs.older == .idle);
+}
+
+fn testThread(id: Id, parent: Id, last: Id) !types.Channel {
+    const c_alloc = std.heap.c_allocator;
+    return .{ .id = id, .guild = 5, .parent = parent, .name = try c_alloc.dupe(u8, "fio"), .topic = try c_alloc.dupe(u8, ""), .thread = .{ .last_message = last } };
+}
+
+test "thread fica fora da lista de canais, no índice do pai, e sai junto com ele" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    _ = try testStore(&s);
+    try s.apply(.{ .channel_upsert = try testThread(100, 10, 7) }, 0);
+    try s.apply(.{ .channel_upsert = try testThread(101, 10, 9) }, 0);
+    try std.testing.expectEqual(@as(usize, 1), s.channelsOf(5).len);
+    const ti = s.threadIndex(10).?;
+    try std.testing.expectEqual(@as(u8, 2), ti.n_shown);
+    // Sem mensagem, conta o ID (a criação): 101 é a mais recente.
+    try std.testing.expectEqual(@as(Id, 101), ti.shown[0]);
+    // Mensagem nova na 100: conta, sobe e marca não lida no recorte.
+    try s.apply(.{ .message_create = .{ .id = 500, .channel = 100, .author = 2, .timestamp = 1, .content = try c_alloc.dupe(u8, "oi") } }, 0);
+    const ti2 = s.threadIndex(10).?;
+    try std.testing.expectEqual(@as(Id, 100), ti2.shown[0]);
+    try std.testing.expect(ti2.unread);
+    try std.testing.expectEqual(@as(u32, 1), s.channel(100).?.info.thread.?.message_count);
+    // Pai apagado leva as threads.
+    try s.apply(.{ .channel_delete = 10 }, 0);
+    try std.testing.expect(s.channel(100) == null and s.channel(101) == null);
+    try std.testing.expect(s.threadIndex(10) == null);
+}
+
+test "THREAD_LIST_SYNC arquiva o que não veio e THREAD_UPDATE não esquece que estamos nela" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    _ = try testStore(&s);
+    try s.apply(.{ .channel_upsert = try testThread(100, 10, 0) }, 0);
+    try s.apply(.{ .channel_upsert = try testThread(101, 10, 0) }, 0);
+    const parents = try c_alloc.alloc(Id, 1);
+    parents[0] = 10;
+    const list = try c_alloc.alloc(types.Channel, 1);
+    list[0] = try testThread(101, 10, 0);
+    const joined = try c_alloc.alloc(Id, 1);
+    joined[0] = 101;
+    try s.apply(.{ .thread_list_sync = .{ .guild = 5, .parents = parents, .threads = list, .joined = joined } }, 0);
+    try std.testing.expect(s.channel(100).?.info.thread.?.archived);
+    try std.testing.expect(s.channel(101).?.info.thread.?.joined);
+    try std.testing.expectEqual(@as(u8, 1), s.threadIndex(10).?.n_shown);
+    try s.apply(.{ .channel_upsert = try testThread(101, 10, 0) }, 0);
+    try std.testing.expect(s.channel(101).?.info.thread.?.joined);
+    try s.apply(.{ .thread_joined = .{ .thread = 101, .joined = false } }, 0);
+    try std.testing.expect(!s.channel(101).?.info.thread.?.joined);
+}
+
+test "permissões da thread vêm do pai" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    s.me = 1;
+    const cs = try testStore(&s);
+    const g = try c_alloc.alloc(types.Guild, 1);
+    g[0] = .{ .id = 5, .name = try c_alloc.dupe(u8, "g"), .acronym = try c_alloc.dupe(u8, "G"), .owner = 9 };
+    try s.apply(.{ .ready = .{ .me = 1, .users = try c_alloc.alloc(types.User, 0), .guilds = g, .channels = try c_alloc.alloc(types.Channel, 0), .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
+    const roles = try c_alloc.alloc(types.Role, 1);
+    roles[0] = .{ .id = 5, .guild = 5, .name = try c_alloc.dupe(u8, "@everyone"), .permissions = types.perm.view_channel | types.perm.send_messages };
+    try s.apply(.{ .roles = .{ .guild = 5, .roles = roles } }, 0);
+    try s.apply(.{ .channel_upsert = try testThread(100, 10, 0) }, 0);
+    const th = &s.channel(100).?.info;
+    try std.testing.expect(s.canAccess(th));
+    try std.testing.expect(!s.canSend(th));
+    try std.testing.expect(!s.canCreateThread(&cs.info));
+    // O pai trancado tranca a thread.
+    const ow = try c_alloc.alloc(types.Overwrite, 1);
+    ow[0] = .{ .id = 5, .deny = types.perm.view_channel };
+    cs.info.overwrites = ow;
+    try std.testing.expect(!s.canAccess(th));
 }

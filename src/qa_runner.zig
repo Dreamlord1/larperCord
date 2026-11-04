@@ -2158,7 +2158,7 @@ const ops = [_]Op{
     .{ .sweep = &.{ "toggle:", "button:" } },
     key(c.ImGuiKey_Escape),
 
-} ++ @import("qa_alertas.zig").ops ++ [_]Op{
+} ++ @import("qa_alertas.zig").ops ++ @import("qa_threads.zig").ops ++ [_]Op{
     s("caixa de entrada"),
     click("guild:500000"),
     click("channel:500005"),
@@ -2512,7 +2512,7 @@ const ops_theme = [_]Op{
     expect("carrega e mostra a conversa", ready),
     expect("caixa de texto e mensagens na tela", composerVisible),
     .{ .shot = "tema" },
-} ++ qa_temas.ops_static ++ qa_temas.ops_motion ++ qa_temas.ops_window ++ [_]Op{
+} ++ qa_temas.ops_static ++ qa_temas.ops_motion ++ qa_temas.ops_window ++ @import("qa_threads.zig").ops_theme ++ [_]Op{
     click("composer"),
     .{ .text = "oi deste tema" },
     key(c.ImGuiKey_Enter),
@@ -2898,6 +2898,7 @@ pub const Runner = struct {
         h.update(&.{ st.profile_tab, @intFromBool(st.note_editing) });
         h.update(std.mem.asBytes(&@as(u32, app.store.notes.count())));
         h.update(std.mem.asBytes(&@import("ui/video.zig").qaState()));
+        h.update(std.mem.asBytes(&@import("ui/forum.zig").qaState()));
         h.update(std.mem.asBytes(&@as(u32, @intCast(app.actions.items.len))));
         if (st.activeChannel()) |cid| {
             const sc = st.scrollOf(cid);

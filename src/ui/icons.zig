@@ -117,3 +117,35 @@ pub fn bookmark(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32, filled: bool) voi
     }
     c.ImDrawList_AddPolyline(dl, &pts[0], pts.len, col, 1.8, c.ImDrawFlags_Closed);
 }
+
+/// Fórum: um balão com duas linhas de texto.
+pub fn forum(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
+    const th: f32 = 1.7;
+    c.ImDrawList_AddRectEx(dl, v(cx - 7.5, cy - 7), v(cx + 7.5, cy + 4.5), col, 3, th, 0);
+    line(dl, cx - 3.5, cy + 4.5, cx - 5, cy + 8, col, th);
+    line(dl, cx - 5, cy + 8, cx - 0.5, cy + 4.5, col, th);
+    line(dl, cx - 4, cy - 3.5, cx + 4, cy - 3.5, col, th);
+    line(dl, cx - 4, cy + 0.5, cx + 1.5, cy + 0.5, col, th);
+}
+
+/// Canal de mídia: uma foto com uma montanha e o sol.
+pub fn media(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
+    const th: f32 = 1.7;
+    c.ImDrawList_AddRectEx(dl, v(cx - 8, cy - 6.5), v(cx + 8, cy + 6.5), col, 2.5, th, 0);
+    line(dl, cx - 6, cy + 4, cx - 1.5, cy - 1, col, th);
+    line(dl, cx - 1.5, cy - 1, cx + 2, cy + 2.5, col, th);
+    line(dl, cx + 2, cy + 2.5, cx + 3.8, cy + 0.8, col, th);
+    line(dl, cx + 3.8, cy + 0.8, cx + 6, cy + 4, col, th);
+    c.ImDrawList_AddCircleFilled(dl, v(cx + 3.5, cy - 3), 1.5, col, 0);
+}
+
+/// Thread: o balão pequeno com uma linha saindo dele.
+pub fn thread(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
+    const th: f32 = 1.6;
+    c.ImDrawList_AddRectEx(dl, v(cx - 7, cy - 6), v(cx + 7, cy + 3), col, 2.5, th, 0);
+    line(dl, cx - 3, cy + 3, cx - 4.5, cy + 6.5, col, th);
+    line(dl, cx - 4.5, cy + 6.5, cx, cy + 3, col, th);
+    c.ImDrawList_AddCircleFilled(dl, v(cx - 3, cy - 1.5), 1, col, 0);
+    c.ImDrawList_AddCircleFilled(dl, v(cx, cy - 1.5), 1, col, 0);
+    c.ImDrawList_AddCircleFilled(dl, v(cx + 3, cy - 1.5), 1, col, 0);
+}

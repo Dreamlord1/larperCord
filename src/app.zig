@@ -681,11 +681,10 @@ pub const App = struct {
 
     fn openChannel(app: *App, id: types.Id, new_tab: bool) void {
         const cs = app.store.channel(id) orelse return;
-        if (cs.info.kind != .text) return;
+        if (cs.info.kind != .text and cs.info.kind != .forum) return;
         app.st.guild = cs.info.guild;
         app.st.friends = false;
-        // Lista de membros do servidor, vista deste canal.
-        if (cs.info.guild != 0) app.cmd(.{ .subscribe_guild = .{ .guild = cs.info.guild, .channel = id } });
+        app.subscribeTo(cs);
         app.st.last_channel.put(app.gpa, cs.info.guild, id) catch {};
         for (app.st.tabs.items, 0..) |t, i| if (t == id) {
             app.st.tab = i;
@@ -698,12 +697,26 @@ pub const App = struct {
         app.afterOpen(cs);
     }
 
+    /// Lista de membros do servidor, vista deste canal. Numa thread, a do
+    /// canal pai (ela não tem lista própria no op 14), mais quem está nela.
+    fn subscribeTo(app: *App, cs: anytype) void {
+        if (cs.info.guild == 0) return;
+        const parent = if (cs.info.thread != null) cs.info.parent orelse cs.info.id else cs.info.id;
+        app.cmd(.{ .subscribe_guild = .{ .guild = cs.info.guild, .channel = parent, .thread = if (cs.info.thread != null) cs.info.id else 0 } });
+    }
+
     fn afterOpen(app: *App, cs: anytype) void {
         app.store.markRead(cs.info.id);
         app.st.filtros.clear(&app.store, cs.info.id);
         app.st.focus_input = true;
         // Trocou de conversa: a que ficou para trás vai para o disco.
         msg_cache.leaving(&app.store, cs.info.id);
+        // Fórum não tem conversa: a página pede os posts (ui/forum.zig).
+        if (cs.info.kind == .forum) return;
+        if (cs.info.thread != null and !cs.members_asked) {
+            cs.members_asked = true;
+            app.cmd(.{ .fetch_thread_members = cs.info.id });
+        }
         if (cs.history == .none or cs.history == .failed) {
             cs.history = .loading;
             // O cache do disco aparece na hora; o histórico chega por cima.
@@ -804,7 +817,9 @@ pub const App = struct {
             .select_guild => |g| {
                 st.guild = g;
                 // Mensagens diretas sem conversa aberta: começa pelos amigos.
-                const ch = st.last_channel.get(g) orelse app.firstTextChannel(g) orelse return app.handle(.open_friends);
+                // O último aberto pode ter sumido (uma thread apagada).
+                const last = if (st.last_channel.get(g)) |id| (if (app.store.channel(id) != null) id else null) else null;
+                const ch = last orelse app.firstTextChannel(g) orelse return app.handle(.open_friends);
                 if (g == 0 and st.last_channel.get(0) == null) return app.handle(.open_friends);
                 app.openChannel(ch, false);
             },
@@ -910,6 +925,7 @@ pub const App = struct {
                 st.friends = false;
                 if (app.store.channel(st.tabs.items[i])) |cs| {
                     st.guild = cs.info.guild;
+                    if (cs.info.thread != null) app.subscribeTo(cs);
                     app.afterOpen(cs);
                 }
             },
@@ -1021,6 +1037,10 @@ pub const App = struct {
                     for (app.store.channelsOf(id)) |ch| {
                         app.store.markRead(ch);
                         st.filtros.clear(&app.store, ch);
+                        for (app.store.threadsOf(ch)) |tid| {
+                            app.store.markRead(tid);
+                            st.filtros.clear(&app.store, tid);
+                        }
                     }
                     g.mentions = 0;
                 }
@@ -1078,6 +1098,39 @@ pub const App = struct {
                     st.voice_save_ms = ms;
                     app.saveSettings();
                 }
+            },
+            .create_thread => |ct| {
+                defer app.gpa.free(ct.name);
+                const f = app.store.findAny(ct.message) orelse return;
+                const ca = std.heap.c_allocator;
+                const name = ca.dupe(u8, ct.name) catch return;
+                app.cmd(.{ .create_thread = .{ .channel = f.cs.info.id, .message = ct.message, .name = name } });
+            },
+            .create_post => |cp| {
+                defer {
+                    app.gpa.free(cp.name);
+                    app.gpa.free(cp.content);
+                    app.gpa.free(cp.tags);
+                }
+                const ca = std.heap.c_allocator;
+                const name = ca.dupe(u8, cp.name) catch return;
+                const content = ca.dupe(u8, cp.content) catch return ca.free(name);
+                const tags = ca.dupe(types.Id, cp.tags) catch {
+                    ca.free(name);
+                    ca.free(content);
+                    return;
+                };
+                app.cmd(.{ .create_post = .{ .forum = cp.forum, .name = name, .content = content, .tags = tags } });
+            },
+            .join_thread => |jt| app.cmd(.{ .join_thread = .{ .thread = jt.thread, .join = jt.join } }),
+            .fetch_threads => |ft| {
+                const cs = app.store.channel(ft.channel) orelse return;
+                const page = if (ft.archived) &cs.archived_page else &cs.active_page;
+                if (page.state == .loading) return;
+                // Sem nenhuma página ainda: começa do começo.
+                if (page.state != .loaded) page.* = .{};
+                page.state = .loading;
+                app.cmd(.{ .fetch_threads = .{ .channel = ft.channel, .guild = cs.info.guild, .archived = ft.archived, .offset = page.offset, .before = page.before } });
             },
             .toggle_category => |id| {
                 if (st.collapsed.contains(id)) _ = st.collapsed.remove(id) else st.collapsed.put(app.gpa, id, {}) catch {};
@@ -1230,6 +1283,7 @@ pub const App = struct {
             };
             app.store.apply(e, now()) catch {};
             if (quiet) |ch| app.st.filtros.quiet(app.gpa, &app.store, ch);
+            if (e == .thread_open) app.openChannel(e.thread_open, false);
         }
         if (!was_ready and app.store.ready) {
             // O Discord aceitou: agora sim guarda a conta (e o token, se pediram).
@@ -1244,6 +1298,12 @@ pub const App = struct {
             var it = app.store.channels.valueIterator();
             while (it.next()) |p| {
                 const cs = p.*;
+                // O que veio antes da queda pode ter mudado: a página pede de novo.
+                if (cs.info.kind == .forum) {
+                    cs.active_page = .{};
+                    cs.archived_page = .{};
+                    continue;
+                }
                 if (cs.cached or cs.history == .failed) {
                     if (cs.history == .failed) cs.history = .loading;
                     app.cmd(.{ .fetch_history = cs.info.id });
