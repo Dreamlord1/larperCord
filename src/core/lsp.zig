@@ -242,9 +242,24 @@ pub fn validLang(lang: []const u8) bool {
     return true;
 }
 
-/// `untitled:larpercord-composer.zig`: documento virtual, nada em disco.
-pub fn documentUri(out: []u8, ext: []const u8) []const u8 {
-    return std.fmt.bufPrint(out, "untitled:larpercord-composer.{s}", .{ext}) catch "untitled:larpercord-composer";
+/// `file://<pasta vazia>/larpercord-composer.zig`: documento virtual, nada em
+/// disco (o texto vai no didOpen). Tem de ser `file:` porque o clangd, entre
+/// outros, recusa qualquer outro esquema. A pasta é a do próprio servidor.
+pub fn documentUri(out: []u8, dir: []const u8, ext: []const u8) []const u8 {
+    var w = std.Io.Writer.fixed(out);
+    write: {
+        w.writeAll("file://") catch break :write;
+        // Windows: `C:\\pasta` vira `/C:/pasta`.
+        if (dir.len == 0 or (dir[0] != '/' and dir[0] != '\\')) w.writeByte('/') catch break :write;
+        for (dir) |ch| switch (ch) {
+            '\\' => w.writeByte('/') catch break :write,
+            'A'...'Z', 'a'...'z', '0'...'9', '/', '.', '_', '-', '~', ':' => w.writeByte(ch) catch break :write,
+            else => w.print("%{X:0>2}", .{ch}) catch break :write,
+        };
+        w.print("/larpercord-composer.{s}", .{ext}) catch break :write;
+        return w.buffered();
+    }
+    return "file:///larpercord-composer";
 }
 
 /// `PATH` é separado por `:` e por `;` no Windows.
@@ -533,7 +548,8 @@ pub fn handleMessage(gpa: std.mem.Allocator, body: []const u8, uri: []const u8, 
         if (!std.mem.eql(u8, m, "textDocument/publishDiagnostics")) return .ignored;
         const params = jsonx.get(root, "params") orelse return .ignored;
         const got = jsonx.str(jsonx.get(params, "uri")) orelse return .ignored;
-        if (!std.mem.eql(u8, got, uri)) return .ignored;
+        // Só o nome: o servidor pode devolver o caminho normalizado.
+        if (!std.mem.eql(u8, std.fs.path.basenamePosix(got), std.fs.path.basenamePosix(uri))) return .ignored;
         const version = if (jsonx.get(params, "version")) |v| (if (v == .integer) v.integer else null) else null;
         const items = jsonx.array(jsonx.get(params, "diagnostics"));
         return .{ .diagnostics = .{ .version = version, .n = collectDiags(items, out), .total = items.len } };
@@ -919,7 +935,8 @@ test "etiquetas" {
     try t.expect(!validLang("Zig"));
     try t.expect(!validLang(""));
     var buf: [64]u8 = undefined;
-    try t.expectEqualStrings("untitled:larpercord-composer.zig", documentUri(&buf, "zig"));
+    try t.expectEqualStrings("file:///tmp/a%20b/larpercord-composer.zig", documentUri(&buf, "/tmp/a b", "zig"));
+    try t.expectEqualStrings("file:///C:/x/larpercord-composer.c", documentUri(&buf, "C:\\x", "c"));
 }
 
 test "liberação de plugin vale só para aquele argv" {

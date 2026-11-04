@@ -377,7 +377,7 @@ const Server = struct {
     }
 
     fn uri(s: *const Server, buf: []u8) []const u8 {
-        return L.documentUri(buf, s.spec.ext.slice());
+        return L.documentUri(buf, std.mem.sliceTo(&scratch_buf, 0), s.spec.ext.slice());
     }
 };
 
@@ -813,7 +813,7 @@ fn statusPid(s: *const Server) i64 {
 /// está lento, só a versão mais nova vai.
 fn sendDoc(s: *Server, now: u64) bool {
     if (s.out_at < s.out.items.len) return false;
-    var ubuf: [64]u8 = undefined;
+    var ubuf: [1800]u8 = undefined;
     const uri = s.uri(&ubuf);
     if (s.close_doc) {
         s.close_doc = false;
@@ -872,7 +872,7 @@ fn flush(s: *Server, slot: *?*Server, now: u64) bool {
 }
 
 fn onMessage(s: *Server, slot: *?*Server, body: []const u8, now: u64) void {
-    var ubuf: [64]u8 = undefined;
+    var ubuf: [1800]u8 = undefined;
     const ev = L.handleMessage(gpa, body, s.uri(&ubuf), &diag_scratch, &s.out) catch {
         // JSON quebrado num quadro bom: ignora, mas o resto da conversa segue.
         return;

@@ -64,8 +64,8 @@ O app guarda o seu token do Discord, então o servidor roda com o mínimo possí
   não chegam até ele.
 - **Pasta:** ele roda numa pasta própria (`~/.cache/larpercord/lsp-scratch`). O que um servidor
   deixou ali é apagado antes do próximo início, menos subpastas que não estão vazias: o app não entra
-  nelas, então um link deixado ali não o faz apagar mais nada. `rootUri` e `workspaceFolders` são `null`, e o documento é o virtual
-  `untitled:larpercord-composer.<ext>`. Nada do que você digita é gravado em disco, e seus projetos
+  nelas, então um link deixado ali não o faz apagar mais nada. `rootUri` e `workspaceFolders` são `null`, e o documento é um virtual,
+  `file://<essa pasta vazia>/larpercord-composer.<ext>`, que nunca existe em disco (servidores como o clangd só aceitam `file:`). Nada do que você digita é gravado em disco, e seus projetos
   ficam de fora. Isso também quer dizer que um servidor que espera um projeto (imports, arquivo de
   build) só vê um arquivo isolado, então os erros são só daquele trecho.
 - **Arquivos abertos:** no Linux, os soquetes e arquivos do app são fechados no filho.

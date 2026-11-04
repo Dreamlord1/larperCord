@@ -283,7 +283,7 @@ fn auditFds(_: *App) bool {
 }
 fn auditUri(_: *App) bool {
     const u = auditField("uri") orelse return false;
-    return std.mem.eql(u8, u, "untitled:larpercord-composer.zig");
+    return std.mem.startsWith(u8, u, "file:///") and std.mem.endsWith(u8, u, "/larpercord-composer.zig");
 }
 fn tokenStillHere(_: *App) bool {
     const t = c.SDL_getenv("LARPER_TOKEN") orelse return false;
@@ -573,7 +573,7 @@ pub const ops = [_]Op{
     expect("rootUri e workspaceFolders nulos", auditRoot),
     expect("pasta de trabalho vazia", auditCwd),
     expect("só stdin, stdout e stderr abertos (nada do app vaza)", auditFds),
-    expect("documento virtual (untitled:)", auditUri),
+    expect("documento virtual (file: na pasta vazia)", auditUri),
 
     s("lsp: espera entre as teclas"),
     run(markChanges),
@@ -805,6 +805,47 @@ pub const ops = [_]Op{
     expectLong("nada ficou rodando", threadGone),
     run(clearText),
     .{ .wait = 30 },
+};
+
+// --- Um servidor de verdade (QA_LSP_REAL=/caminho/clangd), só à mão ------------------
+
+fn realPrepare(app: *App) void {
+    prepare(app);
+    const cmd = std.mem.span(c.SDL_getenv("QA_LSP_REAL") orelse return);
+    const set = &app.st.settings;
+    set.lsp_cmd_cpp.set(cmd);
+    set.lsp_on_cpp = true;
+}
+fn realText(app: *App) void {
+    setMarked(app, "```cpp\nint main() { return naoexiste;| }\n```");
+}
+var real_seen: u32 = 0;
+var real_diags: net.Diagnostics = .{};
+fn realDiag(_: *App) bool {
+    _ = net.copyDiags(&real_seen, &real_diags);
+    if (real_diags.n == 0) return false;
+    for (real_diags.items[0..real_diags.n]) |*di| std.debug.print("[lsp real] linha {d} col {d}: {s}\n", .{ di.line, di.col, di.message() });
+    return true;
+}
+fn realDead(_: *App) bool {
+    return childCount() == 0;
+}
+fn realStop(_: *App) void {
+    net.stopAll();
+}
+
+pub const ops_real = [_]Op{
+    s("lsp: servidor de verdade"),
+    click("guild:500000"),
+    click("channel:500005"),
+    run(realPrepare),
+    click("composer"),
+    run(realText),
+    .{ .expect = .{ .name = "o servidor de verdade aponta o erro", .check = realDiag, .timeout_ms = 20000 } },
+    .{ .wait = 200 },
+    shot("lsp-real"),
+    run(realStop),
+    .{ .expect = .{ .name = "parar mata o servidor", .check = realDead, .timeout_ms = 5000 } },
 };
 
 // --- Fechar o app com um servidor de pé (conferido por tools/qa_lsp.sh) ------------------

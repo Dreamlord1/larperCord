@@ -64,8 +64,8 @@ The app holds your Discord token, so a server runs with as little as possible:
   rest of your environment do not reach it.
 - **Folder:** it runs in a scratch folder (`~/.cache/larpercord/lsp-scratch`). Whatever a server
   left there is removed before the next start, except subfolders that aren't empty: the app does
-  not walk into them, so a link left there can't make it delete anything else. `rootUri` and `workspaceFolders` are `null`, and the document is the virtual
-  `untitled:larpercord-composer.<ext>`. Nothing you type is written to disk, and your projects
+  not walk into them, so a link left there can't make it delete anything else. `rootUri` and `workspaceFolders` are `null`, and the document is a virtual
+  `file://<that scratch folder>/larpercord-composer.<ext>` that never exists on disk (servers such as clangd only accept `file:`). Nothing you type is written to disk, and your projects
   are not involved. This also means a server that wants a project (imports, a build file) only
   sees one isolated file, so its errors are about that snippet alone.
 - **Open files:** on Linux the app's sockets and files are closed in the child.

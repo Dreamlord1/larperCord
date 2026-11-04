@@ -20,6 +20,7 @@ const Key = []const u8;
 const has_lsp_qa = @import("builtin").mode == .debug;
 const lsp_ops = if (has_lsp_qa) @import("qa_lsp.zig").ops else [_]Op{};
 const lsp_ops_quit = if (has_lsp_qa) @import("qa_lsp.zig").ops_quit else [_]Op{};
+const lsp_ops_real = if (has_lsp_qa) @import("qa_lsp.zig").ops_real else [_]Op{};
 
 /// Onde agir: uma marcação (com deslocamento opcional) ou uma marcação
 /// calculada na hora (depende de IDs que só existem durante o teste).
@@ -2543,6 +2544,7 @@ const ops_leitura = [_]Op{
 const ops_voz = [_]Op{ expect("pronto", ready), click("guild:500000") } ++ @import("qa_voz.zig").ops;
 const ops_lsp = [_]Op{expect("pronto", ready)} ++ lsp_ops;
 const ops_lsp_quit = [_]Op{expect("pronto", ready)} ++ lsp_ops_quit;
+const ops_lsp_real = [_]Op{expect("pronto", ready)} ++ lsp_ops_real;
 
 const ops_voice = [_]Op{
     s("voz"),
@@ -2853,6 +2855,7 @@ fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "voz")) return &ops_voz;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp")) return &ops_lsp;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp-quit")) return &ops_lsp_quit;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp-real")) return &ops_lsp_real;
     const scene = std.mem.span(c.SDL_getenv("QA_SCENE") orelse return &ops);
     if (std.mem.eql(u8, scene, "ctrl")) return &ops_ctrl;
     if (std.mem.eql(u8, scene, "nome")) return &ops_nome;
