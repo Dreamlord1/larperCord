@@ -2,7 +2,7 @@
 
 # larperCord
 
-**Um cliente de Discord para Linux e Windows, nativo de cerca de 50 MB, cuja interface inteira é um arquivo de tema.**
+**Um cliente de Discord nativo, para Linux e Windows, de cerca de 50 MB, cuja interface inteira é um arquivo de tema.**
 
 Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 

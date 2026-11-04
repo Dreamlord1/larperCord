@@ -17,7 +17,10 @@ fn addLua(b: *std.Build, m: *std.Build.Module) void {
         .files = &lua_sources,
         // Sem o sanitizador de UB do Zig: o Lua conta com aritmética de C
         // que ele marcaria (e o QA roda em debug).
-        .flags = if (windows) &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined" } else &.{ "-std=gnu99", "-O2", "-DLUA_USE_POSIX", "-fno-sanitize=undefined" },
+        // No Windows o longjmp desenrola a pilha pelas tabelas do SEH e morre ao
+        // passar por um quadro em Zig (o gancho que para plugin em laço infinito).
+        // Com o quadro nulo no _setjmp ele só restaura os registradores.
+        .flags = if (windows) &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined", "-DLUAI_THROW(L,c)=longjmp((c)->b,1)", "-DLUAI_TRY(L,c,a)=if(_setjmp((c)->b,0)==0){a}", "-Dluai_jmpbuf=jmp_buf" } else &.{ "-std=gnu99", "-O2", "-DLUA_USE_POSIX", "-fno-sanitize=undefined" },
     });
 }
 
