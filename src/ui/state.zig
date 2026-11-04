@@ -5,14 +5,19 @@ const Id = @import("../core/types.zig").Id;
 const i18n = @import("i18n.zig");
 pub const Settings = @import("settings_state.zig").Settings;
 
-pub const MenuKind = enum { message, user, channel, guild, status };
+/// `voice_move`: os canais de voz para onde dá para mover alguém (id = a pessoa).
+pub const MenuKind = enum { message, user, channel, guild, status, voice_move };
 
 pub const Popup = union(enum) {
     none,
     menu: struct { kind: MenuKind, id: Id, x: f32, y: f32 },
     profile: struct { user: Id, x: f32, y: f32 },
+    /// Perfil grande, no meio da tela (aba em `profile_tab`).
+    profile_full: struct { user: Id },
     /// `target` = mensagem que vai receber a reação (0 = caixa de texto).
     emoji: struct { target: Id, x: f32, y: f32 },
+    /// Mixer da call: volume individual de cada pessoa.
+    mixer: struct { x: f32, y: f32 },
 };
 
 /// Seleção de texto entre mensagens: âncora e cabeça (mensagem + byte).
@@ -107,6 +112,13 @@ pub const State = struct {
     /// DM pedida ao Discord: abre quando o canal chegar.
     pending_dm: Id = 0,
     voice: ?Id = null,
+    voice_guild: Id = 0,
+    voice_status: @import("../core/event.zig").VoiceStatus = .disconnected,
+    /// Mixer aberto na barra de voz.
+    voice_mixer: bool = false,
+    /// Volume individual de cada pessoa na call (0..2).
+    voice_volumes: std.AutoHashMapUnmanaged(Id, f32) = .empty,
+    voice_save_ms: i64 = 0,
     muted: bool = false,
     deafened: bool = false,
     collapsed: std.AutoHashMapUnmanaged(Id, void) = .empty,
@@ -120,6 +132,11 @@ pub const State = struct {
     popup: Popup = .none,
     /// Lista de cargos para dar, aberta no cartão de perfil.
     role_picker: bool = false,
+    /// Aba do perfil grande: 0 atividade, 1 amigos em comum, 2 servidores em comum.
+    profile_tab: u8 = 0,
+    /// Editando a nota do perfil (texto em `note_input`).
+    note_editing: bool = false,
+    note_input: [256]u8 = @splat(0),
     /// Caixa de texto do cartão de perfil ("Mensagem @fulano").
     popup_input: [256]u8 = @splat(0),
     reply_to: Id = 0,

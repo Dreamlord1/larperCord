@@ -166,6 +166,7 @@ pub const App = struct {
     }
 
     pub fn destroy(app: *App) void {
+        app.saveSettings();
         _ = c.SDL_RemoveTimer(app.timer);
         app.asked_profiles.deinit(app.gpa);
         var colors_it = app.theme_colors.iterator();
@@ -329,6 +330,9 @@ pub const App = struct {
         st.collapsed.clearRetainingCapacity();
         st.scroll.clearRetainingCapacity();
         st.voice = null;
+        st.voice_guild = 0;
+        st.voice_status = .disconnected;
+        st.voice_mixer = false;
         st.popup = .none;
         st.palette.open = false;
         st.settings.open = false;
@@ -484,6 +488,12 @@ pub const App = struct {
                 // `theme-options "terminal" crt=#false ascii=#true`
                 const name = (n.arg(0) orelse continue).asString() orelse continue;
                 for (n.props) |p| if (p.value.asBool()) |v| app.themes.choose(name, p.key, v);
+            } else if (std.mem.eql(u8, n.name, "voice-volume")) {
+                // `voice-volume "1234" 0.8`
+                const sid = (n.arg(0) orelse continue).asString() orelse continue;
+                const gain = (n.arg(1) orelse continue).asNumber() orelse continue;
+                const uid = std.fmt.parseInt(types.Id, sid, 10) catch continue;
+                app.st.voice_volumes.put(app.gpa, uid, @floatCast(std.math.clamp(gain, 0, 2))) catch {};
             } else if (std.mem.eql(u8, n.name, "theme-colors")) {
                 // `theme-colors "vidro" mode=dark bg="#101014" accent="#ff00aa"`
                 const name = (n.arg(0) orelse continue).asString() orelse continue;
@@ -526,6 +536,8 @@ pub const App = struct {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(app.gpa);
         settings_state.write(&app.st.settings, app.themes.name(), &out, app.gpa) catch return;
+        var vit = app.st.voice_volumes.iterator();
+        while (vit.next()) |e| out.print(app.gpa, "voice-volume \"{d}\" {d:.3}\n", .{ e.key_ptr.*, e.value_ptr.* }) catch return;
         var it = app.themes.choices.iterator();
         while (it.next()) |e| {
             out.print(app.gpa, "theme-options \"{s}\"", .{e.key_ptr.*}) catch return;
@@ -669,15 +681,35 @@ pub const App = struct {
                 app.openChannel(ch, false);
             },
             .set_status => |status| {
-                st.settings.my_status = @intFromEnum(status);
+                st.settings.my_status = @backingInt(status);
                 if (app.store.users.getPtr(app.store.me)) |me| me.status = status;
                 app.cmd(.{ .set_status = status });
                 app.saveSettings();
             },
             .want_profile => |user| {
-                if (app.asked_profiles.contains(user)) return;
-                app.asked_profiles.put(app.gpa, user, {}) catch return;
+                // Por servidor também: "no servidor desde" muda com ele.
+                const key = user ^ (st.guild *% 0x9E3779B97F4A7C15);
+                if (app.asked_profiles.contains(key)) return;
+                app.asked_profiles.put(app.gpa, key, {}) catch return;
                 app.cmd(.{ .fetch_profile = .{ .user = user, .guild = st.guild } });
+            },
+            .open_full_profile => |fp| {
+                st.popup = .{ .profile_full = .{ .user = fp.user } };
+                st.profile_tab = fp.tab;
+            },
+            .set_note => |n| {
+                defer app.gpa.free(n.text);
+                const ca = std.heap.c_allocator;
+                const mine = ca.dupe(u8, n.text) catch return;
+                app.store.apply(.{ .note = .{ .user = n.user, .text = mine } }, now()) catch {};
+                if (app.store.demo) return;
+                app.cmd(.{ .set_note = .{ .user = n.user, .text = ca.dupe(u8, n.text) catch return } });
+            },
+            .move_member => |mm| app.cmd(.{ .move_member = .{ .guild = mm.guild, .user = mm.user, .channel = mm.channel } }),
+            .want_app_icon => |id| {
+                if (app.asked_profiles.contains(id)) return;
+                app.asked_profiles.put(app.gpa, id, {}) catch return;
+                app.cmd(.{ .fetch_app = id });
             },
             .member_role => |mr| {
                 app.store.memberRoleLocal(mr.guild, mr.user, mr.role, mr.add) catch return;
@@ -820,15 +852,49 @@ pub const App = struct {
                 app.cmd(.{ .typing = id });
             },
             .toggle_voice => |ch| {
-                st.voice = if (st.voice == ch) null else ch;
-                app.cmd(.{ .join_voice = st.voice });
+                if (st.voice == ch) {
+                    st.voice = null;
+                    st.voice_status = .disconnected;
+                    st.voice_mixer = false;
+                    app.cmd(.{ .join_voice = .{ .guild = st.voice_guild, .channel = null, .mute = st.muted, .deaf = st.deafened } });
+                } else {
+                    const cs = app.store.channel(ch) orelse return;
+                    if (cs.info.kind != .voice) return;
+                    st.voice = ch;
+                    st.voice_guild = cs.info.guild;
+                    st.voice_status = .connecting;
+                    st.voice_mixer = false;
+                    app.cmd(.{ .join_voice = .{ .guild = cs.info.guild, .channel = ch, .mute = st.muted, .deaf = st.deafened } });
+                    var vit = st.voice_volumes.iterator();
+                    while (vit.next()) |e| app.cmd(.{ .voice_volume = .{ .user = e.key_ptr.*, .volume = e.value_ptr.* } });
+                }
             },
             .leave_voice => {
                 st.voice = null;
-                app.cmd(.{ .join_voice = null });
+                st.voice_status = .disconnected;
+                st.voice_mixer = false;
+                app.cmd(.{ .join_voice = .{ .guild = st.voice_guild, .channel = null, .mute = st.muted, .deaf = st.deafened } });
             },
-            .toggle_mute => st.muted = !st.muted,
-            .toggle_deafen => st.deafened = !st.deafened,
+            .toggle_mute => {
+                st.muted = !st.muted;
+                if (st.voice != null) app.cmd(.{ .voice_flags = .{ .mute = st.muted, .deaf = st.deafened } });
+            },
+            .toggle_deafen => {
+                st.deafened = !st.deafened;
+                if (st.deafened) st.muted = true;
+                if (st.voice != null) app.cmd(.{ .voice_flags = .{ .mute = st.muted, .deaf = st.deafened } });
+            },
+            .toggle_voice_mixer => st.voice_mixer = !st.voice_mixer,
+            .set_voice_volume => |vv| {
+                const val = std.math.clamp(vv.volume, 0, 2);
+                st.voice_volumes.put(app.gpa, vv.user, val) catch {};
+                app.cmd(.{ .voice_volume = .{ .user = vv.user, .volume = val } });
+                const ms = now();
+                if (ms - st.voice_save_ms > 2000) {
+                    st.voice_save_ms = ms;
+                    app.saveSettings();
+                }
+            },
             .toggle_category => |id| {
                 if (st.collapsed.contains(id)) _ = st.collapsed.remove(id) else st.collapsed.put(app.gpa, id, {}) catch {};
             },
@@ -899,6 +965,19 @@ pub const App = struct {
                 const n = @min(e.notice.len, app.last_notice.len);
                 @memcpy(app.last_notice[0..n], e.notice[0..n]);
                 app.last_notice_len = n;
+            }
+            if (e == .voice_status) {
+                const mine = e.voice_status.channel == 0 or app.st.voice == e.voice_status.channel;
+                if (mine) {
+                    app.st.voice_status = e.voice_status.status;
+                    if (e.voice_status.status == .disconnected and app.st.voice != null) {
+                        app.st.voice = null;
+                        app.st.voice_mixer = false;
+                        app.st.showToast(now(), true, "a call caiu", "the call dropped", .{});
+                    } else if (e.voice_status.status == .connected) {
+                        app.st.showToast(now(), false, "entrou na call", "joined the call", .{});
+                    }
+                }
             }
             if (e == .status and e.status == .failed) failed = true;
             if (e == .message_create and app.store.ready) app.notify(e.message_create);
@@ -1064,7 +1143,7 @@ pub const App = struct {
 
     fn onReady(app: *App) void {
         // O status escolhido da última vez (o Discord começa em online).
-        if (app.st.settings.my_status != 0) app.handle(.{ .set_status = @enumFromInt(@min(app.st.settings.my_status, 3)) });
+        if (app.st.settings.my_status != 0) app.handle(.{ .set_status = @fromBackingInt(@intCast(@min(app.st.settings.my_status, 3))) });
         if (!app.store.demo) {
             // Conta real: começa pelas DMs (ou pelo primeiro servidor).
             const g0: types.Id = if (app.store.channelsOf(0).len > 0) 0 else if (app.store.guilds.items.len > 0) app.store.guilds.items[0].id else 0;
@@ -1103,6 +1182,19 @@ pub const App = struct {
             if (!G.done and app.store.guilds.items.len > 0) {
                 G.done = true;
                 app.handle(.{ .select_guild = app.store.guilds.items[0].id });
+            }
+            return;
+        }
+        // "voice": entra numa call e abre o mixer para o print.
+        if (std.mem.eql(u8, which, "voice")) {
+            const V = struct {
+                var done = false;
+            };
+            if (!V.done) {
+                V.done = true;
+                if (app.store.guilds.items.len > 0) app.handle(.{ .select_guild = app.store.guilds.items[0].id });
+                app.handle(.{ .toggle_voice = gw.channelId(0, 13) });
+                app.st.popup = .{ .mixer = .{ .x = 90, .y = 410 } };
             }
             return;
         }
@@ -1198,7 +1290,7 @@ pub const App = struct {
             var input = false;
             while (got) {
                 if (e.type == app.win.wake_type) {
-                    switch (@as(platform.Wake, @enumFromInt(e.user.code))) {
+                    switch (@as(platform.Wake, @fromBackingInt(@intCast(e.user.code)))) {
                         .gateway => {
                             app.gw_signaled.store(false, .release);
                             app.drainEvents();

@@ -768,7 +768,7 @@ fn about(p: *Page) void {
     p.y += 40;
     p.note(i18n.tr("Cliente de Discord nativo: Zig + SDL3 + Dear ImGui + FreeType.", "Native Discord client: Zig + SDL3 + Dear ImGui + FreeType."));
     p.note(i18n.tr("Temas em KDL que reorganizam a interface inteira, recarregados ao salvar.", "KDL themes that rearrange the whole interface, reloaded on save."));
-    p.note(i18n.tr("Versão 0.3.0 · ainda sem chamadas de voz.", "Version 0.3.0 · voice calls aren't in yet."));
+    p.note(i18n.tr("Versão 0.4.0 · voz com E2EE (DAVE), mixer por pessoa e Opus 48 kHz.", "Version 0.4.0 · voice with E2EE (DAVE), per-person mixer and 48 kHz Opus."));
     p.note(i18n.tr("Cliente não oficial: usar contas de usuário fora do app oficial vai contra os termos do Discord.", "Unofficial client: using user accounts outside the official app is against Discord's terms."));
     p.divider();
     p.heading(i18n.tr("Feito com", "Built with"));

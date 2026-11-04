@@ -6,17 +6,17 @@
 
 Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 
-![Oito temas do larperCord](docs/themes.png)
+![Dez temas do larperCord](docs/themes.png)
 
-*O mesmo binário e os mesmos dados, só trocando o arquivo `.kdl`. São 8 temas, cada um em claro e escuro.*
+*O mesmo binário e os mesmos dados, só trocando o arquivo `.kdl`. São 10 temas, cada um em claro e escuro.*
 
 </div>
 
 > **English TL;DR**: a native Discord client prototype written in Zig. It idles at ~0% CPU,
 > uses ~40 MB of RAM (the official client uses 1.2+ GB on the same machine) and its whole
 > UI (layout, components, colors, fonts) is described by hot-reloadable [KDL](https://kdl.dev) theme
-> files. It speaks the real Discord gateway + REST API (text only, no voice yet) and falls back to a
-> demo mode with fake data when no token is configured.
+> files. It speaks the real Discord gateway + REST API, including voice calls with Discord's
+> DAVE end-to-end encryption, and falls back to a demo mode with fake data when no token is configured.
 
 > [!WARNING]
 > **Clientes de terceiros violam os Termos de Uso do Discord**, e a sua conta pode ser
@@ -49,6 +49,9 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 - **Conecta no Discord de verdade**: gateway por WebSocket com heartbeat, **RESUME de sessão**,
   **zlib-stream** e reconexão; IDENTIFY e cabeçalhos no formato do cliente web (a mesma
   uma requisição por vez e respeitando o rate limit.
+- **Chamadas de voz** de verdade: gateway v9, UDP/RTP, Opus 48 kHz estéreo, **DAVE (E2EE)** via
+  libdave/MLS, mic e saída pelo SDL3, mudo/ensurdecer, anel de "falando" e **mixer com volume
+  individual** de cada pessoa. A thread de voz só nasce quando você entra numa call.
 - **Interações do Discord**: menu do botão direito em mensagens, usuários, canais e servidores;
   barra de ações ao passar o mouse; **responder** (com a "curvinha" e clique para pular até a
   original); **editar** (`↑` na caixa vazia edita a última); **excluir**; **reações**;
@@ -82,6 +85,8 @@ Todos têm **modo claro e escuro** e **opções próprias** em Configurações �
 | `vidro` | cartões translúcidos com o blur do compositor | reflexo de luz nos cartões |
 | `terminal` | tmux + IRC; no claro, papel de impressora matricial | efeito CRT, logo em ASCII, fósforo verde |
 | `subsolo` | terminal de hacking underground, verde ácido e scanlines | rack horizontal, ultravioleta, logo em ASCII |
+| `orbital` | console de bordo em grafite e menta, com sistemas numerados | wordmark no topo, composer de comando, faixa de servidores no rodapé |
+| `editorial` | revista impressa, masthead em serifa e índice à direita | layout invertido, conversa em serifa, colofão |
 | `bolhas` | mensageiro com balões de conversa | "Entregue ✓✓" e balão de digitando |
 | `zen` | uma coluna central, letras maiores | a navegação se esconde sozinha |
 | `papel` | caderno com índice na margem e títulos em serifa | folha pautada com margem vermelha |
@@ -99,9 +104,10 @@ sair. O app procura nesta ordem:
 2. A variável `LARPER_TOKEN`
 3. O arquivo `~/.config/larpercord/token`, que precisa ter `chmod 600`
 
-larperCord ainda não tem backend de áudio/DAVE), imagens (avatares, anexos e emojis
-personalizados aparecem como texto), threads/fóruns, permissões por canal (canais sem acesso
-só mostram um aviso) e notificações.
+`--demo` força o modo demonstração mesmo com token. Ainda não tem: vídeo/streaming, imagens
+(avatares, anexos e emojis personalizados aparecem como texto), threads/fóruns, permissões por
+canal (canais sem acesso só mostram um aviso) e notificações. A voz usa o backend de áudio do
+sistema via SDL3 e só sobe a thread quando você entra numa call.
 
 ## Como ele fica leve
 

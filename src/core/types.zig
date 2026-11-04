@@ -29,6 +29,48 @@ pub const Profile = struct {
     accent: u32 = 0,
     bio: []const u8 = "",
     pronouns: []const u8 = "",
+    /// Nome de usuário (o @), quando é diferente do nome que aparece.
+    username: []const u8 = "",
+    /// Servidor do pedido e quando a pessoa entrou nele (ms; 0 = não sabe).
+    guild: Id = 0,
+    joined_ms: i64 = 0,
+    /// Impulsionando o servidor desde (ms; 0 = não).
+    boost_ms: i64 = 0,
+    mutual_guilds: []const Id = &.{},
+    mutual_friends: []const Id = &.{},
+    mutual_friends_count: u32 = 0,
+    connections: []const Connection = &.{},
+    badges: []const Badge = &.{},
+};
+
+/// Conta ligada ao perfil (GitHub, Steam, Spotify…). `url` vazio = sem link.
+pub const Connection = struct {
+    kind: []const u8,
+    name: []const u8,
+    url: []const u8 = "",
+};
+
+/// Insígnia do perfil: `icon` é o hash em cdn.discordapp.com/badge-icons/.
+pub const Badge = struct {
+    icon: []const u8,
+    description: []const u8,
+};
+
+/// Atividade de alguém (jogo, música, transmissão…), da presença.
+/// `kind` é o do Discord: 0 jogando, 1 transmitindo, 2 ouvindo,
+/// 3 assistindo, 5 competindo. Textos alocados; vazio = não tem.
+pub const Activity = struct {
+    kind: u8 = 0,
+    name: []const u8 = "",
+    details: []const u8 = "",
+    state: []const u8 = "",
+    /// Começo/fim (ms Unix; 0 = não diz).
+    start_ms: i64 = 0,
+    end_ms: i64 = 0,
+    /// Imagem grande já como URL (CDN/proxy do Discord) ou "".
+    image: []const u8 = "",
+    /// Aplicação (para o ícone do jogo quando não há imagem).
+    app: Id = 0,
 };
 
 /// Pasta de servidores da barra lateral (como no cliente oficial).
@@ -44,6 +86,7 @@ pub const GuildFolder = struct {
 pub const perm = struct {
     pub const administrator: u64 = 1 << 3;
     pub const manage_messages: u64 = 1 << 13;
+    pub const move_members: u64 = 1 << 24;
     pub const manage_roles: u64 = 1 << 28;
 };
 

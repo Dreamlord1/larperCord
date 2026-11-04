@@ -1,0 +1,110 @@
+// editorial — uma revista impressa: masthead em serifa, conversa em coluna
+// central, colaboradores à esquerda e o índice de canais à direita.
+theme "editorial" description="Revista impressa: masthead em serifa, conversa em coluna central e índice à direita." description-en="Print magazine: serif masthead, conversation column in the middle and an index on the right." author="larperCord" preview=mirror
+
+options {
+    option "manchete" label="Masthead" description="O cabeçalho grande com o nome da revista e os servidores." label-en="Masthead" description-en="The big header with the magazine name and servers." default=#true
+    option "abas" label="Abas de canal" description="Canais abertos como um sumário acima da conversa." label-en="Channel tabs" description-en="Open channels as a table of contents above the conversation." default=#true
+    option "status" label="Colofão" description="Conexão, tema, ping e relógio no pé da página." label-en="Colophon" description-en="Connection, theme, ping and clock at the bottom of the page." default=#true
+}
+
+colors mode=light {
+    bg          "#f4efe6"
+    rail        "#e8e0d1"
+    sidebar     "#efe8db"
+    surface     "#faf6ed"
+    elevated    "#ffffff"
+    overlay     "#ffffff"
+    text        "#1c1a17"
+    muted       "#5f574a"
+    faint       "#9b8f7a"
+    accent      "#a4161a"
+    accent-text "#ffffff"
+    border      "#d6cbb8"
+    hover       "alpha(#1c1a17, 0.05)"
+    selected    "alpha(#a4161a, 0.10)"
+    online      "#3f6b3f"
+    idle        "#a06a00"
+    dnd         "#a4161a"
+    danger      "#a4161a"
+    mention     "#a4161a"
+    link        "#1f4e79"
+    code-bg     "#ebe2d2"
+    bubble-self "alpha(#a4161a, 0.10)"
+    bubble-self-text "#3b0b0c"
+    bubble-other "#f0e8d9"
+    shadow      "alpha(#3a2a18, 0.14)"
+}
+roles mode=light "#7d1f1f" "#1f4e79" "#3f6b3f" "#8a6a00" "#5b3f6b" "#4a5a66" "#2f6e6e" "#3b3630"
+
+colors mode=dark {
+    bg          "#0b0a09"
+    rail        "#13110f"
+    sidebar     "#11100e"
+    surface     "#0b0a09"
+    elevated    "#1a1713"
+    overlay     "#12100d"
+    text        "#f3ead8"
+    muted       "#9b8f7a"
+    faint       "#5e5548"
+    accent      "#e63946"
+    accent-text "#ffffff"
+    border      "#2a241d"
+    hover       "alpha(#f3ead8, 0.05)"
+    selected    "alpha(#e63946, 0.14)"
+    online      "#7fb069"
+    idle        "#d9a441"
+    dnd         "#e63946"
+    danger      "#e63946"
+    mention     "#e63946"
+    link        "#d4a373"
+    code-bg     "#171410"
+    bubble-self "alpha(#e63946, 0.14)"
+    bubble-self-text "#ffe7e8"
+    bubble-other "#1a1713"
+    shadow      "alpha(black, 0.45)"
+}
+roles mode=dark "#e8a0a4" "#9db8d6" "#a9c98a" "#e0c070" "#c4a3d9" "#9fb0b8" "#7fc4c4" "#d9d0c0"
+
+fonts ui="Inter" mono="JetBrains Mono" size=15
+metrics radius=0
+
+layout {
+    column {
+        topbar height=30 bg=rail
+        row height=92 bg=bg padding-x=32 when=manchete {
+            column width=330 {
+                label height=58 text="larperCord" font="Liberation Serif" size=40 weight=bold color=text
+                label height=16 text="REVISTA DE CONVERSA" size=10 weight=semibold color=accent
+            }
+            column flex=1 {
+                spacer flex=1
+                guild-bar height=44 orientation=horizontal variant=bar shape=square size=34 icon-style=outline labels=#false indicators=#false
+                spacer flex=1
+            }
+            label width=150 align=right text="EDIÇÃO 08" size=10 weight=semibold color=faint font=mono
+        }
+        row flex=1 padding-x=32 padding-y=8 gap=24 {
+            column width=210 hide-below=1150 {
+                label height=28 text="COLABORADORES" size=10 weight=semibold color=faint font=mono
+                member-list flex=1 variant=tty font=mono
+            }
+            column flex=1 {
+                tabs height=36 variant=underline when=abas
+                header height=70 variant=minimal font="Liberation Serif"
+                messages flex=1 avatar=none spacing=20 font="Liberation Serif"
+                column height=80 {
+                    spacer flex=1
+                    composer height=44 variant=box font="Liberation Serif"
+                    spacer height=16
+                }
+            }
+            column width=240 {
+                label height=28 text="ÍNDICE" size=10 weight=semibold color=faint font=mono
+                channel-list flex=1 header=#false font=mono
+                user-panel height=52 variant=tty font=mono
+            }
+        }
+        status-bar height=24 variant=plain when=status items="conn theme ping ram spacer clock"
+    }
+}

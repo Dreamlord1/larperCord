@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
-      - run: pacman -Syu --noconfirm --needed git sdl3 curl zlib freetype2 fontconfig libwebp noto-fonts noto-fonts-emoji
+      - run: pacman -Syu --noconfirm --needed git sdl3 curl zlib freetype2 fontconfig libwebp opus noto-fonts noto-fonts-emoji
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:

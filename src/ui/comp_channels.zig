@@ -192,8 +192,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
     if (ch.kind == .voice) {
         for (cs.voice_members.items) |uid| {
             const u = ctx.store.user(uid) orelse continue;
-            // Ainda sem voz de verdade: ninguém aparece "falando".
-            const speaking = false;
+            const speaking = ctx.store.isSpeaking(uid, ctx.now_ms);
             // Clicar em quem está na call abre o perfil (botão direito: menu).
             const vr: d.Rect = .{ .x = rr.x + 26, .y = y2, .w = rr.w - 26, .h = if (variant == .tree) 20 else 26 };
             const vh = d.hit(ctx, @truncate(uid *% 31 +% ch.id), vr);
@@ -315,19 +314,50 @@ pub fn voiceBarHeight(tty: bool) f32 {
 fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     const cs = ctx.store.channel(vc) orelse return;
     const g = ctx.store.guild(cs.info.guild);
-    var buf: [128]u8 = undefined;
+    const connected = ctx.st.voice_status == .connected;
+    var buf: [160]u8 = undefined;
     if (tty) {
-        const t = i18n.fmt(&buf, "♪ {s}  [sair]", "♪ {s}  [leave]", .{cs.info.name});
-        d.text(ctx.dl, fam.get(.bold), ctx.th.font_size - 2, r.x + 10, d.centerY(r, ctx.th.font_size - 2), ctx.col(.online), t);
-        const hb = d.hitRaw(ctx, r);
-        qa.mark(r, "hangup", .{});
-        if (hb.clicked) ctx.act(.leave_voice);
+        const t = i18n.fmt(&buf, "♪ {s}  [mixer] [sair]", "♪ {s}  [mixer] [leave]", .{cs.info.name});
+        d.text(ctx.dl, fam.get(.bold), ctx.th.font_size - 2, r.x + 10, d.centerY(r, ctx.th.font_size - 2), if (connected) ctx.col(.online) else ctx.col(.idle), t);
+        const leave_r: d.Rect = .{ .x = r.right() - 44, .y = r.y, .w = 44, .h = r.h };
+        const mix_r: d.Rect = .{ .x = r.right() - 104, .y = r.y, .w = 58, .h = r.h };
+        qa.mark(leave_r, "hangup", .{});
+        if (d.hitRaw(ctx, leave_r).clicked) ctx.act(.leave_voice);
+        qa.mark(mix_r, "voice-mixer", .{});
+        if (d.hitRaw(ctx, mix_r).clicked) ctx.popup(.{ .mixer = .{ .x = r.x + 4, .y = r.y - 300 } });
         return;
     }
     d.line(ctx.dl, r.x + 8, r.bottom() - 0.5, r.right() - 8, r.bottom() - 0.5, ctx.col(.border), 1);
-    d.text(ctx.dl, fam.get(.semibold), 14, r.x + 14, r.y + 9, ctx.col(.online), i18n.tr("Voz conectada", "Voice Connected"));
-    const sub = std.fmt.bufPrint(&buf, "{s} / {s}", .{ cs.info.name, if (g) |x| x.name else "" }) catch "";
-    _ = d.textClipped(ctx.dl, fam.get(.regular), 13, r.x + 14, r.y + 29, ctx.col(.muted), sub, r.w - 70);
+    d.text(ctx.dl, fam.get(.semibold), 14, r.x + 14, r.y + 8, if (connected) ctx.col(.online) else ctx.col(.idle), if (connected) i18n.tr("Voz conectada", "Voice Connected") else i18n.tr("Conectando à call…", "Connecting to the call…"));
+    const sub = if (g) |x|
+        std.fmt.bufPrint(&buf, "{s} / {s}{s}{s}", .{
+            cs.info.name,
+            x.name,
+            if (ctx.st.muted) (if (i18n.en()) " · muted" else " · mudo") else "",
+            if (ctx.st.deafened) (if (i18n.en()) " · deafened" else " · surdo") else "",
+        }) catch cs.info.name
+    else
+        cs.info.name;
+    _ = d.textClipped(ctx.dl, fam.get(.regular), 12, r.x + 14, r.y + 28, ctx.col(.muted), sub, r.w - 98);
+
+    // Mixer: três faders.
+    const mr: d.Rect = .{ .x = r.right() - 80, .y = r.y + 11, .w = 32, .h = 32 };
+    const mh = d.hitRaw(ctx, mr);
+    qa.mark(mr, "voice-mixer", .{});
+    const mk = anim.to(anim.id("voice-mixer", 0), if (mh.hovered) 1 else 0, 24);
+    d.rect(ctx.dl, mr, ctx.col(.hover).alpha(mk * 1.5), ctx.th.radius);
+    const mx = mr.x + 16;
+    const my = mr.y + 16;
+    const mink = ctx.col(.muted).mix(ctx.col(.text), mk);
+    for (0..3) |i| {
+        const yy = my - 7 + @as(f32, @floatFromInt(i)) * 7;
+        d.line(ctx.dl, mx - 7, yy, mx + 7, yy, mink.alpha(0.6), 1.3);
+        const kx = mx - 7 + @as(f32, @floatFromInt((i * 5) % 14));
+        c.ImDrawList_AddCircleEx(ctx.dl, d.v(kx, yy), 2.2, mink.u(), 0, 1.2, 0);
+    }
+    d.tip(ctx, mr, i18n.tr("Mixer da call", "Call mixer"), mh.hovered);
+    if (mh.clicked) ctx.popup(.{ .mixer = .{ .x = r.x + 4, .y = r.y - 300 } });
+
     const br: d.Rect = .{ .x = r.right() - 44, .y = r.y + 11, .w = 32, .h = 32 };
     const hb = d.hitRaw(ctx, br);
     qa.mark(br, "hangup", .{});
@@ -338,6 +368,7 @@ fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     const ink = ctx.col(.muted).mix(ctx.col(.danger), k);
     d.line(ctx.dl, cx - 5, cy - 5, cx + 5, cy + 5, ink, 2.2);
     d.line(ctx.dl, cx + 5, cy - 5, cx - 5, cy + 5, ink, 2.2);
+    d.tip(ctx, br, i18n.tr("Sair da call", "Leave call"), hb.hovered);
     if (hb.clicked) ctx.act(.leave_voice);
 }
 

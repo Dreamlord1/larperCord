@@ -54,8 +54,13 @@ pub const Event = union(enum) {
     /// Aviso para mostrar ao usuário (texto alocado).
     notice: []const u8,
     /// `activity` vazio limpa a atividade; null mantém a anterior.
-    presence_update: struct { user: Id, status: types.Status, activity: ?[]const u8 = null },
+    /// `activities`: null mantém as anteriores, vazio limpa (o Store assume).
+    presence_update: struct { user: Id, status: types.Status, activity: ?[]const u8 = null, activities: ?[]types.Activity = null },
     voice_state: struct { channel: ?Id, user: Id },
+    /// Estado da nossa conexão de voz (a barra "Voz conectada").
+    voice_status: struct { status: VoiceStatus, channel: Id = 0 },
+    /// Alguém começou/parou de falar na call (o anel verde).
+    voice_speaking: struct { user: Id, speaking: bool },
     latency: u32,
     /// Cargos de um servidor (nomes alocados), para os grupos da lista de membros.
     roles: struct { guild: Id, roles: []types.Role },
@@ -74,10 +79,16 @@ pub const Event = union(enum) {
     /// Perfil completo de alguém (o Store assume os textos).
     profile: struct { user: Id, profile: types.Profile },
     /// Amizade/pedido/bloqueio (`none` = deixou de existir).
-    relationship: struct { user: Id, kind: types.Relationship },
+    relationship: struct { user: Id, kind: types.Relationship, since_ms: i64 = 0 },
+    /// Nota que só a gente vê sobre alguém (texto alocado; vazio = sem).
+    note: struct { user: Id, text: []const u8 },
+    /// Ícone de uma aplicação (jogo), para a atividade sem imagem.
+    app_icon: struct { app: Id, icon: []const u8 },
 };
 
 pub const Connection = enum { connecting, ready, reconnecting, failed, offline };
+
+pub const VoiceStatus = enum { disconnected, connecting, connected };
 
 pub const Command = union(enum) {
     /// `files`: caminhos dos arquivos a enviar (alocados, terminados em 0).
@@ -90,7 +101,12 @@ pub const Command = union(enum) {
     fetch_older: struct { channel: Id, before: Id },
     /// "fulano está digitando" (o Discord limita a um a cada ~8 s).
     typing: Id,
-    join_voice: ?Id,
+    /// Entrar (channel != null) ou sair da call.
+    join_voice: struct { guild: Id, channel: ?Id, mute: bool = false, deaf: bool = false },
+    /// Mudou mudo/ensurdecer com a call já conectada.
+    voice_flags: struct { mute: bool, deaf: bool },
+    /// Volume individual de quem está falando (0..2).
+    voice_volume: struct { user: Id, volume: f32 },
     /// Pede a lista de membros de um servidor, vista do canal aberto (op 14).
     subscribe_guild: struct { guild: Id, channel: Id },
     /// Aceita um pedido de amizade (true) ou remove/recusa/cancela (false).
@@ -103,6 +119,12 @@ pub const Command = union(enum) {
     member_role: struct { guild: Id, user: Id, role: Id, add: bool },
     /// Nosso status (offline = invisível), pelo gateway (op 3).
     set_status: types.Status,
+    /// Guarda a nota sobre alguém (PUT /users/@me/notes/{id}).
+    set_note: struct { user: Id, text: []const u8 },
+    /// Ícone de uma aplicação (GET /applications/{id}/rpc).
+    fetch_app: Id,
+    /// Move alguém para outro canal de voz (null = desconecta da call).
+    move_member: struct { guild: Id, user: Id, channel: ?Id },
     shutdown,
 };
 
@@ -117,6 +139,10 @@ pub const Action = union(enum) {
     leave_voice,
     toggle_mute,
     toggle_deafen,
+    /// Volume individual de alguém na call (0 = mudo, 1 = normal, 2 = dobro).
+    set_voice_volume: struct { user: Id, volume: f32 },
+    /// Abre/fecha o mixer de voz (a lista de quem está na call com volumes).
+    toggle_voice_mixer,
     typing: Id,
     toggle_category: Id,
     set_theme: usize,
@@ -161,4 +187,10 @@ pub const Action = union(enum) {
     accept_friend: Id,
     /// Recusa um pedido, cancela o nosso ou desbloqueia.
     remove_relationship: Id,
+    /// Perfil grande (o cartão com abas); `tab`: 0 atividade, 1 amigos, 2 servidores.
+    open_full_profile: struct { user: Id, tab: u8 = 0 },
+    set_note: struct { user: Id, text: []const u8 },
+    /// Atividade sem imagem: busca o ícone do jogo (uma vez por aplicação).
+    want_app_icon: Id,
+    move_member: struct { guild: Id, user: Id, channel: ?Id },
 };

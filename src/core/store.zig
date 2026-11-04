@@ -102,6 +102,17 @@ pub const Store = struct {
     /// Perfis completos já buscados (e a bio já interpretada).
     profiles: std.AutoHashMapUnmanaged(Id, types.Profile) = .empty,
     bios: std.AutoHashMapUnmanaged(Id, []const markdown.Span) = .empty,
+    /// Atividades de cada um (jogo, música…), da presença; só quem tem alguma.
+    activities: std.AutoHashMapUnmanaged(Id, []types.Activity) = .empty,
+    /// Até quando cada pessoa conta como "falando" (o gateway de voz manda
+    /// curtinho; o anel verde some sozinho se o pacote de parar se perder).
+    speaking: std.AutoHashMapUnmanaged(Id, i64) = .empty,
+    /// Amigos desde (ms), das relações.
+    friend_since: std.AutoHashMapUnmanaged(Id, i64) = .empty,
+    /// Notas que só a gente vê (buscadas ao abrir o perfil).
+    notes: std.AutoHashMapUnmanaged(Id, []const u8) = .empty,
+    /// Ícone (hash) de cada aplicação; "" = não tem ou não deu.
+    app_icons: std.AutoHashMapUnmanaged(Id, []const u8) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) Store {
         return .{ .gpa = gpa };
@@ -133,6 +144,17 @@ pub const Store = struct {
         var bi = s.bios.valueIterator();
         while (bi.next()) |b| s.gpa.free(b.*);
         s.bios.deinit(s.gpa);
+        var ai = s.activities.valueIterator();
+        while (ai.next()) |a| freeActivities(a.*);
+        s.activities.deinit(s.gpa);
+        s.speaking.deinit(s.gpa);
+        s.friend_since.deinit(s.gpa);
+        var ni = s.notes.valueIterator();
+        while (ni.next()) |n| ev_alloc.free(n.*);
+        s.notes.deinit(s.gpa);
+        var ii = s.app_icons.valueIterator();
+        while (ii.next()) |n| if (n.len > 0) ev_alloc.free(n.*);
+        s.app_icons.deinit(s.gpa);
         var gc = s.guild_channels.valueIterator();
         while (gc.next()) |l| l.deinit(s.gpa);
         s.guild_channels.deinit(s.gpa);
@@ -161,7 +183,37 @@ pub const Store = struct {
     }
 
     fn freeProfile(p: types.Profile) void {
-        for ([_][]const u8{ p.banner, p.bio, p.pronouns }) |t| if (t.len > 0) ev_alloc.free(t);
+        for ([_][]const u8{ p.banner, p.bio, p.pronouns, p.username }) |t| if (t.len > 0) ev_alloc.free(t);
+        if (p.mutual_guilds.len > 0) ev_alloc.free(p.mutual_guilds);
+        if (p.mutual_friends.len > 0) ev_alloc.free(p.mutual_friends);
+        for (p.connections) |cn| for ([_][]const u8{ cn.kind, cn.name, cn.url }) |t| if (t.len > 0) ev_alloc.free(t);
+        if (p.connections.len > 0) ev_alloc.free(p.connections);
+        for (p.badges) |b| for ([_][]const u8{ b.icon, b.description }) |t| if (t.len > 0) ev_alloc.free(t);
+        if (p.badges.len > 0) ev_alloc.free(p.badges);
+    }
+
+    pub fn freeActivities(list: []types.Activity) void {
+        for (list) |a| for ([_][]const u8{ a.name, a.details, a.state, a.image }) |t| if (t.len > 0) ev_alloc.free(t);
+        if (list.len > 0) ev_alloc.free(list);
+    }
+
+    /// Canal de voz em que a pessoa está (0 = nenhum).
+    pub fn voiceChannelOf(s: *const Store, user_id: Id) Id {
+        var it = s.channels.valueIterator();
+        while (it.next()) |cs| {
+            if (cs.*.voice_members.items.len > 0 and std.mem.indexOfScalar(Id, cs.*.voice_members.items, user_id) != null) return cs.*.info.id;
+        }
+        return 0;
+    }
+
+    /// A pessoa está falando agora? (o anel verde some sozinho)
+    pub fn isSpeaking(s: *Store, user_id: Id, now_ms: i64) bool {
+        const ptr = s.speaking.getPtr(user_id) orelse return false;
+        if (ptr.* < now_ms) {
+            _ = s.speaking.remove(user_id);
+            return false;
+        }
+        return true;
     }
 
     fn freeGuildInfo(g: types.Guild) void {
@@ -449,6 +501,16 @@ pub const Store = struct {
                     // Usuário desconhecido: o texto veio alocado, não vaza.
                     if (a.len > 0) ev_alloc.free(@constCast(a));
                 }
+                if (p.activities) |list| {
+                    if (list.len == 0 or s.users.get(p.user) == null) {
+                        if (s.activities.fetchRemove(p.user)) |kv| freeActivities(kv.value);
+                        freeActivities(list);
+                    } else {
+                        const gop = try s.activities.getOrPut(s.gpa, p.user);
+                        if (gop.found_existing) freeActivities(gop.value_ptr.*);
+                        gop.value_ptr.* = list;
+                    }
+                }
             },
             .voice_state => |v| {
                 var it = s.channels.valueIterator();
@@ -460,6 +522,15 @@ pub const Store = struct {
                     };
                 }
                 if (v.channel) |id| if (s.channel(id)) |cs| try cs.voice_members.append(s.gpa, v.user);
+                if (v.channel == null) _ = s.speaking.remove(v.user);
+            },
+            .voice_speaking => |v| {
+                if (v.speaking) {
+                    try s.speaking.put(s.gpa, v.user, now_ms + 4000);
+                } else _ = s.speaking.remove(v.user);
+            },
+            .voice_status => |v| {
+                if (v.status == .disconnected) s.speaking.clearRetainingCapacity();
             },
             .latency => |l| s.latency_ms = l,
             .status => |st| s.connection = st,
@@ -658,7 +729,19 @@ pub const Store = struct {
             .relationship => |r| {
                 if (r.kind == .none) {
                     _ = s.relationships.remove(r.user);
+                    _ = s.friend_since.remove(r.user);
                 } else try s.relationships.put(s.gpa, r.user, r.kind);
+                if (r.kind == .friend and r.since_ms != 0) try s.friend_since.put(s.gpa, r.user, r.since_ms);
+            },
+            .note => |n| {
+                const gop = try s.notes.getOrPut(s.gpa, n.user);
+                if (gop.found_existing) ev_alloc.free(gop.value_ptr.*);
+                gop.value_ptr.* = n.text;
+            },
+            .app_icon => |ai| {
+                const gop = try s.app_icons.getOrPut(s.gpa, ai.app);
+                if (gop.found_existing and gop.value_ptr.len > 0) ev_alloc.free(gop.value_ptr.*);
+                gop.value_ptr.* = ai.icon;
             },
         }
     }

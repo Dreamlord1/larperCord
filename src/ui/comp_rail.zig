@@ -17,6 +17,7 @@ const i18n = @import("i18n.zig");
 
 pub fn draw(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     icon_style = std.meta.stringToEnum(IconStyle, d.pstr(n, "icon-style", "fill")) orelse .fill;
+    show_indicators = d.pflag(n, "indicators", true);
     const horizontal = if (n.str("orientation")) |o| std.mem.eql(u8, o, "horizontal") else r.w > r.h;
     const shape_s = d.pstr(n, "shape", "circle");
     if (std.mem.eql(u8, shape_s, "text")) return textTabs(ctx, n, r);
@@ -209,6 +210,7 @@ const GuildRef = struct { g: *types.Guild, i: usize };
 pub const IconStyle = enum { fill, soft, outline };
 
 var icon_style: IconStyle = .fill;
+var show_indicators = true;
 
 /// Ícone do servidor (a imagem dele, se tiver e já tiver chegado).
 fn guildPicture(ctx: *d.Ctx, dl: *c.ImDrawList, g: *const types.Guild, r: d.Rect, radius: f32) bool {
@@ -291,7 +293,7 @@ fn icon(ctx: *d.Ctx, dl: *c.ImDrawList, ref: ?GuildRef, cx: f32, y: f32, size: f
 
         const target: f32 = if (selected) size * 0.83 else if (hb.hovered) size * 0.42 else if (g.unread) 8 else 0;
         const pill = anim.to(anim.id("g-pill", n), target, 18);
-        if (pill > 0.5) switch (ind) {
+        if (show_indicators and pill > 0.5) switch (ind) {
             .left => d.rectFlags(dl, .{ .x = bar.x, .y = y + size / 2 - pill / 2, .w = 4, .h = pill }, ctx.col(.text), 4, c.ImDrawFlags_RoundRight),
             .bottom => d.rectFlags(dl, .{ .x = cx - pill / 2, .y = bar.bottom() - 4, .w = pill, .h = 3 }, ctx.col(.accent), 3, c.ImDrawFlags_RoundTop),
         };

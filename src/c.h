@@ -9,6 +9,7 @@
 #include <sys/inotify.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <arpa/inet.h>
 #include <malloc.h>
 #include <poll.h>
 #include <stdio.h>
@@ -18,6 +19,8 @@
 #include <curl/curl.h>
 #include <webp/decode.h>
 #include <webp/demux.h>
+#include <opus/opus.h>
+#include <dave/dave.h>
 #define STBI_NO_STDIO
 #include "stb_image.h"
 /* GIF quadro a quadro (third_party/stb/stb_image.c). */

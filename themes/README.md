@@ -99,7 +99,7 @@ Contêineres: `row` (horizontal), `column` (vertical), `stack` (um sobre o outro
 
 | Componente | Propriedades |
 |---|---|
-| `guild-bar` | `variant=bar\|dock\|list` `icon-style=fill\|soft\|outline` `orientation=vertical\|horizontal` `shape=circle\|squircle\|square\|text` `size=48` `labels=#true` `home=#false` |
+| `guild-bar` | `variant=bar\|dock\|list` `icon-style=fill\|soft\|outline` `orientation=vertical\|horizontal` `shape=circle\|squircle\|square\|text` `size=48` `labels=#true` `home=#false` `indicators=#false` |
 | `channel-list` | `variant=discord\|tree\|pills` `header=#false` |
 | `user-panel` | `variant=discord\|tty` |
 | `header` | `variant=discord\|minimal\|tty` `divider=#false` |
@@ -192,7 +192,8 @@ options {
 | `messages ruled=#true margin-line=#true` | folha pautada e margem vermelha | papel |
 | `messages ticks=#true typing-bubble=#true` | "Entregue ✓✓" e balão de digitando | bolhas |
 | `autohide=#true` (qualquer nó) | o componente some até o mouse chegar perto | zen |
-| `topbar` | voltar/avançar entre abas, busca e ajuda | escritorio |
+| `guild-bar variant=bar orientation=horizontal` | faixa horizontal de servidores no rodapé, sem zoom nos ícones | orbital |
+| `topbar` | voltar/avançar entre abas, busca e ajuda | escritorio, editorial (opcional no orbital) |
 
 ## Os temas que vêm junto
 
@@ -200,6 +201,8 @@ options {
 - [`vidro.kdl`](vidro.kdl): cartões translúcidos com blur do compositor
 - [`terminal.kdl`](terminal.kdl): tmux + IRC em fósforo âmbar
 - [`subsolo.kdl`](subsolo.kdl): terminal de hacking underground, verde ácido, ultravioleta e scanlines
+- [`orbital.kdl`](orbital.kdl): console de bordo com sistemas numerados, prompt de comando e faixa de servidores no rodapé
+- [`editorial.kdl`](editorial.kdl): revista impressa, masthead em serifa e índice à direita
 - [`bolhas.kdl`](bolhas.kdl): claro, com balões de conversa
 - [`zen.kdl`](zen.kdl): uma coluna central e mais nada
 - [`papel.kdl`](papel.kdl): serifado e espelhado

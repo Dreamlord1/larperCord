@@ -6,6 +6,9 @@ pub const std_options: std.Options = .{ .log_level = .info };
 const builtin_themes = @import("builtin_themes");
 const App = @import("app.zig").App;
 const Options = @import("app.zig").Options;
+const discord = @import("net/discord.zig");
+const ev = @import("core/event.zig");
+const Queue = @import("net/queue.zig").Queue;
 
 const usage =
     \\larperCord — cliente de Discord nativo e leve
@@ -22,6 +25,7 @@ const usage =
     \\  --lang IDIOMA     pt ou en (ignora as configurações)
     \\  --no-live         desliga as mensagens automáticas do modo demonstração
     \\  --stats           mostra tempo até o primeiro quadro
+    \\  --voice-test G C  entra no canal de voz C do servidor G por 25 s
     \\
     \\atalhos: Ctrl+K paleta · Ctrl+, configurações · F2 próximo tema
     \\         Ctrl+Tab abas · Alt+1..9 · Ctrl+W fecha aba
@@ -58,6 +62,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
             opts.settings = true;
         } else if (std.mem.eql(u8, arg, "--stats")) {
             opts.stats = true;
+        } else if (std.mem.eql(u8, arg, "--voice-test")) {
+            const g = it.next() orelse return fail("--voice-test precisa do servidor e do canal");
+            const ch = it.next() orelse return fail("--voice-test precisa do servidor e do canal");
+            const gid = std.fmt.parseInt(u64, g, 10) catch return fail("servidor inválido");
+            const cid = std.fmt.parseInt(u64, ch, 10) catch return fail("canal inválido");
+            return voiceTest(gid, cid);
         } else if (std.mem.eql(u8, arg, "--list-themes")) {
             for (builtin_themes.list) |t| std.debug.print("{s}\n", .{t.name});
             return;
@@ -80,6 +90,44 @@ fn watchdog(_: ?*anyopaque) callconv(.c) c_int {
     c.SDL_Delay(3000);
     std.log.warn("encerramento demorou mais de 3 s; saindo assim mesmo", .{});
     std.c._exit(0);
+}
+
+var test_ctx: u8 = 0;
+
+fn voiceTest(guild: u64, channel: u64) !void {
+    _ = c.SDL_Init(c.SDL_INIT_AUDIO);
+    const alloc = std.heap.c_allocator;
+    _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
+    const token = discord.loadToken() orelse return fail("defina LARPER_TOKEN para testar a voz");
+    var gw: discord.Gateway = .{
+        .commands = try Queue(ev.Command).init(alloc),
+        .sink = .{ .ctx = &test_ctx, .push = testSink },
+        .token = token,
+    };
+    std.debug.print("voz: conectando ao gateway...\n", .{});
+    try gw.start();
+    gw.commands.push(.{ .join_voice = .{ .guild = guild, .channel = channel } });
+    std.debug.print("voz: pedido de entrar no canal enviado\n", .{});
+    var i: u32 = 0;
+    while (i < 25) : (i += 1) {
+        c.SDL_Delay(1000);
+    }
+    gw.commands.push(.{ .join_voice = .{ .guild = guild, .channel = null } });
+    c.SDL_Delay(1500);
+    gw.stop();
+    c.SDL_Quit();
+    std.debug.print("voz: teste encerrado\n", .{});
+}
+
+fn testSink(_: ?*anyopaque, e: ev.Event) void {
+    std.debug.print("evento: {t}\n", .{e});
+    switch (e) {
+        .voice_status => |v| std.debug.print("[voz] status: {t} (canal {d})\n", .{ v.status, v.channel }),
+        .voice_speaking => |v| std.debug.print("[voz] {d} falando={}\n", .{ v.user, v.speaking }),
+        .notice => |n| std.debug.print("[voz] aviso: {s}\n", .{n}),
+        .status => |st| if (st == .failed) std.debug.print("[voz] conexão falhou\n", .{}),
+        else => {},
+    }
 }
 
 fn fail(msg: []const u8) error{InvalidArgs} {

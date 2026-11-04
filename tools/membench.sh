@@ -10,7 +10,7 @@ zig build -Doptimize=ReleaseFast
 bin="$PWD/zig-out/bin/larpercord"
 fail=0
 printf "%-10s %10s %12s\n" tema "RAM (PSS)" "CPU parado"
-for t in classico vidro terminal subsolo bolhas zen papel escritorio; do
+for t in classico vidro terminal subsolo orbital editorial bolhas zen papel escritorio; do
     if command -v hyprctl >/dev/null && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
         hyprctl dispatch exec "[workspace special:larper silent] $bin --theme $t --no-live" >/dev/null
     else

@@ -58,7 +58,8 @@ pub const Gateway = struct {
 
     fn run(g: *Gateway) !void {
         g.emit(.{ .ready = try buildReady() });
-        for (relations) |rel| g.emit(.{ .relationship = .{ .user = rel.user, .kind = rel.kind } });
+        for (relations, 0..) |rel, i| g.emit(.{ .relationship = .{ .user = rel.user, .kind = rel.kind, .since_ms = nowMs() - @as(i64, @intCast(i + 1)) * 97 * 86_400_000 } });
+        try g.demoActivities();
         g.emit(.{ .guild_folders = try demoFolders() });
         g.emit(.{ .status = .ready });
         g.next_live_ms = nowMs() + 6000;
@@ -112,14 +113,34 @@ pub const Gateway = struct {
                     const seed = for (users) |x| {
                         if (x.id == fp.user) break x;
                     } else continue;
+                    // Servidores em comum: os da demonstração em que a pessoa está.
+                    var mg: std.ArrayList(Id) = .empty;
+                    for (guilds, 0..) |_, gi| if (fp.user == me_id or (fp.user * 7 + gi) % 5 != 0) try mg.append(alloc, guildId(gi));
+                    var mf: std.ArrayList(Id) = .empty;
+                    for (relations) |rel| if (rel.kind == .friend and rel.user != fp.user and (rel.user + fp.user) % 3 != 0) try mf.append(alloc, rel.user);
+                    const cns = try alloc.alloc(types.Connection, 2);
+                    cns[0] = .{ .kind = try alloc.dupe(u8, "github"), .name = try alloc.dupe(u8, seed.name), .url = try std.fmt.allocPrint(alloc, "https://github.com/{s}", .{seed.name}) };
+                    cns[1] = .{ .kind = try alloc.dupe(u8, "steam"), .name = try alloc.dupe(u8, seed.name), .url = "" };
+                    const nf: u32 = @intCast(mf.items.len);
                     g.emit(.{ .profile = .{ .user = fp.user, .profile = .{
                         .banner = if (fp.user % 2 == 1) try alloc.dupe(u8, "demo:1") else "",
                         .accent = 0x5865F2,
                         .bio = try i18n.allocPrint(alloc, "oi! sou **{s}** 👋\nfalo de zig, rice e café.", "hi! I'm **{s}** 👋\ninto zig, ricing and coffee.", .{seed.name}),
                         .pronouns = try alloc.dupe(u8, if (fp.user % 3 == 0) "ela/dela" else "ele/dele"),
+                        .username = try std.fmt.allocPrint(alloc, "{s}_{d}", .{ seed.name, fp.user % 100 }),
+                        .guild = fp.guild,
+                        .joined_ms = if (fp.guild != 0) nowMs() - @as(i64, @intCast(fp.user % 40 + 3)) * 30 * 86_400_000 else 0,
+                        .mutual_guilds = try mg.toOwnedSlice(alloc),
+                        .mutual_friends = try mf.toOwnedSlice(alloc),
+                        .mutual_friends_count = nf,
+                        .connections = cns,
                     } } });
+                    if (fp.user == 1001) g.emit(.{ .note = .{ .user = fp.user, .text = try i18n.allocPrint(alloc, "conheci na game jam", "met at the game jam", .{}) } });
                 },
                 .member_role => {},
+                .set_note => |n| alloc.free(n.text),
+                .move_member => |mm| g.emit(.{ .voice_state = .{ .channel = mm.channel, .user = mm.user } }),
+                .fetch_app => |app| g.emit(.{ .app_icon = .{ .app = app, .icon = "" } }),
                 .set_status => |st| g.emit(.{ .presence_update = .{ .user = me_id, .status = st } }),
                 .create_dm => |u| {
                     const seed = for (users) |x| {
@@ -133,10 +154,35 @@ pub const Gateway = struct {
                         .recipient = u,
                     } });
                 },
-                .join_voice => |ch| g.emit(.{ .voice_state = .{ .channel = ch, .user = me_id } }),
+                .join_voice => |v| {
+                    g.emit(.{ .voice_state = .{ .channel = v.channel, .user = me_id } });
+                    g.emit(.{ .voice_status = .{ .status = if (v.channel != null) .connected else .disconnected, .channel = v.channel orelse 0 } });
+                },
+                .voice_flags, .voice_volume => {},
             };
             cmds.clearRetainingCapacity();
             try g.tick(nowMs());
+        }
+    }
+
+    /// Jogos da demonstração (com tempo de jogo, para o cartão de perfil).
+    fn demoActivities(g: *Gateway) !void {
+        const list = [_]struct { user: Id, name: []const u8, details: []const u8, mins: i64 }{
+            .{ .user = 1002, .name = "Hollow Knight", .details = "Cidade das Lágrimas", .mins = 68 },
+            .{ .user = 1007, .name = "Minecraft", .details = "Survival com a galera", .mins = 23 },
+        };
+        for (list, 0..) |a, i| {
+            const acts = try alloc.alloc(types.Activity, 1);
+            acts[0] = .{
+                .name = try alloc.dupe(u8, a.name),
+                .details = try alloc.dupe(u8, a.details),
+                .start_ms = nowMs() - a.mins * 60_000,
+                .image = try std.fmt.allocPrint(alloc, "demo:icon:{d}", .{i + 1}),
+            };
+            const u = for (users) |x| {
+                if (x.id == a.user) break x;
+            } else continue;
+            g.emit(.{ .presence_update = .{ .user = a.user, .status = u.status, .activities = acts } });
         }
     }
 
