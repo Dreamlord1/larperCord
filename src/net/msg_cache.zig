@@ -200,8 +200,13 @@ pub fn restore(store: *Store, cs: *ChannelState) void {
     for (dec.entries) |*e| {
         var m = e.msg;
         m.content = alloc.dupe(u8, e.msg.content) catch continue;
+        m.raw = alloc.dupe(u8, e.msg.raw) catch {
+            alloc.free(m.content);
+            continue;
+        };
         m.attachments = dupeAttachments(e.msg.attachments) catch {
             alloc.free(m.content);
+            alloc.free(m.raw);
             continue;
         };
         m.embeds = &.{};
@@ -234,7 +239,7 @@ pub fn save(store: *Store, cs: *ChannelState) void {
         i -= 1;
         const m = &items[i];
         if (m.pending or m.msg.id == 0 or m.deleted) continue;
-        var est: usize = 48 + m.msg.content.len;
+        var est: usize = 48 + m.msg.content.len + m.msg.raw.len;
         for (m.msg.attachments) |a| est += 24 + a.url.len + a.filename.len + a.still.len + a.link.len;
         if (n > 0 and bytes + est > channel_bytes) break;
         bytes += est;

@@ -956,6 +956,8 @@ fn demo(jb: Job, stop: *std.atomic.Value(bool)) Pixels {
     if (std.mem.startsWith(u8, spec, "av:")) return demoAvatar(std.fmt.parseInt(u64, spec[3..], 10) catch 0, jb, false);
     if (std.mem.startsWith(u8, spec, "icon:")) return demoAvatar(std.fmt.parseInt(u64, spec[5..], 10) catch 0, jb, true);
     if (std.mem.eql(u8, spec, "gif")) return demoGif(jb);
+    // "emoji:<id>:<0|1>" e "sticker:<id>:<0|1>": a carinha da demonstração.
+    if (std.mem.startsWith(u8, spec, "emoji:") or std.mem.startsWith(u8, spec, "sticker:")) return demoEmoji(spec);
     // "GIF em MP4" da demonstração: o vídeo embutido, pelo FFmpeg.
     if (std.mem.eql(u8, spec, "mp4")) {
         c.SDL_WaitSemaphore(decode_slots);
@@ -1040,6 +1042,48 @@ fn demoAvatar(seed: u64, jb: Job, icon: bool) Pixels {
         put(out[(y * size + x) * 4 ..][0..4], col);
     };
     return Pixels.single(out, size, size);
+}
+
+/// Emoji ou figurinha da demonstração: uma carinha de fundo transparente, de
+/// cor diferente para cada ID. A animada balança (8 quadros).
+fn demoEmoji(spec: []const u8) Pixels {
+    var it = std.mem.splitScalar(u8, spec, ':');
+    const kind = it.next() orelse "";
+    const seed = std.fmt.parseInt(u64, it.next() orelse "0", 10) catch 0;
+    const animated = std.mem.eql(u8, it.next() orelse "0", "1");
+    const size: usize = if (std.mem.eql(u8, kind, "sticker")) 160 else 64;
+    const n: usize = if (animated) 8 else 1;
+    var prng = std.Random.DefaultPrng.init(seed *% 0x9E3779B97F4A7C15);
+    const hue = prng.random().float(f32);
+    const smile = prng.random().boolean();
+    const frames = alloc.alloc(PixFrame, n) catch return .{};
+    for (0..n) |f| {
+        const out = alloc.alloc(u8, size * size * 4) catch {
+            for (frames[0..f]) |fr| alloc.free(fr.data);
+            alloc.free(frames);
+            return .{};
+        };
+        const wobble = @sin(@as(f32, @floatFromInt(f)) / @as(f32, @floatFromInt(n)) * std.math.tau) * (if (animated) @as(f32, 0.09) else 0);
+        const fs: f32 = @floatFromInt(size);
+        for (0..size) |y| for (0..size) |x| {
+            const dx = (@as(f32, @floatFromInt(x)) + 0.5) / fs - 0.5 - wobble;
+            const dy = (@as(f32, @floatFromInt(y)) + 0.5) / fs - 0.5;
+            const o = out[(y * size + x) * 4 ..][0..4];
+            const r = @sqrt(dx * dx + dy * dy);
+            if (r > 0.44) {
+                @memset(o, 0);
+                continue;
+            }
+            var col = mix3(hsv(hue, 0.65, 1), hsv(hue + 0.08, 0.8, 0.8), dy + 0.5);
+            const eye = @min((dx - 0.15) * (dx - 0.15), (dx + 0.15) * (dx + 0.15)) + (dy + 0.1) * (dy + 0.1) < 0.005;
+            const curve = if (smile) dy - 0.08 - (0.09 - dx * dx * 1.1) else dy - 0.2 + (0.05 - dx * dx * 0.9);
+            const mouth = @abs(curve) < 0.028 and @abs(dx) < 0.22;
+            if (eye or mouth) col = .{ 0.1, 0.08, 0.12 };
+            put(o, col);
+        };
+        frames[f] = .{ .data = out, .delay_ms = 90 };
+    }
+    return .{ .frames = frames, .w = @intCast(size), .h = @intCast(size) };
 }
 
 /// GIF da demonstração: uma bolinha dando a volta, 24 quadros.

@@ -86,6 +86,7 @@ pub const GuildFolder = struct {
 pub const perm = struct {
     pub const administrator: u64 = 1 << 3;
     pub const manage_messages: u64 = 1 << 13;
+    pub const mention_everyone: u64 = 1 << 17;
     pub const view_channel: u64 = 1 << 10;
     pub const send_messages: u64 = 1 << 11;
     pub const read_history: u64 = 1 << 16;
@@ -104,6 +105,18 @@ pub const Role = struct {
     permissions: u64 = 0,
     /// Cargo de bot/integração: ninguém dá ou tira à mão.
     managed: bool = false,
+    /// Qualquer um pode mencionar (`<@&id>`).
+    mentionable: bool = false,
+};
+
+/// Emoji personalizado de um servidor. `name` é alocado.
+pub const Emoji = struct {
+    id: Id,
+    guild: Id = 0,
+    name: []const u8,
+    animated: bool = false,
+    /// O servidor perdeu o nível de impulso que liberava este emoji.
+    available: bool = true,
 };
 
 /// O que a pessoa é da gente (os números são os do Discord).
@@ -304,12 +317,16 @@ pub const Message = struct {
 
 pub const SystemKind = enum(u8) { none, join, leave, call, pin, edit, boost, other };
 
-/// Uma reação: o emoji (UTF-8, até 15 bytes), quantas pessoas e se inclui a gente.
+/// Uma reação: o emoji (UTF-8; o nome, se for personalizado), quantas pessoas
+/// e se inclui a gente. 32 bytes cabem qualquer emoji Unicode (os mais longos,
+/// bandeiras de tags e famílias, têm 28) e qualquer nome do Discord.
 pub const Reaction = struct {
-    emoji: [16]u8 = @splat(0),
+    emoji: [32]u8 = @splat(0),
     len: u8 = 0,
     count: u16 = 0,
     me: bool = false,
+    /// Personalizado animado (`<a:…>`).
+    animated: bool = false,
     /// Emoji personalizado (0 = unicode): é assim que a API o reconhece.
     custom: Id = 0,
 
@@ -319,10 +336,23 @@ pub const Reaction = struct {
 
     pub fn init(e: []const u8) Reaction {
         var r: Reaction = .{};
-        const n = @min(e.len, 15);
+        const n = @min(e.len, r.emoji.len);
         @memcpy(r.emoji[0..n], e[0..n]);
         r.len = @intCast(n);
         return r;
+    }
+
+    pub fn initCustom(name: []const u8, id: Id, animated: bool) Reaction {
+        var r = init(name);
+        r.custom = id;
+        r.animated = animated;
+        return r;
+    }
+
+    /// É o mesmo emoji? (Personalizado vale pelo ID: o nome pode mudar.)
+    pub fn same(a: *const Reaction, b: *const Reaction) bool {
+        if (a.custom != 0 or b.custom != 0) return a.custom == b.custom;
+        return std.mem.eql(u8, a.text(), b.text());
     }
 };
 

@@ -107,6 +107,9 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
         c.ImGuiWindowFlags_NoBackground | c.ImGuiWindowFlags_NoScrollWithMouse | c.ImGuiWindowFlags_NoNav);
     ctx.dl = c.ImGui_GetWindowDrawList();
     ctx.fg = c.ImGui_GetForegroundDrawList();
+    const rich = @import("rich.zig");
+    rich.frame_ctx = ctx;
+    rich.emoji_images = @import("emoji_img.zig").enabled(ctx);
     vim.beforeFrame(ctx.st);
     ctx.win = .{ .x = vp.*.Pos.x, .y = vp.*.Pos.y, .w = vp.*.Size.x, .h = vp.*.Size.y };
 
@@ -161,6 +164,7 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
             if (d.pflag(p.node, "autohide", false)) autohide(ctx, p, i);
         }
     }
+    @import("autocomplete.zig").draw(ctx);
     c.ImGui_End();
 
     const t1 = if (profile) c.SDL_GetTicksNS() else 0;

@@ -12,6 +12,8 @@ test {
     _ = @import("ui/rascunhos.zig");
     _ = @import("core/inbox.zig");
     _ = @import("core/saved.zig");
+    _ = @import("core/mentions.zig");
+    _ = @import("ui/emoji_data.zig");
     _ = @import("core/cache_format.zig");
     _ = @import("core/search_query.zig");
     _ = @import("core/accounts.zig");

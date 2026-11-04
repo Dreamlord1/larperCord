@@ -29,6 +29,8 @@ const custom = @import("theme/custom.zig");
 const guild_color = @import("ui/guild_color.zig");
 const theme_mod = @import("theme/theme.zig");
 const plugin_host = @import("plugins/host.zig");
+const mentions = @import("core/mentions.zig");
+const autocomplete = @import("ui/autocomplete.zig");
 const inbox_core = @import("core/inbox.zig");
 const saved_ui = @import("ui/saved.zig");
 const msg_cache = @import("net/msg_cache.zig");
@@ -721,25 +723,8 @@ pub const App = struct {
     /// `with_uploads`: leva os arquivos da bandeja junto. Só o que a própria
     /// pessoa enviou pela caixa de texto; um plugin nunca leva os arquivos dela.
     pub fn sendWith(app: *App, ch: types.Id, text: []const u8, reply_to: types.Id, with_uploads: bool) void {
-        var out: std.ArrayList(u8) = .empty;
-        defer out.deinit(app.gpa);
-        var words = std.mem.splitScalar(u8, text, ' ');
-        var first = true;
-        while (words.next()) |word| {
-            if (!first) out.append(app.gpa, ' ') catch return;
-            first = false;
-            if (word.len > 1 and word[0] == '@') {
-                var it = app.store.users.valueIterator();
-                const found = while (it.next()) |u| {
-                    if (std.mem.eql(u8, u.name, word[1..])) break u.id;
-                } else null;
-                if (found) |id| {
-                    out.print(app.gpa, "<@{d}>", .{id}) catch return;
-                    continue;
-                }
-            }
-            out.appendSlice(app.gpa, word) catch return;
-        }
+        const out_text = mentions.expand(app.gpa, &app.store, app.guildOfChannel(ch), text, &.{}) catch return;
+        defer app.gpa.free(out_text);
         app.st.nonce += 1;
         // Os arquivos da bandeja vão junto: aparecem na hora na cópia pendente.
         const ca = std.heap.c_allocator;
@@ -762,10 +747,14 @@ pub const App = struct {
             // Os caminhos passam para o comando; a bandeja esvazia.
             app.st.uploads.clearRetainingCapacity();
         }
-        app.store.addPending(ch, out.items, app.st.nonce, reply_to, now(), atts) catch return;
+        app.store.addPending(ch, out_text, app.st.nonce, reply_to, now(), atts) catch return;
         app.st.scrollOf(ch).stick_bottom = true;
-        const copy = ca.dupe(u8, out.items) catch return;
+        const copy = ca.dupe(u8, out_text) catch return;
         app.cmd(.{ .send_message = .{ .channel = ch, .content = copy, .nonce = app.st.nonce, .reply_to = reply_to, .files = files } });
+    }
+
+    fn guildOfChannel(app: *const App, ch: types.Id) types.Id {
+        return if (app.store.channel(ch)) |cs| cs.info.guild else 0;
     }
 
     /// Trocou de canal: o texto da caixa vira o rascunho do anterior e o
@@ -927,7 +916,11 @@ pub const App = struct {
                 // "/nome" de um plugin: roda aqui e não vai para o Discord.
                 if (app.plugins.command(text)) return;
                 const ch = st.activeChannel() orelse return;
-                app.sendTo(ch, text, st.reply_to);
+                // O que foi escolhido na lista vira a menção exata (pelo ID).
+                const chosen = mentions.expand(app.gpa, &app.store, app.guildOfChannel(ch), text, autocomplete.tokens()) catch return;
+                defer app.gpa.free(chosen);
+                autocomplete.clearTokens();
+                app.sendTo(ch, chosen, st.reply_to);
                 st.reply_to = 0;
                 st.drafts.remove(app.gpa, ch);
             },
@@ -953,13 +946,16 @@ pub const App = struct {
                 st.input_sync = true;
                 st.focus_input = true;
             },
-            .save_edit => |text| {
-                defer app.gpa.free(text);
+            .save_edit => |typed| {
+                defer app.gpa.free(typed);
                 const id = st.editing;
                 st.editing = 0;
                 app.restoreDraft();
                 const f = app.store.findAny(id) orelse return;
                 const ch = f.cs.info.id;
+                const text = mentions.expand(app.gpa, &app.store, f.cs.info.guild, typed, autocomplete.tokens()) catch return;
+                defer app.gpa.free(text);
+                autocomplete.clearTokens();
                 if (std.mem.eql(u8, f.m.msg.editable(), text)) return;
                 // Na tela o emoji personalizado continua como `:nome:`.
                 const shown = jsonx.simplifyContent(app.gpa, text) catch return;
@@ -983,10 +979,10 @@ pub const App = struct {
             .react => |r| {
                 const f = app.store.findAny(r.id) orelse return;
                 var mine = false;
-                for (f.m.reactionSlice()) |*x| if (std.mem.eql(u8, x.text(), r.emoji.text())) {
+                for (f.m.reactionSlice()) |*x| if (x.same(&r.emoji)) {
                     mine = x.me;
                 };
-                app.store.react(f.m, r.emoji.text(), true, !mine);
+                app.store.react(f.m, r.emoji, true, !mine);
                 app.cmd(.{ .react = .{ .channel = f.cs.info.id, .id = r.id, .emoji = r.emoji, .add = !mine } });
             },
             .open_dm => |user| {
@@ -1626,7 +1622,9 @@ pub const App = struct {
                     }
                 } else {
                     input = true;
-                    _ = c.cImGui_ImplSDL3_ProcessEvent(&e);
+                    // Com a lista do autocompletar aberta, setas, Tab, Enter e Esc são dela.
+                    const for_list = e.type == c.SDL_EVENT_KEY_DOWN and autocomplete.takeSdlKey(e.key.key, e.key.mod);
+                    if (!for_list) _ = c.cImGui_ImplSDL3_ProcessEvent(&e);
                     if (e.type == c.SDL_EVENT_QUIT or e.type == c.SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
                         running = false;
                         // Some da tela na hora; o resto do encerramento é por trás.

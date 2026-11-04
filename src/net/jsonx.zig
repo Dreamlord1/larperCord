@@ -150,6 +150,16 @@ pub fn urlEncode(buf: []u8, s: []const u8) []const u8 {
     return buf[0..n];
 }
 
+/// O emoji como vai no caminho das reações: `nome:id` (personalizado) ou o
+/// emoji Unicode codificado. Sobra `buf` de 128 bytes para qualquer um.
+pub fn reactionKey(buf: []u8, text: []const u8, custom: u64) []const u8 {
+    if (custom != 0) {
+        var enc: [96]u8 = undefined;
+        return std.fmt.bufPrint(buf, "{s}:{d}", .{ urlEncode(&enc, text), custom }) catch "";
+    }
+    return urlEncode(buf, text);
+}
+
 /// Sigla de um servidor sem ícone: primeira letra de até 3 palavras.
 pub fn acronym(gpa: std.mem.Allocator, name: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
@@ -188,6 +198,14 @@ test "conteúdo, strings e URLs" {
     const ac = try acronym(a, "Zig Brasil");
     defer a.free(ac);
     try std.testing.expectEqualStrings("ZB", ac);
+}
+
+test "emoji no caminho das reações" {
+    var b: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("pepe_ok:123", reactionKey(&b, "pepe_ok", 123));
+    try std.testing.expectEqualStrings("%F0%9F%91%8D", reactionKey(&b, "👍", 0));
+    // A bandeira de tags (28 bytes) cabe inteira.
+    try std.testing.expectEqual(@as(usize, 84), reactionKey(&b, "🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}", 0).len);
 }
 
 test "emoji personalizado: só o formato de verdade" {

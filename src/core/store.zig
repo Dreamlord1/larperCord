@@ -107,6 +107,13 @@ pub const Store = struct {
     /// Da nossa conta (Configurações → Minha conta).
     me_username: ?[]const u8 = null,
     me_email: ?[]const u8 = null,
+    /// `premium_type` da conta: 0 = sem Nitro (emoji de outro servidor e
+    /// animado são recusados pelo Discord).
+    premium_type: u8 = 0,
+    /// Emojis personalizados de cada servidor (nomes com o ev_alloc) e todos
+    /// eles pelo ID (as cópias apontam para os mesmos nomes).
+    guild_emojis: std.AutoHashMapUnmanaged(Id, []types.Emoji) = .empty,
+    emoji_by_id: std.AutoHashMapUnmanaged(Id, types.Emoji) = .empty,
     users: std.AutoHashMapUnmanaged(Id, types.User) = .empty,
     guilds: std.ArrayList(types.Guild) = .empty,
     channels: std.AutoHashMapUnmanaged(Id, *ChannelState) = .empty,
@@ -158,6 +165,10 @@ pub const Store = struct {
     }
 
     pub fn deinit(s: *Store) void {
+        var gei = s.guild_emojis.valueIterator();
+        while (gei.next()) |list| freeEmojis(list.*);
+        s.guild_emojis.deinit(s.gpa);
+        s.emoji_by_id.deinit(s.gpa);
         var it = s.channels.valueIterator();
         while (it.next()) |cs| {
             for (cs.*.messages.items) |*m| s.freeMessage(m);
@@ -334,7 +345,7 @@ pub const Store = struct {
 
     /// Mensagem pronta para guardar: o markdown já interpretado.
     fn stored(s: *Store, m: types.Message) !StoredMessage {
-        return .{ .msg = m, .spans = try markdown.parse(s.gpa, m.content), .embed_spans = try s.parseEmbeds(m.embeds) };
+        return .{ .msg = m, .spans = try markdown.parseRaw(s.gpa, m.content, m.raw), .embed_spans = try s.parseEmbeds(m.embeds) };
     }
 
     /// READY pode chegar mais de uma vez (sessão nova depois de uma queda).
@@ -450,8 +461,38 @@ pub const Store = struct {
             var mi = s.members.keyIterator();
             while (mi.next()) |k| if (k.*[0] == id) keys.append(s.gpa, k.*) catch {};
             for (keys.items) |k| _ = s.members.remove(k);
+            s.setEmojis(id, &.{});
             return;
         }
+    }
+
+    fn freeEmojis(list: []types.Emoji) void {
+        for (list) |e| ev_alloc.free(e.name);
+        if (list.len > 0) ev_alloc.free(list);
+    }
+
+    /// Troca os emojis de um servidor (assume a lista e os nomes).
+    fn setEmojis(s: *Store, guild_id: Id, list: []types.Emoji) void {
+        if (s.guild_emojis.fetchRemove(guild_id)) |kv| {
+            for (kv.value) |e| _ = s.emoji_by_id.remove(e.id);
+            freeEmojis(kv.value);
+        }
+        if (list.len == 0) return;
+        s.guild_emojis.put(s.gpa, guild_id, list) catch return freeEmojis(list);
+        for (list) |*e| {
+            e.guild = guild_id;
+            s.emoji_by_id.put(s.gpa, e.id, e.*) catch {};
+        }
+    }
+
+    pub const EmojiUse = enum { ok, needs_nitro, unavailable };
+
+    /// Dá para usar este emoji numa conversa de `guild_id` (0 = DM)? Sem Nitro
+    /// só os do próprio servidor e nenhum animado; o Discord recusa o resto.
+    pub fn emojiUse(s: *const Store, e: *const types.Emoji, guild_id: Id) EmojiUse {
+        if (!e.available) return .unavailable;
+        if (s.premium_type != 0) return .ok;
+        return if (e.animated or e.guild != guild_id or guild_id == 0) .needs_nitro else .ok;
     }
 
     pub fn user(s: *const Store, id: Id) ?*const types.User {
@@ -504,6 +545,7 @@ pub const Store = struct {
                     if (s.me_email) |old| ev_alloc.free(old);
                     s.me_email = x;
                 }
+                s.premium_type = r.premium_type;
                 for (r.users) |u| try s.mergeUser(u);
                 for (r.guilds) |g| try s.mergeGuild(g);
                 for (r.channels) |ch| try s.mergeChannel(ch);
@@ -654,7 +696,7 @@ pub const Store = struct {
             .reaction_set => |rs| {
                 const cs = s.channel(rs.channel) orelse return;
                 const m = s.find(cs, rs.id) orelse return;
-                for (m.reactions[0..m.n_reactions]) |*r| if (std.mem.eql(u8, r.text(), rs.reaction.text())) {
+                for (m.reactions[0..m.n_reactions]) |*r| if (r.same(&rs.reaction)) {
                     r.* = rs.reaction;
                     m.layout_w = -1;
                     return;
@@ -703,7 +745,7 @@ pub const Store = struct {
                 const m = s.find(cs, rc.id) orelse return;
                 if (rc.emoji) |e| {
                     for (m.reactions[0..m.n_reactions], 0..) |*r, i| {
-                        if (!std.mem.eql(u8, r.text(), e.text())) continue;
+                        if (!r.same(&e)) continue;
                         std.mem.copyForwards(types.Reaction, m.reactions[i .. m.n_reactions - 1], m.reactions[i + 1 .. m.n_reactions]);
                         m.n_reactions -= 1;
                         break;
@@ -724,7 +766,7 @@ pub const Store = struct {
                     return;
                 };
                 if (up.content) |t| {
-                    const spans = markdown.parse(s.gpa, t) catch {
+                    const spans = markdown.parseRaw(s.gpa, t, up.raw orelse "") catch {
                         ev_alloc.free(t);
                         if (up.raw) |x| ev_alloc.free(x);
                         return;
@@ -799,8 +841,10 @@ pub const Store = struct {
             .reaction => |r| {
                 const cs = s.channel(r.channel) orelse return;
                 const m = s.find(cs, r.id) orelse return;
-                s.react(m, r.emoji.text(), r.user == s.me, r.add);
+                s.react(m, r.emoji, r.user == s.me, r.add);
             },
+            .guild_emojis => |ge| s.setEmojis(ge.guild, ge.emojis),
+            .premium => |p| s.premium_type = p,
             .roles => |rs| {
                 defer ev_alloc.free(rs.roles);
                 for (rs.roles) |r| {
@@ -1150,9 +1194,9 @@ pub const Store = struct {
     }
 
     /// Soma ou tira uma reação. `mine` indica se foi a gente.
-    pub fn react(s: *Store, m: *StoredMessage, emoji: []const u8, mine: bool, add: bool) void {
+    pub fn react(s: *Store, m: *StoredMessage, emoji: types.Reaction, mine: bool, add: bool) void {
         _ = s;
-        for (m.reactions[0..m.n_reactions], 0..) |*r, i| if (std.mem.eql(u8, r.text(), emoji)) {
+        for (m.reactions[0..m.n_reactions], 0..) |*r, i| if (r.same(&emoji)) {
             if (add) {
                 if (mine and r.me) return;
                 r.count +|= 1;
@@ -1170,7 +1214,7 @@ pub const Store = struct {
             return;
         };
         if (!add or m.n_reactions >= m.reactions.len) return;
-        var r = types.Reaction.init(emoji);
+        var r = emoji;
         r.count = 1;
         r.me = mine;
         m.reactions[m.n_reactions] = r;
