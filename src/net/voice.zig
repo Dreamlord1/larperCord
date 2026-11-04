@@ -190,6 +190,11 @@ const Worker = struct {
     resuming: bool = false,
     end: ?End = null,
     dave: ?Dave = null,
+    /// Quem está na call e de quem é cada SSRC. Chegam (op 11, 5, 18, 20)
+    /// antes da descrição da sessão, quando o DAVE ainda nem existe: ficam
+    /// aqui e entram no DAVE quando ele nasce.
+    call_users: std.AutoHashMapUnmanaged(Id, void) = .empty,
+    call_ssrcs: std.AutoHashMapUnmanaged(u32, Id) = .empty,
     encoder: ?*c.OpusEncoder = null,
     // Áudio.
     audio_on: bool = false,
@@ -314,6 +319,13 @@ const Worker = struct {
         w.closeWs();
         std.crypto.secureZero(u8, &w.secret);
         w.ws_in.deinit(alloc);
+        w.call_users.deinit(alloc);
+        w.call_ssrcs.deinit(alloc);
+    }
+
+    fn addCallUser(w: *Worker, uid: Id) void {
+        w.call_users.put(alloc, uid, {}) catch {};
+        if (w.dave) |*dave| dave.addUser(uid);
     }
 
     fn loop(w: *Worker) End {
@@ -548,9 +560,12 @@ const Worker = struct {
             },
             5 => w.onSpeaking(d),
             11 => for (j.array(j.get(d, "user_ids"))) |u| {
-                if (j.id(u)) |uid| if (w.dave) |*dave| dave.addUser(uid);
+                if (j.id(u)) |uid| w.addCallUser(uid);
             },
+            // Flags e plataforma de quem está na call: também diz que ele está aqui.
+            18, 20 => if (j.id(j.get(d, "user_id"))) |uid| w.addCallUser(uid),
             13 => if (j.id(j.get(d, "user_id"))) |uid| {
+                _ = w.call_users.remove(uid);
                 w.removeSource(uid);
                 if (w.dave) |*dave| dave.removeUser(uid);
                 w.v.emit(.{ .voice_speaking = .{ .user = uid, .speaking = false } });
@@ -725,10 +740,9 @@ const Worker = struct {
         const ssrc: u32 = @intCast(std.math.clamp(j.int(j.get(d, "ssrc")) orelse 0, 0, std.math.maxInt(u32)));
         if (ssrc == 0) return;
         _ = w.sourceFor(ssrc, uid);
-        if (w.dave) |*dave| {
-            dave.addUser(uid);
-            dave.setSsrcUser(ssrc, uid);
-        }
+        w.addCallUser(uid);
+        w.call_ssrcs.put(alloc, ssrc, uid) catch {};
+        if (w.dave) |*dave| dave.setSsrcUser(ssrc, uid);
     }
 
     // --- DAVE --------------------------------------------------------------
@@ -739,6 +753,10 @@ const Worker = struct {
             return;
         };
         d.setLocalSsrc(w.ssrc);
+        var ui = w.call_users.keyIterator();
+        while (ui.next()) |u| d.addUser(u.*);
+        var si = w.call_ssrcs.iterator();
+        while (si.next()) |kv| d.setSsrcUser(kv.key_ptr.*, kv.value_ptr.*);
         w.dave = d;
     }
 

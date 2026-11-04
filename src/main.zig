@@ -106,13 +106,14 @@ fn voiceTest(guild: u64, channel: u64) !void {
     };
     std.debug.print("voz: conectando ao gateway...\n", .{});
     try gw.start();
-    gw.commands.push(.{ .join_voice = .{ .guild = guild, .channel = channel } });
+    // Sempre mudo: o teste só escuta (não transmite o microfone de ninguém).
+    gw.commands.push(.{ .join_voice = .{ .guild = guild, .channel = channel, .mute = true } });
     std.debug.print("voz: pedido de entrar no canal enviado\n", .{});
     var i: u32 = 0;
     while (i < 25) : (i += 1) {
         c.SDL_Delay(1000);
     }
-    gw.commands.push(.{ .join_voice = .{ .guild = guild, .channel = null } });
+    gw.commands.push(.{ .join_voice = .{ .guild = guild, .channel = null, .mute = true } });
     c.SDL_Delay(1500);
     gw.stop();
     c.SDL_Quit();
