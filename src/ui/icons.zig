@@ -83,6 +83,14 @@ pub fn members(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
     arc(dl, cx + 6, cy + 6.5, 4.5, pi * 1.25, 2 * pi, col, 2);
 }
 
+/// Cadeado (canal sem acesso).
+pub fn lock(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
+    c.ImDrawList_AddRectFilledEx(dl, v(cx - 5.5, cy - 1), v(cx + 5.5, cy + 7), col, 2, 0);
+    arc(dl, cx, cy - 1.5, 3.6, pi, 2 * pi, col, 1.8);
+    line(dl, cx - 3.6, cy - 1.5, cx - 3.6, cy - 0.5, col, 1.8);
+    line(dl, cx + 3.6, cy - 1.5, cx + 3.6, cy - 0.5, col, 1.8);
+}
+
 /// Caixa de entrada: uma bandeja com a abertura no meio.
 pub fn inbox(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
     const th: f32 = 1.8;

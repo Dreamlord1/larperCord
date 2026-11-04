@@ -609,6 +609,11 @@ pub const Gateway = struct {
     /// Objeto `member` de uma mensagem/digitando: guarda cor e cargos.
     fn memberColor(g: *Gateway, gid: Id, uid: Id, m: Value) void {
         if (gid == 0 or uid == 0) return;
+        if (uid == g.me) {
+            var list: std.ArrayList(Id) = .empty;
+            for (j.array(j.get(m, "roles"))) |rv| if (j.id(rv)) |rid| list.append(alloc, rid) catch {};
+            if (list.toOwnedSlice(alloc)) |roles| g.emit(.{ .my_roles = .{ .guild = gid, .roles = roles } }) else |_| {}
+        }
         g.emit(.{ .member_info = .{ .guild = gid, .user = uid, .info = g.infoOf(j.array(j.get(m, "roles"))) } });
     }
 
@@ -1163,6 +1168,16 @@ pub const Gateway = struct {
 
         const parent = j.id(j.get(cv, "parent_id")) orelse 0;
         const pos: u16 = @intCast(std.math.clamp(j.int(j.get(cv, "position")) orelse 0, 0, 65535));
+        var ows: std.ArrayList(types.Overwrite) = .empty;
+        for (j.array(j.get(cv, "permission_overwrites"))) |ov| {
+            const oid = j.id(j.get(ov, "id")) orelse continue;
+            ows.append(alloc, .{
+                .id = oid,
+                .member = (j.int(j.get(ov, "type")) orelse 0) == 1,
+                .allow = permBits(j.get(ov, "allow")),
+                .deny = permBits(j.get(ov, "deny")),
+            }) catch {};
+        }
         return .{
             .id = cid,
             .guild = gid,
@@ -1175,6 +1190,17 @@ pub const Gateway = struct {
             .recipients = recipients,
             .group = kind_i == 3,
             .icon = optDupe(j.str(j.get(cv, "icon"))),
+            .overwrites = ows.toOwnedSlice(alloc) catch &.{},
+        };
+    }
+
+    /// Permissões vêm como texto ("1024") nas versões novas da API.
+    fn permBits(v: ?Value) u64 {
+        const x = v orelse return 0;
+        return switch (x) {
+            .string => |s| std.fmt.parseInt(u64, s, 10) catch 0,
+            .integer => |n| @bitCast(n),
+            else => 0,
         };
     }
 

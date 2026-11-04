@@ -645,6 +645,20 @@ fn disconnected1001(app: *App) bool {
     return cur == 0 or app.store.channel(cur).?.info.guild != app.st.guild;
 }
 
+var locked_before: ?Id = null;
+fn rememberLockedFrom(app: *App) void {
+    locked_before = app.st.activeChannel();
+}
+fn lockedShown(_: *App) bool {
+    return qa.find("locked:501012") != null and qa.find("locked:501016") != null and qa.find("locked:501006") == null;
+}
+fn joinLockedVoice(app: *App) void {
+    app.actions.append(app.gpa, .{ .toggle_voice = 501016 }) catch {};
+}
+fn lockedNotOpened(app: *App) bool {
+    return app.st.activeChannel() == locked_before and std.mem.indexOf(u8, app.st.toast.text(), "acesso") != null;
+}
+
 fn inVoice(app: *App) bool {
     return app.st.voice == ch(13);
 }
@@ -1576,6 +1590,19 @@ const ops = [_]Op{
     expect("a nota fica guardada", profileNoteSaved),
     click("profile-full-close"),
     expect("o X fecha o perfil grande", popupClosed),
+
+    s("canais sem acesso"),
+    click("guild:501000"),
+    .{ .wait = 200 },
+    .{ .shot = "26-sem-acesso" },
+    expect("canal sem permissão aparece com cadeado (e o resto não)", lockedShown),
+    .{ .run = rememberLockedFrom },
+    click("channel:501012"),
+    expect("clicar num canal trancado só avisa (não abre)", lockedNotOpened),
+    // O AFK fica fora da tela: pede a entrada direto, como o clique faria.
+    .{ .run = joinLockedVoice },
+    expect("canal de voz sem permissão de entrar não entra", notInVoice),
+    click("guild:500000"),
 
     s("emoji"),
     click("composer-emoji"),

@@ -62,6 +62,13 @@ pub const Gateway = struct {
     fn run(g: *Gateway) !void {
         g.epoch_ms = nowMs();
         g.emit(.{ .ready = try buildReady() });
+        // O @everyone do segundo servidor (que não é nosso): com ele, o #bugs
+        // e o AFK de lá aparecem trancados (demoOverwrites).
+        {
+            const rs = try alloc.alloc(types.Role, 1);
+            rs[0] = .{ .id = guildId(1), .guild = guildId(1), .name = try alloc.dupe(u8, "@everyone"), .permissions = types.perm.view_channel | types.perm.send_messages | types.perm.read_history | types.perm.connect };
+            g.emit(.{ .roles = .{ .guild = guildId(1), .roles = rs } });
+        }
         for (relations, 0..) |rel, i| g.emit(.{ .relationship = .{ .user = rel.user, .kind = rel.kind, .since_ms = nowMs() - @as(i64, @intCast(i + 1)) * 97 * 86_400_000 } });
         try g.demoActivities();
         g.emit(.{ .guild_folders = try demoFolders() });
@@ -458,6 +465,19 @@ pub fn channelId(guild_index: usize, i: usize) Id {
     return guildId(guild_index) + 1 + @as(Id, i);
 }
 
+/// No segundo servidor, o #bugs só a moderação vê e no AFK ninguém entra.
+fn demoOverwrites(gi: usize, ci: usize) ![]const types.Overwrite {
+    if (gi != 1) return &.{};
+    const deny: u64 = switch (ci) {
+        11 => types.perm.view_channel,
+        15 => types.perm.connect,
+        else => return &.{},
+    };
+    const o = try alloc.alloc(types.Overwrite, 1);
+    o[0] = .{ .id = guildId(1), .deny = deny };
+    return o;
+}
+
 /// Pastas da demonstração: soltos, "Programação" e "Jogos".
 fn demoFolders() ![]types.GuildFolder {
     const spec = [_]struct { id: u64, name: []const u8, name_en: []const u8, color: u32, guilds: []const usize }{
@@ -516,6 +536,7 @@ fn buildReady() !ev.Ready {
                 .topic = try alloc.dupe(u8, pick(ch.topic, ch.topic_en)),
                 .position = @intCast(ci),
                 .unread = ch.unread and gi % 2 == 0,
+                .overwrites = try demoOverwrites(gi, ci),
             };
             n += 1;
         }

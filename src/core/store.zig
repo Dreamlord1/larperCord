@@ -121,6 +121,8 @@ pub const Store = struct {
     friend_since: std.AutoHashMapUnmanaged(Id, i64) = .empty,
     /// Notas que só a gente vê (buscadas ao abrir o perfil).
     notes: std.AutoHashMapUnmanaged(Id, []const u8) = .empty,
+    /// Todos os nossos cargos em cada servidor (para as exceções dos canais).
+    my_roles: std.AutoHashMapUnmanaged(Id, []Id) = .empty,
     /// Ícone (hash) de cada aplicação; "" = não tem ou não deu.
     app_icons: std.AutoHashMapUnmanaged(Id, []const u8) = .empty,
     /// Menções recentes (GET /users/@me/mentions), da mais nova para a mais
@@ -173,6 +175,9 @@ pub const Store = struct {
         var ii = s.app_icons.valueIterator();
         while (ii.next()) |n| if (n.len > 0) ev_alloc.free(n.*);
         s.app_icons.deinit(s.gpa);
+        var mri = s.my_roles.valueIterator();
+        while (mri.next()) |r| ev_alloc.free(r.*);
+        s.my_roles.deinit(s.gpa);
         for (s.recent_mentions.items) |*m| s.freeMessage(m);
         s.recent_mentions.deinit(s.gpa);
         var gc = s.guild_channels.valueIterator();
@@ -247,6 +252,7 @@ pub const Store = struct {
     }
 
     fn freeChannelInfo(ch: *const types.Channel) void {
+        if (ch.overwrites.len > 0) ev_alloc.free(ch.overwrites);
         ev_alloc.free(ch.name);
         ev_alloc.free(ch.topic);
         if (ch.recipients.len > 0) ev_alloc.free(ch.recipients);
@@ -754,6 +760,11 @@ pub const Store = struct {
                 };
             },
             .member_info => |mi| try s.members.put(s.gpa, .{ mi.guild, mi.user }, mi.info),
+            .my_roles => |mr| {
+                const gop = try s.my_roles.getOrPut(s.gpa, mr.guild);
+                if (gop.found_existing) ev_alloc.free(gop.value_ptr.*);
+                gop.value_ptr.* = mr.roles;
+            },
             .role_delete => |rid| if (s.roles.fetchRemove(rid)) |kv| ev_alloc.free(kv.value.name),
             .member_remove => |mr| _ = s.members.remove(.{ mr.guild, mr.user }),
             .guild_folders => |list| {
@@ -921,11 +932,56 @@ pub const Store = struct {
         if (g.owner != 0 and g.owner == s.me) return std.math.maxInt(u64);
         // @everyone tem o mesmo ID do servidor.
         var p: u64 = if (s.roles.get(guild_id)) |r| r.permissions else 0;
-        if (s.memberInfo(guild_id, s.me)) |mi| for (mi.roleSlice()) |rid| {
+        if (s.my_roles.get(guild_id)) |list| {
+            for (list) |rid| if (s.roles.get(rid)) |r| {
+                p |= r.permissions;
+            };
+        } else if (s.memberInfo(guild_id, s.me)) |mi| for (mi.roleSlice()) |rid| {
             if (s.roles.get(rid)) |r| p |= r.permissions;
         };
         if (p & types.perm.administrator != 0) return std.math.maxInt(u64);
         return p;
+    }
+
+    /// Nossas permissões num canal: as do servidor com as exceções do canal
+    /// (@everyone, depois os nossos cargos juntos, depois a gente), como o
+    /// Discord calcula. Sem saber os cargos do servidor ainda, libera tudo
+    /// (melhor não trancar um canal à toa).
+    pub fn channelPermissions(s: *const Store, ch: *const types.Channel) u64 {
+        const all = std.math.maxInt(u64);
+        if (ch.guild == 0) return all;
+        if (s.roles.get(ch.guild) == null) return all;
+        var p = s.permissions(ch.guild);
+        if (p & types.perm.administrator != 0 or p == all) return all;
+        var role_allow: u64 = 0;
+        var role_deny: u64 = 0;
+        const mine = s.my_roles.get(ch.guild) orelse &.{};
+        for (ch.overwrites) |o| {
+            if (o.member) continue;
+            if (o.id == ch.guild) {
+                p = (p & ~o.deny) | o.allow;
+            } else if (std.mem.indexOfScalar(Id, mine, o.id) != null) {
+                role_allow |= o.allow;
+                role_deny |= o.deny;
+            }
+        }
+        p = (p & ~role_deny) | role_allow;
+        for (ch.overwrites) |o| if (o.member and o.id == s.me) {
+            p = (p & ~o.deny) | o.allow;
+        };
+        return p;
+    }
+
+    /// Dá para abrir o canal? (ver; e, num de voz, também entrar)
+    pub fn canAccess(s: *const Store, ch: *const types.Channel) bool {
+        const p = s.channelPermissions(ch);
+        if (p & types.perm.view_channel == 0) return false;
+        if (ch.kind == .voice and p & types.perm.connect == 0) return false;
+        return true;
+    }
+
+    pub fn canSend(s: *const Store, ch: *const types.Channel) bool {
+        return s.channelPermissions(ch) & types.perm.send_messages != 0;
     }
 
     pub fn can(s: *const Store, guild_id: Id, bit: u64) bool {

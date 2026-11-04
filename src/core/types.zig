@@ -86,6 +86,10 @@ pub const GuildFolder = struct {
 pub const perm = struct {
     pub const administrator: u64 = 1 << 3;
     pub const manage_messages: u64 = 1 << 13;
+    pub const view_channel: u64 = 1 << 10;
+    pub const send_messages: u64 = 1 << 11;
+    pub const read_history: u64 = 1 << 16;
+    pub const connect: u64 = 1 << 20;
     pub const move_members: u64 = 1 << 24;
     pub const manage_roles: u64 = 1 << 28;
 };
@@ -170,6 +174,17 @@ pub const Channel = struct {
     icon: ?[]const u8 = null,
     /// DM em grupo (tipo 3 do Discord), mesmo que só reste uma pessoa.
     group: bool = false,
+    /// Exceções de permissão do canal (alocadas com o c_allocator).
+    overwrites: []const Overwrite = &.{},
+};
+
+/// Exceção de permissão de um canal para um cargo (o @everyone tem o ID do
+/// servidor) ou para uma pessoa.
+pub const Overwrite = struct {
+    id: Id,
+    member: bool = false,
+    allow: u64 = 0,
+    deny: u64 = 0,
 };
 
 /// Anexo de uma mensagem. `url` pode ser https:// (CDN do Discord),

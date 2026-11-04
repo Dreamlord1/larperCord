@@ -140,7 +140,14 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
     };
 
     const k = anim.to(anim.id("chan", ch.id), if (selected) 1 else if (hb.hovered) 0.5 else 0, 24);
-    const muted_ch = ctx.st.muted_channels.contains(ch.id);
+    // Sem permissão para ver (ou entrar, se é de voz): cadeado e apagado;
+    // clicar só avisa (app.zig), não vai ao Discord.
+    const locked = ch.kind != .category and !ctx.store.canAccess(ch);
+    if (locked) {
+        qa.mark(rr, "locked:{d}", .{ch.id});
+        d.tip(ctx, rr, if (ch.kind == .voice) i18n.tr("Você não pode entrar neste canal", "You can't join this channel") else i18n.tr("Você não tem acesso a este canal", "You don't have access to this channel"), hb.hovered);
+    }
+    const muted_ch = ctx.st.muted_channels.contains(ch.id) or locked;
     const bright = (selected or hb.hovered or ch.unread or in_voice) and !muted_ch;
     const name_col = if (selected) ctx.col(.text) else if (bright) ctx.col(.text).mix(ctx.col(.muted), 0.15) else if (muted_ch) ctx.col(.faint) else ctx.col(.muted);
     const fs = ctx.th.font_size;
@@ -151,7 +158,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
         .discord => {
             if (k > 0.01) d.rect(dl, rr, ctx.col(.selected).alpha(k), ctx.th.radius);
             const ic = ctx.col(.faint).mix(ctx.col(.muted), if (bright) 0.5 else 0);
-            switch (ch.kind) {
+            if (locked) icons.lock(dl, rr.x + 18, rr.y + rr.h / 2 - 2, ic.u()) else switch (ch.kind) {
                 .voice => icons.speaker(dl, rr.x + 18, rr.y + rr.h / 2, ic.u()),
                 else => d.text(dl, fam.get(.medium), 20, rr.x + 10, rr.y + 3.5, ic, "#"),
             }
@@ -168,7 +175,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             const ic_bg = if (on) ctx.col(.accent_text).alpha(0.22) else ctx.col(.elevated);
             d.circle(dl, pr.x + 20, pr.y + pr.h / 2, 13, ic_bg);
             const ink = if (on) ctx.col(.accent_text) else ctx.col(.muted);
-            switch (ch.kind) {
+            if (locked) icons.lock(dl, pr.x + 20, pr.y + pr.h / 2 - 2, ink.u()) else switch (ch.kind) {
                 .voice => icons.speaker(dl, pr.x + 21, pr.y + pr.h / 2, ink.u()),
                 else => {
                     const hw = d.width(fam.get(.bold), 14, "#");
@@ -185,7 +192,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             if (selected) d.rect(dl, rr, ctx.col(.accent), 0) else if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
             var buf: [96]u8 = undefined;
             const branch = if (last) "└" else "├";
-            const sigil = if (ch.kind == .voice) "♪" else "#";
+            const sigil = if (locked) "×" else if (ch.kind == .voice) "♪" else "#";
             const t = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ branch, sigil, ch.name }) catch ch.name;
             const tc = if (selected) ctx.col(.accent_text) else name_col;
             _ = d.textClipped(dl, fam.get(if (ch.unread or selected) .bold else .regular), fs - 1, rr.x + 4, d.centerY(rr, fs - 1), tc, t, rr.w - 24);

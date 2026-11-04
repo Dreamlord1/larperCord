@@ -848,6 +848,9 @@ pub const App = struct {
             .remove_relationship => |u| app.cmd(.{ .relationship = .{ .user = u, .accept = false } }),
             .select_channel => |ch| {
                 if (app.opts.qa and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[ação] select_channel ctrl={}\n", .{app.io.*.KeyCtrl});
+                if (app.store.channel(ch)) |cs| if (!app.store.canAccess(&cs.info)) {
+                    return st.showToast(now(), true, "você não tem acesso a #{s}", "you don't have access to #{s}", .{cs.info.name});
+                };
                 app.openChannel(ch, app.io.*.KeyCtrl);
             },
             .focus_tab => |i| if (i < st.tabs.items.len) {
@@ -973,6 +976,9 @@ pub const App = struct {
                 app.cmd(.{ .typing = id });
             },
             .toggle_voice => |ch| {
+                if (st.voice != ch) if (app.store.channel(ch)) |cs| if (!app.store.canAccess(&cs.info)) {
+                    return st.showToast(now(), true, "você não pode entrar em {s}", "you can't join {s}", .{cs.info.name});
+                };
                 if (st.voice == ch) {
                     st.voice = null;
                     st.voice_status = .disconnected;

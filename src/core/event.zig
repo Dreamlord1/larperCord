@@ -72,6 +72,9 @@ pub const Event = union(enum) {
     /// Cargo apagado / alguém saiu do servidor (GUILD_ROLE_DELETE, GUILD_MEMBER_REMOVE).
     role_delete: Id,
     member_remove: struct { guild: Id, user: Id },
+    /// Todos os nossos cargos num servidor (o `member_info` guarda só os 6
+    /// mais altos; as exceções dos canais podem citar qualquer um).
+    my_roles: struct { guild: Id, roles: []Id },
     /// Cargos e cor do nome de alguém num servidor.
     member_info: struct { guild: Id, user: Id, info: types.MemberInfo },
     /// Ordem dos servidores e pastas (READY / mudança nas configurações).
