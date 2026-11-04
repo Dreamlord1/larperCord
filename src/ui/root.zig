@@ -105,7 +105,18 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
                 return th.option(name);
             }
         };
-        layout.solveWith(ctx.st.gpa, root, ctx.win, ctx.win.w, .{ .ctx = ctx.th, .get = Look.get }, placed) catch {};
+        // O que o usuário desligou sai do layout (a conversa ocupa o espaço).
+        var hides: [2][]const u8 = undefined;
+        var n_hides: usize = 0;
+        if (!ctx.st.settings.show_member_list) {
+            hides[n_hides] = "member-list";
+            n_hides += 1;
+        }
+        if (!ctx.st.settings.show_status_bar) {
+            hides[n_hides] = "status-bar";
+            n_hides += 1;
+        }
+        layout.solveWith(ctx.st.gpa, root, ctx.win, ctx.win.w, .{ .ctx = ctx.th, .get = Look.get, .hides = hides[0..n_hides] }, placed) catch {};
         const base_theme = ctx.th;
         defer ctx.th = base_theme;
         var local: theme_mod.Theme = undefined;

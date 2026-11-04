@@ -184,6 +184,27 @@ pub fn text(dl: *c.ImDrawList, font: *c.ImFont, size: f32, x: f32, y: f32, color
     c.ImDrawList_AddTextImFontPtrEx(dl, font, sz, v(@round(x), @round(y + dy)), color.u(), b, b + s.len, 0, null);
 }
 
+/// Quantos bytes de `s` cabem em `max_w`, sem partir um caractere (busca
+/// binária: cortar um texto longo mede umas 8 vezes, não uma por caractere).
+pub fn fitBytes(font: *c.ImFont, size: f32, s: []const u8, max_w: f32) usize {
+    var lo: usize = 0;
+    var hi: usize = s.len;
+    while (lo < hi) {
+        var mid = lo + (hi - lo + 1) / 2;
+        while (mid > lo and mid < s.len and (s[mid] & 0xC0) == 0x80) mid -= 1;
+        if (mid == lo) {
+            // Só resta um caractere entre lo e hi: vê se ele cabe.
+            mid = lo + 1;
+            while (mid < s.len and (s[mid] & 0xC0) == 0x80) mid += 1;
+            if (mid > hi or width(font, size, s[0..mid]) > max_w) break;
+            lo = mid;
+            continue;
+        }
+        if (width(font, size, s[0..mid]) <= max_w) lo = mid else hi = mid - 1;
+    }
+    return lo;
+}
+
 /// Texto que corta com "…" se passar de `max_w`. Retorna a largura usada.
 pub fn textClipped(dl: *c.ImDrawList, font: *c.ImFont, size: f32, x: f32, y: f32, color: Rgba, s: []const u8, max_w: f32) f32 {
     const full = width(font, size, s);
@@ -193,12 +214,7 @@ pub fn textClipped(dl: *c.ImDrawList, font: *c.ImFont, size: f32, x: f32, y: f32
     }
     const ell = "…";
     const avail = max_w - width(font, size, ell);
-    var end: usize = s.len;
-    while (end > 0) {
-        end -= 1;
-        while (end > 0 and (s[end] & 0xC0) == 0x80) end -= 1;
-        if (width(font, size, s[0..end]) <= avail) break;
-    }
+    const end = fitBytes(font, size, s, avail);
     text(dl, font, size, x, y, color, s[0..end]);
     const w0 = width(font, size, s[0..end]);
     text(dl, font, size, x + w0, y, color, ell);

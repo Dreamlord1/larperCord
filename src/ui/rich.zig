@@ -137,39 +137,64 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
     var syn: syntax.State = .normal;
     // "Copiar" do bloco: desenhado depois da última linha, para ficar por cima.
     var copy: ?struct { sp: *const md.Span, x: f32, y: f32, at_top: bool } = null;
-    while (it.next()) |word| {
-        const sp = word.span;
-        if (copy) |cp| if (cp.sp != sp) {
-            copyButton(o.ctx.?, dl.?, cp.sp, cp.x, cp.y, wrap, cp.at_top, o, mouse);
-            copy = null;
-        };
-        const font = fontFor(o, sp);
-        const s = if (sp.mention != .none) label(store, sp, &buf) else word.text;
-        const size = if (sp.flags.code) o.size - 1.5 else o.size;
-        const pad: f32 = if (sp.flags.code) 5 else if (sp.mention != .none) 3 else 0;
-        // Linha do bloco de código ocupa a largura toda (cortada se passar).
-        const w = if (sp.flags.block) wrap else d.width(font, size, s) + pad * 2;
-        if (word.breaks > 0 and !(x == 0 and y == 0 and line_start)) {
-            // Uma linha nova por \n (linhas em branco contam, até 3).
-            x = 0;
-            y += o.line_h * @as(f32, @floatFromInt(@min(word.breaks, 3)));
-            line_start = true;
-        } else if (x > 0 and x + w > wrap) {
-            x = 0;
-            y += o.line_h;
-            line_start = true;
+    while (it.next()) |word_in| {
+        var word = word_in;
+        // Palavra maior que a linha (link, "kkkkk…"): vai em pedaços.
+        pieces: while (true) {
+            const sp = word.span;
+            if (copy) |cp| if (cp.sp != sp) {
+                copyButton(o.ctx.?, dl.?, cp.sp, cp.x, cp.y, wrap, cp.at_top, o, mouse);
+                copy = null;
+            };
+            const font = fontFor(o, sp);
+            var s = if (sp.mention != .none) label(store, sp, &buf) else word.text;
+            const size = if (sp.flags.code) o.size - 1.5 else o.size;
+            const pad: f32 = if (sp.flags.code) 5 else if (sp.mention != .none) 3 else 0;
+            // Linha do bloco de código ocupa a largura toda (cortada se passar).
+            var w = if (sp.flags.block) wrap else d.width(font, size, s) + pad * 2;
+            if (word.breaks > 0 and !(x == 0 and y == 0 and line_start)) {
+                // Uma linha nova por \n (linhas em branco contam, até 3).
+                x = 0;
+                y += o.line_h * @as(f32, @floatFromInt(@min(word.breaks, 3)));
+                line_start = true;
+            } else if (x > 0 and x + w > wrap) {
+                x = 0;
+                y += o.line_h;
+                line_start = true;
+            }
+            var rest: []const u8 = "";
+            if (w > wrap and !sp.flags.block and sp.mention == .none and word.text.len > 1) {
+                var fit = d.fitBytes(font, size, word.text, wrap - pad * 2);
+                // Nem um caractere cabe (coluna estreitíssima): anda um assim mesmo.
+                if (fit == 0) fit = @min(std.unicode.utf8ByteSequenceLength(word.text[0]) catch 1, word.text.len);
+                rest = word.text[fit..];
+                word.text = word.text[0..fit];
+                if (rest.len > 0) word.space_after = false;
+                s = word.text;
+                w = d.width(font, size, s) + pad * 2;
+            }
+            if (dl) |l| {
+                const block_top = sp.flags.block and word.text.ptr == sp.text.ptr;
+                if (block_top) syn = .normal;
+                if (o.base) |base| select(l, th_col, base, word, sp, font, size, pad, x0 + x, y0 + y, w, space_w, o, line_start);
+                drawWord(l, th_col, sp, font, size, s, x0 + x, y0 + y, w, pad, o, mouse, &syn);
+                if (block_top and o.ctx != null) copy = .{ .sp = sp, .x = x0 + x, .y = y0 + y, .at_top = y == 0 };
+            }
+            line_start = false;
+            x += w;
+            max_w = @max(max_w, x);
+            if (rest.len > 0) {
+                x = 0;
+                y += o.line_h;
+                line_start = true;
+                word = word_in;
+                word.text = rest;
+                word.breaks = 0;
+                continue :pieces;
+            }
+            if (word.space_after) x += space_w;
+            break;
         }
-        if (dl) |l| {
-            const block_top = sp.flags.block and word.text.ptr == sp.text.ptr;
-            if (block_top) syn = .normal;
-            if (o.base) |base| select(l, th_col, base, word, sp, font, size, pad, x0 + x, y0 + y, w, space_w, o, line_start);
-            drawWord(l, th_col, sp, font, size, s, x0 + x, y0 + y, w, pad, o, mouse, &syn);
-            if (block_top and o.ctx != null) copy = .{ .sp = sp, .x = x0 + x, .y = y0 + y, .at_top = y == 0 };
-        }
-        line_start = false;
-        x += w;
-        max_w = @max(max_w, x);
-        if (word.space_after) x += space_w;
     }
     if (copy) |cp| copyButton(o.ctx.?, dl.?, cp.sp, cp.x, cp.y, wrap, cp.at_top, o, mouse);
     return .{ .h = y + o.line_h, .w = max_w, .last_x = x };

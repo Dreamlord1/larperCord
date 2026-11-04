@@ -977,7 +977,8 @@ pub const Gateway = struct {
         }
         if (std.mem.eql(u8, t, "PRESENCE_UPDATE")) {
             const u = j.get(d, "user") orelse return;
-            g.upsert(u);
+            // A presença costuma trazer só o ID: sem nome não há o que atualizar.
+            if (j.get(u, "username") != null) g.upsert(u);
             const st = statusOf(d);
             g.emit(.{ .presence_update = .{
                 .user = j.id(j.get(u, "id")) orelse return,
@@ -1090,7 +1091,7 @@ pub const Gateway = struct {
         for (list) |p| {
             var uid: Id = 0;
             if (j.get(p, "user")) |u| {
-                g.upsert(u);
+                if (j.get(u, "username") != null) g.upsert(u);
                 uid = j.id(j.get(u, "id")) orelse 0;
             }
             if (uid == 0) uid = j.id(j.get(p, "user_id")) orelse continue;

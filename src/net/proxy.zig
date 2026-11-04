@@ -76,6 +76,11 @@ fn unlock() void {
 /// Aplica o que está nas configurações (inválido = sem proxy). Barato se
 /// nada mudou (o app chama a cada quadro).
 pub fn set(url: []const u8, all: bool) void {
+    // Chamado a cada quadro: sem mudança, nem valida.
+    if (last_all == all and std.mem.eql(u8, last_raw[0..last_raw_len], url)) return;
+    last_all = all;
+    last_raw_len = @min(url.len, last_raw.len);
+    @memcpy(last_raw[0..last_raw_len], url[0..last_raw_len]);
     const u = if (valid(url)) url else "";
     lock();
     defer unlock();
@@ -85,6 +90,10 @@ pub fn set(url: []const u8, all: bool) void {
     cur_len = u.len;
     cur_all = all;
 }
+
+var last_raw: [512]u8 = undefined;
+var last_raw_len: usize = 0;
+var last_all = false;
 
 /// O proxy para baixar `url` (null = conexão direta).
 pub fn forUrl(buf: *Buf, url: []const u8) ?[:0]const u8 {

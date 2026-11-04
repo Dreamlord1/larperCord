@@ -1471,6 +1471,7 @@ pub const App = struct {
         const bg_frame_ms: i64 = 50;
         var bg_dirty = false;
         var last_frame_ms: i64 = 0;
+        var typing_check_ms: i64 = 0;
         var was_active = false;
         // LARPER_RECORD=pasta: salva cada quadro da tela de login (a 30 qps fixos)
         // para montar o vídeo/GIF da documentação.
@@ -1479,6 +1480,11 @@ pub const App = struct {
 
         while (running) {
             var e: c.SDL_Event = undefined;
+            // A tela de login anima sem parar: no máximo 60 quadros por segundo.
+            if (app.login.visible() and !app.opts.qa and app.opts.shot == null and !bench and record_dir == null) {
+                const since_frame = now() - last_frame_ms;
+                if (since_frame < 16) c.SDL_Delay(@intCast(16 - since_frame));
+            }
             const busy = pending > 0 or anim.active or app.opts.shot != null or app.opts.qa or bench or
                 (app.login.visible() and !app.st.settings.reduce_motion);
             // Dorme até o próximo quadro de um GIF, de uma animação lenta ou
@@ -1531,7 +1537,12 @@ pub const App = struct {
                 got = c.SDL_PollEvent(&e);
             }
             if (input) pending = 3;
-            if (app.store.expireTyping(now())) pending = 2;
+            // "Digitando" vence em segundos: conferir 4 vezes por segundo basta
+            // (são todos os canais).
+            if (now() - typing_check_ms >= 250) {
+                typing_check_ms = now();
+                if (app.store.expireTyping(typing_check_ms)) pending = 2;
+            }
             if (app.notifiers.items.len > 0) app.reapNotifiers();
 
             app.images.now_ms = now();

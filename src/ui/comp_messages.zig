@@ -195,7 +195,7 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     if (ctx.st.friends) return @import("comp_friends.zig").page(ctx, n, r_in);
     // A bandeja de arquivos fica entre a conversa e a caixa de texto.
     var r = r_in;
-    r.h = @max(40, r.h - att.trayHeight(ctx) - md_preview.height(ctx.st));
+    r.h = @max(40, r.h - att.trayHeight(ctx) - md_preview.height(ctx.st) - composer_extra);
     // Tela dividida: cada painel chama `history` com o canal dele.
     if (mosaic.on()) return mosaic.draw(ctx, n, r);
     const ch_id = ctx.st.activeChannel() orelse return;
@@ -565,7 +565,7 @@ fn quotedText(ctx: *d.Ctx, m: *StoredMessage) []const u8 {
 fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x: f32, y: f32, max_w: f32, spine_x: ?f32, on_accent: bool) void {
     var buf: [160]u8 = undefined;
     const fam = g.fam;
-    const found = ctx.store.findAny(m.msg.reply_to);
+    const found = ctx.store.findNear(m.msg.channel, m.msg.reply_to);
     const rr: d.Rect = .{ .x = x, .y = y, .w = max_w, .h = reply_h };
     const hb = d.hitUnder(ctx, @truncate(m.msg.id ^ 0x5151), rr);
     qa.mark(rr, "reply-line:{d}", .{m.msg.id});
@@ -838,7 +838,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             if (flash > 0) d.rect(dl, row, ctx.col(.accent).alpha(0.25 * flash), 0);
             if (mentions_me) d.rect(dl, .{ .x = r.x, .y = row.y, .w = 2, .h = row.h }, ctx.col(.mention), 0);
             if (reply) {
-                const found = ctx.store.findAny(m.msg.reply_to);
+                const found = ctx.store.findNear(m.msg.channel, m.msg.reply_to);
                 const ru = if (found) |f| ctx.store.user(f.m.msg.author) else null;
                 var rb: [160]u8 = undefined;
                 const line = std.fmt.bufPrint(&rb, "↳ {s}: {s}", .{ if (ru) |x| x.name else "?", if (found) |f| snippet(rb[100..], quotedText(ctx, f.m)) else "…" }) catch "";
@@ -975,13 +975,18 @@ fn inputCallback(data: [*c]c.ImGuiInputTextCallbackData) callconv(.c) c_int {
         c.ImGuiInputTextCallbackData_DeleteChars(data, 0, data.*.BufTextLen);
         c.ImGuiInputTextCallbackData_InsertChars(data, 0, &st.input, null);
     }
-    if (data.*.EventFlag == c.ImGuiInputTextFlags_CallbackHistory and data.*.EventKey == c.ImGuiKey_UpArrow and data.*.BufTextLen == 0)
-        st.edit_last = true;
     return 0;
 }
 
-pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
+/// Altura a mais da caixa de texto (as linhas além da primeira). Ela cresce
+/// para cima e a conversa encolhe junto (`messages`).
+pub var composer_extra: f32 = 0;
+const composer_max_lines = 10;
+
+pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     if (ctx.st.friends) return;
+    const grown = composer_extra;
+    const r: d.Rect = .{ .x = r_in.x, .y = r_in.y - grown, .w = r_in.w, .h = r_in.h + grown };
     const fam = ctx.familyFor(n);
     const variant = d.pstr(n, "variant", "box");
     const ch_id = ctx.st.activeChannel() orelse return;
@@ -1100,11 +1105,31 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     }
 
     const fs = ctx.th.font_size;
-    const frame_h = fs * d.text_scale + 8;
-    c.ImGui_PushFontFloat(fam.get(.regular), fs * d.text_scale);
-    c.ImGui_SetCursorScreenPos(d.v(input_x, r.y + (r.h - frame_h) / 2));
-    qa.mark(.{ .x = input_x, .y = r.y, .w = @max(40, input_r - input_x), .h = r.h }, "composer", .{});
-    c.ImGui_SetNextItemWidth(@max(40, input_r - input_x));
+    const font_px = fs * d.text_scale;
+    const input_w = @max(40, input_r - input_x);
+    const frame_h = font_px + 8 + grown;
+    // Quantas linhas o texto ocupa: a caixa cresce até `composer_max_lines`
+    // (depois rola por dentro). A medida vale para o próximo quadro.
+    {
+        const len = std.mem.indexOfScalar(u8, &st.input, 0) orelse st.input.len;
+        const pad_x = c.ImGui_GetStyle().*.FramePadding.x;
+        var lines: f32 = 1;
+        if (len > 0) {
+            const b: [*]const u8 = &st.input;
+            const sz = c.ImFont_CalcTextSizeAEx(fam.get(.regular), font_px, std.math.floatMax(f32), input_w - pad_x * 2 - 16, b, b + len, null);
+            lines = @round(sz.y / font_px);
+            if (st.input[len - 1] == '\n') lines += 1;
+        }
+        const want = (std.math.clamp(lines, 1, composer_max_lines) - 1) * font_px;
+        if (want != composer_extra) {
+            composer_extra = want;
+            anim.active = true;
+        }
+    }
+    c.ImGui_PushFontFloat(fam.get(.regular), font_px);
+    const input_y = r.y + (r.h - frame_h) / 2;
+    c.ImGui_SetCursorScreenPos(d.v(input_x, input_y));
+    qa.mark(.{ .x = input_x, .y = r.y, .w = input_w, .h = r.h }, "composer", .{});
     if (st.focus_input and !st.palette.open and !st.settings.open and st.popup == .none) {
         c.ImGui_SetKeyboardFocusHere();
         st.focus_input = false;
@@ -1114,15 +1139,20 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         i18n.fmtZ(&hint_buf, "Conversar com @{s}", "Message @{s}", .{cs.info.name})
     else
         i18n.fmtZ(&hint_buf, "Conversar em #{s}", "Message #{s}", .{cs.info.name});
-    const flags = c.ImGuiInputTextFlags_EnterReturnsTrue | c.ImGuiInputTextFlags_CallbackAlways | c.ImGuiInputTextFlags_CallbackHistory;
+    // A caixa vazia mostra a dica (a multilinha do ImGui não tem).
+    if (st.input[0] == 0 and hint.len > 0) d.text(dl, fam.get(.regular), fs, input_x + c.ImGui_GetStyle().*.FramePadding.x, input_y + 4, ctx.col(.faint), hint);
+    // Enter envia; Shift+Enter (ou Ctrl+Enter) abre uma linha nova.
+    const flags = c.ImGuiInputTextFlags_EnterReturnsTrue | c.ImGuiInputTextFlags_CallbackAlways | c.ImGuiInputTextFlags_CtrlEnterForNewLine | c.ImGuiInputTextFlags_WordWrap;
     // Navegação vim: Esc sai da caixa e o texto fica (o ImGui desfaria).
     const keep = vim.escapeKeepsText(st);
     var kept: @TypeOf(st.input) = undefined;
     if (keep) kept = st.input;
-    if (c.ImGui_InputTextWithHintEx("##composer", hint.ptr, &st.input, st.input.len, flags, inputCallback, st)) submit(ctx);
+    if (c.ImGui_InputTextMultilineEx("##composer", &st.input, st.input.len, d.v(input_w, frame_h), flags, inputCallback, st)) submit(ctx);
     // Avisa o Discord quando o texto muda (o app limita a um a cada 8 s).
     if (c.ImGui_IsItemEdited() and st.input[0] != 0) ctx.act(.{ .typing = ch_id });
     const active = c.ImGui_IsItemActive();
+    // Seta para cima com a caixa vazia: edita a última mensagem.
+    if (active and st.input[0] == 0 and c.ImGui_IsKeyPressed(c.ImGuiKey_UpArrow)) st.edit_last = true;
     if (keep) st.input = kept;
     vim.composer_active = active;
     c.ImGui_PopFont();
@@ -1148,7 +1178,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
 fn submit(ctx: *d.Ctx) void {
     const st = ctx.st;
     const len = std.mem.indexOfScalar(u8, &st.input, 0) orelse st.input.len;
-    const s = std.mem.trim(u8, st.input[0..len], " \t");
+    const s = std.mem.trim(u8, st.input[0..len], " \t\r\n");
     if (s.len > 0 or (st.uploads.items.len > 0 and st.editing == 0)) {
         const owned = st.gpa.dupe(u8, s) catch return;
         ctx.act(if (st.editing != 0) .{ .save_edit = owned } else .{ .send_message = owned });

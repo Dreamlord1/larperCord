@@ -667,6 +667,45 @@ var locked_before: ?Id = null;
 fn rememberLockedFrom(app: *App) void {
     locked_before = app.st.activeChannel();
 }
+var composer_w0: f32 = 0;
+var composer_h0: f32 = 0;
+fn rememberComposerW(_: *App) void {
+    if (qa.find("composer")) |r| composer_w0 = r.w;
+}
+fn composerWider(_: *App) bool {
+    const r = qa.find("composer") orelse return false;
+    return r.w > composer_w0 + 100;
+}
+fn rememberComposerH(_: *App) void {
+    if (qa.find("composer")) |r| composer_h0 = r.h;
+}
+fn composerGrew(app: *App) bool {
+    const r = qa.find("composer") orelse return false;
+    return std.mem.indexOfScalar(u8, &app.st.input, '\n') != null and r.h > composer_h0 + 5;
+}
+fn composerBack(_: *App) bool {
+    const r = qa.find("composer") orelse return false;
+    return r.h <= composer_h0 + 1;
+}
+fn sentTwoLines(app: *App) bool {
+    const cs = active(app) orelse return false;
+    const items = cs.messages.items;
+    return items.len > 0 and std.mem.eql(u8, items[items.len - 1].msg.content, "linha um\nlinha dois") and app.st.input[0] == 0;
+}
+fn sendLongWord(app: *App) void {
+    const text = app.gpa.alloc(u8, 900) catch return;
+    @memset(text, 'k');
+    app.actions.append(app.gpa, .{ .send_message = text }) catch {};
+}
+fn longWordWrapped(app: *App) bool {
+    const cs = active(app) orelse return false;
+    const items = cs.messages.items;
+    if (items.len == 0 or items[items.len - 1].msg.content.len != 900) return false;
+    var b: [64]u8 = undefined;
+    const r = qa.find(markFmt(&b, "msgtext:{d}", .{items[items.len - 1].msg.id})) orelse return false;
+    const members = qa.findFirst("member:1001") orelse return false;
+    return r.h > 40 and r.x + r.w <= members.x;
+}
 fn lockedShown(_: *App) bool {
     return qa.find("locked:501012") != null and qa.find("locked:501016") != null and qa.find("locked:501006") == null;
 }
@@ -1689,6 +1728,21 @@ const ops = [_]Op{
     expect("canal de voz sem permissão de entrar não entra", notInVoice),
     click("guild:500000"),
 
+    s("mensagem longa"),
+    click("guild:500000"),
+    click("composer"),
+    .{ .text = "linha um" },
+    .{ .run = rememberComposerH },
+    .{ .key = .{ .key = c.ImGuiKey_Enter, .shift = true } },
+    .{ .text = "linha dois" },
+    expect("Shift+Enter abre uma linha nova e a caixa cresce", composerGrew),
+    key(c.ImGuiKey_Enter),
+    expect("Enter envia com as duas linhas", sentTwoLines),
+    expect("depois de enviar, a caixa volta ao tamanho normal", composerBack),
+    .{ .run = sendLongWord },
+    .{ .expect = .{ .name = "palavra enorme quebra em várias linhas sem sair da tela", .check = longWordWrapped, .timeout_ms = 3000 } },
+    .{ .shot = "27-mensagem-longa" },
+
     s("emoji"),
     click("composer-emoji"),
     expect("botão de emoji abre o seletor", emojiOpen),
@@ -1740,9 +1794,11 @@ const ops = [_]Op{
     expect("botão de mutar", muted),
     click("user-btn:0"),
     expect("botão de desmutar", unmuted),
+    .{ .run = rememberComposerW },
     click("header-members"),
     expect("botão de membros esconde a lista", membersHidden),
     expect("a lista some da tela", noMembers),
+    expect("a conversa ocupa o lugar da lista (sem espaço vazio)", composerWider),
     click("header-members"),
     expect("e mostra de novo", membersShown),
 

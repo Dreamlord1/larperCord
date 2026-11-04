@@ -61,6 +61,9 @@ fn num(n: *const kdl.Node, key: []const u8) ?f32 {
 pub const Options = struct {
     ctx: *const anyopaque,
     get: *const fn (ctx: *const anyopaque, name: []const u8) ?bool,
+    /// Componentes desligados pelo usuário (lista de membros, barra de
+    /// status): não ocupam espaço. Coluna que só existia para eles some junto.
+    hides: []const []const u8 = &.{},
 
     fn on(o: ?Options, name: []const u8) bool {
         const x = o orelse return true;
@@ -75,6 +78,39 @@ fn visible(n: *const kdl.Node, env: Env) bool {
     if (num(n, "hide-below")) |w| if (env.win_w < w) return false;
     if (n.str("when")) |o| if (!Options.on(env.opts, o)) return false;
     if (n.str("unless")) |o| if (env.opts != null and Options.on(env.opts, o)) return false;
+    if (env.opts) |o| if (o.hides.len > 0 and onlyHidden(n, o.hides)) return false;
+    return true;
+}
+
+fn isHiddenName(name: []const u8, hides: []const []const u8) bool {
+    for (hides) |h| if (std.mem.eql(u8, h, name)) return true;
+    return false;
+}
+
+/// O nó é um componente escondido, ou um contêiner em que sobrou só
+/// decoração (título, espaço, régua) em volta de um componente escondido.
+fn onlyHidden(n: *const kdl.Node, hides: []const []const u8) bool {
+    if (axisOf(n.name) == null) return isHiddenName(n.name, hides);
+    var found = false;
+    for (n.children) |*ch| {
+        if (axisOf(ch.name) != null) {
+            if (onlyHidden(ch, hides)) {
+                found = true;
+            } else if (!decorative(ch)) return false;
+        } else if (isHiddenName(ch.name, hides)) {
+            found = true;
+        } else if (!std.mem.eql(u8, ch.name, "label") and !std.mem.eql(u8, ch.name, "spacer")) return false;
+    }
+    return found;
+}
+
+/// Contêiner sem nenhum componente de verdade dentro (réguas, títulos).
+fn decorative(n: *const kdl.Node) bool {
+    for (n.children) |*ch| {
+        if (axisOf(ch.name) != null) {
+            if (!decorative(ch)) return false;
+        } else if (!std.mem.eql(u8, ch.name, "label") and !std.mem.eql(u8, ch.name, "spacer")) return false;
+    }
     return true;
 }
 

@@ -12,6 +12,8 @@ const Id = types.Id;
 /// Strings que chegam em eventos são alocadas com o c_allocator (podem vir
 /// de outra thread) e liberadas com ele também.
 const ev_alloc = std.heap.c_allocator;
+/// Quantas mensagens a mais um canal pode ter antes de cortar para `max_messages`.
+const trim_slack = 128;
 
 pub const StoredMessage = struct {
     msg: types.Message,
@@ -1057,12 +1059,32 @@ pub const Store = struct {
 
     pub fn find(s: *const Store, cs: *ChannelState, id: Id) ?*StoredMessage {
         _ = s;
-        var i = cs.messages.items.len;
-        while (i > 0) {
+        const items = cs.messages.items;
+        // As últimas podem estar pendentes (id 0, confirmadas fora de ordem);
+        // o resto está em ordem de ID: busca binária.
+        const tail_start = items.len -| 16;
+        var i = items.len;
+        while (i > tail_start) {
             i -= 1;
-            if (cs.messages.items[i].msg.id == id) return &cs.messages.items[i];
+            if (items[i].msg.id == id) return &items[i];
+        }
+        var lo: usize = 0;
+        var hi: usize = tail_start;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const v = items[mid].msg.id;
+            if (v == id) return &items[mid];
+            if (v < id) lo = mid + 1 else hi = mid;
         }
         return null;
+    }
+
+    /// Procura primeiro no canal dado (uma resposta quase sempre cita o
+    /// próprio canal) e depois em todos.
+    pub fn findNear(s: *const Store, channel_id: Id, id: Id) ?struct { cs: *ChannelState, m: *StoredMessage } {
+        if (s.channel(channel_id)) |cs| if (s.find(cs, id)) |m| return .{ .cs = cs, .m = m };
+        const f = s.findAny(id) orelse return null;
+        return .{ .cs = f.cs, .m = f.m };
     }
 
     /// Procura uma mensagem em qualquer canal carregado.
@@ -1230,7 +1252,9 @@ pub const Store = struct {
     }
 
     fn trim(s: *Store, cs: *ChannelState) void {
-        if (cs.messages.items.len <= s.max_messages) return;
+        // Em lote: tirar uma de cada vez deslocaria o canal inteiro a cada
+        // mensagem nova num canal movimentado.
+        if (cs.messages.items.len <= s.max_messages + @min(trim_slack, s.max_messages / 8)) return;
         const drop = cs.messages.items.len - s.max_messages;
         for (cs.messages.items[0..drop]) |*m| s.freeMessage(m);
         cs.messages.replaceRangeAssumeCapacity(0, drop, &.{});

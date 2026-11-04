@@ -88,7 +88,6 @@ pub fn build(b: *std.Build) void {
             "imgui/imgui_draw.cpp",
             "imgui/imgui_tables.cpp",
             "imgui/imgui_widgets.cpp",
-            "imgui/imgui_demo.cpp",
             "imgui/misc/freetype/imgui_freetype.cpp",
             "imgui/backends/imgui_impl_sdl3.cpp",
             "imgui/backends/imgui_impl_sdlrenderer3.cpp",
@@ -98,6 +97,9 @@ pub fn build(b: *std.Build) void {
         },
         .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti" },
     });
+    // Só os stubs: as bindings citam ShowDemoWindow, mas o app nunca abre a demo.
+    mod.addCSourceFile(.{ .file = b.path("third_party/imgui/imgui_demo.cpp"), .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-DIMGUI_DISABLE_DEMO_WINDOWS" } });
+
     // Decodificador de imagens (PNG/JPEG/GIF) dos anexos; WebP vem da libwebp.
     mod.addIncludePath(b.path("third_party/stb"));
     mod.addCSourceFile(.{ .file = b.path("third_party/stb/stb_image.c"), .flags = &.{"-O2"} });
