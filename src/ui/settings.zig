@@ -14,7 +14,7 @@ const Preview = @import("../theme/manager.zig").Preview;
 
 const Section = struct { title: []const u8, title_en: []const u8, items: []const struct { page: S.Page, label: []const u8, label_en: []const u8 } };
 
-const sections = [_]Section{
+pub const sections = [_]Section{
     .{ .title = "CONFIGURAÇÕES DE USUÁRIO", .title_en = "USER SETTINGS", .items = &.{
         .{ .page = .conta, .label = "Minha conta", .label_en = "My Account" },
         .{ .page = .privacidade, .label = "Privacidade", .label_en = "Privacy" },
@@ -521,6 +521,8 @@ fn page(p: *Page, previews: []const Preview) void {
             p.toggle(i18n.tr("Modo economia", "Data saver"), i18n.tr("Imagens, fotos de perfil e anexos só baixam quando você clica. Bom em rede ruim.", "Images, profile pictures and attachments only download when you click. Good on bad networks."), &s.data_saver);
             p.heading(i18n.tr("Conteúdo", "Content"));
             p.toggle(i18n.tr("Sempre mostrar spoilers", "Always show spoilers"), i18n.tr("Revela o texto ||escondido|| sem precisar clicar.", "Reveals ||hidden|| text without clicking."), &s.show_spoilers);
+            p.heading(i18n.tr("Caixa de texto", "Text box"));
+            p.toggle(i18n.tr("Prévia do markdown", "Markdown preview"), i18n.tr("Com **negrito**, `código`, ||spoiler||…, mostra acima da caixa como vai ficar.", "With **bold**, `code`, ||spoilers||…, shows above the box how it will look."), &s.md_preview);
         },
         .notificacoes => {
             p.title(i18n.tr("Notificações", "Notifications"));
@@ -540,6 +542,7 @@ fn page(p: *Page, previews: []const Preview) void {
         .atalhos => {
             p.title(i18n.tr("Atalhos de teclado", "Keybinds"));
             p.keyRow(i18n.tr("Paleta de comandos", "Command palette"), "Ctrl+K");
+            p.keyRow(i18n.tr("Paleta com as ações primeiro", "Palette, actions first"), "Ctrl+Shift+P");
             p.keyRow(i18n.tr("Configurações", "Settings"), "Ctrl+,");
             p.keyRow(i18n.tr("Próximo tema", "Next theme"), "F2");
             p.keyRow(i18n.tr("Tema anterior", "Previous theme"), "Shift+F2");
@@ -551,6 +554,17 @@ fn page(p: *Page, previews: []const Preview) void {
             p.keyRow(i18n.tr("Mensagens salvas", "Saved messages"), "Ctrl+Shift+S");
             p.keyRow(i18n.tr("Abrir canal em nova aba", "Open channel in a new tab"), i18n.tr("Ctrl+Clique", "Ctrl+Click"));
             p.keyRow(i18n.tr("Fechar aba com o mouse", "Close tab with the mouse"), i18n.tr("Botão do meio", "Middle click"));
+            p.divider();
+            p.toggle(i18n.tr("Navegação estilo vim", "Vim-style navigation"), i18n.tr("Com a caixa de texto sem foco (Esc sai dela), as teclas abaixo navegam.", "With the text box unfocused (Esc leaves it), the keys below navigate."), &s.vim_keys);
+            if (s.vim_keys) {
+                p.keyRow(i18n.tr("Rolar para baixo / para cima", "Scroll down / up"), "j / k");
+                p.keyRow(i18n.tr("Topo / fim da conversa", "Top / bottom of the conversation"), "gg / G");
+                p.keyRow(i18n.tr("Meia página para baixo / para cima", "Half page down / up"), "Ctrl+d / Ctrl+u");
+                p.keyRow(i18n.tr("Próximo / anterior canal", "Next / previous channel"), "J / K");
+                p.keyRow(i18n.tr("Voltar para a caixa de texto", "Back to the text box"), i18n.tr("i ou Enter", "i or Enter"));
+                p.keyRow(i18n.tr("Sair da caixa de texto", "Leave the text box"), "Esc");
+                p.keyRow(i18n.tr("Buscar (paleta)", "Search (palette)"), "/");
+            }
         },
         .idioma => {
             p.title(i18n.tr("Idioma", "Language"));

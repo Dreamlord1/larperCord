@@ -22,10 +22,46 @@ pub const Mention = union(enum) {
     role: Id,
 };
 
+/// Linguagem de um bloco de código (pela etiqueta: ```zig), para o realce.
+pub const Lang = enum(u8) {
+    none,
+    zig,
+    c,
+    js,
+    py,
+    rust,
+    go,
+    sh,
+    json,
+    lua,
+    java,
+    cs,
+    diff,
+
+    const tags = std.StaticStringMap(Lang).initComptime(.{
+        .{ "zig", .zig }, .{ "c", .c },           .{ "h", .c },        .{ "cpp", .c },       .{ "c++", .c },
+        .{ "cc", .c },    .{ "hpp", .c },         .{ "cxx", .c },      .{ "js", .js },       .{ "javascript", .js },
+        .{ "ts", .js },   .{ "typescript", .js }, .{ "jsx", .js },     .{ "tsx", .js },      .{ "mjs", .js },
+        .{ "py", .py },   .{ "python", .py },     .{ "python3", .py }, .{ "rs", .rust },     .{ "rust", .rust },
+        .{ "go", .go },   .{ "golang", .go },     .{ "sh", .sh },      .{ "bash", .sh },     .{ "shell", .sh },
+        .{ "zsh", .sh },  .{ "fish", .sh },       .{ "console", .sh }, .{ "json", .json },   .{ "jsonc", .json },
+        .{ "lua", .lua }, .{ "luau", .lua },      .{ "java", .java },  .{ "kotlin", .java }, .{ "kt", .java },
+        .{ "cs", .cs },   .{ "csharp", .cs },     .{ "diff", .diff },  .{ "patch", .diff },
+    });
+
+    pub fn fromTag(tag: []const u8) Lang {
+        var buf: [16]u8 = undefined;
+        if (tag.len == 0 or tag.len > buf.len) return .none;
+        return tags.get(std.ascii.lowerString(&buf, tag)) orelse .none;
+    }
+};
+
 pub const Span = struct {
     /// Fatia do conteúdo original (não é copiada).
     text: []const u8,
     flags: Flags = .{},
+    /// Só nos blocos de código.
+    lang: Lang = .none,
     mention: Mention = .none,
 };
 
@@ -49,13 +85,17 @@ pub fn parse(gpa: std.mem.Allocator, s: []const u8) ![]Span {
             if (std.mem.indexOfPos(u8, s, i + 3, "```")) |close| {
                 try Flush.run(&out, gpa, s, run_start, i, flags);
                 var start = i + 3;
+                var lang: Lang = .none;
                 if (std.mem.indexOfScalarPos(u8, s, start, '\n')) |nl| {
-                    const lang = s[start..nl];
-                    if (nl < close and lang.len <= 16 and std.mem.indexOfScalar(u8, lang, ' ') == null) start = nl + 1;
+                    const tag = s[start..nl];
+                    if (nl < close and tag.len <= 16 and std.mem.indexOfScalar(u8, tag, ' ') == null) {
+                        lang = Lang.fromTag(tag);
+                        start = nl + 1;
+                    }
                 }
                 var end = close;
                 if (end > start and s[end - 1] == '\n') end -= 1;
-                if (end > start) try out.append(gpa, .{ .text = s[start..end], .flags = .{ .code = true, .block = true } });
+                if (end > start) try out.append(gpa, .{ .text = s[start..end], .flags = .{ .code = true, .block = true }, .lang = lang });
                 i = close + 3;
                 // A quebra logo depois do ``` não vira linha em branco.
                 if (i < s.len and s[i] == '\n') i += 1;
@@ -164,7 +204,18 @@ test "bloco de código e menção a cargo" {
     try std.testing.expectEqualStrings("regras:\n", spans[0].text);
     try std.testing.expect(spans[1].flags.block);
     try std.testing.expectEqualStrings("# um\n# dois", spans[1].text);
+    try std.testing.expectEqual(Lang.none, spans[1].lang);
     try std.testing.expectEqual(@as(Id, 7), spans[2].mention.role);
+}
+
+test "etiqueta do bloco de código vira a linguagem" {
+    const a = std.testing.allocator;
+    const spans = try parse(a, "```Zig\nconst x = 1;\n```\n```ts\nlet y\n```");
+    defer a.free(spans);
+    try std.testing.expectEqual(Lang.zig, spans[0].lang);
+    try std.testing.expectEqualStrings("const x = 1;", spans[0].text);
+    try std.testing.expectEqual(Lang.js, spans[1].lang);
+    try std.testing.expectEqual(Lang.none, Lang.fromTag("brainfuck"));
 }
 
 test "spoiler e riscado" {

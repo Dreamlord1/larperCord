@@ -18,6 +18,8 @@ const rich = @import("rich.zig");
 const icons = @import("icons.zig");
 const att = @import("attachments.zig");
 const emb = @import("embeds.zig");
+const md_preview = @import("md_preview.zig");
+const vim = @import("vim.zig");
 const popup = @import("popup.zig");
 const mosaic = @import("mosaic.zig");
 const sigil = @import("comp_chat.zig").sigil;
@@ -193,7 +195,7 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     if (ctx.st.friends) return @import("comp_friends.zig").page(ctx, n, r_in);
     // A bandeja de arquivos fica entre a conversa e a caixa de texto.
     var r = r_in;
-    r.h = @max(40, r.h - att.trayHeight(ctx));
+    r.h = @max(40, r.h - att.trayHeight(ctx) - md_preview.height(ctx.st));
     // Tela dividida: cada painel chama `history` com o canal dele.
     if (mosaic.on()) return mosaic.draw(ctx, n, r);
     const ch_id = ctx.st.activeChannel() orelse return;
@@ -206,6 +208,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     const cs = ctx.store.channel(ch_id) orelse return;
     const g = geometry(ctx, n, r);
     ctx.hot = false;
+    vim.page_h = r.h;
 
     cs.seen_ms = ctx.now_ms;
     if (cs.history != .loaded) return skeleton(ctx, g, r);
@@ -721,6 +724,9 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
     o.sel_from = sel_from;
     o.sel_to = sel_to;
     o.probe = probe;
+    // Blocos de código com o botão "Copiar".
+    o.ctx = ctx;
+    o.msg_id = m.msg.id;
     const show_bar = under and ctx.st.popup == .none and !ctx.st.selection.dragging and m.msg.id != 0;
 
     // Destaque ao pular para esta mensagem.
@@ -990,6 +996,13 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         top = bar.y;
     }
 
+    // Prévia do markdown, acima de tudo que fica preso na caixa.
+    {
+        const typing_gap: f32 = if (d.pflag(n, "typing", true) and cs.typing.items.len > 0) 22 else 6;
+        const inset: f32 = if (pill) 18 else 0;
+        md_preview.draw(ctx, dl, fam, r.x + inset, top - tray_h - typing_gap, r.w - inset * 2, typing_gap);
+    }
+
     if (d.pflag(n, "typing", true) and cs.typing.items.len > 0) {
         const u = ctx.store.user(cs.typing.items[0].user);
         var buf: [96]u8 = undefined;
@@ -1074,10 +1087,16 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     else
         i18n.fmtZ(&hint_buf, "Conversar em #{s}", "Message #{s}", .{cs.info.name});
     const flags = c.ImGuiInputTextFlags_EnterReturnsTrue | c.ImGuiInputTextFlags_CallbackAlways | c.ImGuiInputTextFlags_CallbackHistory;
+    // Navegação vim: Esc sai da caixa e o texto fica (o ImGui desfaria).
+    const keep = vim.escapeKeepsText(st);
+    var kept: @TypeOf(st.input) = undefined;
+    if (keep) kept = st.input;
     if (c.ImGui_InputTextWithHintEx("##composer", hint.ptr, &st.input, st.input.len, flags, inputCallback, st)) submit(ctx);
     // Avisa o Discord quando o texto muda (o app limita a um a cada 8 s).
     if (c.ImGui_IsItemEdited() and st.input[0] != 0) ctx.act(.{ .typing = ch_id });
     const active = c.ImGui_IsItemActive();
+    if (keep) st.input = kept;
+    vim.composer_active = active;
     c.ImGui_PopFont();
     // Ctrl+V com imagem copiada (print, imagem do navegador): vira anexo.
     if (active and ctx.io.*.KeyCtrl and c.ImGui_IsKeyPressed(c.ImGuiKey_V) and c.SDL_HasClipboardData("image/png") and !c.SDL_HasClipboardText())

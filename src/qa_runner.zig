@@ -755,6 +755,261 @@ fn guildPlain(app: *App) bool {
     return app.st.guild == 500000 and guild_color.get(500000) == null and !accentIs(app, red);
 }
 
+// --- Editor: prévia do markdown, blocos de código, paleta, vim -----------------
+
+fn previewShown(_: *App) bool {
+    return qa.find("md-preview") != null;
+}
+fn previewHidden(_: *App) bool {
+    return qa.find("md-preview") == null;
+}
+fn previewOff(app: *App) bool {
+    return !app.st.settings.md_preview;
+}
+const code_body = "const std = @import(\"std\");\n// comentário do QA\npub fn main() !void {\n    std.debug.print(\"oi {d}\\n\", .{42});\n}";
+const code_msg = "```zig\n" ++ code_body ++ "\n```";
+fn sendCodeBlock(app: *App) void {
+    const text = app.gpa.dupe(u8, code_msg) catch return;
+    app.actions.append(app.gpa, .{ .send_message = text }) catch {};
+}
+fn codeMsg(app: *App) ?*@import("core/store.zig").StoredMessage {
+    const cs = active(app) orelse return null;
+    var i = cs.messages.items.len;
+    while (i > 0) {
+        i -= 1;
+        const m = &cs.messages.items[i];
+        if (std.mem.eql(u8, m.msg.content, code_msg)) return m;
+    }
+    return null;
+}
+fn codeSent(app: *App) bool {
+    const m = codeMsg(app) orelse return false;
+    return !m.pending and m.msg.id != 0;
+}
+fn codeLang(app: *App) bool {
+    const m = codeMsg(app) orelse return false;
+    for (m.spans) |sp| if (sp.flags.block) return sp.lang == .zig and std.mem.eql(u8, sp.text, code_body);
+    return false;
+}
+fn tCodeCopy(app: *App, b: []u8) []const u8 {
+    const m = codeMsg(app) orelse return "";
+    return markFmt(b, "code-copy:{d}:{d}", .{ m.msg.id, "```zig\n".len });
+}
+fn codeCopied(app: *App) bool {
+    if (!toastCopied(app)) return false;
+    // O driver de vídeo do QA pode não ter área de transferência: aí basta o aviso.
+    const clip = c.SDL_GetClipboardText() orelse return true;
+    defer c.SDL_free(clip);
+    const t = std.mem.span(clip);
+    return t.len == 0 or std.mem.eql(u8, t, code_body);
+}
+fn actionsFirst(app: *App) bool {
+    const items = app.st.palette.items.items;
+    return app.st.palette.open and items.len > 0 and items[0].kind != .channel and items[0].kind != .guild;
+}
+fn meIdle(app: *App) bool {
+    return app.store.user(app.store.me).?.status == .idle and app.st.settings.my_status == 1;
+}
+fn chatPage(app: *App) bool {
+    return app.st.settings.open and app.st.settings.page == .chat;
+}
+fn allRead(app: *App) bool {
+    for (app.store.guilds.items) |g| if (g.unread or g.mentions > 0) return false;
+    return true;
+}
+fn vimDefaultOff(app: *App) bool {
+    return !app.st.settings.vim_keys;
+}
+fn vimOn(app: *App) bool {
+    return app.st.settings.vim_keys;
+}
+fn vimLeft(app: *App) bool {
+    return !app.io.*.WantTextInput and std.mem.eql(u8, std.mem.sliceTo(&app.st.input, 0), "rascunho");
+}
+fn composerFocused(app: *App) bool {
+    return app.io.*.WantTextInput and !app.st.palette.open;
+}
+fn scrolledUp(app: *App) bool {
+    const sc = app.st.scrollOf(app.st.activeChannel() orelse return false);
+    return !sc.stick_bottom;
+}
+fn atTop(app: *App) bool {
+    const sc = app.st.scrollOf(app.st.activeChannel() orelse return false);
+    return !sc.stick_bottom and sc.target < 1;
+}
+fn stuckBottom(app: *App) bool {
+    return app.st.scrollOf(app.st.activeChannel() orelse return false).stick_bottom;
+}
+var saved_target: f32 = 0;
+fn rememberTarget(app: *App) void {
+    saved_target = app.st.scrollOf(app.st.activeChannel() orelse return).target;
+}
+fn halfPageDown(app: *App) bool {
+    return app.st.scrollOf(app.st.activeChannel() orelse return false).target > saved_target + 100;
+}
+fn halfPageUp(app: *App) bool {
+    return app.st.scrollOf(app.st.activeChannel() orelse return false).target < saved_target - 100;
+}
+fn scrolledDown(app: *App) bool {
+    return app.st.scrollOf(app.st.activeChannel() orelse return false).target > saved_target + 30;
+}
+var saved_channel: Id = 0;
+fn rememberChannel(app: *App) void {
+    saved_channel = app.st.activeChannel() orelse 0;
+}
+fn channelMovedUnfocused(app: *App) bool {
+    const id = app.st.activeChannel() orelse return false;
+    return id != saved_channel and !app.io.*.WantTextInput and app.store.channel(id).?.info.kind == .text;
+}
+fn channelBack(app: *App) bool {
+    return app.st.activeChannel() == saved_channel;
+}
+fn shiftKey(k: c_int) Op {
+    return .{ .key = .{ .key = k, .shift = true } };
+}
+fn ctrlShift(k: c_int) Op {
+    return .{ .key = .{ .key = k, .ctrl = true, .shift = true } };
+}
+
+const ops_editor = [_]Op{
+    s("prévia do markdown"),
+    click("composer"),
+    .{ .text = "https://ziglang.org" },
+    .{ .wait = 100 },
+    expect("link sozinho não abre a prévia", previewHidden),
+    ctrl(c.ImGuiKey_A),
+    .{ .text = "isso é **negrito**, *itálico*, ~~riscado~~ e `código`" },
+    expect("texto com formatação mostra a prévia", previewShown),
+    .{ .shot = "40-previa" },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Chat"),
+    click("toggle:Prévia do markdown"),
+    expect("Configurações → Chat desliga a prévia", previewOff),
+    key(c.ImGuiKey_Escape),
+    .{ .wait = 100 },
+    expect("desligada, a prévia some", previewHidden),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Chat"),
+    click("toggle:Prévia do markdown"),
+    key(c.ImGuiKey_Escape),
+    expect("religada, a prévia volta", previewShown),
+    click("composer"),
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    .{ .wait = 100 },
+    expect("caixa vazia, sem prévia", previewHidden),
+
+    s("blocos de código"),
+    .{ .run = sendCodeBlock },
+    .{ .expect = .{ .name = "bloco ```zig enviado", .check = codeSent, .timeout_ms = 3000 } },
+    expect("o bloco guarda a linguagem da etiqueta", codeLang),
+    .{ .run = scrollBottom },
+    .{ .wait = 300 },
+    .{ .hover = .{ .dyn = tCodeCopy } },
+    .{ .wait = 200 },
+    .{ .shot = "41-bloco-codigo" },
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tCodeCopy } },
+    expect("\"Copiar\" copia o código do bloco", codeCopied),
+
+    s("paleta de comandos"),
+    ctrlShift(c.ImGuiKey_P),
+    expect("Ctrl+Shift+P abre a paleta com as ações primeiro", actionsFirst),
+    .{ .shot = "42-paleta-acoes" },
+    .{ .text = "ligar modo compacto" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta liga uma opção das configurações", compactOn),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "desligar modo compacto" },
+    key(c.ImGuiKey_Enter),
+    expect("e desliga", compactOff),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "status ausente" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta muda o status", meIdle),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "status online" },
+    key(c.ImGuiKey_Enter),
+    expect("e volta para online", meOnline),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "modo claro" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta troca para o modo claro", lightMode),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "modo escuro" },
+    key(c.ImGuiKey_Enter),
+    expect("e para o escuro", darkMode),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "marcar tudo como lido" },
+    key(c.ImGuiKey_Enter),
+    expect("marcar tudo como lido", allRead),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "configurações chat" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta abre uma página das configurações", chatPage),
+    key(c.ImGuiKey_Escape),
+    ctrl(c.ImGuiKey_K),
+    .{ .text = "@ ana" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta abre uma mensagem direta", dmWithAna),
+    click("guild:500000"),
+
+    s("navegação vim"),
+    expect("vim vem desligado", vimDefaultOff),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Atalhos de teclado"),
+    click("toggle:Navegação estilo vim"),
+    expect("Atalhos de teclado liga a navegação vim", vimOn),
+    .{ .shot = "43-atalhos-vim" },
+    key(c.ImGuiKey_Escape),
+    click("composer"),
+    .{ .text = "rascunho" },
+    key(c.ImGuiKey_Escape),
+    expect("Esc sai da caixa sem apagar o texto", vimLeft),
+    key(c.ImGuiKey_K),
+    key(c.ImGuiKey_K),
+    expect("k rola para cima", scrolledUp),
+    shiftKey(c.ImGuiKey_G),
+    expect("G vai para o fim", stuckBottom),
+    // Meia página perto do fim (no topo chegam as antigas e a rolagem anda junto).
+    .{ .run = rememberTarget },
+    ctrl(c.ImGuiKey_U),
+    expect("Ctrl+u sobe meia página", halfPageUp),
+    .{ .run = rememberTarget },
+    ctrl(c.ImGuiKey_D),
+    expect("Ctrl+d desce meia página", halfPageDown),
+    key(c.ImGuiKey_G),
+    key(c.ImGuiKey_G),
+    expect("gg vai para o topo", atTop),
+    .{ .run = rememberTarget },
+    key(c.ImGuiKey_J),
+    expect("j rola para baixo", scrolledDown),
+    shiftKey(c.ImGuiKey_G),
+    .{ .run = rememberChannel },
+    shiftKey(c.ImGuiKey_J),
+    expect("J vai para o próximo canal (e a caixa fica sem foco)", channelMovedUnfocused),
+    .{ .wait = 100 },
+    shiftKey(c.ImGuiKey_K),
+    expect("K volta para o canal anterior", channelBack),
+    key(c.ImGuiKey_Slash),
+    expect("/ abre a paleta", paletteOpen),
+    key(c.ImGuiKey_Escape),
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha a paleta e sai da caixa", vimLeft),
+    key(c.ImGuiKey_I),
+    expect("i volta para a caixa de texto", composerFocused),
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    key(c.ImGuiKey_Escape),
+    key(c.ImGuiKey_Enter),
+    expect("Enter também volta para a caixa", composerFocused),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Atalhos de teclado"),
+    click("toggle:Navegação estilo vim"),
+    expect("desligar a navegação vim", vimDefaultOff),
+    key(c.ImGuiKey_Escape),
+};
+
 const long_text = "Mensagem longa do QA pra testar a quebra de linha: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 😂🔥🎉 `código inline` **negrito** *itálico* ~~riscado~~ ||spoiler|| https://ziglang.org fim.";
 
 // --- Caixa de entrada e mensagens salvas ---------------------------------------
@@ -1391,12 +1646,13 @@ const ops = [_]Op{
     click("guild-color:0"),
     expect("a primeira bolinha tira a cor", guildPlain),
 
+} ++ ops_editor ++ [_]Op{
     s("clicar em tudo: servidor"),
     .{ .run = toClassico },
     .{ .wait = 200 },
     click("guild:500000"),
     .{ .wait = 300 },
-    .{ .sweep = &.{ "guild:", "folder:", "category:", "channel:", "member:", "voice-member:", "user-btn:", "header-search", "header-members", "header-inbox", "header-saved", "tab:", "tab-plus", "status-theme", "chip:", "chip-add:", "att:", "me", "composer-emoji", "guild-header" } },
+    .{ .sweep = &.{ "guild:", "folder:", "category:", "channel:", "member:", "voice-member:", "user-btn:", "header-search", "header-members", "header-inbox", "header-saved", "tab:", "tab-plus", "status-theme", "chip:", "chip-add:", "att:", "me", "composer-emoji", "guild-header", "code-copy:" } },
     s("clicar em tudo: caixa de entrada"),
     ctrl(c.ImGuiKey_I),
     .{ .wait = 200 },
@@ -1434,6 +1690,8 @@ const ops = [_]Op{
     click("settings:Notificações"),
     .{ .sweep = &.{"toggle:"} },
     click("settings:Privacidade"),
+    .{ .sweep = &.{"toggle:"} },
+    click("settings:Atalhos de teclado"),
     .{ .sweep = &.{"toggle:"} },
     click("settings:Avançado"),
     .{ .sweep = &.{"toggle:"} },
@@ -1602,6 +1860,22 @@ const ops_theme = [_]Op{
     expect("chegar nas mensagens diretas", onDms),
     .{ .shot = "tema-dms" },
     click("guild:500000"),
+    click("composer"),
+    .{ .text = "**prévia** do `tema`" },
+    expect("prévia do markdown acima da caixa", previewShown),
+    .{ .shot = "tema-previa" },
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    .{ .run = sendCodeBlock },
+    .{ .expect = .{ .name = "bloco de código enviado", .check = codeSent, .timeout_ms = 3000 } },
+    .{ .run = scrollBottom },
+    .{ .wait = 300 },
+    .{ .hover = .{ .dyn = tCodeCopy } },
+    .{ .wait = 150 },
+    .{ .shot = "tema-codigo" },
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tCodeCopy } },
+    expect("\"Copiar\" no bloco de código", codeCopied),
     ctrl(c.ImGuiKey_K),
     expect("paleta", paletteOpen),
     .{ .text = "zig" },
