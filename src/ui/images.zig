@@ -155,14 +155,14 @@ pub const Cache = struct {
     trim_due: bool = false,
 
     pub fn init(renderer: *c.SDL_Renderer, wake_type: u32) !Cache {
+        if (curl_mutex == null) curl_mutex = c.SDL_CreateMutex() orelse return error.SdlMutex;
+        if (decode_slots == null) decode_slots = c.SDL_CreateSemaphore(2) orelse return error.SdlSemaphore;
         return .{
             .renderer = renderer,
             .wake_type = wake_type,
             .jobs = try Queue(Job).init(alloc),
             .results = try Queue(Result).init(alloc),
         };
-        if (curl_mutex == null) curl_mutex = c.SDL_CreateMutex() orelse return error.SdlMutex;
-        if (decode_slots == null) decode_slots = c.SDL_CreateSemaphore(2) orelse return error.SdlSemaphore;
     }
 
     /// Só com a primeira imagem pedida: a tela de login não usa nenhuma thread.
@@ -258,13 +258,13 @@ pub const Cache = struct {
             .max_w = bw,
             .max_h = bh,
         };
+        cache.startWorkers();
         cache.jobs.push(job);
         return .loading;
     }
 
     /// O quadro de agora (todos os GIFs andam no mesmo relógio) e quando
     /// o próximo vence.
-        cache.startWorkers();
     fn frameOf(cache: *Cache, e: *const Entry, play: bool) *c.SDL_Texture {
         if (e.frames.len == 1 or !play) return e.frames[0].tex;
         const total = e.total();

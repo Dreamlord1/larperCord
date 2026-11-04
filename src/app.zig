@@ -128,21 +128,21 @@ pub const App = struct {
 
         app.win = try platform.Window.init("larperCord", 1280, 800);
         wake_type_global = app.win.wake_type;
-
         timeline.mark(.janela);
+
         _ = c.ImGui_CreateContext(null);
         const io = c.ImGui_GetIO();
         io.*.IniFilename = null;
         io.*.ConfigInputTextCursorBlink = false; // sem piscar = sem redesenho parado
         _ = c.cImGui_ImplSDL3_InitForSDLRenderer(app.win.window, app.win.renderer);
         _ = c.cImGui_ImplSDLRenderer3_Init(app.win.renderer);
-
         timeline.mark(.imgui);
-        app.* = .{
+
         const theme_list = try themes.Manager.init(gpa);
         timeline.mark(.lista_temas);
         const base_fonts = fonts_mod.Fonts.init(gpa, io.*.Fonts);
         timeline.mark(.fontes_base);
+        app.* = .{
             .gpa = gpa,
             .win = app.win,
             .store = Store.init(gpa),
@@ -179,20 +179,20 @@ pub const App = struct {
         // Já aqui: os dados da demonstração saem no idioma da interface.
         i18n.set(if (opts.qa) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language));
         app.st.settings.open = opts.settings;
-        const name = opts.theme orelse saved_theme orelse "classico";
         timeline.mark(.config);
+        const name = opts.theme orelse saved_theme orelse "classico";
         const want = app.themes.indexOf(name) orelse 0;
         if (!app.themes.load(want)) {
             std.log.err("{s}", .{app.themes.last_error orelse "tema inválido"});
             if (!app.themes.load(0)) return error.NoTheme;
         }
-        app.applyThemeStyle();
         timeline.mark(.tema);
-        app.themes.watch(wakeTheme);
+        app.applyThemeStyle();
         timeline.mark(.fontes_tema);
-
+        app.themes.watch(wakeTheme);
         // Antes da rede: a thread do gateway inicia o libcurl pelo mesmo caminho.
         app.images = try images.Cache.init(app.win.renderer, app.win.wake_type);
+
         // Com token salvo: conecta direto (a tela de abertura aparece enquanto
         // isso). Sem token: a tela de login. Prints e QA usam a demonstração.
         app.net = .none;
@@ -217,8 +217,8 @@ pub const App = struct {
         app.stats.ram_kb = platform.selfPssKb();
         app.picked = try Queue([:0]u8).init(std.heap.c_allocator);
         plugin_host.init(app);
-        return app;
         timeline.mark(.create_fim);
+        return app;
     }
 
     pub fn destroy(app: *App) void {
@@ -245,6 +245,7 @@ pub const App = struct {
         app.clearUploads();
         app.picked.deinit();
         @import("ui/video.zig").shutdown();
+        // (Por último, lá dentro: as threads de mídia e de vídeo usam o libcurl.)
         app.images.deinit();
         app.st.saved.deinit(app.gpa);
         app.store.deinit();
@@ -262,7 +263,6 @@ pub const App = struct {
             .fake => |*g| g.commands.push(command),
             .real => |*g| g.commands.push(command),
         }
-        // (Por último, lá dentro: as threads de mídia e de vídeo usam o libcurl.)
     }
 
     /// Conecta na conta de verdade. O gateway passa a ser dono do token.
@@ -435,9 +435,9 @@ pub const App = struct {
 
     /// O que a tela de login pediu.
     fn loginResult(app: *App, r: login_mod.Result) void {
-        const lg = &app.login;
         // Decidiu alguma coisa na tela: a resposta do chaveiro não vale mais.
         app_accounts.abandonStartupLookup();
+        const lg = &app.login;
         switch (r) {
             .submit => {
                 const t = lg.tokenText();
@@ -1530,6 +1530,7 @@ pub const App = struct {
             }
             if (e == .voice_ping) app.st.voice_ping_ms = e.voice_ping;
             if (e == .voice_audio) app.voiceAudio(e.voice_audio.mic_ok, e.voice_audio.out_ok);
+            if (e == .history) timeline.mark(.historico);
             if (e == .status and e.status == .failed) failed = true;
             // Antes de o Store ficar com a mensagem (se o canal não existe, ele a libera).
             const quiet: ?types.Id = if (e == .message_create and app.store.ready) app.incoming(e.message_create) else null;
@@ -1537,7 +1538,6 @@ pub const App = struct {
             if (app.opts.stats) switch (e) {
                 .status => |st| std.log.info("conexão: {t}", .{st}),
                 .notice => |n| std.log.info("aviso: {s}", .{n}),
-            if (e == .history) timeline.mark(.historico);
                 .latency => |l| std.log.info("ping: {d} ms", .{l}),
                 .ready => |r| std.log.info("READY: {d} servidores, {d} canais, {d} usuários", .{ r.guilds.len, r.channels.len, r.users.len }),
                 else => {},
@@ -1941,13 +1941,18 @@ pub const App = struct {
             // O relógio do sistema andou para trás: sem isso, o quadro adiado
             // só viria quando ele alcançasse a hora antiga.
             if (last_frame_ms > now()) last_frame_ms = now();
+            // Janela minimizada ou coberta: ninguém vê. Os eventos da rede são
+            // tratados; ao voltar, o SDL avisa e o quadro sai certo.
+            const hidden_flags = c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_OCCLUDED;
+            const unseen = c.SDL_GetWindowFlags(app.win.window) & hidden_flags != 0 and !app.opts.qa and app.opts.shot == null and !bench and record_dir == null;
             // A tela de login anima sem parar: no máximo 60 quadros por segundo.
-            if (app.login.visible() and !app.opts.qa and app.opts.shot == null and !bench and record_dir == null) {
+            const login_anim = app.login.visible() and !unseen;
+            if (login_anim and !app.opts.qa and app.opts.shot == null and !bench and record_dir == null) {
                 const since_frame = now() - last_frame_ms;
                 if (since_frame < 16) c.SDL_Delay(@intCast(16 - since_frame));
             }
             const busy = pending > 0 or anim.active or app.opts.shot != null or app.opts.qa or bench or
-                (app.login.visible() and !app.st.settings.reduce_motion);
+                (login_anim and !app.st.settings.reduce_motion);
             // Dorme até o próximo quadro de um GIF, de uma animação lenta ou
             // do redesenho adiado da rede (o que vier primeiro).
             var due = @min(app.images.next_frame_ms, anim.next_wake_ms);
@@ -1984,6 +1989,11 @@ pub const App = struct {
                             }
                         },
                         .media => bg_dirty = true,
+                        .token => {
+                            timeline.mark(.token_fim);
+                            app_accounts.finishStartupLookup(app);
+                            pending = 3;
+                        },
                     }
                 } else {
                     input = true;
@@ -1996,11 +2006,6 @@ pub const App = struct {
                         // Some da tela na hora; o resto do encerramento é por trás.
                         _ = c.SDL_HideWindow(app.win.window);
                     }
-                        .token => {
-                            timeline.mark(.token_fim);
-                            app_accounts.finishStartupLookup(app);
-                            pending = 3;
-                        },
                     // Arquivo arrastado para a janela: vai para a bandeja.
                     if (e.type == c.SDL_EVENT_DROP_FILE and app.store.ready and app.st.activeChannel() != null)
                         if (e.drop.data) |p| app.attachFile(std.mem.span(p));
@@ -2018,15 +2023,15 @@ pub const App = struct {
 
             app.images.now_ms = now();
             if (app.images.pump()) bg_dirty = true;
+            if (app.images.trim_due) {
+                app.images.trim_due = false;
+                app.trim_wanted.store(true, .release);
+            }
             {
                 var picked: std.ArrayList([:0]u8) = .empty;
                 defer picked.deinit(std.heap.c_allocator);
                 app.picked.drain(&picked);
                 for (picked.items) |p| {
-            if (app.images.trim_due) {
-                app.images.trim_due = false;
-                app.trim_wanted.store(true, .release);
-            }
                     defer std.heap.c_allocator.free(p);
                     if (app.store.ready) app.attachFile(p);
                 }
@@ -2035,9 +2040,6 @@ pub const App = struct {
             const now_ms = now();
             // Nada venceu ainda: não há por que redesenhar.
             if (timed_out and pending == 0 and !bg_dirty and !was_active and now_ms < due) continue;
-            // Janela minimizada ou coberta: ninguém vê. Os eventos da rede já
-            // foram tratados; ao voltar, o SDL avisa e o quadro sai certo.
-            const hidden_flags = c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_OCCLUDED;
             if (c.SDL_GetWindowFlags(app.win.window) & hidden_flags != 0 and running and !app.opts.qa and app.opts.shot == null and !bench and record_dir == null) {
                 bg_dirty = false;
                 pending = 0;
@@ -2132,6 +2134,8 @@ pub const App = struct {
                     .win = undefined,
                 };
                 const tf = c.SDL_GetTicksNS();
+                // As miniaturas de tema só existem para a página de Configurações.
+                if (app.st.settings.open) app.themes.ensurePreviews();
                 root.frame(&ctx, &app.placed, app.themes.previews.items);
                 plugin_host.pollKeys(app);
                 // Um clique pode ter mexido no Store direto (marcar como não lida
@@ -2145,8 +2149,6 @@ pub const App = struct {
                 const result = login_mod.draw(&app.login, .{
                     .ui = app.uiFamily("Inter"),
                     .io = app.io,
-                // As miniaturas de tema só existem para a página de Configurações.
-                if (app.st.settings.open) app.themes.ensurePreviews();
                     .light = app.themes.mode == .light,
                     .reduce = set.reduce_motion,
                     .dt = if (record_dir != null) 1.0 / 30.0 else anim.dt,
@@ -2225,7 +2227,7 @@ pub const App = struct {
                     prof_render = 0;
                     prof_gpu = 0;
                     const rt = @import("ui/root.zig");
-                    for (rt.prof_names[0..rt.prof_n], rt.prof_us[0..rt.prof_n]) |nm, us| if (us / S.n > 200) std.log.info("   {s}: {d} µs/quadro", .{ nm, us / S.n });
+                    for (rt.prof_names[0..rt.prof_n], rt.prof_us[0..rt.prof_n]) |nm, us| if (us / S.n >= 20) std.log.info("   {s}: {d} µs/quadro", .{ nm, us / S.n });
                     @memset(&rt.prof_us, 0);
                     S.since = t;
                     S.n = 0;
@@ -2272,8 +2274,8 @@ pub const App = struct {
             if (pending > 0) pending -= 1;
             was_active = anim.active;
         }
+        // Não chegou a conectar: o que deu para medir ainda sai.
+        timeline.report();
         return runner.fail == 0;
     }
 };
-        // Não chegou a conectar: o que deu para medir ainda sai.
-        timeline.report();

@@ -59,8 +59,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
             const m = it.next() orelse return fail("--mode precisa de claro ou escuro");
             opts.mode = if (std.mem.eql(u8, m, "claro") or std.mem.eql(u8, m, "light")) .light else .dark;
         } else if (std.mem.eql(u8, arg, "--qa")) {
-            opts.qa = true;
             if (!@import("ui/qa.zig").compiled) return fail("este build não tem o QA: compile com -Doptimize=debug ou -Dqa=true");
+            opts.qa = true;
             opts.live = false;
             if (@import("c").SDL_getenv("SDL_VIDEO_DRIVER") == null) _ = @import("c").SDL_setenv_unsafe("SDL_VIDEO_DRIVER", "offscreen", 1);
         } else if (std.mem.eql(u8, arg, "--lang")) {

@@ -8,7 +8,8 @@
 # A janela flutua com tamanho fixo (1280x800): o que entra na tela muda a RAM, e
 # num workspace com outras janelas o tamanho variava de uma rodada para outra.
 # No Hyprland ela abre num workspace escondido; em outros ambientes ela aparece
-# por alguns segundos.
+# por alguns segundos. O "CPU parado" conta o GIF que a demonstração deixa na tela
+# (~2%); com LARPER_NO_PICS=1 no ambiente dá para ver o app sem nada se mexendo.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 budget="${1:-60}"
