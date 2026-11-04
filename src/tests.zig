@@ -8,6 +8,9 @@ test {
     _ = @import("core/types.zig");
     _ = @import("core/markdown.zig");
     _ = @import("core/store.zig");
+    _ = @import("core/cache_format.zig");
+    _ = @import("core/search_query.zig");
+    _ = @import("core/accounts.zig");
     _ = @import("theme/kdl.zig");
     _ = @import("theme/color.zig");
     _ = @import("theme/theme.zig");

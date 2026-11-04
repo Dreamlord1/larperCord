@@ -55,6 +55,14 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   **seleção de texto** com o mouse entre várias mensagens + `Ctrl+C`; **cartão de perfil** com
   "Mensagem @fulano"; seletor de emoji; **mensagens diretas**; menções a você em destaque.
 - **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K`), atalhos de teclado.
+- **Cache local e busca offline.** As últimas 200 mensagens vistas de cada canal ficam em
+  `~/.cache/larpercord/messages` (pastas 700, arquivos 600, teto de 50 MB): a conversa aparece
+  na hora ao abrir e o histórico de verdade chega por cima, sem pular a rolagem. `Ctrl+F` busca
+  na memória e no cache, a cada tecla e sem internet, com `from:nome`, `in:canal`, `has:link`,
+  `has:imagem` e `has:arquivo`; clicar no resultado pula até a mensagem. Dá para desligar e
+  apagar em Configurações → Privacidade.
+- **Várias contas.** O menu do próprio nome lista as contas guardadas (nome e foto) e troca na
+  hora; "Adicionar conta" volta ao login sem esquecer as outras.
 - **Configurações no estilo Discord** (`Ctrl+,`): 13 páginas, troca de tema com miniaturas,
   cor de destaque/cantos, **cores personalizadas por tema e modo em hex**, escala de fonte,
   modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
@@ -98,6 +106,11 @@ sair. O app procura nesta ordem:
    ```
 2. A variável `LARPER_TOKEN`
 3. O arquivo `~/.config/larpercord/token`, que precisa ter `chmod 600`
+
+Com "Lembrar" no login, cada conta fica numa entrada própria do chaveiro
+(`service larpercord-account account <ID>`; sem chaveiro, `~/.config/larpercord/tokens/<ID>` com
+`chmod 600`) e aparece no menu do usuário para trocar. A lista (só ID, nome e avatar) fica em
+`~/.config/larpercord/accounts`. A entrada de cima continua valendo para a conta que já estava nela.
 
 larperCord ainda não tem backend de áudio/DAVE), imagens (avatares, anexos e emojis
 personalizados aparecem como texto), threads/fóruns, permissões por canal (canais sem acesso

@@ -53,6 +53,8 @@ pub const Settings = struct {
     gif_hosts: bool = false,
     /// Esconde o e-mail e o @usuário na conta.
     streamer_mode: bool = false,
+    /// Últimas mensagens de cada canal em disco (abrir na hora, busca offline).
+    message_cache: bool = true,
 
     /// Nosso status: 0 online, 1 ausente, 2 não perturbe, 3 invisível.
     /// Reaplicado ao conectar.

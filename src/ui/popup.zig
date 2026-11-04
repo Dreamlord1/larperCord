@@ -14,6 +14,7 @@ const Id = types.Id;
 const rich = @import("rich.zig");
 const att = @import("attachments.zig");
 const icons = @import("icons.zig");
+const accounts_menu = @import("accounts_menu.zig");
 
 pub const emojis = [_][]const u8{
     "😂", "😭", "💀", "🔥", "❤️", "👍", "👎", "👀", "🎉", "😍", "🙏", "😎",
@@ -162,8 +163,10 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         if (it.sep) seps += 9;
     }
     const mw: f32 = 220;
-    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + 12;
-    const r = fit(ctx, x + 2, y + 2, mw, mh);
+    // Menu do usuário: as contas embaixo (o menu cresce para cima).
+    const acc_h: f32 = if (kind == .status) accounts_menu.height(ctx) else 0;
+    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + 12 + acc_h;
+    const r = fit(ctx, x + 2, y + 2 - acc_h, mw, mh);
     const k = anim.to(anim.id("menu", @intFromEnum(kind)), 1, 30);
     const dl = beginWindow("##menu", r);
     defer c.ImGui_End();
@@ -206,6 +209,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         if (hb.clicked) return choose(ctx, kind, id, it.id, r);
         yy += row_h;
     }
+    if (kind == .status and accounts_menu.draw(ctx, dl, r, yy)) close(ctx);
 }
 
 fn copyFmt(ctx: *d.Ctx, comptime fmt: []const u8, args: anytype) void {

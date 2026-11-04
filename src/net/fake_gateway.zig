@@ -36,6 +36,9 @@ pub const Gateway = struct {
     /// como um servidor grande).
     flood_per_s: u32 = 0,
     next_flood_ms: i64 = std.math.maxInt(i64),
+    /// Começo da sessão: o histórico de um canal é sempre o mesmo dentro
+    /// dela (mesmos IDs, como no Discord), mesmo pedido de novo.
+    epoch_ms: i64 = 0,
 
     pub fn start(g: *Gateway) !void {
         g.thread = c.SDL_CreateThread(threadMain, "gateway", g) orelse return error.SdlThread;
@@ -57,6 +60,7 @@ pub const Gateway = struct {
     }
 
     fn run(g: *Gateway) !void {
+        g.epoch_ms = nowMs();
         g.emit(.{ .ready = try buildReady() });
         for (relations) |rel| g.emit(.{ .relationship = .{ .user = rel.user, .kind = rel.kind } });
         g.emit(.{ .guild_folders = try demoFolders() });
@@ -225,7 +229,7 @@ pub const Gateway = struct {
         while (i < g.history_replies.items.len) {
             const r = g.history_replies.items[i];
             if (r.at_ms <= now) {
-                const msgs = try buildHistory(r.channel, now);
+                const msgs = try buildHistory(r.channel, g.epoch_ms);
                 g.emit(.{ .history = .{ .channel = r.channel, .messages = msgs } });
                 // Algumas reações nas mensagens recentes.
                 var prng = std.Random.DefaultPrng.init(r.channel ^ 0xABCD);

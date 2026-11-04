@@ -538,6 +538,128 @@ fn toDemoStart(app: *App) void {
     app.st.editing = 0;
 }
 
+// --- Cache em disco, busca local e várias contas -----------------------------
+
+const msg_cache = @import("net/msg_cache.zig");
+const search = @import("ui/search.zig");
+const acc_store = @import("net/accounts_store.zig");
+
+var restored_before: u32 = 0;
+
+fn cacheFlush(app: *App) void {
+    msg_cache.flushDirty(&app.store);
+}
+fn cacheHasActive(app: *App) bool {
+    const cs = active(app) orelse return false;
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    const dec = msg_cache.readChannel(arena.allocator(), cs.info.id) orelse return false;
+    return dec.entries.len > 0 and dec.entries.len <= msg_cache.channel_msgs;
+}
+/// Tira a conversa aberta da memória (como o teto de mensagens faz) e abre de novo.
+fn cacheReopen(app: *App) void {
+    const cs = active(app) orelse return;
+    restored_before = msg_cache.restored;
+    app.store.unload(cs);
+    app.actions.append(app.gpa, .{ .focus_tab = app.st.tab }) catch {};
+}
+fn cacheShown(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return msg_cache.restored > restored_before and cs.history == .loaded and cs.messages.items.len > 0;
+}
+fn cacheReplaced(app: *App) bool {
+    const cs = active(app) orelse return false;
+    const sc = app.st.scrollOf(cs.info.id);
+    return !cs.cached and cs.history == .loaded and cs.messages.items.len > 0 and sc.stick_bottom;
+}
+fn searchOpen(_: *App) bool {
+    return search.open and qa.find("search-input") != null;
+}
+fn searchClosed(_: *App) bool {
+    return !search.open;
+}
+fn searchFromAna(app: *App) bool {
+    if (search.results.items.len == 0) return false;
+    for (search.results.items) |r| if (std.mem.indexOf(u8, r.author, "ana") == null) return false;
+    _ = app;
+    return qa.find("search-result:0") != null;
+}
+fn searchImages(app: *App) bool {
+    if (search.results.items.len == 0) return false;
+    for (search.results.items) |r| {
+        const cs = app.store.channel(r.channel) orelse return false;
+        if (cs.history != .loaded) continue;
+        const m = app.store.find(cs, r.id) orelse return false;
+        const img = for (m.msg.attachments) |a| {
+            if (a.isImage()) break true;
+        } else false;
+        if (!img) return false;
+    }
+    return true;
+}
+fn searchClear(_: *App) void {
+    search.close();
+    search.start();
+}
+/// Os #memes fora da tela saem da memória: a busca tem que achar no disco.
+fn unloadMemes(app: *App) void {
+    msg_cache.flushDirty(&app.store);
+    const open_ch = app.st.activeChannel() orelse 0;
+    var it = app.store.channels.valueIterator();
+    while (it.next()) |cs| if (cs.*.info.id != open_ch and std.mem.eql(u8, cs.*.info.name, "memes") and cs.*.history == .loaded) app.store.unload(cs.*);
+}
+var search_target: struct { ch: Id = 0, id: Id = 0 } = .{};
+fn searchFromDisk(_: *App) bool {
+    if (search.found_disk == 0 or search.results.items.len == 0) return false;
+    const r = search.results.items[0];
+    search_target = .{ .ch = r.channel, .id = r.id };
+    return r.disk;
+}
+fn searchJumped(app: *App) bool {
+    if (search.open or app.st.activeChannel() != search_target.ch) return false;
+    var b: [40]u8 = undefined;
+    return qa.find(std.fmt.bufPrint(&b, "msg:{d}", .{search_target.id}) catch return false) != null;
+}
+fn tClearCache(_: *App, b: []u8) []const u8 {
+    var keys: [4][56]u8 = undefined;
+    var lens: [4]u8 = undefined;
+    if (qa.keysWith(&.{"button:Apagar cache"}, &keys, &lens) == 0) return "";
+    const n = lens[0];
+    @memcpy(b[0..n], keys[0][0..n]);
+    return b[0..n];
+}
+fn cacheEmpty(_: *App) bool {
+    var ids: std.ArrayList(Id) = .empty;
+    defer ids.deinit(std.heap.c_allocator);
+    msg_cache.listChannels(&ids);
+    return ids.items.len == 0 and msg_cache.totalBytes() == 0;
+}
+fn privacyPage(app: *App) bool {
+    return app.st.settings.open and app.st.settings.page == .privacidade and qa.find("toggle:Guardar mensagens no disco") != null;
+}
+fn fakeAccounts(app: *App) void {
+    acc_store.list = .{};
+    _ = acc_store.list.upsert(app.store.me, "rsha", "", false);
+    _ = acc_store.list.upsert(7001, "conta-b", "", false);
+    acc_store.list.active = app.store.me;
+    acc_store.session = app.store.me;
+}
+fn accountsListed(_: *App) bool {
+    return qa.find("account:7001") != null and qa.find("account:1000") != null and qa.find("menu:Adicionar conta") != null;
+}
+fn switchedB(app: *App) bool {
+    return acc_store.session == 7001 and app.store.ready and acc_store.list.active == 7001 and app.login.phase != .form;
+}
+fn addForm(app: *App) bool {
+    return app.login.phase == .form and app.store.ready and app.login.back_len > 0 and acc_store.list.len == 2 and qa.find("login:voltar") != null;
+}
+fn backToSession(app: *App) bool {
+    return app.login.phase != .form and app.store.ready and acc_store.session == 7001;
+}
+fn removedB(app: *App) bool {
+    return acc_store.list.len == 1 and acc_store.list.find(7001) == null and acc_store.session == 1000 and app.store.ready;
+}
+
 const long_text = "Mensagem longa do QA pra testar a quebra de linha: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 😂🔥🎉 `código inline` **negrito** *itálico* ~~riscado~~ ||spoiler|| https://ziglang.org fim.";
 
 const ops = [_]Op{
@@ -834,12 +956,54 @@ const ops = [_]Op{
     click("jump-bottom"),
     expect("o botão de ir ao fim volta para a última mensagem", atBottom),
 
+    s("cache em disco"),
+    click("guild:500000"),
+    click("channel:500005"),
+    expect("pronto", ready),
+    .{ .run = cacheFlush },
+    expect("a conversa vai para o disco (no máximo 200 por canal)", cacheHasActive),
+    .{ .run = cacheReopen },
+    expect("reabrir mostra o cache na hora", cacheShown),
+    .{ .shot = "40-cache" },
+    .{ .expect = .{ .name = "o histórico de verdade substitui o cache sem pular a rolagem", .check = cacheReplaced, .timeout_ms = 4000 } },
+
+    s("busca local"),
+    ctrl(c.ImGuiKey_F),
+    expect("Ctrl+F abre a busca", searchOpen),
+    .{ .shot = "41-busca-vazia" },
+    .{ .text = "from:ana" },
+    expect("from:ana só acha mensagens da ana", searchFromAna),
+    .{ .shot = "42-busca" },
+    .{ .run = searchClear },
+    .{ .wait = 100 },
+    .{ .text = "has:imagem" },
+    expect("has:imagem só acha mensagens com imagem", searchImages),
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha a busca", searchClosed),
+    click("header-find"),
+    expect("a lupa do cabeçalho abre a busca", searchOpen),
+    key(c.ImGuiKey_Escape),
+    .{ .run = unloadMemes },
+    ctrl(c.ImGuiKey_F),
+    .{ .text = "in:memes" },
+    expect("canal fora da memória: a busca acha no cache em disco", searchFromDisk),
+    .{ .shot = "43-busca-disco" },
+    click("search-result:0"),
+    .{ .expect = .{ .name = "clicar no resultado abre o canal e pula até a mensagem", .check = searchJumped, .timeout_ms = 4000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Privacidade"),
+    expect("Privacidade tem a opção do cache", privacyPage),
+    .{ .shot = "44-privacidade" },
+    .{ .click = .{ .dyn = tClearCache } },
+    expect("Apagar cache apaga os arquivos", cacheEmpty),
+    key(c.ImGuiKey_Escape),
+
     s("clicar em tudo: servidor"),
     .{ .run = toClassico },
     .{ .wait = 200 },
     click("guild:500000"),
     .{ .wait = 300 },
-    .{ .sweep = &.{ "guild:", "folder:", "category:", "channel:", "member:", "voice-member:", "user-btn:", "header-search", "header-members", "tab:", "tab-plus", "status-theme", "chip:", "chip-add:", "att:", "me", "composer-emoji", "guild-header" } },
+    .{ .sweep = &.{ "guild:", "folder:", "category:", "channel:", "member:", "voice-member:", "user-btn:", "header-search", "header-find", "header-members", "tab:", "tab-plus", "status-theme", "chip:", "chip-add:", "att:", "me", "composer-emoji", "guild-header" } },
     s("clicar em tudo: mensagens diretas"),
     click("guild:0"),
     click("friends"),
@@ -879,6 +1043,27 @@ const ops = [_]Op{
     .{ .resize = .{ 1280, 800 } },
     .{ .wait = 150 },
     expect("janela grande volta a lista de membros", hasMembers),
+
+    s("várias contas"),
+    key(c.ImGuiKey_Escape),
+    expect("fecha as configurações", settingsClosed),
+    .{ .run = fakeAccounts },
+    click("me"),
+    expect("o menu do usuário lista as contas", accountsListed),
+    .{ .shot = "45-contas" },
+    click("account:7001"),
+    .{ .expect = .{ .name = "trocar de conta desconecta e entra na outra", .check = switchedB, .timeout_ms = 6000 } },
+    .{ .wait = 900 },
+    click("me"),
+    click("menu:Adicionar conta"),
+    expect("Adicionar conta mostra o login sem esquecer as outras", addForm),
+    .{ .shot = "46-adicionar-conta" },
+    click("login:voltar"),
+    expect("Voltar fecha o login e a conta continua aberta", backToSession),
+    .{ .wait = 900 },
+    click("me"),
+    click("menu:Remover conta"),
+    .{ .expect = .{ .name = "Remover conta esquece a aberta e entra na outra", .check = removedB, .timeout_ms = 6000 } },
 };
 
 /// Cenários curtos para isolar um problema: QA_SCENE=ctrl|nome|card
@@ -1266,6 +1451,7 @@ pub const Runner = struct {
         st.popup = b.popup;
         st.viewer = null;
         st.palette.open = false;
+        if (search.open) search.close();
         st.role_picker = false;
         st.selection = .{};
         st.reply_to = 0;
@@ -1298,7 +1484,7 @@ pub const Runner = struct {
         h.update(std.mem.sliceAsBytes(st.tabs.items));
         h.update(std.mem.asBytes(&st.friends));
         h.update(std.mem.asBytes(&st.friends_tab));
-        h.update(&.{ @intFromBool(st.viewer != null), @intFromBool(st.palette.open), @intFromBool(st.role_picker), @intFromBool(st.muted), @intFromBool(st.deafened) });
+        h.update(&.{ @intFromBool(st.viewer != null), @intFromBool(st.palette.open), @intFromBool(st.role_picker), @intFromBool(st.muted), @intFromBool(st.deafened), @intFromBool(search.open) });
         h.update(std.mem.asBytes(&st.voice));
         h.update(std.mem.asBytes(&st.reply_to));
         h.update(std.mem.asBytes(&st.editing));

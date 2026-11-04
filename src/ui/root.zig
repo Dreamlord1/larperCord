@@ -17,6 +17,7 @@ const popup = @import("popup.zig");
 const side = @import("comp_side.zig");
 const palette = @import("palette.zig");
 const settings = @import("settings.zig");
+const search = @import("search.zig");
 const Preview = @import("../theme/manager.zig").Preview;
 
 const extra = @import("comp_extra.zig");
@@ -138,6 +139,7 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
     if (profile) profAdd("overlays", (c.SDL_GetTicksNS() - t1) / 1000);
     @import("attachments.zig").viewer(ctx);
     palette.draw(ctx);
+    search.draw(ctx);
     toast(ctx);
     shortcuts(ctx);
 }
@@ -182,6 +184,7 @@ fn shortcuts(ctx: *d.Ctx) void {
     if (c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and ctx.st.popup == .none and !ctx.st.selection.empty()) ctx.st.selection = .{};
     if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_Comma)) ctx.act(if (ctx.st.settings.open) .close_settings else .open_settings);
     if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_K)) ctx.act(if (ctx.st.palette.open) .close_palette else .open_palette);
+    if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_F) and !ctx.st.settings.open) search.toggle();
     if (c.ImGui_IsKeyPressed(c.ImGuiKey_F2) or (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_T)))
         ctx.act(.{ .next_theme = if (shift) -1 else 1 });
     if (ctrl and c.ImGui_IsKeyPressed(c.ImGuiKey_Tab)) ctx.act(.{ .next_tab = if (shift) -1 else 1 });

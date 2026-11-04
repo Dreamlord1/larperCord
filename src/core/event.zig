@@ -161,4 +161,11 @@ pub const Action = union(enum) {
     accept_friend: Id,
     /// Recusa um pedido, cancela o nosso ou desbloqueia.
     remove_relationship: Id,
+    /// Várias contas: troca (desconecta e entra na outra), volta à tela de
+    /// login sem esquecer as guardadas, esquece uma conta.
+    switch_account: Id,
+    add_account,
+    remove_account: Id,
+    /// Configurações → Privacidade → Apagar cache.
+    clear_cache,
 };

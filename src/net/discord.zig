@@ -1887,10 +1887,18 @@ pub const Gateway = struct {
 ///   3. ~/.config/larpercord/token (precisa ter permissão 600)
 /// Retorna null se não houver (o app usa o modo demonstração).
 pub fn loadToken() ?[:0]u8 {
-    if (c.SDL_getenv("LARPER_TOKEN")) |t| {
-        const s = std.mem.trim(u8, std.mem.span(t), " \n\r\t");
-        if (s.len > 20) return alloc.dupeSentinel(u8, s, 0) catch null;
-    }
+    return envToken() orelse loadSavedToken();
+}
+
+/// Só a variável LARPER_TOKEN (nunca é guardada em lugar nenhum).
+pub fn envToken() ?[:0]u8 {
+    const t = c.SDL_getenv("LARPER_TOKEN") orelse return null;
+    const s = std.mem.trim(u8, std.mem.span(t), " \n\r\t");
+    return if (s.len > 20) alloc.dupeSentinel(u8, s, 0) catch null else null;
+}
+
+/// Só o token guardado na entrada antiga (chaveiro, depois o arquivo).
+pub fn loadSavedToken() ?[:0]u8 {
     if (c.popen("secret-tool lookup service larpercord 2>/dev/null", "r")) |f| {
         var buf: [256]u8 = undefined;
         const n = c.fread(&buf, 1, buf.len, f);

@@ -17,7 +17,8 @@ const Rect = d.Rect;
 
 pub const Phase = enum { hidden, form, connecting, leaving };
 
-pub const Result = enum { submit, demo, cancel };
+/// `back`: "Voltar" (adicionando outra conta, ou depois de sair de uma).
+pub const Result = enum { submit, demo, cancel, back };
 
 pub const Login = struct {
     phase: Phase = .hidden,
@@ -32,6 +33,9 @@ pub const Login = struct {
     err_len: usize = 0,
     err_at: f32 = -10,
     want_focus: bool = true,
+    /// Texto do "Voltar" no topo do cartão (vazio = sem). Ex.: "Voltar para ana".
+    back_buf: [96]u8 = undefined,
+    back_len: usize = 0,
     /// Valores suavizados entre quadros.
     look: [2]f32 = .{ 0, 0 },
     card_h: f32 = 0,
@@ -62,6 +66,12 @@ pub const Login = struct {
         @memcpy(l.err_buf[0..n], msg[0..n]);
         l.err_len = n;
         l.err_at = l.t;
+    }
+
+    pub fn setBack(l: *Login, label: []const u8) void {
+        const n = @min(label.len, l.back_buf.len);
+        @memcpy(l.back_buf[0..n], label[0..n]);
+        l.back_len = n;
     }
 
     pub fn tokenText(l: *const Login) []const u8 {
@@ -420,6 +430,24 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
     const dl = f.dl;
     var result: ?Result = null;
     var y = y0;
+
+    // Voltar (para a conta aberta ou uma guardada).
+    if (l.back_len > 0) {
+        const label = l.back_buf[0..l.back_len];
+        const lw = f.width(.medium, 13.5, label) + 22;
+        const br: Rect = .{ .x = x - 6, .y = y - 6, .w = @min(lw + 12, w + 12), .h = 26 };
+        const hb = hit(36, br);
+        qa.mark(br, "login:voltar", .{});
+        if (hb.clicked or c.ImGui_IsKeyPressed(c.ImGuiKey_Escape)) result = .back;
+        if (hb.hovered) d.rect(dl, br, f.p.text.alpha(0.06 * f.a), 6);
+        const col = if (hb.hovered) f.p.text else f.p.muted;
+        const ay = br.y + br.h / 2;
+        d.line(dl, x, ay, x + 9, ay, col.alpha(f.a), 1.6);
+        d.line(dl, x, ay, x + 4, ay - 4, col.alpha(f.a), 1.6);
+        d.line(dl, x, ay, x + 4, ay + 4, col.alpha(f.a), 1.6);
+        _ = d.textClipped(dl, f.font(.medium), 13.5, x + 16, d.centerY(br, 13.5), col.alpha(f.a), label, w - 16);
+        y += 34;
+    }
 
     f.text(.semibold, 24, x, y, f.p.text, i18n.tr("Entrar", "Sign in"));
     y += 36;

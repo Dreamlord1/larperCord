@@ -532,11 +532,21 @@ fn page(p: *Page, previews: []const Preview) void {
             p.toggle(i18n.tr("Animar GIFs do Tenor e do Giphy", "Animate Tenor and Giphy GIFs"), i18n.tr("Baixa do site deles, que vê o seu IP (o app oficial faz igual). Desligado: prévia parada pelo Discord.", "Downloads from their site, which sees your IP (the official app does too). Off: still preview via Discord."), &s.gif_hosts);
             p.toggle(i18n.tr("Modo streamer", "Streamer Mode"), i18n.tr("Esconde o e-mail e o nome de usuário nas configurações.", "Hides your email and username in settings."), &s.streamer_mode);
             p.toggle(i18n.tr("Registro de mensagens", "Message log"), i18n.tr("Apagadas continuam na tela (marcadas) e editadas guardam o original. Só aqui.", "Deleted messages stay visible (marked) and edits keep the original. Local only."), &s.message_log);
+            p.toggle(i18n.tr("Guardar mensagens no disco", "Keep messages on disk"), i18n.tr("Conversas abrem na hora e a busca (Ctrl+F) funciona sem internet. Só o seu usuário lê.", "Chats open instantly and search (Ctrl+F) works offline. Only your user can read it."), &s.message_cache);
+            {
+                const msg_cache = @import("../net/msg_cache.zig");
+                var sb: [24]u8 = undefined;
+                var lb: [64]u8 = undefined;
+                const size = msg_cache.formatSize(&sb, msg_cache.totalBytes(), i18n.en());
+                if (p.button(i18n.fmt(&lb, "Apagar cache ({s})", "Clear cache ({s})", .{size}), true)) ctx.act(.clear_cache);
+                p.y += 52;
+            }
             p.note(i18n.tr("Fora isso, imagens e avatares só vêm dos servidores do Discord.", "Everything else (images, avatars) only comes from Discord's servers."));
         },
         .atalhos => {
             p.title(i18n.tr("Atalhos de teclado", "Keybinds"));
             p.keyRow(i18n.tr("Paleta de comandos", "Command palette"), "Ctrl+K");
+            p.keyRow(i18n.tr("Buscar mensagens", "Search messages"), "Ctrl+F");
             p.keyRow(i18n.tr("Configurações", "Settings"), "Ctrl+,");
             p.keyRow(i18n.tr("Próximo tema", "Next theme"), "F2");
             p.keyRow(i18n.tr("Tema anterior", "Previous theme"), "Shift+F2");
@@ -735,7 +745,7 @@ fn account(p: *Page) void {
     d.text(p.dl, p.font(.regular), 12.5, er.x + 14, er.y + 54, ctx.col(.faint), i18n.tr("Nome, foto e senha se mudam pelo app oficial ou pelo site.", "Name, picture and password are changed in the official app or website."));
     p.y += card.h + 24;
     p.heading(i18n.tr("Sessão", "Session"));
-    p.note(if (ctx.store.demo) i18n.tr("Você está no modo demonstração. Sair leva à tela de login.", "You're in demo mode. Logging out takes you to the sign-in screen.") else i18n.tr("Sair desconecta e apaga o token guardado neste computador.", "Logging out disconnects and deletes the token saved on this computer."));
+    p.note(if (ctx.store.demo) i18n.tr("Você está no modo demonstração. Sair leva à tela de login.", "You're in demo mode. Logging out takes you to the sign-in screen.") else i18n.tr("Sair desconecta e apaga o token desta conta neste computador (as outras contas guardadas continuam).", "Logging out disconnects and deletes this account's token from this computer (other saved accounts stay)."));
     if (p.button(i18n.tr("Sair", "Log Out"), true)) ctx.act(.logout);
     p.y += 52;
 }
