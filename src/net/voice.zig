@@ -857,18 +857,23 @@ const Worker = struct {
         const blocked = w.v.micBlocked();
         var pcm: [frame_samples * channels]i16 = undefined;
         const have = !blocked and w.mic.read(&pcm);
+        const ptt = sh.ptt.load(.monotonic);
+        const key = sh.ptt_down.load(.monotonic);
+        // Aperte para falar com a tecla solta: o microfone segue sendo lido (o
+        // som velho não pode sair quando a tecla descer), mas nada é tratado.
+        const idle = w.talk.pttIdle(now, ptt, key);
         // Mudo não gasta nada com o supressor: nem o estado fica.
-        if (blocked or w.mic.stream == null) w.cap.release();
+        if (blocked or w.mic.stream == null or idle) w.cap.release();
         var voice = false;
-        if (have) {
+        if (have and !idle) {
             const res = w.cap.process(&pcm, sh.captureCfg());
             voice = res.voice;
             w.mic_peak_rms = @max(w.mic_peak_rms, res.rms);
         }
         const talking = w.talk.update(now, .{
             .voice = voice,
-            .ptt = sh.ptt.load(.monotonic),
-            .key = sh.ptt_down.load(.monotonic),
+            .ptt = ptt,
+            .key = key,
             .blocked = blocked or w.mic.stream == null,
         });
         if (debug_on and now - w.stats_ms >= 3000) {

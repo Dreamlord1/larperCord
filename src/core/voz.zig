@@ -242,6 +242,12 @@ pub const Talk = struct {
         blocked: bool = false,
     };
 
+    /// Aperte para falar com a tecla solta (e a folga já passou): nada deste
+    /// quadro vai para a call, então não há por que tratá-lo.
+    pub fn pttIdle(t: *const Talk, now: i64, ptt: bool, key: bool) bool {
+        return ptt and !key and now - t.last_key_ms >= ptt_tail_ms;
+    }
+
     pub fn update(t: *Talk, now: i64, in: In) bool {
         if (in.blocked) {
             t.* = .{};
@@ -628,6 +634,11 @@ test "aperte para falar: tecla manda, voz não; folga ao soltar" {
     try t_expect(t.update(1040, .{ .ptt = true, .key = true }));
     try t_expect(t.update(1239, .{ .ptt = true }));
     try t_expect(!t.update(1240, .{ .ptt = true }));
+    // Só fica ocioso depois da folga: o fim da fala ainda é tratado.
+    try t_expect(!t.pttIdle(1239, true, false));
+    try t_expect(t.pttIdle(1240, true, false));
+    try t_expect(!t.pttIdle(1240, true, true));
+    try t_expect(!t.pttIdle(1240, false, false));
     // Bloqueado (mudo pelo servidor) não transmite nem com a tecla.
     try t_expect(!t.update(1300, .{ .ptt = true, .key = true, .blocked = true }));
 }
