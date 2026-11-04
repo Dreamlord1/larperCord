@@ -54,7 +54,8 @@ pub const Event = union(enum) {
     /// Aviso para mostrar ao usuário (texto alocado).
     notice: []const u8,
     /// `activity` vazio limpa a atividade; null mantém a anterior.
-    presence_update: struct { user: Id, status: types.Status, activity: ?[]const u8 = null },
+    /// `activities`: null mantém as anteriores, vazio limpa (o Store assume).
+    presence_update: struct { user: Id, status: types.Status, activity: ?[]const u8 = null, activities: ?[]types.Activity = null },
     voice_state: struct { channel: ?Id, user: Id },
     latency: u32,
     /// Cargos de um servidor (nomes alocados), para os grupos da lista de membros.
@@ -74,7 +75,11 @@ pub const Event = union(enum) {
     /// Perfil completo de alguém (o Store assume os textos).
     profile: struct { user: Id, profile: types.Profile },
     /// Amizade/pedido/bloqueio (`none` = deixou de existir).
-    relationship: struct { user: Id, kind: types.Relationship },
+    relationship: struct { user: Id, kind: types.Relationship, since_ms: i64 = 0 },
+    /// Nota que só a gente vê sobre alguém (texto alocado; vazio = sem).
+    note: struct { user: Id, text: []const u8 },
+    /// Ícone de uma aplicação (jogo), para a atividade sem imagem.
+    app_icon: struct { app: Id, icon: []const u8 },
 };
 
 pub const Connection = enum { connecting, ready, reconnecting, failed, offline };
@@ -103,6 +108,12 @@ pub const Command = union(enum) {
     member_role: struct { guild: Id, user: Id, role: Id, add: bool },
     /// Nosso status (offline = invisível), pelo gateway (op 3).
     set_status: types.Status,
+    /// Guarda a nota sobre alguém (PUT /users/@me/notes/{id}).
+    set_note: struct { user: Id, text: []const u8 },
+    /// Ícone de uma aplicação (GET /applications/{id}/rpc).
+    fetch_app: Id,
+    /// Move alguém para outro canal de voz (null = desconecta da call).
+    move_member: struct { guild: Id, user: Id, channel: ?Id },
     shutdown,
 };
 
@@ -161,4 +172,10 @@ pub const Action = union(enum) {
     accept_friend: Id,
     /// Recusa um pedido, cancela o nosso ou desbloqueia.
     remove_relationship: Id,
+    /// Perfil grande (o cartão com abas); `tab`: 0 atividade, 1 amigos, 2 servidores.
+    open_full_profile: struct { user: Id, tab: u8 = 0 },
+    set_note: struct { user: Id, text: []const u8 },
+    /// Atividade sem imagem: busca o ícone do jogo (uma vez por aplicação).
+    want_app_icon: Id,
+    move_member: struct { guild: Id, user: Id, channel: ?Id },
 };

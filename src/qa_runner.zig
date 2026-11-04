@@ -447,6 +447,45 @@ fn onZig(app: *App) bool {
     const cs = active(app) orelse return false;
     return std.mem.eql(u8, cs.info.name, "zig") and !app.st.palette.open;
 }
+fn fullProfile(app: *App) bool {
+    return app.st.popup == .profile_full;
+}
+fn anyMark(prefix: []const u8) bool {
+    var keys: [4][56]u8 = undefined;
+    var lens: [4]u8 = undefined;
+    return qa.keysWith(&.{prefix}, &keys, &lens) > 0;
+}
+fn fullFriendsTab(app: *App) bool {
+    return fullProfile(app) and app.st.profile_tab == 1 and anyMark("profile-friend:");
+}
+fn fullGuildsTab(app: *App) bool {
+    return fullProfile(app) and app.st.profile_tab == 2 and anyMark("profile-guild:");
+}
+fn hasActivity(app: *App) bool {
+    _ = app;
+    return qa.find("profile-activity") != null;
+}
+fn cardDetails(app: *App) bool {
+    _ = app;
+    return qa.find("profile-activity") != null and qa.find("profile-joined") != null and qa.find("profile-mutual:1") != null;
+}
+fn openedGithub(app: *App) bool {
+    _ = app;
+    const a = @import("ui/attachments.zig");
+    return std.mem.startsWith(u8, a.last_opened[0..a.last_opened_len], "https://github.com/");
+}
+fn noteSaved(app: *App) bool {
+    const n = app.store.notes.get(1002) orelse return false;
+    return std.mem.eql(u8, n, "jogador de hollow knight") and !app.st.note_editing;
+}
+fn movedToGaming(app: *App) bool {
+    return app.store.voiceChannelOf(1001, app.st.guild) == ch(14);
+}
+fn disconnected1001(app: *App) bool {
+    const cur = app.store.voiceChannelOf(1001, app.st.guild);
+    return cur == 0 or app.store.channel(cur).?.info.guild != app.st.guild;
+}
+
 fn inVoice(app: *App) bool {
     return app.st.voice == ch(13);
 }
@@ -643,6 +682,27 @@ const ops = [_]Op{
     expect("\"Mensagem @fulano\" manda DM", dmSent),
     click("guild:500000"),
 
+    s("perfil completo"),
+    click("guild:500000"),
+    click("member:1002"),
+    expect("o cartão mostra o jogo, quando entrou no servidor e o que há em comum", cardDetails),
+    click("profile-mutual:1"),
+    expect("amigos em comum abre o perfil grande na aba certa", fullFriendsTab),
+    .{ .shot = "07b-perfil-amigos" },
+    click("profile-tab:2"),
+    expect("aba de servidores em comum", fullGuildsTab),
+    click("profile-tab:0"),
+    expect("aba de atividade mostra o jogo", hasActivity),
+    .{ .shot = "07c-perfil-grande" },
+    click("profile-conn:github"),
+    expect("conta ligada abre o link", openedGithub),
+    click("profile-note"),
+    .{ .text = "jogador de hollow knight" },
+    key(c.ImGuiKey_Enter),
+    expect("a nota fica guardada", noteSaved),
+    click("profile-full-close"),
+    expect("o X fecha o perfil grande", popupClosed),
+
     s("emoji"),
     click("composer-emoji"),
     expect("botão de emoji abre o seletor", emojiOpen),
@@ -669,6 +729,13 @@ const ops = [_]Op{
     click("voice-member:500014:1001"),
     expect("clicar em quem está na call abre o perfil", profileOpen),
     key(c.ImGuiKey_Escape),
+    .{ .rclick = .{ .mark = "voice-member:500014:1001" } },
+    click("menu:Mover para…"),
+    click("menu:Jogando"),
+    expect("botão direito → Mover para… muda a pessoa de call", movedToGaming),
+    .{ .rclick = .{ .mark = "member:1001" } },
+    click("menu:Desconectar da call"),
+    expect("Desconectar da call tira a pessoa da call", disconnected1001),
     click("hangup"),
     expect("desligar sai da call", notInVoice),
     click("me"),
@@ -849,7 +916,17 @@ const ops = [_]Op{
     click("guild:500000"),
     click("member:1001"),
     .{ .wait = 300 },
-    .{ .sweep = &.{ "role:", "role-add", "profile-avatar", "profile-banner" } },
+    .{ .sweep = &.{ "role:", "role-add", "profile-avatar", "profile-banner", "profile-name", "profile-full", "profile-mutual:" } },
+    key(c.ImGuiKey_Escape),
+    s("clicar em tudo: perfil grande"),
+    click("member:1002"),
+    click("profile-full"),
+    .{ .wait = 300 },
+    .{ .sweep = &.{ "profile-tab:", "profile-conn:", "profile-note", "profile-btn:", "profile-full-close", "profile-avatar", "profile-banner" } },
+    click("profile-tab:1"),
+    .{ .sweep = &.{"profile-friend:"} },
+    click("profile-tab:2"),
+    .{ .sweep = &.{"profile-guild:"} },
     key(c.ImGuiKey_Escape),
     s("clicar em tudo: configurações"),
     ctrl(c.ImGuiKey_Comma),
@@ -1313,7 +1390,10 @@ pub const Runner = struct {
         const th = app.themes.theme_();
         for (th.options) |o| h.update(&.{@intFromBool(th.option(o.name) orelse o.default)});
         if (st.popup == .profile) if (app.store.memberInfo(st.guild, st.popup.profile.user)) |mi| h.update(std.mem.sliceAsBytes(mi.roleSlice()));
-        h.update(std.mem.asBytes(&@import("ui/attachments.zig").last_opened_len));
+        const att_mod = @import("ui/attachments.zig");
+        h.update(att_mod.last_opened[0..att_mod.last_opened_len]);
+        h.update(&.{ st.profile_tab, @intFromBool(st.note_editing) });
+        h.update(std.mem.asBytes(&@as(u32, app.store.notes.count())));
         h.update(std.mem.asBytes(&@as(u32, @intCast(app.actions.items.len))));
         if (st.activeChannel()) |cid| {
             const sc = st.scrollOf(cid);
@@ -1345,6 +1425,7 @@ pub const Runner = struct {
         if (num(name, "guild:")) |g| return st.guild == g and !st.friends;
         if (std.mem.startsWith(u8, name, "friends-tab:")) return std.mem.eql(u8, name["friends-tab:".len..], @tagName(@as(enum { online, all, pending, blocked }, @enumFromInt(st.friends_tab))));
         if (std.mem.eql(u8, name, "friends")) return st.friends;
+        if (num(name, "profile-tab:")) |t| return t == st.profile_tab;
         // Opções de escolha única: clicar na já escolhida não muda nada.
         for ([_][]const u8{ "seg:", "radio:", "accent:", "theme-card:", "settings:" }) |p| if (std.mem.startsWith(u8, name, p)) return true;
         return false;

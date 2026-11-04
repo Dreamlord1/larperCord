@@ -675,9 +675,29 @@ pub const App = struct {
                 app.saveSettings();
             },
             .want_profile => |user| {
-                if (app.asked_profiles.contains(user)) return;
-                app.asked_profiles.put(app.gpa, user, {}) catch return;
+                // Por servidor também: "no servidor desde" muda com ele.
+                const key = user ^ (st.guild *% 0x9E3779B97F4A7C15);
+                if (app.asked_profiles.contains(key)) return;
+                app.asked_profiles.put(app.gpa, key, {}) catch return;
                 app.cmd(.{ .fetch_profile = .{ .user = user, .guild = st.guild } });
+            },
+            .open_full_profile => |fp| {
+                st.popup = .{ .profile_full = .{ .user = fp.user } };
+                st.profile_tab = fp.tab;
+            },
+            .set_note => |n| {
+                defer app.gpa.free(n.text);
+                const ca = std.heap.c_allocator;
+                const mine = ca.dupe(u8, n.text) catch return;
+                app.store.apply(.{ .note = .{ .user = n.user, .text = mine } }, now()) catch {};
+                if (app.store.demo) return;
+                app.cmd(.{ .set_note = .{ .user = n.user, .text = ca.dupe(u8, n.text) catch return } });
+            },
+            .move_member => |mm| app.cmd(.{ .move_member = .{ .guild = mm.guild, .user = mm.user, .channel = mm.channel } }),
+            .want_app_icon => |id| {
+                if (app.asked_profiles.contains(id)) return;
+                app.asked_profiles.put(app.gpa, id, {}) catch return;
+                app.cmd(.{ .fetch_app = id });
             },
             .member_role => |mr| {
                 app.store.memberRoleLocal(mr.guild, mr.user, mr.role, mr.add) catch return;

@@ -626,7 +626,7 @@ pub const Gateway = struct {
         const u = j.get(m, "user") orelse return .none;
         const uid = j.id(j.get(u, "id")) orelse return .none;
         g.upsert(u);
-        if (j.get(m, "presence")) |p| g.emit(.{ .presence_update = .{ .user = uid, .status = statusOf(p), .activity = presenceActivity(p) } });
+        if (j.get(m, "presence")) |p| g.emit(.{ .presence_update = .{ .user = uid, .status = statusOf(p), .activity = presenceActivity(p), .activities = presenceActivities(p) } });
         return .{ .member = .{ .user = uid, .info = g.infoOf(j.array(j.get(m, "roles"))) } };
     }
 
@@ -690,6 +690,12 @@ pub const Gateway = struct {
             .dnd => "dnd",
             .offline => "invisible",
         };
+    }
+
+    /// "since" da relação (ISO) em ms; 0 = não veio.
+    fn sinceMs(rv: Value) i64 {
+        const t = j.str(j.get(rv, "since")) orelse return 0;
+        return j.isoTime(t) * 1000;
     }
 
     fn relationshipKind(v: ?Value) types.Relationship {
@@ -827,7 +833,7 @@ pub const Gateway = struct {
         if (std.mem.eql(u8, t, "RELATIONSHIP_ADD") or std.mem.eql(u8, t, "RELATIONSHIP_UPDATE")) {
             if (j.get(d, "user")) |u| g.upsert(u);
             const uid = j.id(j.get(d, "id")) orelse return;
-            g.emit(.{ .relationship = .{ .user = uid, .kind = relationshipKind(j.get(d, "type")) } });
+            g.emit(.{ .relationship = .{ .user = uid, .kind = relationshipKind(j.get(d, "type")), .since_ms = sinceMs(d) } });
             return;
         }
         if (std.mem.eql(u8, t, "RELATIONSHIP_REMOVE")) {
@@ -905,6 +911,7 @@ pub const Gateway = struct {
                 .user = j.id(j.get(u, "id")) orelse return,
                 .status = st,
                 .activity = presenceActivity(d),
+                .activities = presenceActivities(d),
             } });
             return;
         }
@@ -968,6 +975,43 @@ pub const Gateway = struct {
         return std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix, name }) catch null;
     }
 
+    /// As atividades com nome (jogo, música, transmissão…), sem o status
+    /// personalizado (esse já vira o texto de `presenceActivity`). Até 3.
+    fn presenceActivities(p: Value) ?[]types.Activity {
+        const acts = if (j.get(p, "presence")) |inner| j.array(j.get(inner, "activities")) else j.array(j.get(p, "activities"));
+        var out: std.ArrayList(types.Activity) = .empty;
+        for (acts) |a| {
+            const kind = j.int(j.get(a, "type")) orelse 0;
+            const name = j.str(j.get(a, "name")) orelse "";
+            if (kind == 4 or name.len == 0 or out.items.len == 3) continue;
+            const ts = j.get(a, "timestamps");
+            const app = j.id(j.get(a, "application_id")) orelse 0;
+            var ib: [512]u8 = undefined;
+            const img = if (j.get(a, "assets")) |as| activityImage(&ib, app, j.str(j.get(as, "large_image")) orelse "") else "";
+            out.append(alloc, .{
+                .kind = @intCast(std.math.clamp(kind, 0, 255)),
+                .name = dupeOpt(name) catch "",
+                .details = dupeOpt(j.str(j.get(a, "details")) orelse "") catch "",
+                .state = dupeOpt(j.str(j.get(a, "state")) orelse "") catch "",
+                .start_ms = if (ts) |t| j.int(j.get(t, "start")) orelse 0 else 0,
+                .end_ms = if (ts) |t| j.int(j.get(t, "end")) orelse 0 else 0,
+                .image = dupeOpt(img) catch "",
+                .app = app,
+            }) catch break;
+        }
+        return out.toOwnedSlice(alloc) catch null;
+    }
+
+    /// Imagem grande da atividade como URL que o cache de imagens aceita:
+    /// "mp:external/…" vem pelo proxy de mídia, o número é um asset da
+    /// aplicação. Spotify ("spotify:…") e outros de fora ficam sem imagem.
+    fn activityImage(buf: []u8, app: Id, key: []const u8) []const u8 {
+        if (std.mem.startsWith(u8, key, "mp:")) return std.fmt.bufPrint(buf, "https://media.discordapp.net/{s}", .{key[3..]}) catch "";
+        if (key.len == 0 or app == 0) return "";
+        for (key) |ch| if (!std.ascii.isDigit(ch)) return "";
+        return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/app-assets/{d}/{s}.png", .{ app, key }) catch "";
+    }
+
     /// Presenças podem vir como PresenceUpdate (com `user`) ou como
     /// MergedPresence do READY_SUPPLEMENTAL (com `user_id` e `presence`).
     fn ingestPresences(g: *Gateway, list: []const Value) void {
@@ -982,6 +1026,7 @@ pub const Gateway = struct {
                 .user = uid,
                 .status = presenceStatus(p),
                 .activity = presenceActivity(p),
+                .activities = presenceActivities(p),
             } });
         }
     }
@@ -1291,6 +1336,84 @@ pub const Gateway = struct {
         return list.toOwnedSlice(alloc);
     }
 
+    /// GET /users/{id}/profile: banner, bio, desde quando está no servidor,
+    /// servidores e amigos em comum, contas ligadas e insígnias.
+    fn onProfile(g: *Gateway, uid: Id, guild: Id, body: []const u8) void {
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const v = std.json.parseFromSliceLeaky(Value, arena.allocator(), body, .{}) catch return;
+        const u = j.get(v, "user") orelse return;
+        const up = j.get(v, "user_profile");
+        g.upsert(u);
+        for (j.array(j.get(v, "mutual_friends"))) |f| g.upsert(f);
+        const bio = (if (up) |p| j.str(j.get(p, "bio")) else null) orelse j.str(j.get(u, "bio")) orelse "";
+        var pf: types.Profile = .{
+            .banner = dupeOpt(j.str(j.get(u, "banner")) orelse "") catch "",
+            .accent = @intCast(std.math.clamp(j.int(j.get(u, "accent_color")) orelse 0, 0, 0xffffff)),
+            .bio = dupeOpt(bio) catch "",
+            .pronouns = dupeOpt((if (up) |p| j.str(j.get(p, "pronouns")) else null) orelse "") catch "",
+            .username = dupeOpt(j.str(j.get(u, "username")) orelse "") catch "",
+            .guild = guild,
+        };
+        if (j.get(v, "guild_member")) |gm| {
+            pf.joined_ms = j.isoTime(j.str(j.get(gm, "joined_at")) orelse "") * 1000;
+            pf.boost_ms = j.isoTime(j.str(j.get(gm, "premium_since")) orelse "") * 1000;
+        }
+        var mg: std.ArrayList(Id) = .empty;
+        for (j.array(j.get(v, "mutual_guilds"))) |m| if (j.id(j.get(m, "id"))) |id| mg.append(alloc, id) catch {};
+        pf.mutual_guilds = mg.toOwnedSlice(alloc) catch &.{};
+        var mf: std.ArrayList(Id) = .empty;
+        for (j.array(j.get(v, "mutual_friends"))) |f| if (j.id(j.get(f, "id"))) |id| mf.append(alloc, id) catch {};
+        pf.mutual_friends = mf.toOwnedSlice(alloc) catch &.{};
+        pf.mutual_friends_count = @intCast(std.math.clamp(j.int(j.get(v, "mutual_friends_count")) orelse @as(i64, @intCast(pf.mutual_friends.len)), 0, 1 << 30));
+        var cns: std.ArrayList(types.Connection) = .empty;
+        for (j.array(j.get(v, "connected_accounts"))) |ca| {
+            const kind = j.str(j.get(ca, "type")) orelse continue;
+            const name = j.str(j.get(ca, "name")) orelse continue;
+            var ub: [256]u8 = undefined;
+            cns.append(alloc, .{
+                .kind = dupeOpt(kind) catch continue,
+                .name = dupeOpt(name) catch continue,
+                .url = dupeOpt(connectionUrl(&ub, kind, name, j.str(j.get(ca, "id")) orelse "")) catch "",
+            }) catch {};
+        }
+        pf.connections = cns.toOwnedSlice(alloc) catch &.{};
+        var bds: std.ArrayList(types.Badge) = .empty;
+        for (j.array(j.get(v, "badges"))) |bv| {
+            const icon = j.str(j.get(bv, "icon")) orelse continue;
+            bds.append(alloc, .{
+                .icon = dupeOpt(icon) catch continue,
+                .description = dupeOpt(j.str(j.get(bv, "description")) orelse "") catch "",
+            }) catch {};
+        }
+        pf.badges = bds.toOwnedSlice(alloc) catch &.{};
+        g.emit(.{ .profile = .{ .user = uid, .profile = pf } });
+    }
+
+    /// Link público da conta ligada (só os serviços com endereço conhecido).
+    pub fn connectionUrl(buf: []u8, kind: []const u8, name: []const u8, id: []const u8) []const u8 {
+        const safe = struct {
+            fn f(t: []const u8) bool {
+                if (t.len == 0) return false;
+                for (t) |ch| if (!(std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '-' or ch == '.')) return false;
+                return true;
+            }
+        }.f;
+        const eq = std.mem.eql;
+        if (eq(u8, kind, "github") and safe(name)) return std.fmt.bufPrint(buf, "https://github.com/{s}", .{name}) catch "";
+        if (eq(u8, kind, "twitch") and safe(name)) return std.fmt.bufPrint(buf, "https://twitch.tv/{s}", .{name}) catch "";
+        if (eq(u8, kind, "reddit") and safe(name)) return std.fmt.bufPrint(buf, "https://reddit.com/u/{s}", .{name}) catch "";
+        if (eq(u8, kind, "twitter") and safe(name)) return std.fmt.bufPrint(buf, "https://x.com/{s}", .{name}) catch "";
+        if (eq(u8, kind, "tiktok") and safe(name)) return std.fmt.bufPrint(buf, "https://tiktok.com/@{s}", .{name}) catch "";
+        if (eq(u8, kind, "instagram") and safe(name)) return std.fmt.bufPrint(buf, "https://instagram.com/{s}", .{name}) catch "";
+        if (eq(u8, kind, "bluesky") and safe(name)) return std.fmt.bufPrint(buf, "https://bsky.app/profile/{s}", .{name}) catch "";
+        if (eq(u8, kind, "domain") and safe(name)) return std.fmt.bufPrint(buf, "https://{s}", .{name}) catch "";
+        if (eq(u8, kind, "youtube") and safe(id)) return std.fmt.bufPrint(buf, "https://youtube.com/channel/{s}", .{id}) catch "";
+        if (eq(u8, kind, "steam") and safe(id)) return std.fmt.bufPrint(buf, "https://steamcommunity.com/profiles/{s}", .{id}) catch "";
+        if (eq(u8, kind, "spotify") and safe(id)) return std.fmt.bufPrint(buf, "https://open.spotify.com/user/{s}", .{id}) catch "";
+        return "";
+    }
+
     fn dupeOpt(t: []const u8) ![]const u8 {
         return if (t.len == 0) "" else try alloc.dupe(u8, t);
     }
@@ -1409,7 +1532,7 @@ pub const Gateway = struct {
         } });
         for (j.array(j.get(d, "relationships"))) |rv| {
             const uid = j.id(j.get(rv, "user_id")) orelse j.id(j.get(rv, "id")) orelse continue;
-            g.emit(.{ .relationship = .{ .user = uid, .kind = relationshipKind(j.get(rv, "type")) } });
+            g.emit(.{ .relationship = .{ .user = uid, .kind = relationshipKind(j.get(rv, "type")), .since_ms = sinceMs(rv) } });
         }
         // Pastas e ordem dos servidores: protobuf das configurações (contas
         // atuais) ou o JSON antigo.
@@ -1682,6 +1805,7 @@ pub const Gateway = struct {
 
     fn freeCommand(cmd: ev.Command) void {
         switch (cmd) {
+            .set_note => |n| alloc.free(n.text),
             .send_message => |m| {
                 alloc.free(m.content);
                 for (m.files) |f| alloc.free(f);
@@ -1801,25 +1925,54 @@ pub const Gateway = struct {
             },
             .fetch_profile => |fp| {
                 const path = if (fp.guild != 0)
-                    std.fmt.bufPrint(&path_buf, "/users/{d}/profile?with_mutual_guilds=false&with_mutual_friends=false&guild_id={d}", .{ fp.user, fp.guild }) catch return
+                    std.fmt.bufPrint(&path_buf, "/users/{d}/profile?with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=true&guild_id={d}", .{ fp.user, fp.guild }) catch return
                 else
-                    std.fmt.bufPrint(&path_buf, "/users/{d}/profile?with_mutual_guilds=false&with_mutual_friends=false", .{fp.user}) catch return;
+                    std.fmt.bufPrint(&path_buf, "/users/{d}/profile?with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=true", .{fp.user}) catch return;
                 var resp = g.request("GET", path, null) orelse return;
                 defer resp.body.deinit(alloc);
-                if (resp.status != 200) return; // perfil fechado: fica o que já sabemos
+                if (resp.status == 200) g.onProfile(fp.user, fp.guild, resp.body.items);
+                // A nota (404 = não tem). Só a nossa, ninguém mais vê.
+                if (fp.user == g.me) return;
+                const npath = std.fmt.bufPrint(&path_buf, "/users/@me/notes/{d}", .{fp.user}) catch return;
+                var nresp = g.request("GET", npath, null) orelse return;
+                defer nresp.body.deinit(alloc);
+                if (nresp.status != 200) return;
                 var arena = std.heap.ArenaAllocator.init(alloc);
                 defer arena.deinit();
-                const v = std.json.parseFromSliceLeaky(Value, arena.allocator(), resp.body.items, .{}) catch return;
-                const u = j.get(v, "user") orelse return;
-                const up = j.get(v, "user_profile");
-                g.upsert(u);
-                const bio = (if (up) |p| j.str(j.get(p, "bio")) else null) orelse j.str(j.get(u, "bio")) orelse "";
-                g.emit(.{ .profile = .{ .user = fp.user, .profile = .{
-                    .banner = dupeOpt(j.str(j.get(u, "banner")) orelse "") catch "",
-                    .accent = @intCast(std.math.clamp(j.int(j.get(u, "accent_color")) orelse 0, 0, 0xffffff)),
-                    .bio = dupeOpt(bio) catch "",
-                    .pronouns = dupeOpt((if (up) |p| j.str(j.get(p, "pronouns")) else null) orelse "") catch "",
-                } } });
+                const nv = std.json.parseFromSliceLeaky(Value, arena.allocator(), nresp.body.items, .{}) catch return;
+                g.emit(.{ .note = .{ .user = fp.user, .text = dupeOpt(j.str(j.get(nv, "note")) orelse "") catch return } });
+            },
+            .set_note => |n| {
+                const path = std.fmt.bufPrint(&path_buf, "/users/@me/notes/{d}", .{n.user}) catch return;
+                var out: std.ArrayList(u8) = .empty;
+                defer out.deinit(alloc);
+                out.print(alloc, "{{\"note\":{f}}}", .{std.json.fmt(n.text, .{})}) catch return;
+                var resp = g.request("PUT", path, out.items) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status >= 300) g.noticeHttp(i18n.tr("não deu para salvar a nota", "couldn't save the note"), &resp);
+            },
+            .move_member => |mm| {
+                const path = std.fmt.bufPrint(&path_buf, "/guilds/{d}/members/{d}", .{ mm.guild, mm.user }) catch return;
+                var b: [64]u8 = undefined;
+                const body = if (mm.channel) |ch| std.fmt.bufPrint(&b, "{{\"channel_id\":\"{d}\"}}", .{ch}) catch return else "{\"channel_id\":null}";
+                var resp = g.request("PATCH", path, body) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status >= 300) g.noticeHttp(i18n.tr("não deu para mover da call", "couldn't move the member"), &resp);
+            },
+            .fetch_app => |app| {
+                const path = std.fmt.bufPrint(&path_buf, "/applications/{d}/rpc", .{app}) catch return;
+                var resp = g.request("GET", path, null) orelse return;
+                defer resp.body.deinit(alloc);
+                var icon: []const u8 = "";
+                if (resp.status == 200) {
+                    var arena = std.heap.ArenaAllocator.init(alloc);
+                    defer arena.deinit();
+                    if (std.json.parseFromSliceLeaky(Value, arena.allocator(), resp.body.items, .{})) |v| {
+                        icon = dupeOpt(j.str(j.get(v, "icon")) orelse "") catch "";
+                    } else |_| {}
+                }
+                // Vazio também: não pergunta de novo.
+                g.emit(.{ .app_icon = .{ .app = app, .icon = icon } });
             },
             .set_status => |st| {
                 g.status = st;
