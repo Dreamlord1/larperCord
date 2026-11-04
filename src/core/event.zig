@@ -18,6 +18,8 @@ pub const Ready = struct {
     /// Da nossa conta: @usuário e e-mail (alocados; null = não veio).
     username: ?[]const u8 = null,
     email: ?[]const u8 = null,
+    /// `premium_type` da conta: 0 = sem Nitro.
+    premium_type: u8 = 0,
 };
 
 pub const Event = union(enum) {
@@ -82,6 +84,11 @@ pub const Event = union(enum) {
     /// Alguém começou/parou de falar na call (o anel verde).
     voice_speaking: struct { user: Id, speaking: bool },
     latency: u32,
+    /// Os emojis de um servidor, todos de uma vez (READY, GUILD_CREATE,
+    /// GUILD_EMOJIS_UPDATE). O Store assume a lista e os nomes.
+    guild_emojis: struct { guild: Id, emojis: []types.Emoji },
+    /// Nossa assinatura mudou (USER_UPDATE).
+    premium: u8,
     /// Cargos de um servidor (nomes alocados), para os grupos da lista de membros.
     roles: struct { guild: Id, roles: []types.Role },
     /// GUILD_MEMBER_LIST_UPDATE: a lista de membros do servidor como o

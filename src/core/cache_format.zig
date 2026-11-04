@@ -19,7 +19,9 @@ const std = @import("std");
 const types = @import("types.zig");
 const Id = types.Id;
 
-pub const magic = "LCM1";
+/// LCM2: texto do Discord (`raw`) e emoji personalizado nas reações. Um arquivo
+/// antigo é só ignorado (a conversa vem da rede e ele é regravado).
+pub const magic = "LCM2";
 
 /// Tetos da leitura (bem acima do que o Discord manda).
 const max_str: u32 = 1 << 20;
@@ -87,6 +89,7 @@ pub const Writer = struct {
         try w.out.append(w.gpa, if (m.edited) msg_edited else 0);
         try w.out.append(w.gpa, @intFromEnum(m.system));
         try w.str(m.content);
+        try w.str(m.raw);
         const atts = m.attachments[0..@min(m.attachments.len, 255)];
         try w.out.append(w.gpa, @intCast(atts.len));
         for (atts) |a| {
@@ -109,7 +112,8 @@ pub const Writer = struct {
             try w.out.append(w.gpa, r.len);
             try w.out.appendSlice(w.gpa, r.text());
             try w.int(u16, r.count);
-            try w.out.append(w.gpa, @intFromBool(r.me));
+            try w.out.append(w.gpa, @as(u8, @intFromBool(r.me)) | (@as(u8, @intFromBool(r.animated)) << 1));
+            try w.int(u64, r.custom);
         }
     }
 };
@@ -172,6 +176,7 @@ pub fn decode(arena: std.mem.Allocator, bytes: []const u8) !Decoded {
         const sys = try r.byte();
         m.system = if (sys <= @intFromEnum(types.SystemKind.other)) @enumFromInt(sys) else .other;
         m.content = try r.str(arena);
+        m.raw = try r.str(arena);
         const n_att = try r.byte();
         if (n_att > 0) {
             const atts = try arena.alloc(types.Attachment, n_att);
@@ -193,10 +198,13 @@ pub fn decode(arena: std.mem.Allocator, bytes: []const u8) !Decoded {
         if (n_r > 8) return error.Corrupt;
         for (0..n_r) |k| {
             const len = try r.byte();
-            if (len > 15) return error.Corrupt;
+            if (len > @sizeOf(@FieldType(types.Reaction, "emoji"))) return error.Corrupt;
             var re = types.Reaction.init(try r.need(len));
             re.count = try r.int(u16);
-            re.me = (try r.byte()) != 0;
+            const rf = try r.byte();
+            re.me = rf & 1 != 0;
+            re.animated = rf & 2 != 0;
+            re.custom = try r.int(u64);
             e.reactions[k] = re;
         }
         e.n_reactions = n_r;

@@ -22,6 +22,8 @@ const md_preview = @import("md_preview.zig");
 const vim = @import("vim.zig");
 const popup = @import("popup.zig");
 const mosaic = @import("mosaic.zig");
+const autocomplete = @import("autocomplete.zig");
+const emoji_img = @import("emoji_img.zig");
 const sigil = @import("comp_chat.zig").sigil;
 const threads = @import("comp_threads.zig");
 const forum = @import("forum.zig");
@@ -394,7 +396,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         }
     }
     // Com as configurações (ou um popup) por cima, a roda rola elas, não a conversa.
-    const hovered = ctx.hovering(r) and ctx.st.popup == .none and !st.settings.open;
+    const hovered = ctx.hovering(r) and ctx.st.popup == .none and !st.settings.open and !autocomplete.over(ctx);
     if (sc.pos < 0 or sc.stick_bottom) {
         sc.target = max_scroll;
         if (sc.pos < 0) sc.pos = max_scroll;
@@ -853,13 +855,16 @@ fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x:
     }
 }
 
-fn isCustom(rc: *const types.Reaction) bool {
-    const t = rc.text();
-    return t.len > 2 and t[0] == ':' and t[t.len - 1] == ':';
+/// `:nome:` de uma reação personalizada (modo economia, dica do mouse).
+fn colonName(buf: []u8, rc: *const types.Reaction) []const u8 {
+    return std.fmt.bufPrint(buf, ":{s}:", .{rc.text()}) catch rc.text();
 }
 
 fn emojiW(ctx: *d.Ctx, rc: *const types.Reaction) f32 {
-    return if (isCustom(rc)) d.width(ctx.ui.get(.medium), 12, rc.text()) else 16;
+    if (rc.custom == 0) return 16;
+    if (emoji_img.enabled(ctx)) return 18;
+    var nb: [40]u8 = undefined;
+    return d.width(ctx.ui.get(.medium), 12, colonName(&nb, rc));
 }
 
 fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, show_add: bool, right_to_left: bool, right: f32) void {
@@ -878,17 +883,32 @@ fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, 
         const cnt = std.fmt.bufPrint(&buf, "{d}", .{rc.count}) catch "";
         const cr: d.Rect = .{ .x = xx, .y = y + 3, .w = widths[i], .h = 24 };
         const hb = d.hit(ctx, @truncate((m.msg.id *% 31) +% i), cr);
-        qa.mark(cr, "chip:{d}:{d}", .{m.msg.id, i});
+        // Só o que dá para clicar: atrás do cabeçalho ou da caixa, o clique seria deles.
+        if (qa.enabled) {
+            const lo = c.ImDrawList_GetClipRectMin(dl);
+            const hi = c.ImDrawList_GetClipRectMax(dl);
+            if (cr.y + cr.h / 2 > lo.y and cr.y + cr.h / 2 < hi.y) qa.mark(cr, "chip:{d}:{d}", .{ m.msg.id, i });
+        }
         if (hb.clicked) ctx.act(.{ .react = .{ .id = m.msg.id, .emoji = rc.* } });
         if (hb.right) ctx.popup(.{ .menu = .{ .kind = .message, .id = m.msg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         const bg = if (rc.me) ctx.col(.accent).alpha(0.2) else ctx.col(.elevated);
         const cr_r = @min(8, ctx.th.radius + 2);
         d.rect(dl, cr, if (hb.hovered) bg.mix(ctx.col(.text), 0.06) else bg, cr_r);
         if (rc.me or hb.hovered) d.border(dl, cr, if (rc.me) ctx.col(.accent) else ctx.col(.border).mix(ctx.col(.text), 0.1), cr_r, 1);
-        // Emoji personalizado (ainda sem imagem) aparece como :nome:, menor.
-        if (isCustom(rc)) {
-            d.text(dl, fam.get(.medium), 12, cr.x + 6, d.centerY(cr, 12), ctx.col(.text).mix(ctx.col(.muted), 0.3), rc.text());
-        } else d.text(dl, fam.get(.regular), 15, cr.x + 6, cr.y + 2, d.Rgba.white, rc.text());
+        if (rc.custom != 0) {
+            var nb: [40]u8 = undefined;
+            const shown = colonName(&nb, rc);
+            if (emoji_img.enabled(ctx)) {
+                emoji_img.draw(ctx, dl, rc.custom, rc.animated, .{ .x = cr.x + 6, .y = cr.y + 3, .w = 18, .h = 18 }, 1, hb.hovered, true);
+            } else d.text(dl, fam.get(.medium), 12, cr.x + 6, d.centerY(cr, 12), ctx.col(.text).mix(ctx.col(.muted), 0.3), shown);
+            d.tip(ctx, cr, shown, hb.hovered);
+        } else {
+            // Sequência (família, bandeira): cada pedaço é um desenho; cabe no lugar.
+            const pick = @import("emoji_picker.zig");
+            const g = pick.drawable(rc.text());
+            const es = pick.fitSize(fam.get(.regular), g.slice(), 15, 18);
+            d.text(dl, fam.get(.regular), es, cr.x + 6, cr.y + 12 - es * 0.67, d.Rgba.white, g.slice());
+        }
         d.text(dl, fam.get(.semibold), 13, cr.x + 12 + emojiW(ctx, rc), d.centerY(cr, 13), if (rc.me) ctx.col(.accent).mix(ctx.col(.text), 0.3) else ctx.col(.muted), cnt);
         xx += cr.w + 4;
     }
@@ -1248,7 +1268,16 @@ fn inputCallback(data: [*c]c.ImGuiInputTextCallbackData) callconv(.c) c_int {
         st.input_sync = false;
         c.ImGuiInputTextCallbackData_DeleteChars(data, 0, data.*.BufTextLen);
         c.ImGuiInputTextCallbackData_InsertChars(data, 0, &st.input, null);
+        // O autocompletar pediu o cursor logo depois do que entrou.
+        if (autocomplete.pending_cursor) |p| {
+            autocomplete.pending_cursor = null;
+            const at: c_int = @intCast(@min(p, @as(usize, @intCast(data.*.BufTextLen))));
+            data.*.CursorPos = at;
+            data.*.SelectionStart = at;
+            data.*.SelectionEnd = at;
+        }
     }
+    autocomplete.cursor = @intCast(@max(data.*.CursorPos, 0));
     return 0;
 }
 
@@ -1436,6 +1465,11 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     if (keep) st.input = kept;
     vim.composer_active = active;
     c.ImGui_PopFont();
+    // A lista fica acima de tudo que está preso na caixa.
+    {
+        const inset: f32 = if (pill) 18 else 0;
+        autocomplete.update(ctx, ch_id, active, .{ .x = r.x + inset, .y = top - tray_h, .w = r.w - inset * 2, .h = 0 });
+    }
     // Ctrl+V com imagem copiada (print, imagem do navegador): vira anexo.
     if (active and ctx.io.*.KeyCtrl and c.ImGui_IsKeyPressed(c.ImGuiKey_V) and c.SDL_HasClipboardData("image/png") and !c.SDL_HasClipboardText())
         ctx.act(.paste_image);

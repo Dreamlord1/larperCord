@@ -1,5 +1,6 @@
 //! Layout e desenho dos trechos de uma mensagem (já interpretados pelo
-//! `core/markdown`). Quebra por palavra; código, menções e links não quebram.
+//! `core/markdown`). Quebra por palavra; código, menções, links e emoji
+//! personalizado não quebram.
 const std = @import("std");
 const c = @import("c");
 const md = @import("../core/markdown.zig");
@@ -8,6 +9,19 @@ const d = @import("draw.zig");
 const i18n = @import("i18n.zig");
 const qa = @import("qa.zig");
 const syntax = @import("syntax.zig");
+const emoji_img = @import("emoji_img.zig");
+
+/// Contexto do quadro (o app marca): é ele que dá acesso às imagens dos emojis,
+/// em qualquer lugar onde tenha texto (mensagem, embed, bio).
+pub var frame_ctx: ?*d.Ctx = null;
+/// Emoji personalizado vira imagem? No modo economia e sem fotos é o texto
+/// `:nome:`, sem rede (mudar isto invalida as medidas: `Settings.layoutKey`).
+pub var emoji_images = true;
+
+/// Mensagem só de emoji, como no Discord: imagem de 48 e glifo proporcional.
+const jumbo_box: f32 = 48;
+const jumbo_font: f32 = 40;
+const jumbo_line: f32 = 52;
 
 pub const Opts = struct {
     family: *d.Family,
@@ -27,6 +41,8 @@ pub const Opts = struct {
     ctx: ?*d.Ctx = null,
     /// Mensagem dona do texto (só para a marcação do QA).
     msg_id: u64 = 0,
+    /// Lado do quadrado do emoji personalizado (o `layout` calcula).
+    emoji_box: f32 = 0,
 };
 
 /// Pergunta "qual byte do texto está sob este ponto?".
@@ -78,7 +94,7 @@ const Words = struct {
                 it.pos = nl + 1;
                 return it.take(.{ .text = s[start..nl], .span = sp, .space_after = false });
             }
-            if (sp.flags.code or sp.flags.link or sp.mention != .none) {
+            if (sp.flags.code or sp.flags.link or sp.mention != .none or sp.emoji != 0) {
                 if (it.pos > 0) {
                     it.si += 1;
                     it.pos = 0;
@@ -116,6 +132,7 @@ fn fontFor(o: Opts, sp: *const md.Span) *c.ImFont {
 }
 
 fn label(store: *const Store, sp: *const md.Span, buf: []u8) []const u8 {
+    if (sp.emoji != 0) return std.fmt.bufPrint(buf, ":{s}:", .{sp.emojiName()}) catch sp.text;
     return switch (sp.mention) {
         .none => sp.text,
         .user => |id| std.fmt.bufPrint(buf, "@{s}", .{if (store.user(id)) |u| u.name else i18n.tr("desconhecido", "unknown-user")}) catch sp.text,
@@ -135,7 +152,14 @@ fn wordWidth(font: *c.ImFont, size: f32, s: []const u8, wrap: f32) f32 {
 }
 
 /// Mede (dl = null) ou desenha o texto. Retorna altura e maior largura de linha.
-pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: []const md.Span, x0: f32, y0: f32, wrap: f32, o: Opts, mouse: c.ImVec2) Measure {
+pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: []const md.Span, x0: f32, y0: f32, wrap: f32, o_in: Opts, mouse: c.ImVec2) Measure {
+    var o = o_in;
+    o.emoji_box = o.line_h;
+    if (spans.len > 0 and spans[0].flags.jumbo and jumboShown(spans)) {
+        o.size = jumbo_font;
+        o.line_h = jumbo_line;
+        o.emoji_box = jumbo_box;
+    }
     const space_w = d.width(o.family.get(.regular), o.size, " ");
     var x: f32 = 0;
     var y: f32 = 0;
@@ -157,11 +181,12 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
                 copy = null;
             };
             const font = fontFor(o, sp);
-            var s = if (sp.mention != .none) label(store, sp, &buf) else word.text;
+            const as_image = sp.emoji != 0 and emoji_images;
+            var s = if (sp.mention != .none or sp.emoji != 0) label(store, sp, &buf) else word.text;
             const size = if (sp.flags.code) o.size - 1.5 else o.size;
             const pad: f32 = if (sp.flags.code) 5 else if (sp.mention != .none) 3 else 0;
             // Linha do bloco de código ocupa a largura toda (cortada se passar).
-            var w = if (sp.flags.block) wrap else wordWidth(font, size, s, wrap) + pad * 2;
+            var w = if (sp.flags.block) wrap else if (as_image) o.emoji_box + 2 else wordWidth(font, size, s, wrap) + pad * 2;
             if (word.breaks > 0 and !(x == 0 and y == 0 and line_start)) {
                 // Uma linha nova por \n (linhas em branco contam, até 3).
                 x = 0;
@@ -173,7 +198,7 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
                 line_start = true;
             }
             var rest: []const u8 = "";
-            if (w > wrap and !sp.flags.block and sp.mention == .none and word.text.len > 1) {
+            if (w > wrap and !sp.flags.block and sp.mention == .none and sp.emoji == 0 and word.text.len > 1) {
                 var fit = d.fitBytes(font, size, word.text, wrap - pad * 2);
                 // Nem um caractere cabe (coluna estreitíssima): anda um assim mesmo.
                 if (fit == 0) fit = @min(std.unicode.utf8ByteSequenceLength(word.text[0]) catch 1, word.text.len);
@@ -210,6 +235,13 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
     return .{ .h = y + o.line_h, .w = max_w, .last_x = x };
 }
 
+/// Só emoji, mas personalizado sem imagem vira texto: aí não fica grande.
+fn jumboShown(spans: []const md.Span) bool {
+    if (emoji_images) return true;
+    for (spans) |sp| if (sp.emoji != 0) return false;
+    return true;
+}
+
 /// Byte do texto dentro da palavra que fica na coordenada `px`.
 fn offsetAt(font: *c.ImFont, size: f32, t: []const u8, px: f32) u32 {
     var i: usize = 0;
@@ -226,7 +258,7 @@ fn offsetAt(font: *c.ImFont, size: f32, t: []const u8, px: f32) u32 {
 fn select(dl: *c.ImDrawList, th: anytype, base: [*]const u8, word: Word, sp: *const md.Span, font: *c.ImFont, size: f32, pad: f32, x: f32, y: f32, w: f32, space_w: f32, o: Opts, line_start: bool) void {
     const start: u32 = @intCast(@intFromPtr(word.text.ptr) - @intFromPtr(base));
     const end: u32 = start + @as(u32, @intCast(word.text.len));
-    const atomic = sp.mention != .none;
+    const atomic = sp.mention != .none or sp.emoji != 0;
     if (o.sel_from < o.sel_to and start < o.sel_to and end > o.sel_from) {
         var hx0 = x;
         var hx1 = x + w;
@@ -252,6 +284,7 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
         d.rect(dl, r.inset(-1, 0), th.c(.code_bg).mix(th.c(.text), 0.08), 4);
         return;
     }
+    if (sp.emoji != 0 and emoji_images) return drawEmoji(dl, sp, x, y, o, mouse);
     if (sp.flags.block) {
         // Linha fora da área visível (bloco comprido, rolado): não desenha.
         // Acima dela o realce ainda anda (um comentário aberto continua na
@@ -346,6 +379,24 @@ fn mentionClick(ctx: *d.Ctx, sp: *const md.Span, r: d.Rect, mouse: c.ImVec2) voi
             } else ctx.popup(.{ .menu = .{ .kind = .channel, .id = id, .x = mouse.x, .y = mouse.y } });
         },
         else => {},
+    }
+}
+
+/// Emoji personalizado: a imagem num quadrado fixo (mede e desenha igual, com
+/// ou sem a imagem carregada). Fora da área visível nem pede ao cache.
+fn drawEmoji(dl: *c.ImDrawList, sp: *const md.Span, x: f32, y: f32, o: Opts, mouse: c.ImVec2) void {
+    const ctx = frame_ctx orelse return;
+    const box = o.emoji_box;
+    const r: d.Rect = .{ .x = x + 1, .y = y + (o.line_h - box) / 2, .w = box, .h = box };
+    const clip_lo = c.ImDrawList_GetClipRectMin(dl);
+    const clip_hi = c.ImDrawList_GetClipRectMax(dl);
+    if (r.y >= clip_hi.y or r.bottom() <= clip_lo.y) return;
+    qa.mark(r, "emoji-inline:{d}", .{sp.emoji});
+    const over = r.contains(mouse.x, mouse.y) and c.ImGui_IsWindowHovered(c.ImGuiHoveredFlags_RootAndChildWindows);
+    emoji_img.draw(ctx, dl, sp.emoji, sp.emoji_anim, r, o.color.a, over, true);
+    if (over) {
+        var nb: [72]u8 = undefined;
+        d.tip(ctx, r, std.fmt.bufPrint(&nb, ":{s}:", .{sp.emojiName()}) catch "", true);
     }
 }
 

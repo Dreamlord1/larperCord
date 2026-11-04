@@ -83,6 +83,8 @@ pub const Settings = struct {
     /// de fora passa por ele, ou tudo com `proxy_all` (net/proxy.zig).
     proxy: Text = .{},
     proxy_all: bool = false,
+    /// Emojis usados há pouco, do mais novo para o mais velho (ui/emoji_picker.zig).
+    emoji_recent: Text = .{},
     /// Últimas mensagens de cada canal em disco (abrir na hora, busca offline).
     message_cache: bool = true,
 
@@ -112,6 +114,8 @@ pub const Settings = struct {
         h = h *% 31 +% @intFromBool(s.compact);
         h = h *% 31 +% @intFromBool(s.show_avatars);
         h = h *% 31 +% @intFromBool(s.show_embeds);
+        // No modo economia, emoji personalizado vira `:nome:` (ui/rich.zig).
+        h = h *% 31 +% @intFromBool(s.data_saver);
         return h;
     }
 };
@@ -222,6 +226,7 @@ test "configurações vão e voltam pelo KDL" {
     s.font_scale = 1.2;
     s.language = 2;
     s.proxy.set("socks5h://127.0.0.1:9050");
+    s.emoji_recent.set("😀 ❤️ pepe:12");
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.testing.allocator);
     try write(&s, "vidro", &out, std.testing.allocator);
@@ -235,6 +240,7 @@ test "configurações vão e voltam pelo KDL" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.2), back.font_scale, 0.001);
     try std.testing.expectEqual(@as(u8, 2), back.language);
     try std.testing.expectEqualStrings("socks5h://127.0.0.1:9050", back.proxy.slice());
+    try std.testing.expectEqualStrings("😀 ❤️ pepe:12", back.emoji_recent.slice());
     try std.testing.expectEqualStrings("vidro", nodes[0].str("theme").?);
 }
 

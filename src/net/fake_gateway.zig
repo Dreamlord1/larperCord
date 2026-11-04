@@ -9,6 +9,7 @@ const ev = @import("../core/event.zig");
 const Queue = @import("queue.zig").Queue;
 const i18n = @import("../ui/i18n.zig");
 const leitura = @import("../core/leitura.zig");
+const jsonx = @import("jsonx.zig");
 const Id = types.Id;
 
 const alloc = std.heap.c_allocator;
@@ -107,6 +108,7 @@ pub const Gateway = struct {
         try g.demoActivities();
         g.emit(.{ .guild_folders = try demoFolders() });
         try g.demoThreads();
+        try g.demoEmojis();
         g.emit(.{ .status = .ready });
         g.next_live_ms = nowMs() + 6000;
         if (c.SDL_getenv("LARPER_FLOOD")) |f| {
@@ -128,18 +130,29 @@ pub const Gateway = struct {
                     // mantém os anexos dela na confirmação).
                     for (m.files) |f| alloc.free(f);
                     if (m.files.len > 0) alloc.free(m.files);
+                    // Como o gateway de verdade: emoji personalizado aparece
+                    // como `:nome:` e o texto original fica em `raw`.
+                    const shown = try jsonx.simplifyContent(alloc, m.content);
+                    var raw: []const u8 = "";
+                    if (shown.len != m.content.len) raw = m.content else alloc.free(m.content);
                     // O "servidor" confirma depois de um RTT simulado.
                     try g.nonce_replies.append(alloc, .{ .at_ms = nowMs() + 90, .msg = .{
                         .id = types.makeSnowflake(nowMs(), g.rng.random().int(u22)),
                         .channel = m.channel,
                         .author = me_id,
                         .timestamp = @divTrunc(nowMs(), 1000),
-                        .content = m.content,
+                        .content = shown,
+                        .raw = raw,
                         .nonce = m.nonce,
                         .reply_to = m.reply_to,
                     } });
                 },
-                .edit_message => |m| g.emit(.{ .message_update = .{ .channel = m.channel, .id = m.id, .content = m.content } }),
+                .edit_message => |m| {
+                    const shown = try jsonx.simplifyContent(alloc, m.content);
+                    var raw: ?[]const u8 = null;
+                    if (shown.len != m.content.len) raw = m.content else alloc.free(m.content);
+                    g.emit(.{ .message_update = .{ .channel = m.channel, .id = m.id, .content = shown, .raw = raw } });
+                },
                 .delete_message => |m| g.emit(.{ .message_delete = .{ .channel = m.channel, .id = m.id } }),
                 .react => |r| g.emit(.{ .reaction = .{ .channel = r.channel, .id = r.id, .emoji = r.emoji, .user = me_id, .add = r.add } }),
                 .fetch_history => |ch| {
@@ -428,6 +441,23 @@ pub const Gateway = struct {
 
     /// Lista de membros de um servidor da demonstração, no formato do
     /// GUILD_MEMBER_LIST_UPDATE: online por cargo em destaque, depois offline.
+    fn demoEmojis(g: *Gateway) !void {
+        for (0..guilds.len) |gi| {
+            var n: usize = 0;
+            for (demo_emojis) |e| {
+                if (e.guild == gi) n += 1;
+            }
+            if (n == 0) continue;
+            const list = try alloc.alloc(types.Emoji, n);
+            n = 0;
+            for (demo_emojis) |e| if (e.guild == gi) {
+                list[n] = .{ .id = e.id, .guild = guildId(gi), .name = try alloc.dupe(u8, e.name), .animated = e.animated, .available = e.available };
+                n += 1;
+            };
+            g.emit(.{ .guild_emojis = .{ .guild = guildId(gi), .emojis = list } });
+        }
+    }
+
     fn memberList(g: *Gateway, gid: Id) !void {
         if (gid < guildId(0)) return;
         const gi: usize = @intCast((gid - guildId(0)) / 1000);
@@ -436,7 +466,7 @@ pub const Gateway = struct {
         if (g.roles_sent & (@as(u64, 1) << @intCast(gi)) == 0) {
             g.roles_sent |= @as(u64, 1) << @intCast(gi);
             const rs = try alloc.alloc(types.Role, demo_roles.len);
-            for (demo_roles, 0..) |r, i| rs[i] = .{ .id = role_ids[i], .guild = gid, .name = try alloc.dupe(u8, pick(r.name, r.name_en)), .color = r.color, .position = @intCast(3 - i) };
+            for (demo_roles, 0..) |r, i| rs[i] = .{ .id = role_ids[i], .guild = gid, .name = try alloc.dupe(u8, pick(r.name, r.name_en)), .color = r.color, .position = @intCast(3 - i), .mentionable = i != 0 };
             g.emit(.{ .roles = .{ .guild = gid, .roles = rs } });
         }
         // Quem está neste servidor e em qual cargo (0 = fundação, 1 = moderação, 2 = membro).
@@ -592,6 +622,12 @@ pub const Gateway = struct {
                     const n = 1 + rr.uintLessThan(usize, 4);
                     for (0..n) |u| g.emit(.{ .reaction = .{ .channel = r.channel, .id = msgs[mi].id, .emoji = types.Reaction.init(emoji), .user = users[1 + (u + mi) % 7].id, .add = true } });
                 }
+                // Reações personalizadas (uma animada) na mensagem com emoji.
+                if (r.channel == emoji_channel) {
+                    const target = msgs[msgs.len - 2].id;
+                    for (0..3) |u| g.emit(.{ .reaction = .{ .channel = r.channel, .id = target, .emoji = types.Reaction.initCustom("larper", demo_emojis[0].id, false), .user = users[1 + u].id, .add = true } });
+                    g.emit(.{ .reaction = .{ .channel = r.channel, .id = target, .emoji = types.Reaction.initCustom("festa", demo_emojis[3].id, true), .user = users[4].id, .add = true } });
+                }
                 _ = g.history_replies.orderedRemove(i);
             } else i += 1;
         }
@@ -662,6 +698,25 @@ fn pick(pt: []const u8, en: ?[]const u8) []const u8 {
 }
 
 const me_id: Id = 1000;
+
+/// Emojis personalizados da demonstração (a imagem sai do carregador:
+/// "demo:emoji:<id>:<animado>"). `guild`: índice do servidor. Sem Nitro na conta
+/// da demonstração: os do segundo servidor e os animados ficam travados.
+pub const demo_emojis = [_]struct { id: Id, guild: usize, name: []const u8, animated: bool = false, available: bool = true }{
+    .{ .id = 900_101, .guild = 0, .name = "larper" },
+    .{ .id = 900_102, .guild = 0, .name = "pepe_ok" },
+    .{ .id = 900_103, .guild = 0, .name = "ziguana" },
+    .{ .id = 900_104, .guild = 0, .name = "festa", .animated = true },
+    .{ .id = 900_105, .guild = 0, .name = "cafe" },
+    .{ .id = 900_106, .guild = 0, .name = "gato_triste" },
+    .{ .id = 900_201, .guild = 1, .name = "hypr_rice" },
+    .{ .id = 900_202, .guild = 1, .name = "dance", .animated = true },
+    .{ .id = 900_203, .guild = 1, .name = "antigo", .available = false },
+    .{ .id = 900_301, .guild = 2, .name = "comptime" },
+};
+
+/// A conversa com emoji, figurinha e reações personalizadas: #geral do primeiro servidor.
+pub const emoji_channel: Id = 500_005;
 
 const UserSeed = struct { id: Id, name: []const u8, role: u8, status: types.Status, activity: ?[]const u8 = null, activity_en: ?[]const u8 = null, avatar: bool = false };
 
@@ -1240,6 +1295,7 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
     };
     // Duas fixadas dentro do histórico (a antiga fica fora: seedPins).
     for (pinned_backs) |back| msgs[n - back].pinned = true;
+    if (channel == emoji_channel) try demoEmojiMessages(msgs);
     // Imagens (geradas na hora pelo carregador: "demo:N") e um arquivo.
     const pics = [_]struct { back: usize, text: []const u8, url: []const u8, name: []const u8, w: u16, h: u16, text_en: ?[]const u8 = null, name_en: ?[]const u8 = null }{
         .{ .back = 5, .text = "olha o pôr do sol daqui de casa 🌅", .url = "demo:1", .name = "por-do-sol.png", .w = 900, .h = 560, .text_en = "check out the sunset from my place 🌅", .name_en = "sunset.png" },
@@ -1353,6 +1409,41 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         try set(&msgs[n - 6], try i18n.allocPrint(alloc, "vejam <#{d}> e falem com <@1001>; o outro canal: https://ptb.discord.com/channels/{d}/{d}", "check <#{d}> and talk to <@1001>; the other channel: https://ptb.discord.com/channels/{d}/{d}", .{ channelId(0, 4), guildId(0), channelId(0, 5) }));
     }
     return msgs;
+}
+
+/// Emoji personalizado no meio do texto, mensagens só de emoji (grandes) e
+/// figurinhas. Passa pelo mesmo caminho do gateway de verdade.
+fn demoEmojiMessages(msgs: []types.Message) !void {
+    const n = msgs.len;
+    const texts = [_]struct { back: usize, raw: []const u8, raw_en: []const u8 }{
+        .{ .back = 2, .raw = "ficou muito bom <:larper:900101> o tema novo <:pepe_ok:900102>", .raw_en = "the new theme looks so good <:larper:900101> <:pepe_ok:900102>" },
+        .{ .back = 4, .raw = "<:ziguana:900103> <a:festa:900104>", .raw_en = "<:ziguana:900103> <a:festa:900104>" },
+        .{ .back = 6, .raw = "🔥🔥😂", .raw_en = "🔥🔥😂" },
+    };
+    for (texts) |t| {
+        const m = &msgs[n - t.back];
+        alloc.free(m.content);
+        const raw = pick(t.raw, t.raw_en);
+        m.content = try jsonx.simplifyContent(alloc, raw);
+        m.raw = if (m.content.len != raw.len) try alloc.dupe(u8, raw) else "";
+        m.reply_to = 0;
+    }
+    // Figurinhas: uma imagem e uma animada; a de Lottie só tem o nome.
+    {
+        const m = &msgs[n - 7];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, "");
+        m.reply_to = 0;
+        const list = try alloc.alloc(types.Attachment, 1);
+        list[0] = .{ .url = try alloc.dupe(u8, "demo:sticker:900401:1"), .filename = try alloc.dupe(u8, pick("bom dia", "good morning")), .width = 160, .height = 160 };
+        m.attachments = list;
+    }
+    {
+        const m = &msgs[n - 8];
+        alloc.free(m.content);
+        m.content = try i18n.allocPrint(alloc, "[figurinha: {s}]", "[sticker: {s}]", .{"wumpus"});
+        m.reply_to = 0;
+    }
 }
 
 const phrases = [_][]const u8{

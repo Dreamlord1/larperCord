@@ -21,57 +21,6 @@ const guild_color = @import("guild_color.zig");
 const accounts_menu = @import("accounts_menu.zig");
 const forum = @import("forum.zig");
 
-pub const emojis = [_][]const u8{
-    "😂",
-    "😭",
-    "💀",
-    "🔥",
-    "❤️",
-    "👍",
-    "👎",
-    "👀",
-    "🎉",
-    "😍",
-    "🙏",
-    "😎",
-    "🤔",
-    "😅",
-    "🥲",
-    "😤",
-    "😴",
-    "🤯",
-    "🫠",
-    "🥺",
-    "😈",
-    "🤡",
-    "👻",
-    "🐧",
-    "☕",
-    "🍕",
-    "🎮",
-    "💻",
-    "⚡",
-    "✨",
-    "🌸",
-    "🌙",
-    "🚀",
-    "🦀",
-    "🦎",
-    "🐸",
-    "✅",
-    "❌",
-    "⭐",
-    "💯",
-    "📌",
-    "🔔",
-    "🎵",
-    "📷",
-    "🧠",
-    "💤",
-    "🫡",
-    "🤝",
-};
-
 const quick = [_][]const u8{ "👍", "😂", "😭", "🔥" };
 
 
@@ -200,7 +149,7 @@ pub fn draw(ctx: *d.Ctx) void {
         .menu => |m| menu(ctx, m.kind, m.id, m.x, m.y),
         .profile => |p| profile.card(ctx, p.user, p.x, p.y),
         .profile_full => |p| profile.full(ctx, p.user),
-        .emoji => |e| emojiPicker(ctx, e.target, e.x, e.y),
+        .emoji => |e| @import("emoji_picker.zig").draw(ctx, e.target, e.x, e.y),
         .mixer => |m| mixer(ctx, m.x, m.y),
         .inbox => |ib| @import("inbox.zig").draw(ctx, ib.tab),
         .saved => saved_ui.draw(ctx),
@@ -525,6 +474,11 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         20 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y } },
         21 => if (ctx.store.user(id)) |u| {
             insertText(st, u.name, true);
+            // Com o ID guardado, dois "Ana" no servidor não se confundem.
+            var sb: [136]u8 = undefined;
+            var rb: [32]u8 = undefined;
+            const auto = @import("autocomplete.zig");
+            auto.addToken(std.fmt.bufPrint(&sb, "@{s}", .{u.name}) catch "", std.fmt.bufPrint(&rb, "<@{d}>", .{id}) catch "");
         },
         22 => ctx.act(.{ .open_dm = id }),
         24 => if (ctx.store.user(id)) |u| copyFmt(ctx, "{s}", .{u.name}),
@@ -603,42 +557,6 @@ pub fn selectionText(ctx: *d.Ctx) ?[]u8 {
         if (to > from) out.appendSlice(ctx.st.gpa, s[from..to]) catch {};
     }
     return out.toOwnedSlice(ctx.st.gpa) catch null;
-}
-
-// --- Emoji ------------------------------------------------------------------
-
-fn emojiPicker(ctx: *d.Ctx, target: Id, x: f32, y: f32) void {
-    const cols: usize = 8;
-    const cell: f32 = 40;
-    const rows = (emojis.len + cols - 1) / cols;
-    const wd = @as(f32, @floatFromInt(cols)) * cell + 20;
-    const h = @as(f32, @floatFromInt(rows)) * cell + 52;
-    const r = fit(ctx, x - wd + 40, y - h - 8, wd, h);
-    const dl = beginWindow("##emoji", r);
-    defer c.ImGui_End();
-    ctx.dl = dl;
-    const radius = @max(ctx.th.radius + 2, 6);
-    d.shadow(dl, r, radius, 16, ctx.col(.shadow));
-    d.rect(dl, r, ctx.col(.overlay), radius);
-    d.border(dl, r, ctx.col(.border), radius, 1);
-    d.text(dl, ctx.ui.get(.bold), 12, r.x + 14, r.y + 12, ctx.col(.muted), if (target == 0) i18n.tr("EMOJIS", "EMOJI") else i18n.tr("REAGIR", "REACT"));
-    for (emojis, 0..) |e, i| {
-        const cx = r.x + 10 + @as(f32, @floatFromInt(i % cols)) * cell;
-        const cy = r.y + 38 + @as(f32, @floatFromInt(i / cols)) * cell;
-        const er: d.Rect = .{ .x = cx, .y = cy, .w = cell, .h = cell };
-        const hb = d.hit(ctx, i, er);
-        qa.mark(er, "emoji:{d}", .{i});
-        const k = anim.to(anim.id("emo", i), if (hb.hovered) 1 else 0, 30);
-        if (k > 0.01) d.rect(dl, er.inset(2, 2), ctx.col(.hover).mix(ctx.col(.text), 0.05).alpha(k), 6);
-        const es = 24 + 4 * k;
-        d.text(dl, ctx.ui.get(.regular), es, cx + cell / 2 - es / 2, cy + cell / 2 - es * 0.6, d.Rgba.white, e);
-        if (hb.clicked) {
-            if (target == 0) {
-                insertText(ctx.st, e, false);
-            } else ctx.act(.{ .react = .{ .id = target, .emoji = types.Reaction.init(e) } });
-            return close(ctx);
-        }
-    }
 }
 
 // --- Mixer da call ----------------------------------------------------------

@@ -698,6 +698,7 @@ pub const Gateway = struct {
             g.role_info.put(alloc, rid, .{ .color = color, .pos = pos }) catch {};
             const perms = std.fmt.parseInt(u64, j.str(j.get(rv, "permissions")) orelse "0", 10) catch 0;
             const managed = if (j.get(rv, "managed")) |mv| mv == .bool and mv.bool else false;
+            const mentionable = if (j.get(rv, "mentionable")) |mv| mv == .bool and mv.bool else false;
             out.append(alloc, .{
                 .id = rid,
                 .guild = gid,
@@ -706,9 +707,31 @@ pub const Gateway = struct {
                 .position = @intCast(std.math.clamp(pos, -1000, 100000)),
                 .permissions = perms,
                 .managed = managed,
+                .mentionable = mentionable,
             }) catch {};
         }
         g.emit(.{ .roles = .{ .guild = gid, .roles = out.toOwnedSlice(alloc) catch return } });
+    }
+
+    /// Emojis de um servidor (READY, GUILD_CREATE, GUILD_EMOJIS_UPDATE).
+    fn ingestEmojis(g: *Gateway, gid: Id, list: []const Value) void {
+        const out = alloc.alloc(types.Emoji, list.len) catch return;
+        var n: usize = 0;
+        for (list) |em| {
+            const eid = j.id(j.get(em, "id")) orelse continue;
+            out[n] = .{
+                .id = eid,
+                .guild = gid,
+                .name = dupe(j.str(j.get(em, "name")) orelse "?"),
+                .animated = if (j.get(em, "animated")) |a| a == .bool and a.bool else false,
+                .available = if (j.get(em, "available")) |a| a != .bool or a.bool else true,
+            };
+            n += 1;
+        }
+        g.emit(.{ .guild_emojis = .{ .guild = gid, .emojis = if (n > 0) (alloc.realloc(out, n) catch out[0..n]) else blk: {
+            alloc.free(out);
+            break :blk &.{};
+        } } });
     }
 
     /// Cargos de um membro, do mais alto para o mais baixo, e a cor do
@@ -951,6 +974,7 @@ pub const Gateway = struct {
             const name = guildName(d);
             // Reaproveita o merge do GUILD_CREATE para atualizar o nome.
             if (j.get(d, "roles")) |rl| g.ingestRoles(gid, j.array(rl));
+            if (j.get(d, "emojis")) |el| g.ingestEmojis(gid, j.array(el));
             g.emit(.{ .guild_create = .{
                 .guild = .{
                     .id = gid,
@@ -962,6 +986,10 @@ pub const Gateway = struct {
                 .channels = try alloc.alloc(types.Channel, 0),
                 .voice = try alloc.alloc([2]Id, 0),
             } });
+            return;
+        }
+        if (std.mem.eql(u8, t, "GUILD_EMOJIS_UPDATE")) {
+            g.ingestEmojis(j.id(j.get(d, "guild_id")) orelse return, j.array(j.get(d, "emojis")));
             return;
         }
         if (std.mem.eql(u8, t, "CHANNEL_CREATE") or std.mem.eql(u8, t, "CHANNEL_UPDATE")) {
@@ -992,6 +1020,7 @@ pub const Gateway = struct {
         if (std.mem.eql(u8, t, "GUILD_MEMBER_UPDATE") or std.mem.eql(u8, t, "USER_UPDATE")) {
             const u = j.get(d, "user") orelse d;
             const uid = j.id(j.get(u, "id")) orelse return;
+            if (uid == g.me and std.mem.eql(u8, t, "USER_UPDATE")) if (j.int(j.get(u, "premium_type"))) |p| g.emit(.{ .premium = @intCast(std.math.clamp(p, 0, 255)) });
             g.emit(.{ .user_update = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u), .decoration = decorationOf(u) } });
             if (j.id(j.get(d, "guild_id"))) |gid| g.memberColor(gid, uid, d);
             return;
@@ -1176,11 +1205,8 @@ pub const Gateway = struct {
     fn emojiOf(e: Value) types.Reaction {
         const name = j.str(j.get(e, "name")) orelse "?";
         if (j.isNull(j.get(e, "id"))) return types.Reaction.init(name);
-        // Emoji personalizado: mostra o nome enquanto não há imagens.
-        var b: [16]u8 = undefined;
-        var r = types.Reaction.init(std.fmt.bufPrint(&b, ":{s}:", .{name[0..@min(name.len, 12)]}) catch name);
-        r.custom = j.id(j.get(e, "id")) orelse 0;
-        return r;
+        const animated = if (j.get(e, "animated")) |a| a == .bool and a.bool else false;
+        return types.Reaction.initCustom(name, j.id(j.get(e, "id")) orelse 0, animated);
     }
 
     fn upsert(g: *Gateway, u: Value) void {
@@ -1523,6 +1549,7 @@ pub const Gateway = struct {
         }
         g.ingestMembers(d);
         g.ingestRoles(gid, j.array(j.get(d, "roles")));
+        g.ingestEmojis(gid, j.array(j.get(d, "emojis")));
         g.emit(.{ .guild_create = .{
             .guild = .{
                 .id = gid,
@@ -1560,7 +1587,11 @@ pub const Gateway = struct {
         errdefer alloc.free(raw);
         const atts = try attachmentsOf(m);
         errdefer types.freeAttachments(alloc, atts);
+        // Figurinha que vira imagem está nos anexos (`attachmentsOf`); a de
+        // Lottie (animação vetorial) a gente não desenha: fica o nome.
         for (j.array(j.get(m, "sticker_items"))) |s| {
+            var sb: [128]u8 = undefined;
+            if (media_url.stickerUrl(&sb, j.id(j.get(s, "id")) orelse 0, j.int(j.get(s, "format_type")) orelse 0) != null) continue;
             const more = try i18n.allocPrint(alloc, "{s} [figurinha: {s}]", "{s} [sticker: {s}]", .{ content, j.str(j.get(s, "name")) orelse "?" });
             alloc.free(content);
             content = more;
@@ -1668,6 +1699,17 @@ pub const Gateway = struct {
                 .animated = gif,
                 .video = video and image,
                 .link = if (video and image) try alloc.dupe(u8, cdn) else "",
+            });
+        }
+        for (j.array(j.get(m, "sticker_items"))) |s| {
+            if (list.items.len >= 10) break;
+            var sb: [128]u8 = undefined;
+            const url = media_url.stickerUrl(&sb, j.id(j.get(s, "id")) orelse continue, j.int(j.get(s, "format_type")) orelse 0) orelse continue;
+            try list.append(alloc, .{
+                .url = try alloc.dupe(u8, url),
+                .filename = try alloc.dupe(u8, j.str(j.get(s, "name")) orelse i18n.tr("figurinha", "sticker")),
+                .width = 160,
+                .height = 160,
             });
         }
         try embedAttachments(m, &list);
@@ -1905,6 +1947,7 @@ pub const Gateway = struct {
             const name = j.str(j.get(gv, "name")) orelse (if (props) |p| j.str(j.get(p, "name")) else null) orelse i18n.tr("servidor", "server");
             try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv), .owner = ownerOf(gv), .joined_id = read_json.joinedId(gv) });
             g.ingestRoles(gid, j.array(j.get(gv, "roles")));
+            g.ingestEmojis(gid, j.array(j.get(gv, "emojis")));
             try appendChannels(&channels, gid, j.array(j.get(gv, "channels")));
             for (j.array(j.get(gv, "threads"))) |tv| if (try g.channelValue(tv, gid)) |ch| try channels.append(alloc, ch);
             for (j.array(j.get(gv, "voice_states"))) |vs| {
@@ -1969,6 +2012,7 @@ pub const Gateway = struct {
             .voice = try voice.toOwnedSlice(alloc),
             .username = optDupe(j.str(j.get(me, "username"))),
             .email = optDupe(j.str(j.get(me, "email"))),
+            .premium_type = @intCast(std.math.clamp(j.int(j.get(me, "premium_type")) orelse 0, 0, 255)),
         } });
         g.emitReadStates(d);
         for (j.array(j.get(d, "relationships"))) |rv| {
@@ -2633,12 +2677,11 @@ pub const Gateway = struct {
                 if (resp.status >= 300) g.noticeHttp(i18n.tr("não foi possível apagar", "couldn't delete"), &resp);
             },
             .react => |r| {
-                var enc: [64]u8 = undefined;
-                // Personalizado: a API pede `nome:id` (quem vale é o ID).
-                var name_buf: [48]u8 = undefined;
-                const label = std.mem.trim(u8, r.emoji.text(), ":");
-                const emoji = if (r.emoji.custom != 0) std.fmt.bufPrint(&name_buf, "{s}:{d}", .{ label, r.emoji.custom }) catch return else r.emoji.text();
-                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}/reactions/{s}/@me", .{ r.channel, r.id, j.urlEncode(&enc, emoji) }) catch return;
+                // Personalizado: a API pede `nome:id`; o nome só tem letras,
+                // números e _, e os dois-pontos vão como estão.
+                var enc: [128]u8 = undefined;
+                const emoji = j.reactionKey(&enc, r.emoji.text(), r.emoji.custom);
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}/reactions/{s}/@me", .{ r.channel, r.id, emoji }) catch return;
                 var resp = g.request(if (r.add) "PUT" else "DELETE", path, null) orelse return;
                 defer resp.body.deinit(alloc);
                 if (resp.status >= 300 and resp.status != 404) g.noticeHttp(i18n.tr("não foi possível reagir", "couldn't react"), &resp);

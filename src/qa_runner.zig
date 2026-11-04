@@ -8,6 +8,7 @@ const c = @import("c");
 const App = @import("app.zig").App;
 const qa = @import("ui/qa.zig");
 const qa_temas = @import("qa_temas.zig");
+const autocomplete = @import("ui/autocomplete.zig");
 const gw = @import("net/fake_gateway.zig");
 const types = @import("core/types.zig");
 const Id = types.Id;
@@ -639,7 +640,7 @@ fn emojiOpen(app: *App) bool {
     return app.st.popup == .emoji;
 }
 fn emojiInserted(app: *App) bool {
-    return std.mem.indexOf(u8, std.mem.sliceTo(&app.st.input, 0), "😂") != null and app.st.popup == .none;
+    return std.mem.indexOf(u8, std.mem.sliceTo(&app.st.input, 0), "😀") != null and app.st.popup == .none;
 }
 fn inputEmpty(app: *App) bool {
     return std.mem.sliceTo(&app.st.input, 0).len == 0;
@@ -2115,6 +2116,8 @@ const ops = [_]Op{
     expect("/shrug (docs/plugins/shrug.lua) manda o texto com ¯\\_(ツ)_/¯", shrugSent),
     click("composer"),
     .{ .text = "/trava" },
+    // A primeira escolhe na lista do autocompletar; a segunda envia.
+    key(c.ImGuiKey_Enter),
     key(c.ImGuiKey_Enter),
     expect("plugin em laço infinito é parado pelo limite de instruções", travaStopped),
     .{ .key = .{ .key = c.ImGuiKey_Y, .ctrl = true, .shift = true } },
@@ -2280,7 +2283,7 @@ const ops = [_]Op{
     click("guild-color:0"),
     expect("a primeira bolinha tira a cor", guildPlain),
 
-} ++ ops_editor ++ [_]Op{
+} ++ ops_editor ++ @import("qa_emoji.zig").ops ++ [_]Op{
     s("conversa que não carregou"),
     .{ .run = toClassico },
     .{ .wait = 200 },
@@ -2453,6 +2456,9 @@ const ops_nome = [_]Op{
     .{ .click = .{ .dyn = tUserOther } },
     expect("clicar no nome abre o perfil", profileOpen),
 };
+
+/// Só o emoji e o autocompletar (QA_SCENE=emoji), para olhar em outros temas.
+const ops_emoji = [_]Op{expect("pronto", ready)} ++ @import("qa_emoji.zig").ops;
 
 const ops_config = [_]Op{
     expect("pronto", ready),
@@ -2717,6 +2723,7 @@ fn script() []const Op {
     if (std.mem.eql(u8, scene, "ctrl")) return &ops_ctrl;
     if (std.mem.eql(u8, scene, "nome")) return &ops_nome;
     if (std.mem.eql(u8, scene, "config")) return &ops_config;
+    if (std.mem.eql(u8, scene, "emoji")) return &ops_emoji;
     return &ops;
 }
 
@@ -3132,7 +3139,11 @@ pub const Runner = struct {
                         if (k.shift) c.ImGuiIO_AddKeyEvent(app.io, c.ImGuiMod_Shift, true);
                         if (k.alt) c.ImGuiIO_AddKeyEvent(app.io, c.ImGuiMod_Alt, true);
                     },
-                    1 => c.ImGuiIO_AddKeyEvent(app.io, k.key, true),
+                    1 => {
+                        // Como no laço do app: com a lista do autocompletar
+                        // aberta, a tecla é dela e o campo de texto não vê.
+                        if (autocomplete.takeImGuiKey(k.key, k.shift, k.ctrl)) r.sub = 2 else c.ImGuiIO_AddKeyEvent(app.io, k.key, true);
+                    },
                     2 => c.ImGuiIO_AddKeyEvent(app.io, k.key, false),
                     3 => {
                         if (k.ctrl) c.ImGuiIO_AddKeyEvent(app.io, c.ImGuiMod_Ctrl, false);

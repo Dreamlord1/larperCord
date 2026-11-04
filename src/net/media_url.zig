@@ -133,6 +133,34 @@ test "url do proxy pede o tamanho e mantém o WebP" {
     try std.testing.expect(!allowedHost("https://cdn.discordapp.com.evil.com/x"));
 }
 
+/// Imagem de um emoji personalizado. Sem `animated=true` o CDN devolve só o
+/// primeiro quadro do WebP.
+pub fn emojiUrl(buf: []u8, id: u64, animated: bool) []const u8 {
+    return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/emojis/{d}.webp?size=48{s}", .{ id, if (animated) "&animated=true" else "" }) catch "";
+}
+
+/// Imagem de uma figurinha pelo `format_type` do Discord: 1 PNG, 2 APNG, 4 GIF
+/// (que só existe no proxy de mídia). 3 é Lottie, que a gente não desenha: null.
+pub fn stickerUrl(buf: []u8, id: u64, format: i64) ?[]const u8 {
+    return switch (format) {
+        1 => std.fmt.bufPrint(buf, "https://cdn.discordapp.com/stickers/{d}.png?size=160", .{id}) catch null,
+        2 => std.fmt.bufPrint(buf, "https://cdn.discordapp.com/stickers/{d}.png?size=160&passthrough=true", .{id}) catch null,
+        4 => std.fmt.bufPrint(buf, "https://media.discordapp.net/stickers/{d}.gif?size=160", .{id}) catch null,
+        else => null,
+    };
+}
+
+test "urls de emoji e figurinha" {
+    var b: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("https://cdn.discordapp.com/emojis/12.webp?size=48", emojiUrl(&b, 12, false));
+    try std.testing.expectEqualStrings("https://cdn.discordapp.com/emojis/12.webp?size=48&animated=true", emojiUrl(&b, 12, true));
+    try std.testing.expectEqualStrings("https://cdn.discordapp.com/stickers/7.png?size=160", stickerUrl(&b, 7, 1).?);
+    try std.testing.expectEqualStrings("https://cdn.discordapp.com/stickers/7.png?size=160&passthrough=true", stickerUrl(&b, 7, 2).?);
+    try std.testing.expectEqualStrings("https://media.discordapp.net/stickers/7.gif?size=160", stickerUrl(&b, 7, 4).?);
+    try std.testing.expect(stickerUrl(&b, 7, 3) == null);
+    try std.testing.expect(allowedHost(emojiUrl(&b, 12, true)));
+}
+
 /// Só host + caminho, sem a query (que leva assinaturas) — para logs.
 pub fn logPart(url: []const u8) []const u8 {
     const start = if (std.mem.indexOf(u8, url, "://")) |i| i + 3 else 0;
