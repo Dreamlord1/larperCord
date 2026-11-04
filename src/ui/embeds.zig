@@ -11,6 +11,7 @@ const i18n = @import("i18n.zig");
 const types = @import("../core/types.zig");
 const StoredMessage = @import("../core/store.zig").StoredMessage;
 const md = @import("../core/markdown.zig");
+const video = @import("video.zig");
 
 const max_w: f32 = 520;
 const gap: f32 = 6;
@@ -28,9 +29,9 @@ pub fn block(ctx: *d.Ctx, dl: ?*c.ImDrawList, m: *const StoredMessage, x: f32, y
         const spans = m.embed_spans[k..@min(m.embed_spans.len, k + 1 + e.fields.len)];
         k += 1 + e.fields.len;
         const w = @min(avail, max_w);
-        const h = card(ctx, null, e, spans, x, y, w, alpha, 0);
+        const h = card(ctx, null, e, spans, x, y, w, alpha, 0, 0);
         if (dl) |l| {
-            _ = card(ctx, l, e, spans, x, y, w, alpha, h);
+            _ = card(ctx, l, e, spans, x, y, w, alpha, h, m.msg.id);
             qa.mark(.{ .x = x, .y = y, .w = w, .h = h }, "embed:{d}:{d}", .{ m.msg.id, i });
         }
         y += h;
@@ -51,7 +52,7 @@ fn opts(ctx: *const d.Ctx, size: f32) rich.Opts {
 
 /// Um cartão. Medindo (dl = null) devolve a altura; desenhando, `h` é a
 /// altura medida antes (para o fundo ir por baixo do resto).
-fn card(ctx: *d.Ctx, dl: ?*c.ImDrawList, e: *const types.Embed, spans: []const []const md.Span, x: f32, y0: f32, w: f32, alpha: f32, h: f32) f32 {
+fn card(ctx: *d.Ctx, dl: ?*c.ImDrawList, e: *const types.Embed, spans: []const []const md.Span, x: f32, y0: f32, w: f32, alpha: f32, h: f32, msg_id: types.Id) f32 {
     const fam = ctx.ui;
     if (dl) |l| {
         const r: d.Rect = .{ .x = x, .y = y0, .w = w, .h = h };
@@ -109,7 +110,7 @@ fn card(ctx: *d.Ctx, dl: ?*c.ImDrawList, e: *const types.Embed, spans: []const [
         const ih: f32 = @floatFromInt(e.image_h);
         const s = @min(1.0, @min((w - 4 - pad * 2) / iw, 300 / ih));
         const r: d.Rect = .{ .x = ix, .y = y, .w = @max(40, @round(iw * s)), .h = @max(30, @round(ih * s)) };
-        if (dl) |l| image(ctx, l, e, r, alpha);
+        if (dl) |l| image(ctx, l, e, r, alpha, msg_id);
         y += r.h + 4;
     }
     if (e.footer.len > 0) {
@@ -137,15 +138,33 @@ fn card(ctx: *d.Ctx, dl: ?*c.ImDrawList, e: *const types.Embed, spans: []const [
     return y + 10 - y0;
 }
 
-fn image(ctx: *d.Ctx, dl: *c.ImDrawList, e: *const types.Embed, r: d.Rect, alpha: f32) void {
+fn image(ctx: *d.Ctx, dl: *c.ImDrawList, e: *const types.Embed, r: d.Rect, alpha: f32, msg_id: types.Id) void {
     const scale = ctx.io.*.DisplayFramebufferScale.x;
+    // Vídeo de um link direto (pelo proxy do Discord): toca no lugar da imagem.
+    const vkey = video.keyOf(msg_id, 0x100 + std.hash.Wyhash.hash(0, e.video_url));
+    if (e.video_url.len > 0 and video.isActive(vkey)) {
+        const pv = ctx.images.get(e.image, r.w * scale, r.h * scale);
+        video.draw(ctx, dl, r, alpha, msg_id, if (pv == .ready) pv.ready else null);
+        return;
+    }
     const hb = d.hit(ctx, @truncate(@intFromPtr(e) +% 1), r);
-    switch (ctx.images.get(e.image, r.w * scale, r.h * scale)) {
+    const look = ctx.images.get(e.image, r.w * scale, r.h * scale);
+    // Modo economia: o clique baixa a imagem.
+    if (look == .failed and ctx.images.blocked(e.image)) {
+        att.savedPlaceholder(ctx, dl, r, 0, alpha);
+        if (hb.clicked) ctx.images.allow(e.image);
+        return;
+    }
+    switch (look) {
         .ready => |t| c.ImDrawList_AddImageRounded(dl, t.ref, d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(alpha), 6, 0),
         .loading => d.rect(dl, r, ctx.col(.text).alpha(0.05 * alpha), 6),
         .failed => d.rect(dl, r, ctx.col(.text).alpha(0.03 * alpha), 6),
     }
-    if (e.video) {
+    if (e.video and e.video_url.len > 0) {
+        att.playIcon(dl, r.x + r.w / 2, r.y + r.h / 2, alpha);
+        d.tip(ctx, r, if (video.canPlay(e.video_url, 0)) i18n.tr("Tocar o vídeo", "Play video") else i18n.tr("Abrir o vídeo no navegador", "Open video in browser"), hb.hovered);
+        if (hb.clicked) video.click(ctx, vkey, e.video_url, if (e.url.len > 0) e.url else e.video_url, r, 0);
+    } else if (e.video) {
         att.playIcon(dl, r.x + r.w / 2, r.y + r.h / 2, alpha);
         d.tip(ctx, r, i18n.tr("Abrir o vídeo no navegador", "Open video in browser"), hb.hovered);
         if (hb.clicked and e.url.len > 0) att.openUrl(e.url);

@@ -15,6 +15,10 @@ const Id = types.Id;
 const rich = @import("rich.zig");
 const att = @import("attachments.zig");
 const profile = @import("profile.zig");
+const saved_ui = @import("saved.zig");
+const mosaic = @import("mosaic.zig");
+const guild_color = @import("guild_color.zig");
+const accounts_menu = @import("accounts_menu.zig");
 
 pub const emojis = [_][]const u8{
     "😂",
@@ -69,6 +73,7 @@ pub const emojis = [_][]const u8{
 
 const quick = [_][]const u8{ "👍", "😂", "😭", "🔥" };
 
+
 pub fn close(ctx: *d.Ctx) void {
     if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[popup] fechou\n", .{});
     ctx.st.popup = .none;
@@ -90,7 +95,9 @@ fn popupKey(p: state.Popup) u64 {
         .profile => |pr| 2 +% pr.user *% 31,
         .profile_full => |pr| 4 +% pr.user *% 31,
         .emoji => |e| 3 +% e.target *% 31,
-        .mixer => 5,
+        .inbox => 4,
+        .saved => 5,
+        .mixer => 6,
     };
 }
 
@@ -130,7 +137,9 @@ pub fn draw(ctx: *d.Ctx) void {
     const outside = c.ImGui_IsItemClickedEx(0) or c.ImGui_IsItemClickedEx(1);
     c.ImGui_End();
     if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null and (outside or appearing)) std.debug.print("[popup] appearing={} outside={} mouse={d:.0},{d:.0}\n", .{ appearing, outside, ctx.mouse.x, ctx.mouse.y });
-    if (outside or c.ImGui_IsKeyPressed(c.ImGuiKey_Escape)) return close(ctx);
+    // Esc com uma anotação aberta só cancela a edição (ui/saved.zig).
+    const editing_note = ctx.st.popup == .saved and saved_ui.isEditing();
+    if (outside or (c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and !editing_note)) return close(ctx);
 
     const saved = ctx.dl;
     defer ctx.dl = saved;
@@ -140,6 +149,8 @@ pub fn draw(ctx: *d.Ctx) void {
         .profile_full => |p| profile.full(ctx, p.user),
         .emoji => |e| emojiPicker(ctx, e.target, e.x, e.y),
         .mixer => |m| mixer(ctx, m.x, m.y),
+        .inbox => |ib| @import("inbox.zig").draw(ctx, ib.tab),
+        .saved => saved_ui.draw(ctx),
         .none => {},
     }
 }
@@ -152,18 +163,7 @@ const Item = struct { label: []const u8, en: []const u8, id: u8, danger: bool = 
 /// Canal de voz em que a pessoa está, se dá para movê-la de lá (é do
 /// servidor aberto e temos "Mover membros").
 fn movable(ctx: *d.Ctx, uid: Id) ?*const @import("../core/store.zig").ChannelState {
-    const ch = ctx.store.voiceChannelOf(uid);
-    if (qa.enabled and c.SDL_getenv("QA_DEBUG") != null) {
-        var gid: Id = 0;
-        var owner: Id = 0;
-        var perm: u64 = 0;
-        if (ctx.store.channel(ch)) |x| {
-            gid = x.info.guild;
-            if (ctx.store.guild(gid)) |g| owner = g.owner;
-            perm = ctx.store.permissions(gid);
-        }
-        std.debug.print("[mover] uid={d} ch={d} guild={d} owner={d} me={d} roles={d} perm={x}\n", .{ uid, ch, gid, owner, ctx.store.me, ctx.store.roles.count(), perm });
-    }
+    const ch = ctx.store.voiceChannelOf(uid, ctx.st.guild);
     if (ch == 0) return null;
     const cs = ctx.store.channel(ch) orelse return null;
     if (!ctx.store.can(cs.info.guild, types.perm.move_members)) return null;
@@ -205,6 +205,13 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "Adicionar reação", .en = "Add Reaction", .id = 3 });
             add(&items, &n, .{ .label = if (ctx.st.selection.empty()) "Copiar texto" else "Copiar seleção", .en = if (ctx.st.selection.empty()) "Copy Text" else "Copy Selection", .id = 4 });
             add(&items, &n, .{ .label = "Copiar link da mensagem", .en = "Copy Message Link", .id = 5 });
+            // Salvas: só neste computador (ui/saved.zig).
+            if (found.m.msg.id != 0) {
+                if (ctx.st.saved.find(id) != null)
+                    add(&items, &n, .{ .label = "Remover dos salvos", .en = "Remove from Saved", .id = 10 })
+                else
+                    add(&items, &n, .{ .label = "Salvar mensagem", .en = "Save Message", .id = 10 });
+            }
             add(&items, &n, .{ .label = "Marcar como não lida", .en = "Mark Unread", .id = 7 });
             if (dev) add(&items, &n, .{ .label = "Copiar ID da mensagem", .en = "Copy Message ID", .id = 8 });
             // Dos outros também, para quem pode gerenciar mensagens no servidor.
@@ -215,17 +222,24 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "Perfil", .en = "Profile", .id = 20 });
             add(&items, &n, .{ .label = "Mencionar", .en = "Mention", .id = 21 });
             if (id != ctx.store.me) add(&items, &n, .{ .label = "Mensagem", .en = "Message", .id = 22 });
+            // Ignorar não bloqueia: as mensagens só ficam recolhidas aqui.
+            if (id != ctx.store.me) add(&items, &n, if (ctx.st.filtros.isIgnored(id))
+                .{ .label = "Deixar de ignorar", .en = "Unignore", .id = 26 }
+            else
+                .{ .label = "Ignorar", .en = "Ignore", .id = 26 });
             add(&items, &n, .{ .label = "Copiar nome de usuário", .en = "Copy Username", .id = 24, .sep = true });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do usuário", .en = "Copy User ID", .id = 25 });
             if (movable(ctx, id) != null) {
                 var tb: [24]Id = undefined;
-                if (voiceTargets(ctx, id, &tb).len > 0) add(&items, &n, .{ .label = "Mover para…", .en = "Move To…", .id = 26, .sep = true });
-                add(&items, &n, .{ .label = "Desconectar da call", .en = "Disconnect", .id = 27, .danger = true, .sep = voiceTargets(ctx, id, &tb).len == 0 });
+                if (voiceTargets(ctx, id, &tb).len > 0) add(&items, &n, .{ .label = "Mover para…", .en = "Move To…", .id = 28, .sep = true });
+                add(&items, &n, .{ .label = "Desconectar da call", .en = "Disconnect", .id = 29, .danger = true, .sep = voiceTargets(ctx, id, &tb).len == 0 });
             }
         },
         .channel => {
             add(&items, &n, .{ .label = "Marcar como lido", .en = "Mark As Read", .id = 40 });
             add(&items, &n, .{ .label = "Abrir em nova aba", .en = "Open in New Tab", .id = 41 });
+            // Tela dividida: o canal ao lado do que está aberto (até 3).
+            if (mosaic.canOpenBeside(ctx, id)) add(&items, &n, .{ .label = "Abrir ao lado", .en = "Open to the Side", .id = 45 });
             add(&items, &n, .{ .label = if (ctx.st.muted_channels.contains(id)) "Reativar notificações" else "Silenciar canal", .en = if (ctx.st.muted_channels.contains(id)) "Unmute Channel" else "Mute Channel", .id = 42 });
             add(&items, &n, .{ .label = "Copiar link", .en = "Copy Link", .id = 43, .sep = true });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do canal", .en = "Copy Channel ID", .id = 44 });
@@ -235,6 +249,18 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "◐  Ausente", .en = "◐  Idle", .id = 81 });
             add(&items, &n, .{ .label = "⊘  Não perturbe", .en = "⊘  Do Not Disturb", .id = 82 });
             add(&items, &n, .{ .label = "○  Invisível", .en = "○  Invisible", .id = 83 });
+            if (ctx.st.filtros.focusOn(ctx.now_ms)) {
+                add(&items, &n, .{ .label = "Sair do modo foco", .en = "End Focus Mode", .id = 85, .sep = true });
+            } else {
+                add(&items, &n, .{ .label = "Modo foco: 15 min", .en = "Focus mode: 15 min", .id = 86, .sep = true });
+                add(&items, &n, .{ .label = "Modo foco: 30 min", .en = "Focus mode: 30 min", .id = 87 });
+                add(&items, &n, .{ .label = "Modo foco: 1 h", .en = "Focus mode: 1 h", .id = 88 });
+                add(&items, &n, .{ .label = "Modo foco: até desligar", .en = "Focus mode: until I turn it off", .id = 89 });
+            }
+            add(&items, &n, if (ctx.st.settings.data_saver)
+                .{ .label = "Desligar modo economia", .en = "Turn Off Data Saver", .id = 90 }
+            else
+                .{ .label = "Ligar modo economia", .en = "Turn On Data Saver", .id = 90 });
             add(&items, &n, .{ .label = "Ver perfil", .en = "View Profile", .id = 84, .sep = true });
         },
         .voice_move => {
@@ -253,14 +279,18 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
 
     const row_h: f32 = 32;
     const quick_h: f32 = if (kind == .message) 46 else 0;
+    // "Cor do servidor": uma fileira de cores no fim do menu do servidor.
+    const colors_h: f32 = if (kind == .guild and ctx.store.guild(id) != null) 62 else 0;
     var seps: f32 = 0;
     for (items[0..n]) |it| {
         if (it.sep) seps += 9;
     }
     const mw: f32 = 220;
-    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + 12;
-    const r = fit(ctx, x + 2, y + 2, mw, mh);
-    const k = anim.to(anim.id("menu", @backingInt(kind)), 1, 30);
+    // Menu do usuário: as contas embaixo (o menu cresce para cima).
+    const acc_h: f32 = if (kind == .status) accounts_menu.height(ctx) else 0;
+    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + colors_h + 12 + acc_h;
+    const r = fit(ctx, x + 2, y + 2 - acc_h, mw, mh);
+    const k = anim.to(anim.id("menu", @intFromEnum(kind)), 1, 30);
     const dl = beginWindow("##menu", r);
     defer c.ImGui_End();
     ctx.dl = dl;
@@ -302,6 +332,38 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         if (hb.clicked) return choose(ctx, kind, id, it.id, r);
         yy += row_h;
     }
+    if (colors_h > 0) guildColors(ctx, dl, id, r, yy);
+    if (kind == .status and accounts_menu.draw(ctx, dl, r, yy)) close(ctx);
+}
+
+/// Fileira "Cor do servidor": a primeira bolinha volta para a cor de sempre,
+/// as outras são a paleta de destaque das configurações.
+fn guildColors(ctx: *d.Ctx, dl: *c.ImDrawList, guild: Id, r: d.Rect, y: f32) void {
+    const palette = &@import("../app.zig").App.accents;
+    const fam = ctx.ui;
+    d.line(dl, r.x + 10, y + 4, r.right() - 10, y + 4, ctx.col(.border), 1);
+    d.text(dl, fam.get(.semibold), 12, r.x + 16, y + 12, ctx.col(.muted), i18n.tr("Cor do servidor", "Server Color"));
+    const cur = guild_color.get(guild);
+    const step = (r.w - 24) / @as(f32, @floatFromInt(palette.len + 1));
+    for (0..palette.len + 1) |i| {
+        const cx = r.x + 12 + step * (@as(f32, @floatFromInt(i)) + 0.5);
+        const cy = y + 44;
+        const sr: d.Rect = .{ .x = cx - step / 2, .y = cy - 11, .w = step, .h = 22 };
+        const hb = d.hit(ctx, 300 + i, sr);
+        qa.mark(sr, "guild-color:{d}", .{i});
+        const sel = if (i == 0) cur == null else cur == palette[i - 1];
+        if (sel or hb.hovered) c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 10.5, (if (sel) ctx.col(.text) else ctx.col(.muted)).u(), 0, 1.5, 0);
+        if (i == 0) {
+            // Sem cor própria: anel com um risco.
+            c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 7, ctx.col(.faint).u(), 0, 1.5, 0);
+            d.line(dl, cx - 4.5, cy + 4.5, cx + 4.5, cy - 4.5, ctx.col(.faint), 1.5);
+            d.tip(ctx, sr, i18n.tr("Cor de sempre", "Default color"), hb.hovered);
+        } else d.circle(dl, cx, cy, 7.5, d.Rgba.hex(palette[i - 1]));
+        if (hb.clicked) {
+            ctx.act(.{ .set_guild_color = .{ .guild = guild, .rgb = if (i == 0) null else palette[i - 1] } });
+            return close(ctx);
+        }
+    }
 }
 
 fn copyFmt(ctx: *d.Ctx, comptime fmt: []const u8, args: anytype) void {
@@ -339,8 +401,34 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             f.cs.info.unread = true;
         },
         8, 25, 44, 63 => copyFmt(ctx, "{d}", .{id}),
-        80, 81, 82, 83 => ctx.act(.{ .set_status = @fromBackingInt(@intCast(item - 80)) }),
+        10 => ctx.act(if (st.saved.find(id) != null) .{ .unsave_message = id } else .{ .save_message = id }),
+        80, 81, 82, 83 => ctx.act(.{ .set_status = @enumFromInt(item - 80) }),
         84 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y - 200 } },
+        85 => {
+            st.filtros.endFocus(ctx.store);
+            st.showToast(ctx.now_ms, false, "modo foco desligado", "focus mode off", .{});
+        },
+        86, 87, 88, 89 => {
+            st.filtros.startFocus(ctx.now_ms, ([_]u32{ 15, 30, 60, 0 })[item - 86]);
+            st.showToast(ctx.now_ms, false, "modo foco: só DMs e menções notificam", "focus mode: only DMs and mentions notify", .{});
+        },
+        90 => {
+            st.settings.data_saver = !st.settings.data_saver;
+            st.filtros.save = true;
+            if (st.settings.data_saver)
+                st.showToast(ctx.now_ms, false, "modo economia: imagens só ao clicar", "data saver: images load on click", .{})
+            else
+                st.showToast(ctx.now_ms, false, "modo economia desligado", "data saver off", .{});
+        },
+        26 => {
+            const on = !st.filtros.isIgnored(id);
+            st.filtros.setIgnored(st.gpa, id, on);
+            const name = if (ctx.store.user(id)) |u| u.name else "?";
+            if (on)
+                st.showToast(ctx.now_ms, false, "{s} ignorado: as mensagens ficam recolhidas", "ignoring {s}: their messages are collapsed", .{name})
+            else
+                st.showToast(ctx.now_ms, false, "{s} não é mais ignorado", "no longer ignoring {s}", .{name});
+        },
         9 => ctx.act(.{ .delete_message = id }),
         20 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y } },
         21 => if (ctx.store.user(id)) |u| {
@@ -348,13 +436,14 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         },
         22 => ctx.act(.{ .open_dm = id }),
         24 => if (ctx.store.user(id)) |u| copyFmt(ctx, "{s}", .{u.name}),
-        26 => st.popup = .{ .menu = .{ .kind = .voice_move, .id = id, .x = r.x + r.w - 8, .y = r.y + r.h - 70 } },
-        27 => if (movable(ctx, id)) |cs| ctx.act(.{ .move_member = .{ .guild = cs.info.guild, .user = id, .channel = null } }),
+        28 => st.popup = .{ .menu = .{ .kind = .voice_move, .id = id, .x = r.x + r.w - 8, .y = r.y + r.h - 70 } },
+        29 => if (movable(ctx, id)) |cs| ctx.act(.{ .move_member = .{ .guild = cs.info.guild, .user = id, .channel = null } }),
         40, 60 => ctx.act(.{ .mark_read = id }),
         41 => {
             st.tabs.append(st.gpa, id) catch {};
             ctx.act(.{ .focus_tab = st.tabs.items.len - 1 });
         },
+        45 => mosaic.openBeside(ctx, id),
         42 => if (st.muted_channels.contains(id)) {
             _ = st.muted_channels.remove(id);
         } else st.muted_channels.put(st.gpa, id, {}) catch {},

@@ -36,6 +36,9 @@ pub const Gateway = struct {
     /// como um servidor grande).
     flood_per_s: u32 = 0,
     next_flood_ms: i64 = std.math.maxInt(i64),
+    /// Começo da sessão: o histórico de um canal é sempre o mesmo dentro
+    /// dela (mesmos IDs, como no Discord), mesmo pedido de novo.
+    epoch_ms: i64 = 0,
 
     pub fn start(g: *Gateway) !void {
         g.thread = c.SDL_CreateThread(threadMain, "gateway", g) orelse return error.SdlThread;
@@ -57,6 +60,7 @@ pub const Gateway = struct {
     }
 
     fn run(g: *Gateway) !void {
+        g.epoch_ms = nowMs();
         g.emit(.{ .ready = try buildReady() });
         for (relations, 0..) |rel, i| g.emit(.{ .relationship = .{ .user = rel.user, .kind = rel.kind, .since_ms = nowMs() - @as(i64, @intCast(i + 1)) * 97 * 86_400_000 } });
         try g.demoActivities();
@@ -159,6 +163,7 @@ pub const Gateway = struct {
                     g.emit(.{ .voice_status = .{ .status = if (v.channel != null) .connected else .disconnected, .channel = v.channel orelse 0 } });
                 },
                 .voice_flags, .voice_volume => {},
+                .fetch_mentions => g.emit(.{ .recent_mentions = try demoMentions(nowMs()) }),
             };
             cmds.clearRetainingCapacity();
             try g.tick(nowMs());
@@ -271,7 +276,7 @@ pub const Gateway = struct {
         while (i < g.history_replies.items.len) {
             const r = g.history_replies.items[i];
             if (r.at_ms <= now) {
-                const msgs = try buildHistory(r.channel, now);
+                const msgs = try buildHistory(r.channel, g.epoch_ms);
                 g.emit(.{ .history = .{ .channel = r.channel, .messages = msgs } });
                 // Algumas reações nas mensagens recentes.
                 var prng = std.Random.DefaultPrng.init(r.channel ^ 0xABCD);
@@ -556,6 +561,32 @@ fn buildReady() !ev.Ready {
     return .{ .me = me_id, .users = us, .guilds = gs, .channels = chs, .voice = voice, .username = try alloc.dupe(u8, "rsha") };
 }
 
+/// Menções recentes da demonstração (o que o GET /users/@me/mentions
+/// devolveria): de horas a dias atrás, em vários servidores e no grupo.
+fn demoMentions(now_ms: i64) ![]types.Message {
+    const spec = [_]struct { ch: Id, author: Id, hours: i64, pt: []const u8, en: []const u8 }{
+        .{ .ch = channelId(3, 4), .author = 1001, .hours = 2, .pt = "<@1000> bora jogar hoje à noite?", .en = "<@1000> gaming tonight?" },
+        .{ .ch = channelId(3, 5), .author = 1002, .hours = 5, .pt = "<@1000> olha isso kkkkkk", .en = "<@1000> look at this lmao" },
+        .{ .ch = group_id, .author = 1003, .hours = 9, .pt = "<@1000> sexta tá de pé?", .en = "<@1000> still on for friday?" },
+        .{ .ch = channelId(5, 4), .author = 1007, .hours = 26, .pt = "<@1000> tu fez o trabalho de cálculo? manda a **questão 3**", .en = "<@1000> did you do the calculus homework? send **question 3**" },
+        .{ .ch = channelId(0, 9), .author = 1003, .hours = 49, .pt = "<@1000> o allocator tava vazando mesmo, valeu 🙏", .en = "<@1000> the allocator really was leaking, thanks 🙏" },
+        .{ .ch = channelId(2, 4), .author = 1005, .hours = 73, .pt = "@everyone live de zig hoje às 20h", .en = "@everyone zig stream today at 8pm" },
+        .{ .ch = channelId(0, 4), .author = 1004, .hours = 120, .pt = "<@1000> e o tema novo, sai quando?", .en = "<@1000> so when's the new theme coming out?" },
+    };
+    const out = try alloc.alloc(types.Message, spec.len);
+    for (spec, 0..) |m, i| {
+        const t = now_ms - m.hours * 3_600_000;
+        out[i] = .{
+            .id = types.makeSnowflake(t, 0x3f0000 + i),
+            .channel = m.ch,
+            .author = m.author,
+            .timestamp = @divTrunc(t, 1000),
+            .content = try alloc.dupe(u8, pick(m.pt, m.en)),
+        };
+    }
+    return out;
+}
+
 /// Parte baixa do ID: o canal entra junto, senão a mensagem N de canais
 /// diferentes teria o mesmo ID (o horário de partida é o mesmo).
 fn demoSeq(channel: Id, i: usize) u64 {
@@ -612,6 +643,15 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
     for (msgs, 0..) |*m, j| {
         if (j > 3 and r.uintLessThan(u8, 9) == 0) m.reply_to = msgs[j - 1 - r.uintLessThan(usize, 3)].id;
     }
+    // #anúncios do primeiro servidor termina com uma menção a nós, de outra
+    // pessoa: a caixa de entrada da demonstração tem uma menção não lida.
+    if (channel == channelId(0, 2)) {
+        alloc.free(msgs[n - 2].content);
+        msgs[n - 2].content = try alloc.dupe(u8, pick("<@1000> dá uma olhada no anúncio novo quando puder 🙏", "<@1000> take a look at the new announcement when you can 🙏"));
+        msgs[n - 2].author = 1001;
+        msgs[n - 2].reply_to = 0;
+        msgs[n - 1].author = 1002;
+    }
     // Imagens (geradas na hora pelo carregador: "demo:N") e um arquivo.
     const pics = [_]struct { back: usize, text: []const u8, url: []const u8, name: []const u8, w: u16, h: u16, text_en: ?[]const u8 = null, name_en: ?[]const u8 = null }{
         .{ .back = 5, .text = "olha o pôr do sol daqui de casa 🌅", .url = "demo:1", .name = "por-do-sol.png", .w = 900, .h = 560, .text_en = "check out the sunset from my place 🌅", .name_en = "sunset.png" },
@@ -629,6 +669,27 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         const list = try alloc.alloc(types.Attachment, 1);
         const gif = std.mem.eql(u8, p.url, "demo:gif");
         list[0] = .{ .url = try alloc.dupe(u8, p.url), .filename = try alloc.dupe(u8, pick(p.name, p.name_en)), .width = p.w, .height = p.h, .size = if (p.w == 0) 482_133 else 0, .animated = gif, .embed = gif };
+        m.attachments = list;
+    }
+    // Um vídeo anexado (toca aqui com o FFmpeg do sistema; a prévia é um
+    // quadro qualquer) e um GIF que só existe em MP4, como os antigos do
+    // Tenor (anima pelo FFmpeg; sem ele, fica a prévia parada).
+    {
+        const m = &msgs[n - 12];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, pick("gravei a tela rapidinho", "quick screen recording"));
+        m.reply_to = 0;
+        const list = try alloc.alloc(types.Attachment, 1);
+        list[0] = .{ .url = try alloc.dupe(u8, "demo:3"), .filename = try alloc.dupe(u8, "gravacao.mp4"), .width = 426, .height = 240, .size = 48_435, .video = true, .link = try alloc.dupe(u8, "demo:video") };
+        m.attachments = list;
+    }
+    {
+        const m = &msgs[n - 20];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, "https://tenor.com/view/larper-antigo");
+        m.reply_to = 0;
+        const list = try alloc.alloc(types.Attachment, 1);
+        list[0] = .{ .url = try alloc.dupe(u8, "demo:mp4"), .filename = try alloc.dupe(u8, "antigo.gif"), .width = 426, .height = 240, .animated = true, .still = try alloc.dupe(u8, "demo:2"), .embed = true };
         m.attachments = list;
     }
     // Embeds: prévia de link, cartão de bot com campos e um vídeo.

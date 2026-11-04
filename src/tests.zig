@@ -8,17 +8,28 @@ test {
     _ = @import("core/types.zig");
     _ = @import("core/markdown.zig");
     _ = @import("core/store.zig");
+    _ = @import("core/filtros.zig");
+    _ = @import("ui/rascunhos.zig");
+    _ = @import("core/inbox.zig");
+    _ = @import("core/saved.zig");
+    _ = @import("core/cache_format.zig");
+    _ = @import("core/search_query.zig");
+    _ = @import("core/accounts.zig");
     _ = @import("theme/kdl.zig");
     _ = @import("theme/color.zig");
     _ = @import("theme/theme.zig");
     _ = @import("theme/custom.zig");
     _ = @import("theme/layout.zig");
     _ = @import("ui/fuzzy.zig");
+    _ = @import("ui/syntax.zig");
     _ = @import("ui/settings_state.zig");
+    _ = @import("ui/guild_color.zig");
     _ = @import("net/jsonx.zig");
     _ = @import("net/media_url.zig");
+    _ = @import("net/proxy.zig");
     _ = @import("net/settings_proto.zig");
     _ = @import("ui/apng.zig");
+    _ = @import("plugins/engine.zig");
 }
 
 /// Componentes que a interface sabe desenhar (manter igual a ui/root.zig).

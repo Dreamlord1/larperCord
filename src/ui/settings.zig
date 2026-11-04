@@ -11,13 +11,15 @@ const S = @import("settings_state.zig");
 const i18n = @import("i18n.zig");
 const custom = @import("../theme/custom.zig");
 const Preview = @import("../theme/manager.zig").Preview;
+const proxy = @import("../net/proxy.zig");
 
 const Section = struct { title: []const u8, title_en: []const u8, items: []const struct { page: S.Page, label: []const u8, label_en: []const u8 } };
 
-const sections = [_]Section{
+pub const sections = [_]Section{
     .{ .title = "CONFIGURAÇÕES DE USUÁRIO", .title_en = "USER SETTINGS", .items = &.{
         .{ .page = .conta, .label = "Minha conta", .label_en = "My Account" },
         .{ .page = .privacidade, .label = "Privacidade", .label_en = "Privacy" },
+        .{ .page = .filtros, .label = "Alertas e filtros", .label_en = "Alerts & Filters" },
     } },
     .{ .title = "CONFIGURAÇÕES DO APLICATIVO", .title_en = "APP SETTINGS", .items = &.{
         .{ .page = .aparencia, .label = "Aparência", .label_en = "Appearance" },
@@ -30,6 +32,7 @@ const sections = [_]Section{
     } },
     .{ .title = "LARPERCORD", .title_en = "LARPERCORD", .items = &.{
         .{ .page = .desempenho, .label = "Desempenho", .label_en = "Performance" },
+        .{ .page = .plugins, .label = "Plugins", .label_en = "Plugins" },
         .{ .page = .sobre, .label = "Sobre", .label_en = "About" },
     } },
 };
@@ -48,35 +51,35 @@ const Page = struct {
         return p.ids;
     }
 
-    fn font(p: *Page, wt: d.Weight) *c.ImFont {
+    pub fn font(p: *Page, wt: d.Weight) *c.ImFont {
         return p.ctx.ui.get(wt);
     }
 
-    fn title(p: *Page, t: []const u8) void {
+    pub fn title(p: *Page, t: []const u8) void {
         d.text(p.dl, p.font(.bold), 22, p.x, p.y, p.ctx.col(.text), t);
         p.y += 44;
     }
 
-    fn heading(p: *Page, t: []const u8) void {
+    pub fn heading(p: *Page, t: []const u8) void {
         p.y += 8;
         var buf: [96]u8 = undefined;
         d.text(p.dl, p.font(.bold), 12, p.x, p.y, p.ctx.col(.muted), d.upper(&buf, t));
         p.y += 26;
     }
 
-    fn note(p: *Page, t: []const u8) void {
+    pub fn note(p: *Page, t: []const u8) void {
         d.text(p.dl, p.font(.regular), 13.5, p.x, p.y, p.ctx.col(.faint), t);
         p.y += 26;
     }
 
-    fn divider(p: *Page) void {
+    pub fn divider(p: *Page) void {
         p.y += 10;
         d.line(p.dl, p.x, p.y, p.x + p.w, p.y, p.ctx.col(.border).mix(p.ctx.col(.text), 0.03), 1);
         p.y += 20;
     }
 
     /// Linha com título, descrição e um interruptor à direita.
-    fn toggle(p: *Page, label: []const u8, desc: []const u8, value: *bool) void {
+    pub fn toggle(p: *Page, label: []const u8, desc: []const u8, value: *bool) void {
         const ctx = p.ctx;
         const row_h: f32 = if (desc.len > 0) 58 else 40;
         const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = row_h };
@@ -208,7 +211,7 @@ const Page = struct {
         p.y += 60;
     }
 
-    fn button(p: *Page, label: []const u8, danger: bool) bool {
+    pub fn button(p: *Page, label: []const u8, danger: bool) bool {
         const ctx = p.ctx;
         const f = p.font(.semibold);
         const tw = d.width(f, 14, label);
@@ -461,6 +464,68 @@ fn themeColors(p: *Page) void {
     p.y = top + @as(f32, @floatFromInt(rows)) * 30 + 10;
 }
 
+// --- Rede (proxy) -----------------------------------------------------------
+
+var proxy_buf: [256]u8 = @splat(0);
+/// O valor das configurações que está no campo (se mudar por fora, o campo
+/// acompanha).
+var proxy_seen: S.Text = .{};
+var proxy_bad = false;
+
+fn network(p: *Page) void {
+    const ctx = p.ctx;
+    const s = &ctx.st.settings;
+    p.heading(i18n.tr("Rede", "Network"));
+    p.note(i18n.tr("Proxy http, https, socks5 ou socks5h. Tor: socks5h://127.0.0.1:9050", "http, https, socks5 or socks5h proxy. Tor: socks5h://127.0.0.1:9050"));
+    if (!std.mem.eql(u8, proxy_seen.slice(), s.proxy.slice())) {
+        proxy_seen = s.proxy;
+        @memset(&proxy_buf, 0);
+        @memcpy(proxy_buf[0..s.proxy.len], s.proxy.slice());
+        proxy_bad = false;
+    }
+    const iw = @min(p.w, 420);
+    const ir: d.Rect = .{ .x = p.x, .y = p.y - 3, .w = iw, .h = 32 };
+    d.rect(p.dl, ir, ctx.col(.elevated), 6);
+    d.border(p.dl, ir, if (proxy_bad) ctx.col(.danger) else ctx.col(.border), 6, 1);
+    c.ImGui_SetCursorScreenPos(d.v(p.x + 10, p.y));
+    c.ImGui_SetNextItemWidth(iw - 20);
+    const enter = c.ImGui_InputTextWithHint("##proxy", "socks5h://127.0.0.1:9050", &proxy_buf, proxy_buf.len, c.ImGuiInputTextFlags_CharsNoBlank | c.ImGuiInputTextFlags_EnterReturnsTrue);
+    qa.mark(.{ .x = p.x, .y = p.y, .w = iw, .h = 30 }, "proxy-input", .{});
+    p.y += 40;
+    if (proxy_bad) p.note(i18n.tr("URL inválida: use esquema://host:porta (http, https, socks5 ou socks5h).", "Invalid URL: use scheme://host:port (http, https, socks5 or socks5h)."));
+    var nbuf: [360]u8 = undefined;
+    if (s.proxy.len > 0 and !proxy.valid(s.proxy.slice())) {
+        p.note(i18n.tr("O proxy salvo é inválido e está sendo ignorado.", "The saved proxy is invalid and is being ignored."));
+    } else if (s.proxy.len > 0) {
+        const scope = if (s.proxy_all) i18n.tr("todas as conexões", "every connection") else i18n.tr("só GIFs e mídia de fora do Discord", "only GIFs and media from outside Discord");
+        // Sem usuário e senha na tela.
+        const u = s.proxy.slice();
+        var shown_buf: [256]u8 = undefined;
+        const shown = if (std.mem.lastIndexOfScalar(u8, u, '@')) |at| (if (std.mem.indexOf(u8, u, "://")) |sch| std.fmt.bufPrint(&shown_buf, "{s}…@{s}", .{ u[0 .. sch + 3], u[at + 1 ..] }) catch u else u) else u;
+        p.note(i18n.fmt(&nbuf, "Em uso: {s} ({s}).", "In use: {s} ({s}).", .{ shown, scope }));
+    } else p.note(i18n.tr("Sem proxy: conexão direta.", "No proxy: direct connection."));
+    if (enter or p.button(i18n.tr("Salvar proxy", "Save proxy"), false)) {
+        const text = std.mem.trim(u8, std.mem.sliceTo(&proxy_buf, 0), " ");
+        if (text.len == 0) {
+            s.proxy = .{};
+            proxy_bad = false;
+        } else if (proxy.valid(text)) {
+            s.proxy.set(text);
+            proxy_bad = false;
+            ctx.st.showToast(ctx.now_ms, false, "proxy salvo", "proxy saved", .{});
+        } else {
+            proxy_bad = true;
+            ctx.st.showToast(ctx.now_ms, true, "proxy inválido", "invalid proxy", .{});
+        }
+    }
+    p.y += 44;
+    if (s.proxy.len > 0) {
+        if (p.button(i18n.tr("Remover proxy", "Remove proxy"), true)) s.proxy = .{};
+        p.y += 44;
+    }
+    p.toggle(i18n.tr("Usar o proxy em tudo", "Use the proxy for everything"), i18n.tr("Também o Discord: API, imagens, vídeos e o gateway (este a partir da próxima conexão).", "Discord too: API, images, videos and the gateway (from the next connection)."), &s.proxy_all);
+}
+
 fn page(p: *Page, previews: []const Preview) void {
     const ctx = p.ctx;
     const s = &ctx.st.settings;
@@ -516,8 +581,11 @@ fn page(p: *Page, previews: []const Preview) void {
             p.heading(i18n.tr("Imagens", "Images"));
             p.toggle(i18n.tr("Reproduzir GIFs automaticamente", "Automatically play GIFs"), i18n.tr("Desligado, o GIF anda quando o mouse passa por cima.", "When off, a GIF plays while you hover it."), &s.autoplay_gifs);
             p.toggle(i18n.tr("Mostrar imagens de links", "Show images from links"), i18n.tr("Imagens e GIFs de links mandados na conversa.", "Images and GIFs from links posted in chat."), &s.show_embeds);
+            p.toggle(i18n.tr("Modo economia", "Data saver"), i18n.tr("Imagens, fotos de perfil e anexos só baixam quando você clica. Bom em rede ruim.", "Images, profile pictures and attachments only download when you click. Good on bad networks."), &s.data_saver);
             p.heading(i18n.tr("Conteúdo", "Content"));
             p.toggle(i18n.tr("Sempre mostrar spoilers", "Always show spoilers"), i18n.tr("Revela o texto ||escondido|| sem precisar clicar.", "Reveals ||hidden|| text without clicking."), &s.show_spoilers);
+            p.heading(i18n.tr("Caixa de texto", "Text box"));
+            p.toggle(i18n.tr("Prévia do markdown", "Markdown preview"), i18n.tr("Com **negrito**, `código`, ||spoiler||…, mostra acima da caixa como vai ficar.", "With **bold**, `code`, ||spoilers||…, shows above the box how it will look."), &s.md_preview);
         },
         .notificacoes => {
             p.title(i18n.tr("Notificações", "Notifications"));
@@ -532,11 +600,24 @@ fn page(p: *Page, previews: []const Preview) void {
             p.toggle(i18n.tr("Animar GIFs do Tenor e do Giphy", "Animate Tenor and Giphy GIFs"), i18n.tr("Baixa do site deles, que vê o seu IP (o app oficial faz igual). Desligado: prévia parada pelo Discord.", "Downloads from their site, which sees your IP (the official app does too). Off: still preview via Discord."), &s.gif_hosts);
             p.toggle(i18n.tr("Modo streamer", "Streamer Mode"), i18n.tr("Esconde o e-mail e o nome de usuário nas configurações.", "Hides your email and username in settings."), &s.streamer_mode);
             p.toggle(i18n.tr("Registro de mensagens", "Message log"), i18n.tr("Apagadas continuam na tela (marcadas) e editadas guardam o original. Só aqui.", "Deleted messages stay visible (marked) and edits keep the original. Local only."), &s.message_log);
+            p.toggle(i18n.tr("Guardar mensagens no disco", "Keep messages on disk"), i18n.tr("Conversas abrem na hora e a busca (Ctrl+F) funciona sem internet. Só o seu usuário lê.", "Chats open instantly and search (Ctrl+F) works offline. Only your user can read it."), &s.message_cache);
+            {
+                const msg_cache = @import("../net/msg_cache.zig");
+                var sb: [24]u8 = undefined;
+                var lb: [64]u8 = undefined;
+                const size = msg_cache.formatSize(&sb, msg_cache.totalBytes(), i18n.en());
+                if (p.button(i18n.fmt(&lb, "Apagar cache ({s})", "Clear cache ({s})", .{size}), true)) ctx.act(.clear_cache);
+                p.y += 52;
+            }
             p.note(i18n.tr("Fora isso, imagens e avatares só vêm dos servidores do Discord.", "Everything else (images, avatars) only comes from Discord's servers."));
+            p.divider();
+            network(p);
         },
         .atalhos => {
             p.title(i18n.tr("Atalhos de teclado", "Keybinds"));
             p.keyRow(i18n.tr("Paleta de comandos", "Command palette"), "Ctrl+K");
+            p.keyRow(i18n.tr("Paleta com as ações primeiro", "Palette, actions first"), "Ctrl+Shift+P");
+            p.keyRow(i18n.tr("Buscar mensagens", "Search messages"), "Ctrl+F");
             p.keyRow(i18n.tr("Configurações", "Settings"), "Ctrl+,");
             p.keyRow(i18n.tr("Próximo tema", "Next theme"), "F2");
             p.keyRow(i18n.tr("Tema anterior", "Previous theme"), "Shift+F2");
@@ -544,8 +625,21 @@ fn page(p: *Page, previews: []const Preview) void {
             p.keyRow(i18n.tr("Aba anterior", "Previous tab"), "Ctrl+Shift+Tab");
             p.keyRow(i18n.tr("Ir para a aba N", "Go to tab N"), "Alt+1…9");
             p.keyRow(i18n.tr("Fechar aba", "Close tab"), "Ctrl+W");
+            p.keyRow(i18n.tr("Caixa de entrada", "Inbox"), "Ctrl+I");
+            p.keyRow(i18n.tr("Mensagens salvas", "Saved messages"), "Ctrl+Shift+S");
             p.keyRow(i18n.tr("Abrir canal em nova aba", "Open channel in a new tab"), i18n.tr("Ctrl+Clique", "Ctrl+Click"));
             p.keyRow(i18n.tr("Fechar aba com o mouse", "Close tab with the mouse"), i18n.tr("Botão do meio", "Middle click"));
+            p.divider();
+            p.toggle(i18n.tr("Navegação estilo vim", "Vim-style navigation"), i18n.tr("Com a caixa de texto sem foco (Esc sai dela), as teclas abaixo navegam.", "With the text box unfocused (Esc leaves it), the keys below navigate."), &s.vim_keys);
+            if (s.vim_keys) {
+                p.keyRow(i18n.tr("Rolar para baixo / para cima", "Scroll down / up"), "j / k");
+                p.keyRow(i18n.tr("Topo / fim da conversa", "Top / bottom of the conversation"), "gg / G");
+                p.keyRow(i18n.tr("Meia página para baixo / para cima", "Half page down / up"), "Ctrl+d / Ctrl+u");
+                p.keyRow(i18n.tr("Próximo / anterior canal", "Next / previous channel"), "J / K");
+                p.keyRow(i18n.tr("Voltar para a caixa de texto", "Back to the text box"), i18n.tr("i ou Enter", "i or Enter"));
+                p.keyRow(i18n.tr("Sair da caixa de texto", "Leave the text box"), "Esc");
+                p.keyRow(i18n.tr("Buscar (paleta)", "Search (palette)"), "/");
+            }
         },
         .idioma => {
             p.title(i18n.tr("Idioma", "Language"));
@@ -558,8 +652,10 @@ fn page(p: *Page, previews: []const Preview) void {
             p.toggle(i18n.tr("Modo desenvolvedor", "Developer Mode"), i18n.tr("Mostra o ID das mensagens e põe \"Copiar ID\" nos menus.", "Shows message IDs and adds \"Copy ID\" to menus."), &s.developer_mode);
             p.toggle(i18n.tr("Recarregar temas ao salvar", "Reload themes on save"), i18n.tr("Salvar um .kdl em themes/ ou ~/.config/larpercord/themes aplica na hora.", "Saving a .kdl in themes/ or ~/.config/larpercord/themes applies it right away."), &s.hot_reload);
         },
+        .filtros => @import("settings_filtros.zig").page(ctx, p.dl, p.x, &p.y, p.w),
         .conta => account(p),
         .desempenho => performance(p),
+        .plugins => @import("plugins_page.zig").draw(p),
         .sobre => about(p),
     }
 }
@@ -735,7 +831,7 @@ fn account(p: *Page) void {
     d.text(p.dl, p.font(.regular), 12.5, er.x + 14, er.y + 54, ctx.col(.faint), i18n.tr("Nome, foto e senha se mudam pelo app oficial ou pelo site.", "Name, picture and password are changed in the official app or website."));
     p.y += card.h + 24;
     p.heading(i18n.tr("Sessão", "Session"));
-    p.note(if (ctx.store.demo) i18n.tr("Você está no modo demonstração. Sair leva à tela de login.", "You're in demo mode. Logging out takes you to the sign-in screen.") else i18n.tr("Sair desconecta e apaga o token guardado neste computador.", "Logging out disconnects and deletes the token saved on this computer."));
+    p.note(if (ctx.store.demo) i18n.tr("Você está no modo demonstração. Sair leva à tela de login.", "You're in demo mode. Logging out takes you to the sign-in screen.") else i18n.tr("Sair desconecta e apaga o token desta conta neste computador (as outras contas guardadas continuam).", "Logging out disconnects and deletes this account's token from this computer (other saved accounts stay)."));
     if (p.button(i18n.tr("Sair", "Log Out"), true)) ctx.act(.logout);
     p.y += 52;
 }
@@ -772,5 +868,5 @@ fn about(p: *Page) void {
     p.note(i18n.tr("Cliente não oficial: usar contas de usuário fora do app oficial vai contra os termos do Discord.", "Unofficial client: using user accounts outside the official app is against Discord's terms."));
     p.divider();
     p.heading(i18n.tr("Feito com", "Built with"));
-    for ([_][]const u8{ "Zig 0.17", "SDL 3.4", "Dear ImGui 1.93 (dear_bindings)", "FreeType + fontconfig", "libcurl + zlib", "stb_image", "Inter, JetBrains Mono, Noto Color Emoji" }) |t| p.note(t);
+    for ([_][]const u8{ "Zig 0.17", "SDL 3.4", "Dear ImGui 1.93 (dear_bindings)", "FreeType + fontconfig", "libcurl + zlib", "stb_image", "Lua 5.4 (plugins)", "Inter, JetBrains Mono, Noto Color Emoji" }) |t| p.note(t);
 }

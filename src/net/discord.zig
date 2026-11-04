@@ -21,6 +21,7 @@ const nowMs = @import("fake_gateway.zig").nowMs;
 const j = @import("jsonx.zig");
 const i18n = @import("../ui/i18n.zig");
 const media_url = @import("media_url.zig");
+const proxy = @import("proxy.zig");
 const settings_proto = @import("settings_proto.zig");
 const voice_mod = @import("voice.zig");
 const Id = types.Id;
@@ -275,6 +276,7 @@ pub const Gateway = struct {
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECT_ONLY, @as(c_long, 2));
         _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, web_user_agent.ptr);
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECTTIMEOUT, @as(c_long, 15));
+        useProxy(h);
         g.abortable(h);
         if (c.curl_easy_perform(h) != c.CURLE_OK) return .retry;
         var sock: c.curl_socket_t = -1;
@@ -1367,6 +1369,10 @@ pub const Gateway = struct {
             out.fields = try fields.toOwnedSlice(alloc);
             // Vídeo (YouTube…): a miniatura grande vira a imagem, com play.
             out.video = j.get(e, "video") != null;
+            // Só o arquivo pelo proxy do Discord toca aqui (o do YouTube é uma página).
+            if (j.get(e, "video")) |vv| if (j.str(j.get(vv, "proxy_url"))) |pu| {
+                if (media_url.discordHost(pu)) out.video_url = try alloc.dupe(u8, pu);
+            };
             const big = j.get(e, "image") orelse if (out.video) j.get(e, "thumbnail") else null;
             if (big) |iv| if (j.str(j.get(iv, "proxy_url"))) |u| {
                 out.image = try alloc.dupe(u8, u);
@@ -1680,6 +1686,13 @@ pub const Gateway = struct {
         global: bool = false,
     };
 
+    /// Configurações → Privacidade → Rede com "em tudo": gateway e API
+    /// também pelo proxy (o gateway muda na próxima conexão).
+    fn useProxy(h: *c.CURL) void {
+        var pb: proxy.Buf = undefined;
+        if (proxy.forDiscord(&pb)) |p| _ = c.curl_easy_setopt(h, c.CURLOPT_PROXY, p.ptr);
+    }
+
     /// Transferência que para assim que o app pede para encerrar.
     fn abortable(g: *Gateway, h: *c.CURL) void {
         _ = c.curl_easy_setopt(h, c.CURLOPT_NOPROGRESS, @as(c_long, 0));
@@ -1800,6 +1813,7 @@ pub const Gateway = struct {
             _ = c.curl_easy_setopt(h, c.CURLOPT_HTTPHEADER, headers);
             _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, web_user_agent.ptr);
             _ = c.curl_easy_setopt(h, c.CURLOPT_CUSTOMREQUEST, method.ptr);
+            useProxy(h);
             _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEFUNCTION, writeCb);
             _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEDATA, &resp.body);
             _ = c.curl_easy_setopt(h, c.CURLOPT_HEADERFUNCTION, headerCb);
@@ -2109,6 +2123,17 @@ pub const Gateway = struct {
                 const v = std.json.parseFromSliceLeaky(Value, arena.allocator(), resp.body.items, .{}) catch return;
                 if (g.channelValue(v, 0) catch null) |ch| g.emit(.{ .channel_upsert = ch });
             },
+            .fetch_mentions => {
+                // Só leitura: as mesmas menções da caixa de entrada do cliente oficial.
+                const none: ev.Event = .{ .recent_mentions = &.{} };
+                var resp = g.request("GET", "/users/@me/mentions?limit=25", null) orelse return g.emit(none);
+                defer resp.body.deinit(alloc);
+                if (resp.status != 200) {
+                    g.noticeHttp(i18n.tr("não consegui carregar as menções", "couldn't load the mentions"), &resp);
+                    return g.emit(none);
+                }
+                g.mentionList(resp.body.items) catch g.emit(none);
+            },
             .join_voice => |v| {
                 if (g.voice != null) g.stopVoice();
                 g.voice_guild = v.guild;
@@ -2139,6 +2164,20 @@ pub const Gateway = struct {
             },
             .shutdown => {},
         }
+    }
+
+    /// GET /users/@me/mentions: lista de mensagens (da mais nova para a mais
+    /// antiga), cada uma com o `channel_id` de onde veio.
+    fn mentionList(g: *Gateway, body: []const u8) !void {
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const root = try std.json.parseFromSliceLeaky(Value, arena.allocator(), body, .{});
+        var list: std.ArrayList(types.Message) = .empty;
+        for (j.array(root)) |m| {
+            g.upsertUsers(m);
+            if (try g.message(m)) |msg| try list.append(alloc, msg);
+        }
+        g.emit(.{ .recent_mentions = try list.toOwnedSlice(alloc) });
     }
 
     fn history(g: *Gateway, ch: Id, body: []const u8, older: bool) !void {
@@ -2176,10 +2215,18 @@ pub const Gateway = struct {
 ///   3. ~/.config/larpercord/token (precisa ter permissão 600)
 /// Retorna null se não houver (o app usa o modo demonstração).
 pub fn loadToken() ?[:0]u8 {
-    if (c.SDL_getenv("LARPER_TOKEN")) |t| {
-        const s = std.mem.trim(u8, std.mem.span(t), " \n\r\t");
-        if (s.len > 20) return alloc.dupeSentinel(u8, s, 0) catch null;
-    }
+    return envToken() orelse loadSavedToken();
+}
+
+/// Só a variável LARPER_TOKEN (nunca é guardada em lugar nenhum).
+pub fn envToken() ?[:0]u8 {
+    const t = c.SDL_getenv("LARPER_TOKEN") orelse return null;
+    const s = std.mem.trim(u8, std.mem.span(t), " \n\r\t");
+    return if (s.len > 20) alloc.dupeSentinel(u8, s, 0) catch null else null;
+}
+
+/// Só o token guardado na entrada antiga (chaveiro, depois o arquivo).
+pub fn loadSavedToken() ?[:0]u8 {
     if (c.popen("secret-tool lookup service larpercord 2>/dev/null", "r")) |f| {
         var buf: [256]u8 = undefined;
         const n = c.fread(&buf, 1, buf.len, f);

@@ -57,13 +57,37 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   original); **editar** (`↑` na caixa vazia edita a última); **excluir**; **reações**;
   **seleção de texto** com o mouse entre várias mensagens + `Ctrl+C`; **cartão de perfil** com
   "Mensagem @fulano"; seletor de emoji; **mensagens diretas**; menções a você em destaque.
-- **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K`), atalhos de teclado.
+- **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K` / `Ctrl+Shift+P`: canais, DMs,
+  servidores, temas, status, marcar como lido e as opções liga/desliga), atalhos de teclado e
+  navegação estilo vim opcional (`j`/`k`, `gg`/`G`, `J`/`K` troca de canal, `/` busca).
+- **Plugins em Lua**: arquivos `.lua` em `~/.config/larpercord/plugins/` que reagem a mensagens e
+  criam comandos locais (`/shrug`) e atalhos, num sandbox com limite de instruções; liga/desliga e
+  erros em Configurações → Plugins. [Guia e API →](docs/plugins.md)
+- **Caixa de entrada** (`Ctrl+I`): DMs e menções não lidas de todos os servidores, por canal, com
+  prévia, ir até a mensagem e "marcar tudo como lido"; aba com as menções recentes do Discord.
+- **Mensagens salvas com anotação** (`Ctrl+Shift+S`, botão direito → Salvar mensagem): só no seu
+  computador, em `~/.config/larpercord/saved-<conta>.json`; nada vai para o Discord.
+- **Cache local e busca offline.** As últimas 200 mensagens vistas de cada canal ficam em
+  `~/.cache/larpercord/messages` (pastas 700, arquivos 600, teto de 50 MB): a conversa aparece
+  na hora ao abrir e o histórico de verdade chega por cima, sem pular a rolagem. `Ctrl+F` busca
+  na memória e no cache, a cada tecla e sem internet, com `from:nome`, `in:canal`, `has:link`,
+  `has:imagem` e `has:arquivo`; clicar no resultado pula até a mensagem. Dá para desligar e
+  apagar em Configurações → Privacidade.
+- **Várias contas.** O menu do próprio nome lista as contas guardadas (nome e foto) e troca na
+  hora; "Adicionar conta" volta ao login sem esquecer as outras.
 - **Configurações no estilo Discord** (`Ctrl+,`): 13 páginas, troca de tema com miniaturas,
   cor de destaque/cantos, **cores personalizadas por tema e modo em hex**, escala de fonte,
   modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
   `~/.config/larpercord/settings.kdl`.
 - **Markdown do Discord**: **negrito**, *itálico*, ~~riscado~~, `código`, ||spoiler||, menções
-  `<@id>`/`<#id>`, links e emoji colorido.
+  `<@id>`/`<#id>`, links e emoji colorido; blocos de código com realce pela etiqueta (zig, c/cpp,
+  js/ts, py, rust, go, sh, json, lua…) e botão "Copiar"; prévia acima da caixa enquanto se digita.
+- **Vídeos tocando na conversa** (anexos e links diretos para .mp4/.webm) com o **FFmpeg do
+  sistema, se tiver** (carregado só no primeiro play, sem dependência de build): play/pausa,
+  barra de progresso, som; até 480p e ~30 qps. Sem FFmpeg, o vídeo abre no navegador. Também
+  anima os GIFs antigos do Tenor que só existem em MP4.
+- **Proxy** (http, https, socks5, socks5h; Tor em `socks5h://127.0.0.1:9050`) para a mídia de
+  fora do Discord ou para tudo (Configurações → Privacidade → Rede).
 - Mensagens agrupadas, separadores de dia, envio "pendente" confirmado pelo servidor,
   indicador de digitação, rolagem suave com lista virtualizada.
 
@@ -104,6 +128,11 @@ sair. O app procura nesta ordem:
 2. A variável `LARPER_TOKEN`
 3. O arquivo `~/.config/larpercord/token`, que precisa ter `chmod 600`
 
+Com "Lembrar" no login, cada conta fica numa entrada própria do chaveiro
+(`service larpercord-account account <ID>`; sem chaveiro, `~/.config/larpercord/tokens/<ID>` com
+`chmod 600`) e aparece no menu do usuário para trocar. A lista (só ID, nome e avatar) fica em
+`~/.config/larpercord/accounts`. A entrada de cima continua valendo para a conta que já estava nela.
+
 `--demo` força o modo demonstração mesmo com token. Ainda não tem: vídeo/streaming, imagens
 (avatares, anexos e emojis personalizados aparecem como texto), threads/fóruns, permissões por
 canal (canais sem acesso só mostram um aviso) e notificações. A voz usa o backend de áudio do
@@ -133,6 +162,8 @@ Nada de mágica, só muitas decisões pequenas:
 
 Precisa de **Zig 0.17**, **SDL3**, **FreeType**, **fontconfig** e **libcurl** (com WebSocket, 7.86+). Fontes recomendadas: Inter,
 JetBrains Mono e Noto Color Emoji (o fontconfig escolhe substitutas se faltar alguma).
+Opcional: **FFmpeg 7, 8 ou 9** (libavformat 61–63) para tocar vídeo dentro do app; outra versão
+é ignorada e o vídeo abre no navegador.
 
 ```bash
 # Arch
@@ -152,7 +183,7 @@ zig build -Doptimize=ReleaseFast
 larpercord [--theme NOME] [--demo] [--settings] [--list-themes] [--no-live] [--shot ARQ.png] [--stats]
 ```
 
-Atalhos: `Ctrl+K` paleta · `Ctrl+,` configurações · `F2` próximo tema · `Ctrl+Tab` abas ·
+Atalhos: `Ctrl+K` paleta · `Ctrl+,` configurações · `Ctrl+I` caixa de entrada · `Ctrl+Shift+S` salvas · `F2` próximo tema · `Ctrl+Tab` abas ·
 `Alt+1…9` · `Ctrl+W` fecha aba · `Ctrl+Clique` abre canal em nova aba · `↑` edita a última
 mensagem · `Esc` cancela resposta/edição · `Ctrl+C` copia a seleção · botão direito em tudo.
 

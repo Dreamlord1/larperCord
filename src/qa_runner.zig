@@ -15,7 +15,7 @@ const Key = []const u8;
 
 /// Onde agir: uma marcação (com deslocamento opcional) ou uma marcação
 /// calculada na hora (depende de IDs que só existem durante o teste).
-const Target = union(enum) {
+pub const Target = union(enum) {
     mark: Key,
     dyn: *const fn (app: *App, buf: []u8) []const u8,
     /// Ponto dentro da marcação: frações da largura/altura.
@@ -23,7 +23,7 @@ const Target = union(enum) {
     dyn_at: struct { f: *const fn (app: *App, buf: []u8) []const u8, fx: f32, fy: f32 },
 };
 
-const Op = union(enum) {
+pub const Op = union(enum) {
     section: []const u8,
     click: Target,
     rclick: Target,
@@ -288,6 +288,165 @@ fn toClassico(app: *App) void {
 fn scrollBottom(app: *App) void {
     if (app.st.activeChannel()) |id| app.st.scrollOf(id).stick_bottom = true;
 }
+// Vídeo (com ou sem FFmpeg no sistema: sem ele, o play só avisa).
+const video = @import("ui/video.zig");
+const ffmpeg = @import("platform/ffmpeg.zig");
+var video_pos: f64 = 0;
+fn hasFfmpeg() bool {
+    return ffmpeg.known() == true;
+}
+fn findVideo(app: *App) ?struct { id: Id, i: usize } {
+    const cs = active(app) orelse return null;
+    var k = cs.messages.items.len;
+    while (k > 0) {
+        k -= 1;
+        const m = &cs.messages.items[k];
+        for (m.msg.attachments, 0..) |a, i| if (a.video and std.mem.eql(u8, a.link, video.demo_link)) return .{ .id = m.msg.id, .i = i };
+    }
+    return null;
+}
+fn jumpToVideo(app: *App) void {
+    const f = findVideo(app) orelse return;
+    app.st.jump = f.id;
+}
+fn tDemoVideo(app: *App, b: []u8) []const u8 {
+    const f = findVideo(app) orelse return "";
+    return markFmt(b, "att:{d}:{d}", .{ f.id, f.i });
+}
+fn tVideoMark(b: []u8, name: []const u8) []const u8 {
+    if (!video.info().active) return "";
+    return markFmt(b, "{s}", .{name});
+}
+fn tVideoPlay(_: *App, b: []u8) []const u8 {
+    return tVideoMark(b, "video-play");
+}
+fn tVideoBar(_: *App, b: []u8) []const u8 {
+    return tVideoMark(b, "video-bar");
+}
+fn tVideoClose(_: *App, b: []u8) []const u8 {
+    return tVideoMark(b, "video-close");
+}
+fn tVideoMute(_: *App, b: []u8) []const u8 {
+    if (!video.info().has_audio) return "";
+    return tVideoMark(b, "video-mute");
+}
+fn videoPlaying(app: *App) bool {
+    if (!hasFfmpeg()) return !video.info().active and std.mem.indexOf(u8, app.st.toast.text(), "vídeo") != null;
+    const v = video.info();
+    return v.active and v.playing and v.shown >= 3 and qa.find("video") != null;
+}
+fn videoLimits(_: *App) bool {
+    if (!hasFfmpeg()) return true;
+    const v = video.info();
+    if (c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[vídeo] {d}x{d} pos={d:.0} dur={d} decodificados={d} mostrados={d} som={} fila={d}\n", .{ v.w, v.h, v.pos_ms, v.duration_ms, v.decoded, v.shown, v.has_audio, v.audio_queued });
+    if (v.pos_ms < 900) return false;
+    // 60 qps na origem: sem o limite seriam ~2 quadros a cada 33 ms.
+    const max_decoded: u32 = @intFromFloat(v.pos_ms / 30 + 6);
+    return v.w > 0 and v.w <= 854 and v.h <= 480 and v.decoded <= max_decoded and v.duration_ms == 3000;
+}
+fn videoAudio(_: *App) bool {
+    if (!hasFfmpeg() or !video.audioAvailable()) return true;
+    return video.info().has_audio;
+}
+fn videoPaused(_: *App) bool {
+    return !hasFfmpeg() or !video.info().playing;
+}
+fn rememberVideoPos(_: *App) void {
+    video_pos = video.info().pos_ms;
+}
+fn videoPosKept(_: *App) bool {
+    return !hasFfmpeg() or video.info().pos_ms == video_pos;
+}
+fn videoSeeked(_: *App) bool {
+    if (!hasFfmpeg()) return true;
+    const v = video.info();
+    // 75% de 3 s (a barra começa depois do tempo; a conta é aproximada).
+    return v.pos_ms > 1800 and v.pos_ms < 2700 and !v.playing;
+}
+fn videoResumed(_: *App) bool {
+    return !hasFfmpeg() or video.info().playing;
+}
+fn videoMuted(_: *App) bool {
+    const v = video.info();
+    return !hasFfmpeg() or !v.has_audio or v.muted;
+}
+fn videoEnded(_: *App) bool {
+    if (!hasFfmpeg()) return true;
+    const v = video.info();
+    return v.ended and !v.playing and v.pos_ms == 3000;
+}
+fn videoRestarted(_: *App) bool {
+    if (!hasFfmpeg()) return true;
+    const v = video.info();
+    return v.playing and !v.ended and v.pos_ms < 1500;
+}
+fn videoClosed(_: *App) bool {
+    return !video.info().active;
+}
+fn jumpToMp4Gif(app: *App) void {
+    const f = findAttachment(app, "demo:mp4") orelse return;
+    app.st.jump = f.id;
+}
+fn gifHostsOn(app: *App) void {
+    app.st.settings.gif_hosts = true;
+}
+fn gifHostsOff(app: *App) void {
+    app.st.settings.gif_hosts = false;
+}
+fn mp4GifStill(app: *App) bool {
+    var it = app.images.map.iterator();
+    var still = false;
+    while (it.next()) |e| {
+        if (std.mem.endsWith(u8, e.key_ptr.*, " demo:mp4")) return false;
+        if (std.mem.endsWith(u8, e.key_ptr.*, " demo:2") and e.value_ptr.state == .ready) still = true;
+    }
+    return still;
+}
+fn mp4GifAnimated(app: *App) bool {
+    var it = app.images.map.iterator();
+    if (c.SDL_getenv("QA_DEBUG") != null) {
+        var it2 = app.images.map.iterator();
+        while (it2.next()) |e| if (std.mem.indexOf(u8, e.key_ptr.*, "demo:mp4") != null) std.debug.print("[mp4] {s} {s} {d}\n", .{ e.key_ptr.*, @tagName(e.value_ptr.state), e.value_ptr.frames.len });
+    }
+    var mp4_failed = false;
+    var still_ok = false;
+    while (it.next()) |e| {
+        if (std.mem.endsWith(u8, e.key_ptr.*, " demo:mp4")) {
+            // 3 s a no máximo 30 qps (o MP4 é de 60).
+            if (e.value_ptr.state == .ready and e.value_ptr.frames.len > 10 and e.value_ptr.frames.len <= 91) return hasFfmpeg();
+            if (e.value_ptr.state == .failed) mp4_failed = true;
+        }
+        if (std.mem.endsWith(u8, e.key_ptr.*, " demo:2") and e.value_ptr.state == .ready) still_ok = true;
+    }
+    return ffmpeg.known() == false and mp4_failed and still_ok;
+}
+
+// Proxy.
+const proxy = @import("net/proxy.zig");
+fn proxyRejected(app: *App) bool {
+    return app.st.settings.proxy.len == 0 and std.mem.indexOf(u8, app.st.toast.text(), "inválido") != null and qa.find("proxy-input") != null;
+}
+fn proxyExternalOnly(app: *App) bool {
+    var b: proxy.Buf = undefined;
+    if (!std.mem.eql(u8, app.st.settings.proxy.slice(), "socks5h://127.0.0.1:9050")) return false;
+    const ext = proxy.forUrl(&b, "https://media.tenor.com/x.webp") orelse return false;
+    return std.mem.eql(u8, ext, "socks5h://127.0.0.1:9050") and proxy.forUrl(&b, "https://cdn.discordapp.com/x.png") == null and proxy.forDiscord(&b) == null;
+}
+fn proxyEverywhere(app: *App) bool {
+    var b: proxy.Buf = undefined;
+    return app.st.settings.proxy_all and proxy.forUrl(&b, "https://cdn.discordapp.com/x.png") != null and proxy.forDiscord(&b) != null;
+}
+fn proxyPersisted(app: *App) bool {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(app.gpa);
+    @import("ui/settings_state.zig").write(&app.st.settings, "classico", &out, app.gpa) catch return false;
+    return std.mem.indexOf(u8, out.items, "proxy=\"socks5h://127.0.0.1:9050\"") != null and std.mem.indexOf(u8, out.items, "proxy_all=#true") != null;
+}
+fn proxyRemoved(app: *App) bool {
+    var b: proxy.Buf = undefined;
+    return app.st.settings.proxy.len == 0 and proxy.forUrl(&b, "https://media.tenor.com/x.webp") == null and proxy.forDiscord(&b) == null;
+}
+
 fn jumpToGif(app: *App) void {
     const f = findAttachment(app, "demo:gif") orelse return;
     app.st.jump = f.id;
@@ -474,15 +633,16 @@ fn openedGithub(app: *App) bool {
     const a = @import("ui/attachments.zig");
     return std.mem.startsWith(u8, a.last_opened[0..a.last_opened_len], "https://github.com/");
 }
-fn noteSaved(app: *App) bool {
+fn profileNoteSaved(app: *App) bool {
     const n = app.store.notes.get(1002) orelse return false;
     return std.mem.eql(u8, n, "jogador de hollow knight") and !app.st.note_editing;
 }
 fn movedToGaming(app: *App) bool {
-    return app.store.voiceChannelOf(1001) == ch(14);
+    return app.store.voiceChannelOf(1001, app.st.guild) == ch(14);
 }
 fn disconnected1001(app: *App) bool {
-    return app.store.voiceChannelOf(1001) == 0;
+    const cur = app.store.voiceChannelOf(1001, app.st.guild);
+    return cur == 0 or app.store.channel(cur).?.info.guild != app.st.guild;
 }
 
 fn inVoice(app: *App) bool {
@@ -580,12 +740,718 @@ fn mentionResolved(app: *App) bool {
 fn popupClosed(app: *App) bool {
     return app.st.popup == .none;
 }
+// Plugins: os dois exemplos de docs/plugins e três de teste.
+const qa_plugins = [_]struct { name: []const u8, src: []const u8 }{
+    .{ .name = "qa.lua", .src =
+    \\larper.on("message", function(msg)
+    \\  if msg.content == "ping-plugin" then larper.notify("pong-plugin de " .. msg.author.name) end
+    \\  if msg.content == "spam-plugin" then larper.send(msg.channel, "spam!") end
+    \\end)
+    \\larper.keybind("ctrl+shift+y", function() larper.send(nil, "atalho do plugin") end)
+    },
+    .{ .name = "trava.lua", .src = "larper.command('/trava', function() while true do end end)" },
+    .{ .name = "quebrado.lua", .src = "larper.on('message', function( end" },
+};
+
+fn writePlugins(_: *App) void {
+    _ = c.SDL_CreateDirectory("qa-out/plugins");
+    for ([_][]const u8{ "shrug.lua", "alerta.lua" }) |n| {
+        var a: [96]u8 = undefined;
+        var b: [96]u8 = undefined;
+        const from = std.fmt.bufPrintSentinel(&a, "docs/plugins/{s}", .{n}, 0) catch continue;
+        const to = std.fmt.bufPrintSentinel(&b, "qa-out/plugins/{s}", .{n}, 0) catch continue;
+        var size: usize = 0;
+        const data = c.SDL_LoadFile(from.ptr, &size) orelse continue;
+        defer c.SDL_free(data);
+        _ = c.SDL_SaveFile(to.ptr, data, size);
+    }
+    for (qa_plugins) |p| {
+        var b: [96]u8 = undefined;
+        const to = std.fmt.bufPrintSentinel(&b, "qa-out/plugins/{s}", .{p.name}, 0) catch continue;
+        _ = c.SDL_SaveFile(to.ptr, p.src.ptr, p.src.len);
+    }
+}
+fn plugin(app: *App, name: []const u8) ?*@import("plugins/engine.zig").Plugin {
+    for (app.plugins.list.items) |p| if (std.mem.eql(u8, p.name, name)) return p;
+    return null;
+}
+fn pluginErr(app: *App, name: []const u8, needle: []const u8) bool {
+    const p = plugin(app, name) orelse return false;
+    return std.mem.indexOf(u8, p.err() orelse return false, needle) != null;
+}
+fn lastIs(app: *App, text: []const u8) bool {
+    const m = lastMsg(app, 0) orelse return false;
+    return m.msg.author == app.store.me and std.mem.eql(u8, m.msg.content, text);
+}
+fn noPlugins(app: *App) bool {
+    return app.plugins.list.items.len == 0 and qa.find("button:Recarregar") != null;
+}
+fn pluginsLoaded(app: *App) bool {
+    return app.plugins.list.items.len == 5 and qa.find("toggle:shrug.lua") != null;
+}
+fn syntaxShown(app: *App) bool {
+    const p = plugin(app, "quebrado.lua") orelse return false;
+    return p.status() == .failed and qa.find("plugin-error:quebrado.lua") != null;
+}
+fn shrugSent(app: *App) bool {
+    return lastIs(app, "sei lá ¯\\_(ツ)_/¯");
+}
+fn travaStopped(app: *App) bool {
+    const p = plugin(app, "trava.lua") orelse return false;
+    return p.status() == .failed and pluginErr(app, "trava.lua", "limite") and !lastIs(app, "/trava");
+}
+fn keySent(app: *App) bool {
+    return lastIs(app, "atalho do plugin");
+}
+fn pongToast(app: *App) bool {
+    return std.mem.indexOf(u8, app.st.toast.text(), "pong-plugin") != null;
+}
+fn fakeUrgent(app: *App) void {
+    const id = app.st.activeChannel() orelse return;
+    @import("plugins/host.zig").onMessage(app, .{ .id = 1, .channel = id, .author = 1001, .timestamp = 0, .content = "isso é URGENTE, gente" });
+}
+fn alertToast(app: *App) bool {
+    return std.mem.indexOf(u8, app.st.toast.text(), "falou \"urgente\"") != null;
+}
+fn spamBlocked(app: *App) bool {
+    const p = plugin(app, "qa.lua") orelse return false;
+    return p.status() == .running and pluginErr(app, "qa.lua", "larper.send") and !lastIs(app, "spam!");
+}
+fn shrugOff(app: *App) bool {
+    const p = plugin(app, "shrug.lua") orelse return false;
+    return p.status() == .off;
+}
+fn shrugOn(app: *App) bool {
+    const p = plugin(app, "shrug.lua") orelse return false;
+    return p.status() == .running;
+}
+fn shrugLiteral(app: *App) bool {
+    return lastIs(app, "/shrug sei lá");
+}
+
 fn toDemoStart(app: *App) void {
     app.st.reply_to = 0;
     app.st.editing = 0;
 }
 
+// --- Tela dividida e cor do servidor ------------------------------------------
+
+const mosaic = @import("ui/mosaic.zig");
+const guild_color = @import("ui/guild_color.zig");
+
+fn inside(a: @import("theme/layout.zig").Rect, b: @import("theme/layout.zig").Rect) bool {
+    return a.x >= b.x - 1 and a.right() <= b.right() + 1 and a.y >= b.y - 1;
+}
+fn sideMenuItem(_: *App) bool {
+    return qa.find("menu:Abrir ao lado") != null;
+}
+fn twoPanes(app: *App) bool {
+    const p = &mosaic.panes;
+    return p.count == 2 and p.ids[0] == ch(4) and p.ids[1] == ch(6) and p.focus == 1 and app.st.activeChannel() == ch(6);
+}
+/// Cada painel desenha o seu histórico, lado a lado, e as marcações do
+/// painel lateral não se confundem com as do focado.
+fn panesDrawn(_: *App) bool {
+    const p0 = qa.find("pane:0") orelse return false;
+    const p1 = qa.find("pane:1") orelse return false;
+    if (p1.x < p0.right() or p0.w < 200 or @abs(p0.w - p1.w) > 2) return false;
+    const side = qa.find("pane0/msg-index:0") orelse return false;
+    const main = qa.find("msg-index:0") orelse return false;
+    const first = qa.findFirst("msg-index:0") orelse return false;
+    return inside(side, p0) and inside(main, p1) and first.x == main.x;
+}
+fn lastIn(app: *App, id: Id) ?*@import("core/store.zig").StoredMessage {
+    const cs = app.store.channel(id) orelse return null;
+    if (cs.messages.items.len == 0) return null;
+    return &cs.messages.items[cs.messages.items.len - 1];
+}
+fn mineIn(app: *App, id: Id, text: []const u8) bool {
+    const m = lastIn(app, id) orelse return false;
+    return m.msg.author == app.store.me and std.mem.eql(u8, m.msg.content, text);
+}
+fn sentRight(app: *App) bool {
+    return mineIn(app, ch(6), "do painel da direita") and !mineIn(app, ch(4), "do painel da direita");
+}
+fn focusLeft(app: *App) bool {
+    return mosaic.panes.focus == 0 and mosaic.panes.count == 2 and app.st.activeChannel() == ch(4);
+}
+fn sentLeft(app: *App) bool {
+    return mineIn(app, ch(4), "do painel da esquerda") and mineIn(app, ch(6), "do painel da direita");
+}
+fn threePanes(app: *App) bool {
+    const p = &mosaic.panes;
+    return p.count == 3 and p.ids[2] == ch(7) and p.focus == 2 and app.st.activeChannel() == ch(7) and qa.find("pane:2") != null;
+}
+fn scrollLeftUp(app: *App) void {
+    const sc = app.st.scrollOf(ch(4));
+    sc.stick_bottom = false;
+    sc.target = 0;
+}
+fn ownScroll(app: *App) bool {
+    // Só o painel da esquerda saiu do fim: o botão aparece só nele.
+    return qa.find("pane0/jump-bottom") != null and qa.find("jump-bottom") == null and qa.find("pane1/jump-bottom") == null and
+        app.st.scrollOf(ch(6)).stick_bottom and app.st.scrollOf(ch(7)).stick_bottom;
+}
+fn leftAtBottom(app: *App) bool {
+    return app.st.scrollOf(ch(4)).stick_bottom and app.st.activeChannel() == ch(4) and mosaic.panes.focus == 0;
+}
+fn focusThird(app: *App) bool {
+    return mosaic.panes.focus == 2 and app.st.activeChannel() == ch(7);
+}
+fn closedThird(app: *App) bool {
+    const p = &mosaic.panes;
+    return p.count == 2 and p.ids[0] == ch(4) and p.ids[1] == ch(6) and app.st.activeChannel() == ch(6) and qa.find("pane:2") == null;
+}
+fn singleView(app: *App) bool {
+    return !mosaic.on() and app.st.activeChannel() == ch(4) and qa.find("pane:0") == null and qa.find("msg-index:0") != null;
+}
+fn colorRow(_: *App) bool {
+    return qa.find("guild-color:0") != null and qa.find("guild-color:8") != null;
+}
+const red: u32 = 0xED4245;
+fn accentIs(app: *App, rgb: u32) bool {
+    const want = @import("theme/color.zig").Rgba.hex(rgb);
+    return std.meta.eql(app.customTheme().c(.accent), want);
+}
+fn guildRed(app: *App) bool {
+    return app.st.guild == 500000 and guild_color.get(500000) == red and accentIs(app, red) and app.st.popup == .none;
+}
+fn otherGuildPlain(app: *App) bool {
+    return app.st.guild == 501000 and !accentIs(app, red);
+}
+fn guildPlain(app: *App) bool {
+    return app.st.guild == 500000 and guild_color.get(500000) == null and !accentIs(app, red);
+}
+
+// --- Editor: prévia do markdown, blocos de código, paleta, vim -----------------
+
+fn previewShown(_: *App) bool {
+    return qa.find("md-preview") != null;
+}
+fn previewHidden(_: *App) bool {
+    return qa.find("md-preview") == null;
+}
+fn previewOff(app: *App) bool {
+    return !app.st.settings.md_preview;
+}
+const code_body = "const std = @import(\"std\");\n// comentário do QA\npub fn main() !void {\n    std.debug.print(\"oi {d}\\n\", .{42});\n}";
+const code_msg = "```zig\n" ++ code_body ++ "\n```";
+fn sendCodeBlock(app: *App) void {
+    const text = app.gpa.dupe(u8, code_msg) catch return;
+    app.actions.append(app.gpa, .{ .send_message = text }) catch {};
+}
+fn codeMsg(app: *App) ?*@import("core/store.zig").StoredMessage {
+    const cs = active(app) orelse return null;
+    var i = cs.messages.items.len;
+    while (i > 0) {
+        i -= 1;
+        const m = &cs.messages.items[i];
+        if (std.mem.eql(u8, m.msg.content, code_msg)) return m;
+    }
+    return null;
+}
+fn codeSent(app: *App) bool {
+    const m = codeMsg(app) orelse return false;
+    return !m.pending and m.msg.id != 0;
+}
+fn codeLang(app: *App) bool {
+    const m = codeMsg(app) orelse return false;
+    for (m.spans) |sp| if (sp.flags.block) return sp.lang == .zig and std.mem.eql(u8, sp.text, code_body);
+    return false;
+}
+fn tCodeCopy(app: *App, b: []u8) []const u8 {
+    const m = codeMsg(app) orelse return "";
+    return markFmt(b, "code-copy:{d}:{d}", .{ m.msg.id, "```zig\n".len });
+}
+fn codeCopied(app: *App) bool {
+    if (!toastCopied(app)) return false;
+    // O driver de vídeo do QA pode não ter área de transferência: aí basta o aviso.
+    const clip = c.SDL_GetClipboardText() orelse return true;
+    defer c.SDL_free(clip);
+    const t = std.mem.span(clip);
+    return t.len == 0 or std.mem.eql(u8, t, code_body);
+}
+fn actionsFirst(app: *App) bool {
+    const items = app.st.palette.items.items;
+    return app.st.palette.open and items.len > 0 and items[0].kind != .channel and items[0].kind != .guild;
+}
+fn meIdle(app: *App) bool {
+    return app.store.user(app.store.me).?.status == .idle and app.st.settings.my_status == 1;
+}
+fn chatPage(app: *App) bool {
+    return app.st.settings.open and app.st.settings.page == .chat;
+}
+fn allRead(app: *App) bool {
+    for (app.store.guilds.items) |g| if (g.unread or g.mentions > 0) return false;
+    return true;
+}
+fn vimDefaultOff(app: *App) bool {
+    return !app.st.settings.vim_keys;
+}
+fn vimOn(app: *App) bool {
+    return app.st.settings.vim_keys;
+}
+fn vimLeft(app: *App) bool {
+    return !app.io.*.WantTextInput and std.mem.eql(u8, std.mem.sliceTo(&app.st.input, 0), "rascunho");
+}
+fn composerFocused(app: *App) bool {
+    return app.io.*.WantTextInput and !app.st.palette.open;
+}
+fn scrolledUp(app: *App) bool {
+    const sc = app.st.scrollOf(app.st.activeChannel() orelse return false);
+    return !sc.stick_bottom;
+}
+fn atTop(app: *App) bool {
+    const sc = app.st.scrollOf(app.st.activeChannel() orelse return false);
+    return !sc.stick_bottom and sc.target < 1;
+}
+fn stuckBottom(app: *App) bool {
+    return app.st.scrollOf(app.st.activeChannel() orelse return false).stick_bottom;
+}
+var saved_target: f32 = 0;
+fn rememberTarget(app: *App) void {
+    saved_target = app.st.scrollOf(app.st.activeChannel() orelse return).target;
+}
+fn halfPageDown(app: *App) bool {
+    return app.st.scrollOf(app.st.activeChannel() orelse return false).target > saved_target + 100;
+}
+fn halfPageUp(app: *App) bool {
+    return app.st.scrollOf(app.st.activeChannel() orelse return false).target < saved_target - 100;
+}
+fn scrolledDown(app: *App) bool {
+    return app.st.scrollOf(app.st.activeChannel() orelse return false).target > saved_target + 30;
+}
+var saved_channel: Id = 0;
+fn rememberChannel(app: *App) void {
+    saved_channel = app.st.activeChannel() orelse 0;
+}
+fn channelMovedUnfocused(app: *App) bool {
+    const id = app.st.activeChannel() orelse return false;
+    return id != saved_channel and !app.io.*.WantTextInput and app.store.channel(id).?.info.kind == .text;
+}
+fn channelBack(app: *App) bool {
+    return app.st.activeChannel() == saved_channel;
+}
+fn shiftKey(k: c_int) Op {
+    return .{ .key = .{ .key = k, .shift = true } };
+}
+fn ctrlShift(k: c_int) Op {
+    return .{ .key = .{ .key = k, .ctrl = true, .shift = true } };
+}
+
+const ops_editor = [_]Op{
+    s("prévia do markdown"),
+    click("composer"),
+    .{ .text = "https://ziglang.org" },
+    .{ .wait = 100 },
+    expect("link sozinho não abre a prévia", previewHidden),
+    ctrl(c.ImGuiKey_A),
+    .{ .text = "isso é **negrito**, *itálico*, ~~riscado~~ e `código`" },
+    expect("texto com formatação mostra a prévia", previewShown),
+    .{ .shot = "40-previa" },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Chat"),
+    click("toggle:Prévia do markdown"),
+    expect("Configurações → Chat desliga a prévia", previewOff),
+    key(c.ImGuiKey_Escape),
+    .{ .wait = 100 },
+    expect("desligada, a prévia some", previewHidden),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Chat"),
+    click("toggle:Prévia do markdown"),
+    key(c.ImGuiKey_Escape),
+    expect("religada, a prévia volta", previewShown),
+    click("composer"),
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    .{ .wait = 100 },
+    expect("caixa vazia, sem prévia", previewHidden),
+
+    s("blocos de código"),
+    .{ .run = sendCodeBlock },
+    .{ .expect = .{ .name = "bloco ```zig enviado", .check = codeSent, .timeout_ms = 3000 } },
+    expect("o bloco guarda a linguagem da etiqueta", codeLang),
+    .{ .run = scrollBottom },
+    .{ .wait = 300 },
+    .{ .hover = .{ .dyn = tCodeCopy } },
+    .{ .wait = 200 },
+    .{ .shot = "41-bloco-codigo" },
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tCodeCopy } },
+    expect("\"Copiar\" copia o código do bloco", codeCopied),
+
+    s("paleta de comandos"),
+    ctrlShift(c.ImGuiKey_P),
+    expect("Ctrl+Shift+P abre a paleta com as ações primeiro", actionsFirst),
+    .{ .shot = "42-paleta-acoes" },
+    .{ .text = "ligar modo compacto" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta liga uma opção das configurações", compactOn),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "desligar modo compacto" },
+    key(c.ImGuiKey_Enter),
+    expect("e desliga", compactOff),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "status ausente" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta muda o status", meIdle),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "status online" },
+    key(c.ImGuiKey_Enter),
+    expect("e volta para online", meOnline),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "modo claro" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta troca para o modo claro", lightMode),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "modo escuro" },
+    key(c.ImGuiKey_Enter),
+    expect("e para o escuro", darkMode),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "marcar tudo como lido" },
+    key(c.ImGuiKey_Enter),
+    expect("marcar tudo como lido", allRead),
+    ctrlShift(c.ImGuiKey_P),
+    .{ .text = "configurações chat" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta abre uma página das configurações", chatPage),
+    key(c.ImGuiKey_Escape),
+    ctrl(c.ImGuiKey_K),
+    .{ .text = "@ ana" },
+    key(c.ImGuiKey_Enter),
+    expect("paleta abre uma mensagem direta", dmWithAna),
+    click("guild:500000"),
+
+    s("navegação vim"),
+    expect("vim vem desligado", vimDefaultOff),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Atalhos de teclado"),
+    click("toggle:Navegação estilo vim"),
+    expect("Atalhos de teclado liga a navegação vim", vimOn),
+    .{ .shot = "43-atalhos-vim" },
+    key(c.ImGuiKey_Escape),
+    click("composer"),
+    .{ .text = "rascunho" },
+    key(c.ImGuiKey_Escape),
+    expect("Esc sai da caixa sem apagar o texto", vimLeft),
+    key(c.ImGuiKey_K),
+    key(c.ImGuiKey_K),
+    expect("k rola para cima", scrolledUp),
+    shiftKey(c.ImGuiKey_G),
+    expect("G vai para o fim", stuckBottom),
+    // Meia página perto do fim (no topo chegam as antigas e a rolagem anda junto).
+    .{ .run = rememberTarget },
+    ctrl(c.ImGuiKey_U),
+    expect("Ctrl+u sobe meia página", halfPageUp),
+    .{ .run = rememberTarget },
+    ctrl(c.ImGuiKey_D),
+    expect("Ctrl+d desce meia página", halfPageDown),
+    key(c.ImGuiKey_G),
+    key(c.ImGuiKey_G),
+    expect("gg vai para o topo", atTop),
+    .{ .run = rememberTarget },
+    key(c.ImGuiKey_J),
+    expect("j rola para baixo", scrolledDown),
+    shiftKey(c.ImGuiKey_G),
+    .{ .run = rememberChannel },
+    shiftKey(c.ImGuiKey_J),
+    expect("J vai para o próximo canal (e a caixa fica sem foco)", channelMovedUnfocused),
+    .{ .wait = 100 },
+    shiftKey(c.ImGuiKey_K),
+    expect("K volta para o canal anterior", channelBack),
+    key(c.ImGuiKey_Slash),
+    expect("/ abre a paleta", paletteOpen),
+    key(c.ImGuiKey_Escape),
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha a paleta e sai da caixa", vimLeft),
+    key(c.ImGuiKey_I),
+    expect("i volta para a caixa de texto", composerFocused),
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    key(c.ImGuiKey_Escape),
+    key(c.ImGuiKey_Enter),
+    expect("Enter também volta para a caixa", composerFocused),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Atalhos de teclado"),
+    click("toggle:Navegação estilo vim"),
+    expect("desligar a navegação vim", vimDefaultOff),
+    key(c.ImGuiKey_Escape),
+};
+
+// --- Cache em disco, busca local e várias contas -----------------------------
+
+const msg_cache = @import("net/msg_cache.zig");
+const search = @import("ui/search.zig");
+const acc_store = @import("net/accounts_store.zig");
+
+var restored_before: u32 = 0;
+
+fn cacheFlush(app: *App) void {
+    msg_cache.flushDirty(&app.store);
+}
+fn cacheHasActive(app: *App) bool {
+    const cs = active(app) orelse return false;
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    const dec = msg_cache.readChannel(arena.allocator(), cs.info.id) orelse return false;
+    return dec.entries.len > 0 and dec.entries.len <= msg_cache.channel_msgs;
+}
+/// Tira a conversa aberta da memória (como o teto de mensagens faz) e abre de novo.
+fn cacheReopen(app: *App) void {
+    const cs = active(app) orelse return;
+    restored_before = msg_cache.restored;
+    app.store.unload(cs);
+    app.actions.append(app.gpa, .{ .focus_tab = app.st.tab }) catch {};
+}
+fn cacheShown(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return msg_cache.restored > restored_before and cs.history == .loaded and cs.messages.items.len > 0;
+}
+fn cacheReplaced(app: *App) bool {
+    const cs = active(app) orelse return false;
+    const sc = app.st.scrollOf(cs.info.id);
+    return !cs.cached and cs.history == .loaded and cs.messages.items.len > 0 and sc.stick_bottom;
+}
+fn searchOpen(_: *App) bool {
+    return search.open and qa.find("search-input") != null;
+}
+fn searchClosed(_: *App) bool {
+    return !search.open;
+}
+fn searchFromAna(app: *App) bool {
+    if (search.results.items.len == 0) return false;
+    for (search.results.items) |r| if (std.mem.indexOf(u8, r.author, "ana") == null) return false;
+    _ = app;
+    return qa.find("search-result:0") != null;
+}
+fn searchImages(app: *App) bool {
+    if (search.results.items.len == 0) return false;
+    for (search.results.items) |r| {
+        const cs = app.store.channel(r.channel) orelse return false;
+        if (cs.history != .loaded) continue;
+        const m = app.store.find(cs, r.id) orelse return false;
+        const img = for (m.msg.attachments) |a| {
+            if (a.isImage()) break true;
+        } else false;
+        if (!img) return false;
+    }
+    return true;
+}
+fn searchClear(_: *App) void {
+    search.close();
+    search.start();
+}
+/// Os #memes fora da tela saem da memória: a busca tem que achar no disco.
+fn unloadMemes(app: *App) void {
+    msg_cache.flushDirty(&app.store);
+    const open_ch = app.st.activeChannel() orelse 0;
+    var it = app.store.channels.valueIterator();
+    while (it.next()) |cs| if (cs.*.info.id != open_ch and std.mem.eql(u8, cs.*.info.name, "memes") and cs.*.history == .loaded) app.store.unload(cs.*);
+}
+var search_target: struct { ch: Id = 0, id: Id = 0 } = .{};
+fn searchFromDisk(_: *App) bool {
+    if (search.found_disk == 0 or search.results.items.len == 0) return false;
+    const r = search.results.items[0];
+    search_target = .{ .ch = r.channel, .id = r.id };
+    return r.disk;
+}
+fn searchJumped(app: *App) bool {
+    if (search.open or app.st.activeChannel() != search_target.ch) return false;
+    var b: [40]u8 = undefined;
+    return qa.find(std.fmt.bufPrint(&b, "msg:{d}", .{search_target.id}) catch return false) != null;
+}
+fn tClearCache(_: *App, b: []u8) []const u8 {
+    var keys: [4][56]u8 = undefined;
+    var lens: [4]u8 = undefined;
+    if (qa.keysWith(&.{"button:Apagar cache"}, &keys, &lens) == 0) return "";
+    const n = lens[0];
+    @memcpy(b[0..n], keys[0][0..n]);
+    return b[0..n];
+}
+fn cacheEmpty(_: *App) bool {
+    var ids: std.ArrayList(Id) = .empty;
+    defer ids.deinit(std.heap.c_allocator);
+    msg_cache.listChannels(&ids);
+    return ids.items.len == 0 and msg_cache.totalBytes() == 0;
+}
+fn privacyPage(app: *App) bool {
+    return app.st.settings.open and app.st.settings.page == .privacidade and qa.find("toggle:Guardar mensagens no disco") != null;
+}
+fn fakeAccounts(app: *App) void {
+    acc_store.list = .{};
+    _ = acc_store.list.upsert(app.store.me, "rsha", "", false);
+    _ = acc_store.list.upsert(7001, "conta-b", "", false);
+    acc_store.list.active = app.store.me;
+    acc_store.session = app.store.me;
+}
+fn accountsListed(_: *App) bool {
+    return qa.find("account:7001") != null and qa.find("account:1000") != null and qa.find("menu:Adicionar conta") != null;
+}
+fn switchedB(app: *App) bool {
+    return acc_store.session == 7001 and app.store.ready and acc_store.list.active == 7001 and app.login.phase != .form;
+}
+fn addForm(app: *App) bool {
+    return app.login.phase == .form and app.store.ready and app.login.back_len > 0 and acc_store.list.len == 2 and qa.find("login:voltar") != null;
+}
+fn backToSession(app: *App) bool {
+    return app.login.phase != .form and app.store.ready and acc_store.session == 7001;
+}
+fn removedB(app: *App) bool {
+    return acc_store.list.len == 1 and acc_store.list.find(7001) == null and acc_store.session == 1000 and app.store.ready;
+}
+
 const long_text = "Mensagem longa do QA pra testar a quebra de linha: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 😂🔥🎉 `código inline` **negrito** *itálico* ~~riscado~~ ||spoiler|| https://ziglang.org fim.";
+
+// --- Caixa de entrada e mensagens salvas ---------------------------------------
+
+const saved_core = @import("core/saved.zig");
+const saved_ui = @import("ui/saved.zig");
+
+fn inboxOpen(app: *App) bool {
+    return app.st.popup == .inbox and qa.find("inbox-tab:unread") != null;
+}
+fn firstMark(prefix: []const u8, b: []u8) []const u8 {
+    var keys: [1][56]u8 = undefined;
+    var lens: [1]u8 = undefined;
+    if (qa.keysWith(&.{prefix}, &keys, &lens) == 0) return "";
+    const k = keys[0][0..lens[0]];
+    @memcpy(b[0..k.len], k);
+    return b[0..k.len];
+}
+fn idOf(name: []const u8) Id {
+    const colon = std.mem.lastIndexOfScalar(u8, name, ':') orelse return 0;
+    return std.fmt.parseInt(Id, name[colon + 1 ..], 10) catch 0;
+}
+fn inboxHasPreview(_: *App) bool {
+    var b: [64]u8 = undefined;
+    return firstMark("inbox-msg:", &b).len > 0;
+}
+/// A menção no fim do #anúncios do primeiro servidor (demonstração).
+fn announcement(app: *App) ?Id {
+    const cs = app.store.channel(ch(2)) orelse return null;
+    var i = cs.messages.items.len;
+    while (i > 0) {
+        i -= 1;
+        const m = &cs.messages.items[i];
+        if (m.msg.author == 1001 and std.mem.indexOf(u8, m.msg.content, "<@1000>") != null) return m.msg.id;
+    }
+    return null;
+}
+fn inboxHasAnnouncement(app: *App) bool {
+    const id = announcement(app) orelse return false;
+    var b: [64]u8 = undefined;
+    return qa.find(markFmt(&b, "inbox-msg:{d}", .{id})) != null and qa.find(markFmt(&b, "inbox-open:{d}", .{ch(2)})) != null;
+}
+fn tInboxAnnouncement(app: *App, b: []u8) []const u8 {
+    const id = announcement(app) orelse return "";
+    return markFmt(b, "inbox-msg:{d}", .{id});
+}
+fn noOldToast(app: *App) bool {
+    return std.mem.indexOf(u8, app.st.toast.text(), "carregada") == null;
+}
+fn jumpedToMention(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return cs.info.id == ch(2) and cs.history == .loaded and app.st.popup == .none and app.st.jump == 0 and !cs.info.unread and noOldToast(app);
+}
+fn announcementGone(_: *App) bool {
+    var b: [64]u8 = undefined;
+    return qa.find(markFmt(&b, "inbox-open:{d}", .{ch(2)})) == null and qa.find("inbox-tab:unread") != null;
+}
+fn tInboxReadFirst(_: *App, b: []u8) []const u8 {
+    const k = firstMark("inbox-read:", b);
+    saved_id = idOf(k);
+    return k;
+}
+fn firstGroupRead(app: *App) bool {
+    if (app.store.channel(saved_id)) |cs| return !cs.info.unread;
+    if (app.store.guild(saved_id)) |g| return g.mentions == 0;
+    return false;
+}
+fn inboxEmpty(app: *App) bool {
+    if (qa.find("inbox-empty") == null or app.st.popup != .inbox) return false;
+    var it = app.store.channels.valueIterator();
+    while (it.next()) |cs| if (cs.*.info.guild == 0 and cs.*.info.unread) return false;
+    for (app.store.guilds.items) |g| if (g.mentions > 0) return false;
+    return true;
+}
+fn mentionsShown(app: *App) bool {
+    var b: [64]u8 = undefined;
+    return app.store.mentions_state == .loaded and app.store.recent_mentions.items.len > 0 and firstMark("inbox-mention:", &b).len > 0;
+}
+fn tFirstMention(_: *App, b: []u8) []const u8 {
+    const k = firstMark("inbox-mention:", b);
+    saved_id = idOf(k);
+    return k;
+}
+fn oldMentionOpened(app: *App) bool {
+    const cs = active(app) orelse return false;
+    const want = for (app.store.recent_mentions.items) |m| {
+        if (m.msg.id == saved_id) break m.msg.channel;
+    } else return false;
+    return cs.info.id == want and cs.history == .loaded and app.st.popup == .none and app.st.jump == 0 and !noOldToast(app);
+}
+fn rememberOther(app: *App) void {
+    if (lastOther(app)) |m| saved_id = m.msg.id;
+}
+fn tHoverSaved(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "msg:{d}", .{saved_id});
+}
+fn oneSaved(app: *App) bool {
+    return app.st.saved.items.items.len == 1 and app.st.saved.find(saved_id) != null;
+}
+fn noneSaved(app: *App) bool {
+    return app.st.saved.items.items.len == 0;
+}
+fn savedOpen(app: *App) bool {
+    var b: [64]u8 = undefined;
+    return app.st.popup == .saved and qa.find(markFmt(&b, "saved-open:{d}", .{saved_id})) != null;
+}
+fn tSavedNote(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "saved-note:{d}", .{saved_id});
+}
+fn tSavedOpen(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "saved-open:{d}", .{saved_id});
+}
+fn tSavedRemove(_: *App, b: []u8) []const u8 {
+    return markFmt(b, "saved-remove:{d}", .{saved_id});
+}
+fn noteEditing(app: *App) bool {
+    return saved_ui.isEditing() and app.st.popup == .saved and qa.find("saved-note-input") != null;
+}
+fn noteCancelled(app: *App) bool {
+    const it = app.st.saved.find(saved_id) orelse return false;
+    return !saved_ui.isEditing() and app.st.popup == .saved and std.mem.eql(u8, it.note, qa_note);
+}
+/// O que está gravado no arquivo de salvas da conta (qa-out/).
+fn savedOnDisk(app: *App) ?saved_core.List {
+    var buf: [256]u8 = undefined;
+    const p = saved_ui.filePath(&buf, app.store.me) orelse return null;
+    var size: usize = 0;
+    const data = c.SDL_LoadFile(p.ptr, &size) orelse return null;
+    defer c.SDL_free(data);
+    var l: saved_core.List = .{};
+    l.read(app.gpa, @as([*]const u8, @ptrCast(data))[0..size]) catch return null;
+    return l;
+}
+const qa_note = "lembrar de responder";
+fn noteSaved(app: *App) bool {
+    const it = app.st.saved.find(saved_id) orelse return false;
+    if (saved_ui.isEditing() or !std.mem.eql(u8, it.note, qa_note)) return false;
+    var disk = savedOnDisk(app) orelse return false;
+    defer disk.deinit(app.gpa);
+    const f = disk.find(saved_id) orelse return false;
+    return std.mem.eql(u8, f.note, qa_note) and f.channel == ch(4) and f.content.len > 0;
+}
+fn jumpedToSaved(app: *App) bool {
+    const cs = active(app) orelse return false;
+    return cs.info.id == ch(4) and app.st.popup == .none and app.st.jump == 0 and noOldToast(app);
+}
+fn savedEmptyOnDisk(app: *App) bool {
+    if (app.st.saved.items.items.len != 0 or qa.find("saved-empty") == null) return false;
+    var disk = savedOnDisk(app) orelse return false;
+    defer disk.deinit(app.gpa);
+    return disk.items.items.len == 0;
+}
 
 const ops = [_]Op{
     s("início"),
@@ -707,7 +1573,7 @@ const ops = [_]Op{
     click("profile-note"),
     .{ .text = "jogador de hollow knight" },
     key(c.ImGuiKey_Enter),
-    expect("a nota fica guardada", noteSaved),
+    expect("a nota fica guardada", profileNoteSaved),
     click("profile-full-close"),
     expect("o X fecha o perfil grande", popupClosed),
 
@@ -738,11 +1604,10 @@ const ops = [_]Op{
     expect("clicar em quem está na call abre o perfil", profileOpen),
     key(c.ImGuiKey_Escape),
     .{ .rclick = .{ .mark = "voice-member:500014:1001" } },
-    .{ .shot = "zz-move" },
     click("menu:Mover para…"),
     click("menu:Jogando"),
     expect("botão direito → Mover para… muda a pessoa de call", movedToGaming),
-    .{ .rclick = .{ .mark = "voice-member:500015:1001" } },
+    .{ .rclick = .{ .mark = "member:1001" } },
     click("menu:Desconectar da call"),
     expect("Desconectar da call tira a pessoa da call", disconnected1001),
     click("hangup"),
@@ -863,6 +1728,38 @@ const ops = [_]Op{
     key(c.ImGuiKey_Enter),
     .{ .expect = .{ .name = "só a imagem, sem texto", .check = sentImageOnly, .timeout_ms = 3000 } },
 
+    s("vídeo"),
+    .{ .run = jumpToVideo },
+    .{ .wait = 500 },
+    .{ .click = .{ .dyn = tDemoVideo } },
+    .{ .expect = .{ .name = "play no vídeo: toca aqui (sem FFmpeg, avisa e não toca)", .check = videoPlaying, .timeout_ms = 5000 } },
+    .{ .shot = "35-video" },
+    .{ .expect = .{ .name = "vídeo em até 480p e ~30 qps (o de 60 qps pula quadros)", .check = videoLimits, .timeout_ms = 4000 } },
+    expect("som do vídeo vai para o SDL (quando há áudio)", videoAudio),
+    .{ .click = .{ .dyn = tVideoPlay } },
+    expect("o botão pausa", videoPaused),
+    .{ .run = rememberVideoPos },
+    .{ .wait = 400 },
+    expect("pausado, o tempo não anda", videoPosKept),
+    .{ .click = .{ .dyn_at = .{ .f = tVideoBar, .fx = 0.75, .fy = 0.5 } } },
+    .{ .expect = .{ .name = "clicar na barra pula para o ponto", .check = videoSeeked, .timeout_ms = 3000 } },
+    .{ .click = .{ .dyn = tVideoPlay } },
+    expect("o botão continua", videoResumed),
+    .{ .click = .{ .dyn = tVideoMute } },
+    expect("o botão de som silencia", videoMuted),
+    .{ .expect = .{ .name = "o vídeo chega ao fim e para no último quadro", .check = videoEnded, .timeout_ms = 5000 } },
+    .{ .click = .{ .dyn = tVideoPlay } },
+    expect("play no fim recomeça do começo", videoRestarted),
+    .{ .click = .{ .dyn = tVideoClose } },
+    expect("o X fecha o vídeo e volta a prévia", videoClosed),
+    .{ .run = jumpToMp4Gif },
+    .{ .wait = 400 },
+    .{ .expect = .{ .name = "GIF de fora desligado: GIF em MP4 fica na prévia parada", .check = mp4GifStill, .timeout_ms = 4000 } },
+    .{ .run = gifHostsOn },
+    .{ .expect = .{ .name = "GIF de fora ligado: o GIF em MP4 anima pelo FFmpeg (sem ele, prévia)", .check = mp4GifAnimated, .timeout_ms = 8000 } },
+    .{ .shot = "36-gif-mp4" },
+    .{ .run = gifHostsOff },
+
     s("amigos, grupos e membros"),
     expect("fotos de perfil carregam", avatarsLoaded),
     expect("ícones dos servidores carregam", iconsLoaded),
@@ -910,12 +1807,179 @@ const ops = [_]Op{
     click("jump-bottom"),
     expect("o botão de ir ao fim volta para a última mensagem", atBottom),
 
+    s("plugins"),
+    .{ .run = writePlugins },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    expect("sem plugins carregados, a página diz como começar", noPlugins),
+    click("button:Recarregar"),
+    expect("Recarregar lê os .lua da pasta", pluginsLoaded),
+    expect("erro de sintaxe aparece na página", syntaxShown),
+    .{ .shot = "35-plugins" },
+    key(c.ImGuiKey_Escape),
+    expect("fecha as configurações", settingsClosed),
+    click("composer"),
+    .{ .text = "/shrug sei lá" },
+    key(c.ImGuiKey_Enter),
+    expect("/shrug (docs/plugins/shrug.lua) manda o texto com ¯\\_(ツ)_/¯", shrugSent),
+    click("composer"),
+    .{ .text = "/trava" },
+    key(c.ImGuiKey_Enter),
+    expect("plugin em laço infinito é parado pelo limite de instruções", travaStopped),
+    .{ .key = .{ .key = c.ImGuiKey_Y, .ctrl = true, .shift = true } },
+    expect("atalho Ctrl+Shift+Y do plugin manda mensagem", keySent),
+    click("composer"),
+    .{ .text = "ping-plugin" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "evento message chega ao plugin e larper.notify avisa", .check = pongToast, .timeout_ms = 3000 } },
+    .{ .run = clearToast },
+    .{ .run = fakeUrgent },
+    expect("alerta.lua (docs/plugins) avisa a palavra de outra pessoa", alertToast),
+    click("composer"),
+    .{ .text = "spam-plugin" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "larper.send em resposta a mensagem é bloqueado", .check = spamBlocked, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("toggle:shrug.lua"),
+    expect("desligar um plugin", shrugOff),
+    key(c.ImGuiKey_Escape),
+    click("composer"),
+    .{ .text = "/shrug sei lá" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "desligado, /shrug vai como texto normal", .check = shrugLiteral, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("toggle:shrug.lua"),
+    expect("religar o plugin", shrugOn),
+    .{ .sweep = &.{ "toggle:", "button:" } },
+    key(c.ImGuiKey_Escape),
+
+} ++ @import("qa_alertas.zig").ops ++ [_]Op{
+    s("caixa de entrada"),
+    click("guild:500000"),
+    click("channel:500005"),
+    click("header-inbox"),
+    expect("o botão do cabeçalho abre a caixa de entrada", inboxOpen),
+    .{ .expect = .{ .name = "DMs e menções não lidas aparecem com prévia", .check = inboxHasPreview, .timeout_ms = 3000 } },
+    .{ .expect = .{ .name = "a menção no #anúncios (nunca aberto) está na lista", .check = inboxHasAnnouncement, .timeout_ms = 3000 } },
+    .{ .shot = "40-caixa-de-entrada" },
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tInboxAnnouncement } },
+    .{ .expect = .{ .name = "clicar na menção abre o canal e rola até ela", .check = jumpedToMention, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_I),
+    expect("Ctrl+I abre a caixa de entrada", inboxOpen),
+    expect("o canal lido sai da lista", announcementGone),
+    .{ .click = .{ .dyn = tInboxReadFirst } },
+    expect("✓ marca um canal como lido", firstGroupRead),
+    click("inbox-readall"),
+    expect("marcar tudo como lido esvazia a caixa", inboxEmpty),
+    .{ .shot = "41-caixa-vazia" },
+    click("inbox-tab:mentions"),
+    .{ .expect = .{ .name = "aba Menções traz as menções recentes", .check = mentionsShown, .timeout_ms = 3000 } },
+    .{ .shot = "42-mencoes" },
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tFirstMention } },
+    .{ .expect = .{ .name = "menção antiga abre o canal e avisa que não está carregada", .check = oldMentionOpened, .timeout_ms = 3000 } },
+
+    s("mensagens salvas"),
+    click("guild:500000"),
+    click("channel:500005"),
+    .{ .run = rememberOther },
+    .{ .rclick = .{ .dyn = tHoverSaved } },
+    click("menu:Salvar mensagem"),
+    expect("salvar pelo menu do botão direito", oneSaved),
+    .{ .key = .{ .key = c.ImGuiKey_S, .ctrl = true, .shift = true } },
+    expect("Ctrl+Shift+S abre as salvas", savedOpen),
+    .{ .shot = "43-salvas" },
+    .{ .click = .{ .dyn = tSavedNote } },
+    expect("clicar em \"Adicionar anotação\" abre a edição", noteEditing),
+    .{ .text = qa_note },
+    key(c.ImGuiKey_Enter),
+    expect("Enter salva a anotação (e ela vai para o arquivo)", noteSaved),
+    .{ .shot = "44-salvas-anotacao" },
+    .{ .click = .{ .dyn = tSavedNote } },
+    expect("editar a anotação de novo", noteEditing),
+    .{ .text = " (rascunho)" },
+    key(c.ImGuiKey_Escape),
+    expect("Esc cancela a edição sem fechar a tela", noteCancelled),
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tSavedOpen } },
+    expect("Ir para a mensagem abre o canal nela", jumpedToSaved),
+    click("header-saved"),
+    expect("o botão do cabeçalho abre as salvas", savedOpen),
+    .{ .click = .{ .dyn = tSavedRemove } },
+    expect("Remover tira das salvas e do arquivo", savedEmptyOnDisk),
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha as salvas", popupClosed),
+    .{ .rclick = .{ .dyn = tHoverSaved } },
+    click("menu:Salvar mensagem"),
+    expect("salvar de novo", oneSaved),
+    .{ .rclick = .{ .dyn = tHoverSaved } },
+    click("menu:Remover dos salvos"),
+    expect("o menu de uma salva oferece remover", noneSaved),
+    s("tela dividida"),
+    click("guild:500000"),
+    click("channel:500005"),
+    .{ .rclick = .{ .mark = "channel:500007" } },
+    expect("menu do canal tem \"Abrir ao lado\"", sideMenuItem),
+    click("menu:Abrir ao lado"),
+    expect("Abrir ao lado divide a tela em dois painéis", twoPanes),
+    expect("cada painel mostra o histórico do seu canal", panesDrawn),
+    .{ .shot = "35-tela-dividida" },
+    click("composer"),
+    .{ .text = "do painel da direita" },
+    key(c.ImGuiKey_Enter),
+    expect("a caixa de texto envia para o painel focado", sentRight),
+    click("pane-focus:0"),
+    expect("clicar no título do outro painel foca ele", focusLeft),
+    click("composer"),
+    .{ .text = "do painel da esquerda" },
+    key(c.ImGuiKey_Enter),
+    expect("e a mensagem vai para o canal dele", sentLeft),
+    .{ .rclick = .{ .mark = "channel:500008" } },
+    click("menu:Abrir ao lado"),
+    expect("um terceiro painel ao lado", threePanes),
+    .{ .shot = "36-tres-paineis" },
+    .{ .run = scrollLeftUp },
+    .{ .wait = 300 },
+    expect("cada painel tem a sua rolagem", ownScroll),
+    click("pane0/jump-bottom"),
+    expect("o botão de ir ao fim do painel lateral rola ele (e foca)", leftAtBottom),
+    .{ .click = .{ .at = .{ .key = "pane:2", .fx = 0.5, .fy = 0.5 } } },
+    expect("clicar dentro de um painel foca ele", focusThird),
+    .{ .sweep = &.{"pane-"} },
+    click("pane-close:2"),
+    expect("o X fecha o painel (e o foco vai para o vizinho)", closedThird),
+    click("pane-close:1"),
+    expect("sobrando um, volta a ser uma conversa só", singleView),
+
+    s("cor do servidor"),
+    .{ .rclick = .{ .mark = "guild:500000" } },
+    expect("menu do servidor mostra as cores", colorRow),
+    .{ .shot = "37-cor-do-servidor" },
+    click("guild-color:4"),
+    expect("escolher a cor pinta o destaque do servidor", guildRed),
+    click("guild:501000"),
+    expect("outro servidor fica com a cor de sempre", otherGuildPlain),
+    click("guild:500000"),
+    expect("voltar ao servidor volta a cor dele", guildRed),
+    .{ .rclick = .{ .mark = "guild:500000" } },
+    click("guild-color:0"),
+    expect("a primeira bolinha tira a cor", guildPlain),
+
+} ++ ops_editor ++ [_]Op{
     s("clicar em tudo: servidor"),
     .{ .run = toClassico },
     .{ .wait = 200 },
     click("guild:500000"),
     .{ .wait = 300 },
-    .{ .sweep = &.{ "guild:", "folder:", "category:", "channel:", "member:", "voice-member:", "user-btn:", "header-search", "header-members", "tab:", "tab-plus", "status-theme", "chip:", "chip-add:", "att:", "me", "composer-emoji", "guild-header" } },
+    .{ .sweep = &.{ "guild:", "folder:", "category:", "channel:", "member:", "voice-member:", "user-btn:", "header-search", "header-find", "header-members", "header-inbox", "header-saved", "tab:", "tab-plus", "status-theme", "chip:", "chip-add:", "att:", "me", "composer-emoji", "guild-header", "code-copy:" } },
+    s("clicar em tudo: caixa de entrada"),
+    ctrl(c.ImGuiKey_I),
+    .{ .wait = 200 },
+    .{ .sweep = &.{"inbox-tab:"} },
+    key(c.ImGuiKey_Escape),
     s("clicar em tudo: mensagens diretas"),
     click("guild:0"),
     click("friends"),
@@ -937,6 +2001,38 @@ const ops = [_]Op{
     click("profile-tab:2"),
     .{ .sweep = &.{"profile-guild:"} },
     key(c.ImGuiKey_Escape),
+    s("clicar em tudo: perfil grande"),
+    click("member:1002"),
+    click("profile-full"),
+    .{ .wait = 300 },
+    .{ .sweep = &.{ "profile-tab:", "profile-conn:", "profile-note", "profile-btn:", "profile-full-close", "profile-avatar", "profile-banner" } },
+    click("profile-tab:1"),
+    .{ .sweep = &.{"profile-friend:"} },
+    click("profile-tab:2"),
+    .{ .sweep = &.{"profile-guild:"} },
+    key(c.ImGuiKey_Escape),
+    s("proxy"),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Privacidade"),
+    .{ .wait = 200 },
+    click("proxy-input"),
+    .{ .text = "ftp://nao.serve:21" },
+    key(c.ImGuiKey_Enter),
+    expect("proxy com URL inválida é recusado", proxyRejected),
+    click("proxy-input"),
+    ctrl(c.ImGuiKey_A),
+    .{ .text = "socks5h://127.0.0.1:9050" },
+    click("button:Salvar proxy"),
+    expect("proxy salvo vale só para a mídia de fora", proxyExternalOnly),
+    .{ .shot = "37-proxy" },
+    click("toggle:Usar o proxy em tudo"),
+    expect("\"em tudo\" inclui o Discord (API, gateway, imagens)", proxyEverywhere),
+    expect("proxy vai para o settings.kdl", proxyPersisted),
+    click("button:Remover proxy"),
+    expect("remover volta à conexão direta", proxyRemoved),
+    click("toggle:Usar o proxy em tudo"),
+    click("settings-close"),
+
     s("clicar em tudo: configurações"),
     ctrl(c.ImGuiKey_Comma),
     click("settings:Aparência"),
@@ -949,8 +2045,14 @@ const ops = [_]Op{
     .{ .sweep = &.{"toggle:"} },
     click("settings:Privacidade"),
     .{ .sweep = &.{"toggle:"} },
+    click("settings:Atalhos de teclado"),
+    .{ .sweep = &.{"toggle:"} },
     click("settings:Avançado"),
     .{ .sweep = &.{"toggle:"} },
+    .{ .run = @import("qa_alertas.zig").ignoreOne },
+    click("settings:Alertas e filtros"),
+    .{ .sweep = &.{ "word-remove:", "unignore:", "seg:", "button:" } },
+    .{ .run = @import("qa_alertas.zig").focusReset },
     click("settings:Idioma"),
     .{ .sweep = &.{"radio:"} },
     .{ .sweep = &.{"settings:"} },
@@ -965,6 +2067,27 @@ const ops = [_]Op{
     .{ .resize = .{ 1280, 800 } },
     .{ .wait = 150 },
     expect("janela grande volta a lista de membros", hasMembers),
+
+    s("várias contas"),
+    key(c.ImGuiKey_Escape),
+    expect("fecha as configurações", settingsClosed),
+    .{ .run = fakeAccounts },
+    click("me"),
+    expect("o menu do usuário lista as contas", accountsListed),
+    .{ .shot = "45-contas" },
+    click("account:7001"),
+    .{ .expect = .{ .name = "trocar de conta desconecta e entra na outra", .check = switchedB, .timeout_ms = 6000 } },
+    .{ .wait = 900 },
+    click("me"),
+    click("menu:Adicionar conta"),
+    expect("Adicionar conta mostra o login sem esquecer as outras", addForm),
+    .{ .shot = "46-adicionar-conta" },
+    click("login:voltar"),
+    expect("Voltar fecha o login e a conta continua aberta", backToSession),
+    .{ .wait = 900 },
+    click("me"),
+    click("menu:Remover conta"),
+    .{ .expect = .{ .name = "Remover conta esquece a aberta e entra na outra", .check = removedB, .timeout_ms = 6000 } },
 };
 
 /// Cenários curtos para isolar um problema: QA_SCENE=ctrl|nome|card
@@ -1134,11 +2257,32 @@ const ops_theme = [_]Op{
     expect("chegar nas mensagens diretas", onDms),
     .{ .shot = "tema-dms" },
     click("guild:500000"),
+    click("composer"),
+    .{ .text = "**prévia** do `tema`" },
+    expect("prévia do markdown acima da caixa", previewShown),
+    .{ .shot = "tema-previa" },
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    .{ .run = sendCodeBlock },
+    .{ .expect = .{ .name = "bloco de código enviado", .check = codeSent, .timeout_ms = 3000 } },
+    .{ .run = scrollBottom },
+    .{ .wait = 300 },
+    .{ .hover = .{ .dyn = tCodeCopy } },
+    .{ .wait = 150 },
+    .{ .shot = "tema-codigo" },
+    .{ .run = clearToast },
+    .{ .click = .{ .dyn = tCodeCopy } },
+    expect("\"Copiar\" no bloco de código", codeCopied),
     ctrl(c.ImGuiKey_K),
     expect("paleta", paletteOpen),
     .{ .text = "zig" },
     key(c.ImGuiKey_Enter),
     expect("paleta abre o canal", onZig),
+    ctrl(c.ImGuiKey_I),
+    expect("Ctrl+I abre a caixa de entrada", inboxOpen),
+    .{ .shot = "tema-caixa" },
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha a caixa de entrada", popupClosed),
     ctrl(c.ImGuiKey_Comma),
     expect("Ctrl+, abre as configurações", settingsOpen),
     click("settings:Aparência"),
@@ -1349,6 +2493,7 @@ pub const Runner = struct {
         voice: ?Id,
         muted: bool,
         deafened: bool,
+        panes: mosaic.Panes,
     };
 
     fn capture(app: *App) Base {
@@ -1366,6 +2511,7 @@ pub const Runner = struct {
             .voice = st.voice,
             .muted = st.muted,
             .deafened = st.deafened,
+            .panes = mosaic.panes,
         };
     }
 
@@ -1374,7 +2520,9 @@ pub const Runner = struct {
         st.settings = b.settings;
         st.popup = b.popup;
         st.viewer = null;
+        @import("ui/video.zig").stop();
         st.palette.open = false;
+        if (search.open) search.close();
         st.role_picker = false;
         st.selection = .{};
         st.reply_to = 0;
@@ -1390,6 +2538,7 @@ pub const Runner = struct {
         st.voice = b.voice;
         st.muted = b.muted;
         st.deafened = b.deafened;
+        mosaic.panes = b.panes;
         st.open_folders.clearRetainingCapacity();
         st.collapsed.clearRetainingCapacity();
         if (app.themes.current != b.theme) app.actions.append(app.gpa, .{ .set_theme = b.theme }) catch {};
@@ -1407,17 +2556,21 @@ pub const Runner = struct {
         h.update(std.mem.sliceAsBytes(st.tabs.items));
         h.update(std.mem.asBytes(&st.friends));
         h.update(std.mem.asBytes(&st.friends_tab));
-        h.update(&.{ @intFromBool(st.viewer != null), @intFromBool(st.palette.open), @intFromBool(st.role_picker), @intFromBool(st.muted), @intFromBool(st.deafened) });
+        h.update(&.{ @intFromBool(st.viewer != null), @intFromBool(st.palette.open), @intFromBool(st.role_picker), @intFromBool(st.muted), @intFromBool(st.deafened), @intFromBool(search.open) });
         h.update(std.mem.asBytes(&st.voice));
         h.update(std.mem.asBytes(&st.reply_to));
         h.update(std.mem.asBytes(&st.editing));
         h.update(std.mem.asBytes(&st.toast.until_ms));
         h.update(std.mem.asBytes(&st.jump));
         h.update(std.mem.asBytes(&app.themes.current));
+        h.update(std.mem.asBytes(&app.plugins.generation));
+        h.update(std.mem.asBytes(&mosaic.panes));
         h.update(std.mem.asBytes(&@as(u32, st.open_folders.count())));
         h.update(std.mem.asBytes(&@as(u32, st.collapsed.count())));
         h.update(std.mem.asBytes(&@as(u32, st.muted_channels.count())));
         h.update(std.mem.asBytes(&@as(u32, app.store.relationships.count())));
+        // Alertas, filtro, ignorados e modo foco (core/filtros.zig).
+        h.update(std.mem.asBytes(&app.st.filtros.gen));
         // Opções do tema e cargos de quem está com o cartão aberto.
         const th = app.themes.theme_();
         for (th.options) |o| h.update(&.{@intFromBool(th.option(o.name) orelse o.default)});
@@ -1426,6 +2579,7 @@ pub const Runner = struct {
         h.update(att_mod.last_opened[0..att_mod.last_opened_len]);
         h.update(&.{ st.profile_tab, @intFromBool(st.note_editing) });
         h.update(std.mem.asBytes(&@as(u32, app.store.notes.count())));
+        h.update(std.mem.asBytes(&@import("ui/video.zig").qaState()));
         h.update(std.mem.asBytes(&@as(u32, @intCast(app.actions.items.len))));
         if (st.activeChannel()) |cid| {
             const sc = st.scrollOf(cid);
@@ -1457,8 +2611,9 @@ pub const Runner = struct {
         if (num(name, "guild:")) |g| return st.guild == g and !st.friends;
         if (std.mem.startsWith(u8, name, "friends-tab:")) return std.mem.eql(u8, name["friends-tab:".len..], @tagName(@as(enum { online, all, pending, blocked }, @enumFromInt(st.friends_tab))));
         if (std.mem.eql(u8, name, "friends")) return st.friends;
+        if (num(name, "profile-tab:")) |t| return t == st.profile_tab;
         // Opções de escolha única: clicar na já escolhida não muda nada.
-        for ([_][]const u8{ "seg:", "radio:", "accent:", "theme-card:", "settings:" }) |p| if (std.mem.startsWith(u8, name, p)) return true;
+        for ([_][]const u8{ "seg:", "radio:", "accent:", "theme-card:", "settings:", "inbox-tab:" }) |p| if (std.mem.startsWith(u8, name, p)) return true;
         return false;
     }
 

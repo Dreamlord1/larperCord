@@ -26,7 +26,14 @@ const widgets = @import("ui/widgets.zig");
 const settings_state = @import("ui/settings_state.zig");
 const kdl = @import("theme/kdl.zig");
 const custom = @import("theme/custom.zig");
+const guild_color = @import("ui/guild_color.zig");
 const theme_mod = @import("theme/theme.zig");
+const plugin_host = @import("plugins/host.zig");
+const inbox_core = @import("core/inbox.zig");
+const saved_ui = @import("ui/saved.zig");
+const msg_cache = @import("net/msg_cache.zig");
+const accounts_store = @import("net/accounts_store.zig");
+const app_accounts = @import("app_accounts.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -94,6 +101,10 @@ pub const App = struct {
     /// Último aviso da rede (vira a mensagem de erro do login).
     last_notice: [200]u8 = undefined,
     last_notice_len: usize = 0,
+    /// Plugins em Lua (~/.config/larpercord/plugins).
+    plugins: plugin_host.Engine = undefined,
+    /// Última gravação do cache de mensagens (no máximo uma por minuto pelo relógio).
+    cache_flush_ms: i64 = 0,
 
     pub fn create(gpa: std.mem.Allocator, opts: Options) !*App {
         const started = c.SDL_GetTicksNS();
@@ -124,11 +135,22 @@ pub const App = struct {
             .started_ns = started,
         };
 
+        app.store.on_evict = msg_cache.onEvict;
+        // Cache de mensagens e contas: o QA e os prints nunca usam os de verdade.
+        msg_cache.init(opts.qa);
+        msg_cache.off = opts.shot != null;
+        accounts_store.memory_only = opts.qa or opts.shot != null;
+        accounts_store.load();
+
         // Configurações salvas (ignoradas nos prints, para serem reprodutíveis).
         var saved_theme: ?[]const u8 = null;
         var settings_arena = std.heap.ArenaAllocator.init(gpa);
         defer settings_arena.deinit();
-        if (opts.shot == null and !opts.qa) saved_theme = app.loadSettings(settings_arena.allocator());
+        if (opts.shot == null and !opts.qa) {
+            saved_theme = app.loadSettings(settings_arena.allocator());
+            var dbuf: [512]u8 = undefined;
+            if (draftsPath(&dbuf)) |p| app.st.drafts.load(gpa, p);
+        }
         app.themes.mode = app.wantedMode();
         // Já aqui: os dados da demonstração saem no idioma da interface.
         i18n.set(if (opts.qa) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language));
@@ -151,7 +173,7 @@ pub const App = struct {
         } else if (opts.demo or opts.qa or (opts.shot != null and c.SDL_getenv("LARPER_SHOT_REAL") == null)) {
             // (LARPER_SHOT_REAL=1: print com a conta de verdade, para depurar.)
             try app.startDemo();
-        } else if (discord.loadToken()) |t| {
+        } else if (app_accounts.startupToken()) |t| {
             try app.startReal(t);
             app.login.begin(.connecting);
         } else app.login.begin(.form);
@@ -162,12 +184,19 @@ pub const App = struct {
         app.images = try images.Cache.init(app.win.renderer, app.win.wake_type);
         try app.images.start();
         app.picked = try Queue([:0]u8).init(std.heap.c_allocator);
+        plugin_host.init(app);
         return app;
     }
 
     pub fn destroy(app: *App) void {
         app.saveSettings();
         _ = c.SDL_RemoveTimer(app.timer);
+        app.plugins.deinit();
+        // O que estava na caixa de texto vira o rascunho do canal.
+        _ = app.st.drafts.switchTo(app.gpa, 0, &app.st.input, app.st.editing == 0);
+        app.saveDrafts();
+        app.st.drafts.deinit(app.gpa);
+        app.st.filtros.deinit(app.gpa);
         app.asked_profiles.deinit(app.gpa);
         var colors_it = app.theme_colors.iterator();
         while (colors_it.next()) |e| app.gpa.free(e.key_ptr.*);
@@ -175,12 +204,16 @@ pub const App = struct {
         for (app.notifiers.items) |p| c.SDL_DestroyProcess(p);
         app.notifiers.deinit(app.gpa);
         app.stopNet();
+        msg_cache.flushDirty(&app.store);
+        msg_cache.deinit();
         if (app.curl_on) c.curl_global_cleanup();
         app.login.clearToken();
         app.events.deinit();
         app.clearUploads();
         app.picked.deinit();
+        @import("ui/video.zig").shutdown();
         app.images.deinit();
+        app.st.saved.deinit(app.gpa);
         app.store.deinit();
         app.themes.deinit();
         c.cImGui_ImplSDLRenderer3_Shutdown();
@@ -199,7 +232,7 @@ pub const App = struct {
     }
 
     /// Conecta na conta de verdade. O gateway passa a ser dono do token.
-    fn startReal(app: *App, token: [:0]u8) !void {
+    pub fn startReal(app: *App, token: [:0]u8) !void {
         // Só inicia o libcurl/OpenSSL quando vai usar (~5 MB a menos no modo demonstração).
         if (!app.curl_on) _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
         app.curl_on = true;
@@ -212,7 +245,7 @@ pub const App = struct {
         try app.net.real.start();
     }
 
-    fn startDemo(app: *App) !void {
+    pub fn startDemo(app: *App) !void {
         app.store.demo = true;
         app.net = .{ .fake = .{
             .commands = try Queue(ev.Command).init(app.gpa),
@@ -223,7 +256,7 @@ pub const App = struct {
         try app.net.fake.start();
     }
 
-    fn stopNet(app: *App) void {
+    pub fn stopNet(app: *App) void {
         switch (app.net) {
             .none => {},
             .fake => |*g| {
@@ -316,12 +349,20 @@ pub const App = struct {
     }
 
     /// Volta ao estado de antes do login: sem conta, sem abas, sem nada.
-    fn resetSession(app: *App) void {
+    pub fn resetSession(app: *App) void {
+        // O que estava na tela vai para o cache antes de sumir.
+        msg_cache.flushDirty(&app.store);
+        @import("ui/search.zig").close();
+        _ = app.st.drafts.switchTo(app.gpa, 0, &app.st.input, app.st.editing == 0);
+        app.st.filtros.resetSession();
         app.asked_profiles.clearRetainingCapacity();
         app.clearUploads();
         app.st.viewer = null;
+        app.st.saved.clear(app.gpa);
+        app.st.saved.owner = 0;
         app.store.deinit();
         app.store = Store.init(app.gpa);
+        app.store.on_evict = msg_cache.onEvict;
         const st = &app.st;
         st.tabs.clearRetainingCapacity();
         st.tab = 0;
@@ -359,7 +400,11 @@ pub const App = struct {
                 }
                 const owned = std.heap.c_allocator.dupeSentinel(u8, t, 0) catch return lg.fail(i18n.tr("Sem memória.", "Out of memory."));
                 lg.clearToken();
+                // Adicionando conta: a que estava aberta desconecta agora.
+                app.stopNet();
                 app.resetSession();
+                lg.back_len = 0;
+                app_accounts.token_source = .typed;
                 app.save_token = lg.remember;
                 app.last_notice_len = 0;
                 app.startReal(owned) catch return lg.fail(i18n.tr("Não consegui iniciar a conexão.", "Couldn't start the connection."));
@@ -369,6 +414,7 @@ pub const App = struct {
                 lg.clearToken();
                 app.stopNet();
                 app.resetSession();
+                app_accounts.token_source = .none;
                 app.startDemo() catch return;
                 lg.setPhase(.connecting);
             },
@@ -376,6 +422,15 @@ pub const App = struct {
                 app.stopNet();
                 app.resetSession();
                 lg.setPhase(.form);
+                app_accounts.offerBack(app, 0);
+            },
+            .back => {
+                lg.clearToken();
+                lg.back_len = 0;
+                // Adicionando conta com a sessão aberta: só fecha o login.
+                if (app.store.ready) return lg.setPhase(.leaving);
+                if (accounts_store.list.find(app_accounts.prev_account) != null and app_accounts.switchAccount(app, app_accounts.prev_account)) return;
+                lg.fail(i18n.tr("Não achei o token dessa conta no chaveiro.", "Couldn't find that account's token in the keyring."));
             },
         }
     }
@@ -494,6 +549,10 @@ pub const App = struct {
                 const gain = (n.arg(1) orelse continue).asNumber() orelse continue;
                 const uid = std.fmt.parseInt(types.Id, sid, 10) catch continue;
                 app.st.voice_volumes.put(app.gpa, uid, @floatCast(std.math.clamp(gain, 0, 2))) catch {};
+            } else if (app.st.filtros.applyNode(app.gpa, n, now())) {
+                // Palavras de alerta, filtro, ignorados e foco (core/filtros.zig).
+            } else if (std.mem.eql(u8, n.name, "guild-color")) {
+                guild_color.load(&guild_color.colors, std.heap.c_allocator, n);
             } else if (std.mem.eql(u8, n.name, "theme-colors")) {
                 // `theme-colors "vidro" mode=dark bg="#101014" accent="#ff00aa"`
                 const name = (n.arg(0) orelse continue).asString() orelse continue;
@@ -524,7 +583,7 @@ pub const App = struct {
         return app.theme_colors.getPtr(key);
     }
 
-    fn saveSettings(app: *App) void {
+    pub fn saveSettings(app: *App) void {
         if (app.opts.shot != null or app.opts.qa) return;
         var buf: [512]u8 = undefined;
         const path = settingsPath(&buf) orelse return;
@@ -538,6 +597,8 @@ pub const App = struct {
         settings_state.write(&app.st.settings, app.themes.name(), &out, app.gpa) catch return;
         var vit = app.st.voice_volumes.iterator();
         while (vit.next()) |e| out.print(app.gpa, "voice-volume \"{d}\" {d:.3}\n", .{ e.key_ptr.*, e.value_ptr.* }) catch return;
+        app.st.filtros.save = false;
+        app.st.filtros.write(&out, app.gpa) catch return;
         var it = app.themes.choices.iterator();
         while (it.next()) |e| {
             out.print(app.gpa, "theme-options \"{s}\"", .{e.key_ptr.*}) catch return;
@@ -560,7 +621,32 @@ pub const App = struct {
                 out.append(app.gpa, '\n') catch return;
             }
         }
+        guild_color.write(&guild_color.colors, &out, app.gpa) catch return;
         _ = c.SDL_SaveFile(path.ptr, out.items.ptr, out.items.len);
+    }
+
+    /// drafts.kdl, ao lado do settings.kdl.
+    fn draftsPath(buf: []u8) ?[:0]const u8 {
+        var sb: [512]u8 = undefined;
+        const p = settingsPath(&sb) orelse return null;
+        const slash = std.mem.lastIndexOfScalar(u8, p, '/') orelse return null;
+        return std.fmt.bufPrintSentinel(buf, "{s}/drafts.kdl", .{p[0..slash]}, 0) catch null;
+    }
+
+    fn saveDrafts(app: *App) void {
+        if (!app.st.drafts.dirty) return;
+        if (app.opts.shot != null or app.opts.qa) {
+            app.st.drafts.dirty = false;
+            return;
+        }
+        var buf: [512]u8 = undefined;
+        const path = draftsPath(&buf) orelse return;
+        if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
+            var dbuf: [512]u8 = undefined;
+            const dir = std.fmt.bufPrintSentinel(&dbuf, "{s}", .{path[0..slash]}, 0) catch return;
+            _ = c.SDL_CreateDirectory(dir.ptr);
+        }
+        app.st.drafts.save(app.gpa, path);
     }
 
     fn loadNodeFonts(app: *App, n: *const kdl.Node) void {
@@ -605,16 +691,21 @@ pub const App = struct {
 
     fn afterOpen(app: *App, cs: anytype) void {
         app.store.markRead(cs.info.id);
+        app.st.filtros.clear(&app.store, cs.info.id);
         app.st.focus_input = true;
+        // Trocou de conversa: o que mudou nas outras vai para o disco.
+        msg_cache.flushDirty(&app.store);
         if (cs.history == .none) {
             cs.history = .loading;
+            // O cache do disco aparece na hora; o histórico chega por cima.
+            msg_cache.restore(&app.store, cs);
             app.cmd(.{ .fetch_history = cs.info.id });
         }
     }
 
     /// Envia uma mensagem: aparece na hora como "pendente" e vai pra rede.
     /// "@fulano" vira a menção de verdade (<@id>) quando o nome existe.
-    fn sendTo(app: *App, ch: types.Id, text: []const u8, reply_to: types.Id) void {
+    pub fn sendTo(app: *App, ch: types.Id, text: []const u8, reply_to: types.Id) void {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(app.gpa);
         var words = std.mem.splitScalar(u8, text, ' ');
@@ -660,6 +751,28 @@ pub const App = struct {
         app.st.scrollOf(ch).stick_bottom = true;
         const copy = ca.dupe(u8, out.items) catch return;
         app.cmd(.{ .send_message = .{ .channel = ch, .content = copy, .nonce = app.st.nonce, .reply_to = reply_to, .files = files } });
+    }
+
+    /// Trocou de canal: o texto da caixa vira o rascunho do anterior e o
+    /// rascunho do novo volta para a caixa (uma edição em andamento é cancelada).
+    fn syncDraft(app: *App) void {
+        const st = &app.st;
+        const ch = st.activeChannel() orelse 0;
+        if (!st.drafts.switchTo(app.gpa, ch, &st.input, st.editing == 0)) return;
+        st.input_sync = true;
+        st.editing = 0;
+        st.reply_to = 0;
+        app.saveDrafts();
+    }
+
+    /// Depois de editar uma mensagem, a caixa volta com o rascunho do canal.
+    fn restoreDraft(app: *App) void {
+        const st = &app.st;
+        const text = if (st.activeChannel()) |ch| st.drafts.get(ch) orelse "" else "";
+        const n = @min(text.len, st.input.len - 1);
+        @memcpy(st.input[0..n], text[0..n]);
+        @memset(st.input[n..], 0);
+        st.input_sync = true;
     }
 
     fn firstTextChannel(app: *App, guild: types.Id) ?types.Id {
@@ -717,7 +830,8 @@ pub const App = struct {
             },
             .load_older => |id| {
                 const cs = app.store.channel(id) orelse return;
-                if (cs.older != .idle or cs.history != .loaded) return;
+                // (Ainda no cache do disco: espera o histórico de verdade.)
+                if (cs.older != .idle or cs.history != .loaded or cs.cached) return;
                 // A mais antiga que já veio do servidor (a pendente não tem ID).
                 const before = for (cs.messages.items) |m| {
                     if (m.msg.id != 0) break m.msg.id;
@@ -729,6 +843,7 @@ pub const App = struct {
                 st.guild = 0;
                 st.friends = true;
             },
+            .set_setting => |ss| if (settings_state.setByte(&st.settings, ss.index, ss.value)) app.saveSettings(),
             .accept_friend => |u| app.cmd(.{ .relationship = .{ .user = u, .accept = true } }),
             .remove_relationship => |u| app.cmd(.{ .relationship = .{ .user = u, .accept = false } }),
             .select_channel => |ch| {
@@ -754,21 +869,25 @@ pub const App = struct {
             },
             .send_message => |text| {
                 defer app.gpa.free(text);
+                // "/nome" de um plugin: roda aqui e não vai para o Discord.
+                if (app.plugins.command(text)) return;
                 const ch = st.activeChannel() orelse return;
                 app.sendTo(ch, text, st.reply_to);
                 st.reply_to = 0;
+                st.drafts.remove(app.gpa, ch);
             },
             .reply => |id| {
                 st.reply_to = id;
                 if (st.editing != 0) {
                     st.editing = 0;
-                    @memset(&st.input, 0);
-                    st.input_sync = true;
+                    app.restoreDraft();
                 }
                 st.focus_input = true;
             },
             .edit_message => |id| {
                 const f = app.store.findAny(id) orelse return;
+                // O que estava sendo escrito fica guardado durante a edição.
+                if (st.editing == 0) if (st.activeChannel()) |ch| st.drafts.put(app.gpa, ch, std.mem.sliceTo(&st.input, 0));
                 const n = @min(f.m.msg.content.len, st.input.len - 1);
                 @memcpy(st.input[0..n], f.m.msg.content[0..n]);
                 st.input[n] = 0;
@@ -781,6 +900,7 @@ pub const App = struct {
                 defer app.gpa.free(text);
                 const id = st.editing;
                 st.editing = 0;
+                app.restoreDraft();
                 const f = app.store.findAny(id) orelse return;
                 const ch = f.cs.info.id;
                 if (std.mem.eql(u8, f.m.msg.content, text)) return;
@@ -789,10 +909,7 @@ pub const App = struct {
                 app.cmd(.{ .edit_message = .{ .channel = ch, .id = id, .content = copy } });
             },
             .cancel_compose => {
-                if (st.editing != 0) {
-                    @memset(&st.input, 0);
-                    st.input_sync = true;
-                }
+                if (st.editing != 0) app.restoreDraft();
                 st.editing = 0;
                 st.reply_to = 0;
             },
@@ -836,12 +953,16 @@ pub const App = struct {
             },
             .jump_to => |id| st.jump = id,
             .mark_read => |id| {
-                if (app.store.channel(id)) |cs| {
-                    cs.info.unread = false;
+                if (app.store.channel(id) != null) {
+                    app.store.markRead(id);
+                    st.filtros.clear(&app.store, id);
                 } else if (app.store.guild(id)) |g| {
                     g.unread = false;
+                    for (app.store.channelsOf(id)) |ch| {
+                        app.store.markRead(ch);
+                        st.filtros.clear(&app.store, ch);
+                    }
                     g.mentions = 0;
-                    for (app.store.channelsOf(id)) |ch| app.store.markRead(ch);
                 }
             },
             .typing => |id| {
@@ -911,6 +1032,10 @@ pub const App = struct {
             },
             .set_theme_color => |cc| app.setThemeColor(cc.slot, cc.rgba),
             .reset_theme_colors => app.resetThemeColors(),
+            .set_guild_color => |gc| {
+                guild_color.set(gc.guild, gc.rgb);
+                app.saveSettings();
+            },
             .next_theme => |delta| {
                 const n: i32 = @intCast(app.themes.entries.items.len);
                 app.setTheme(@intCast(@mod(@as(i32, @intCast(app.themes.current)) + delta, n)));
@@ -940,13 +1065,48 @@ pub const App = struct {
                 _ = st.uploads.orderedRemove(i);
             },
             .paste_image => app.pasteImage(),
-            .logout => {
-                app.saveSettings();
-                if (!app.opts.qa) discord.forgetToken();
-                app.stopNet();
-                app.resetSession();
-                app.login.begin(.form);
-                app.login.t = 10; // sem a abertura de novo
+            .toggle_inbox => {
+                st.palette.open = false;
+                if (st.popup == .inbox) {
+                    st.popup = .none;
+                    st.focus_input = true;
+                    return;
+                }
+                st.popup = .{ .inbox = .{} };
+                // Prévia das DMs não lidas que ainda não foram abertas.
+                var want: [6]types.Id = undefined;
+                for (inbox_core.prefetch(&app.store, &st.muted_channels, &want)) |id| app.cmd(.{ .fetch_history = id });
+            },
+            .toggle_saved => {
+                st.palette.open = false;
+                st.popup = if (st.popup == .saved) .none else .saved;
+                if (st.popup == .none) st.focus_input = true;
+            },
+            .fetch_mentions => if (app.store.mentions_state != .loading) {
+                app.store.mentions_state = .loading;
+                app.cmd(.fetch_mentions);
+            },
+            .save_message => |id| switch (st.saved.add(app.gpa, &app.store, id, @divTrunc(now(), 1000)) catch .missing) {
+                .added => {
+                    app.persistSaved();
+                    st.showToast(now(), false, "mensagem salva ✓ (Ctrl+Shift+S mostra as salvas)", "message saved ✓ (Ctrl+Shift+S shows them)", .{});
+                },
+                .already => st.showToast(now(), false, "essa mensagem já está nas salvas", "that message is already saved", .{}),
+                .full => st.showToast(now(), true, "limite de {d} mensagens salvas", "limit of {d} saved messages", .{@import("core/saved.zig").max_items}),
+                .missing => {},
+            },
+            .unsave_message => |id| if (st.saved.remove(app.gpa, id)) {
+                app.persistSaved();
+                st.showToast(now(), false, "removida das salvas", "removed from saved", .{});
+            },
+            .saved_note => |sn| {
+                defer app.gpa.free(sn.text);
+                if (st.saved.setNote(app.gpa, sn.id, sn.text) catch false) app.persistSaved();
+            },
+            .logout, .switch_account, .add_account, .remove_account => app_accounts.handle(app, a),
+            .clear_cache => {
+                msg_cache.clearAll(&app.store);
+                st.showToast(now(), false, "cache apagado", "cache cleared", .{});
             },
         }
     }
@@ -959,7 +1119,9 @@ pub const App = struct {
         app.events.drain(&batch);
         const was_ready = app.store.ready;
         var failed = false;
+        var reconnected = false;
         for (batch.items) |e| {
+            if (e == .status and e.status == .ready) reconnected = true;
             if (e == .notice) {
                 app.st.showToast(now(), true, "{s}", "{s}", .{e.notice});
                 const n = @min(e.notice.len, app.last_notice.len);
@@ -980,7 +1142,9 @@ pub const App = struct {
                 }
             }
             if (e == .status and e.status == .failed) failed = true;
-            if (e == .message_create and app.store.ready) app.notify(e.message_create);
+            // Antes de o Store ficar com a mensagem (se o canal não existe, ele a libera).
+            const quiet: ?types.Id = if (e == .message_create and app.store.ready) app.incoming(e.message_create) else null;
+            if (e == .message_create and app.store.ready) plugin_host.onMessage(app, e.message_create);
             if (app.opts.stats) switch (e) {
                 .status => |st| std.log.info("conexão: {t}", .{st}),
                 .notice => |n| std.log.info("aviso: {s}", .{n}),
@@ -989,25 +1153,29 @@ pub const App = struct {
                 else => {},
             };
             app.store.apply(e, now()) catch {};
+            if (quiet) |ch| app.st.filtros.quiet(app.gpa, &app.store, ch);
         }
         if (!was_ready and app.store.ready) {
             app.onReady();
+            app.plugins.fireReady();
             if (app.login.phase == .connecting) app.login.setPhase(.leaving);
-            // O Discord aceitou: agora sim guarda o token, se pediram.
-            if (app.save_token and app.net == .real) {
-                app.save_token = false;
-                switch (discord.saveToken(app.net.real.token)) {
-                    .keyring => app.st.showToast(now(), false, "token guardado no chaveiro do sistema", "token saved to the system keyring", .{}),
-                    .file => app.st.showToast(now(), false, "token guardado em ~/.config/larpercord/token", "token saved to ~/.config/larpercord/token", .{}),
-                    .failed => app.st.showToast(now(), true, "não consegui guardar o token", "couldn't save the token", .{}),
-                }
-            }
+            // O Discord aceitou: agora sim guarda a conta (e o token, se pediram).
+            app_accounts.ready(app);
+        } else if (reconnected and was_ready) {
+            // Voltou a conexão: as conversas que ficaram só no cache do disco
+            // (abertas sem rede) buscam o histórico de novo.
+            var it = app.store.channels.valueIterator();
+            while (it.next()) |cs| if (cs.*.cached) app.cmd(.{ .fetch_history = cs.*.info.id });
         }
         if (failed and app.net == .real and !app.store.ready) {
             // Token recusado (ou erro fatal) antes de entrar: volta ao login.
             app.stopNet();
             app.resetSession();
             app.login.fail(if (app.last_notice_len > 0) app.last_notice[0..app.last_notice_len] else i18n.tr("Não deu pra entrar com esse token.", "Couldn't sign in with that token."));
+            app_accounts.offerBack(app, switch (app_accounts.token_source) {
+                .saved => |id| id,
+                else => 0,
+            });
             return;
         }
         // GUILD_DELETE/CHANNEL_DELETE: não deixa a interface apontando para
@@ -1036,17 +1204,36 @@ pub const App = struct {
             };
         }
         // Marca como lido o que chega no canal aberto.
-        if (app.st.activeChannel()) |ch| app.store.markRead(ch);
+        if (app.st.activeChannel()) |ch| {
+            app.store.markRead(ch);
+            app.st.filtros.clear(&app.store, ch);
+        }
+    }
+
+    /// Mensagem de outra pessoa chegando: ignorada/filtrada não notifica nem
+    /// conta; DM, menção ou palavra de alerta conta no canal e notifica.
+    /// Retorna o canal que o modo foco deixa sem "não lido" por enquanto.
+    fn incoming(app: *App, m: types.Message) ?types.Id {
+        const f = &app.st.filtros;
+        if (m.author == app.store.me) return null;
+        const cs = app.store.channel(m.channel) orelse return null;
+        const verdict = f.judge(m.author, m.content, cs.info.guild == 0, mentionsMe(m.content, app.store.me));
+        if (verdict == .important) {
+            f.bump(app.gpa, &app.store, m.channel);
+            if (!app.st.muted_channels.contains(m.channel)) {
+                f.notified +%= 1;
+                app.notify(m, cs);
+            }
+        }
+        if (verdict != .important and f.focusOn(now()) and !cs.info.unread and app.st.activeChannel() != m.channel) return m.channel;
+        return null;
     }
 
     /// DM ou menção chegando sem a pessoa olhando: a janela pisca na barra
     /// de tarefas e sai uma notificação do sistema (notify-send).
-    fn notify(app: *App, m: types.Message) void {
-        if (app.opts.qa or app.store.demo or m.author == app.store.me) return;
+    fn notify(app: *App, m: types.Message, cs: *const @import("core/store.zig").ChannelState) void {
+        if (app.opts.qa or app.store.demo) return;
         const set = &app.st.settings;
-        const cs = app.store.channel(m.channel) orelse return;
-        if (app.st.muted_channels.contains(m.channel)) return;
-        if (cs.info.guild != 0 and !mentionsMe(m.content, app.store.me)) return;
         const focused = (c.SDL_GetWindowFlags(app.win.window) & c.SDL_WINDOW_INPUT_FOCUS) != 0;
         if (focused and app.st.activeChannel() == m.channel) return;
         if (set.taskbar_flash and !focused) _ = c.SDL_FlashWindow(app.win.window, c.SDL_FLASH_UNTIL_FOCUSED);
@@ -1095,12 +1282,13 @@ pub const App = struct {
 
     /// O tema do quadro: o atual, ou uma cópia com a cor de destaque e os
     /// cantos escolhidos nas configurações (vale para todos os temas).
-    fn customTheme(app: *App) *const theme_mod.Theme {
+    pub fn customTheme(app: *App) *const theme_mod.Theme {
         const base = app.themes.theme_();
         const set = &app.st.settings;
         const ovs = app.theme_colors.getPtr(app.themes.name());
         const has_colors = if (ovs) |o| o.atConst(app.themes.mode).any() else false;
-        if (set.accent == 0 and set.corners == 0 and !has_colors) return base;
+        const gcol = guild_color.get(app.st.guild);
+        if (set.accent == 0 and set.corners == 0 and !has_colors and gcol == null) return base;
         app.th_custom = base.*;
         if (set.accent > 0 and set.accent <= accents.len) {
             const col = d.Rgba.hex(accents[set.accent - 1]);
@@ -1117,6 +1305,8 @@ pub const App = struct {
         }
         // Cores personalizadas do tema/modo têm a palavra final.
         if (ovs) |o| custom.apply(&app.th_custom, o.atConst(app.themes.mode));
+        // A cor do servidor aberto vale por cima de tudo (é a escolha mais específica).
+        if (gcol) |rgb| guild_color.apply(&app.th_custom, rgb);
         return &app.th_custom;
     }
 
@@ -1141,7 +1331,14 @@ pub const App = struct {
         app.applyImGuiColors(app.customTheme());
     }
 
+    /// Mensagens salvas no arquivo (os prints não gravam nada).
+    fn persistSaved(app: *App) void {
+        if (app.opts.shot == null) saved_ui.persist(&app.st.saved, app.gpa);
+    }
+
     fn onReady(app: *App) void {
+        // As salvas desta conta (o QA e os prints começam sem nenhuma).
+        saved_ui.load(&app.st.saved, app.gpa, app.store.me, !app.opts.qa and app.opts.shot == null);
         // O status escolhido da última vez (o Discord começa em online).
         if (app.st.settings.my_status != 0) app.handle(.{ .set_status = @fromBackingInt(@intCast(@min(app.st.settings.my_status, 3))) });
         if (!app.store.demo) {
@@ -1300,7 +1497,14 @@ pub const App = struct {
                             app.applyThemeStyle();
                             app.st.showToast(now(), false, "tema recarregado: {s}", "theme reloaded: {s}", .{app.themes.name()});
                         } else app.st.showToast(now(), true, "{s}", "{s}", .{app.themes.last_error orelse i18n.tr("erro no tema", "theme error")}),
-                        .tick => pending = @max(pending, 1),
+                        .tick => {
+                            pending = @max(pending, 1);
+                            // O relógio já acorda o app: aproveita para gravar o cache.
+                            if (now() - app.cache_flush_ms >= 60_000) {
+                                app.cache_flush_ms = now();
+                                msg_cache.flushDirty(&app.store);
+                            }
+                        },
                         .media => bg_dirty = true,
                     }
                 } else {
@@ -1365,9 +1569,19 @@ pub const App = struct {
             }
             anim.instant = set.reduce_motion;
             @import("net/media_url.zig").allow_gif_hosts.store(set.gif_hosts, .release);
+            @import("net/proxy.zig").set(set.proxy.slice(), set.proxy_all);
             @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
             app.store.keep_log = set.message_log;
+            msg_cache.enabled = set.message_cache;
             widgets.hour12 = !set.clock_24h;
+            app.images.data_saver = set.data_saver;
+            // Modo foco venceu: o que chegou nos outros canais volta como não lido.
+            if (app.st.filtros.focus_until != 0 and !app.st.filtros.focusOn(now_ms)) app.st.filtros.endFocus(&app.store);
+            if (app.st.filtros.save) {
+                app.st.filtros.save = false;
+                app.saveSettings();
+            }
+            if (app.store.ready) app.syncDraft();
             const key = set.layoutKey();
             if (key != app.layout_key) {
                 app.layout_key = key;
@@ -1377,8 +1591,11 @@ pub const App = struct {
             if (app.store.ready and (app.opts.stats or app.opts.shot != null)) app.scene(settled_frames >= 3);
             c.ImGui_NewFrame();
             qa_mod.beginFrame();
-            if (app.store.ready) {
+            // (O login por cima da conta aberta, ao adicionar outra, cobre tudo.)
+            if (app.store.ready and app.login.phase != .form) {
                 const th = app.customTheme();
+                // Trocou de servidor (ou de cor do servidor): seleção e cursor do texto acompanham.
+                if (guild_color.changed(app.st.guild)) app.applyImGuiColors(th);
                 var ctx: d.Ctx = .{
                     .th = th,
                     .theme_name = app.themes.name(),
@@ -1401,6 +1618,7 @@ pub const App = struct {
                 };
                 const tf = c.SDL_GetTicksNS();
                 root.frame(&ctx, &app.placed, app.themes.previews.items);
+                plugin_host.pollKeys(app);
                 if (app.opts.stats) prof_frame += (c.SDL_GetTicksNS() - tf) / 1000;
             }
             if (app.login.visible()) {
@@ -1415,6 +1633,8 @@ pub const App = struct {
                 _ = th;
                 if (result) |r| login_result = r;
             }
+            // Vídeo que não foi desenhado neste quadro pausa.
+            @import("ui/video.zig").endFrame(now());
             const tr0 = c.SDL_GetTicksNS();
             c.ImGui_Render();
             if (app.opts.stats) prof_render += (c.SDL_GetTicksNS() - tr0) / 1000;

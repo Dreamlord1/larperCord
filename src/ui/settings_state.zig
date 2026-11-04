@@ -6,6 +6,7 @@ const std = @import("std");
 pub const Page = enum {
     conta,
     privacidade,
+    filtros,
     aparencia,
     acessibilidade,
     chat,
@@ -14,7 +15,26 @@ pub const Page = enum {
     idioma,
     avancado,
     desempenho,
+    plugins,
     sobre,
+};
+
+/// Texto curto salvo nas configurações (o proxy). Tamanho fixo: as
+/// configurações são copiadas e comparadas byte a byte.
+pub const Text = struct {
+    len: u8 = 0,
+    buf: [255]u8 = @splat(0),
+
+    pub fn slice(t: *const Text) []const u8 {
+        return t.buf[0..t.len];
+    }
+
+    pub fn set(t: *Text, s: []const u8) void {
+        const n = @min(s.len, t.buf.len);
+        t.* = .{};
+        @memcpy(t.buf[0..n], s[0..n]);
+        t.len = @intCast(n);
+    }
 };
 
 pub const Settings = struct {
@@ -43,6 +63,10 @@ pub const Settings = struct {
     autoplay_gifs: bool = true,
     /// Imagens e GIFs que vêm de links (embeds).
     show_embeds: bool = true,
+    /// Modo economia: imagens, avatares e anexos só baixam ao clicar.
+    data_saver: bool = false,
+    /// Prévia do markdown acima da caixa de texto, quando tem formatação.
+    md_preview: bool = true,
 
     // Privacidade
     send_typing: bool = true,
@@ -53,6 +77,12 @@ pub const Settings = struct {
     gif_hosts: bool = false,
     /// Esconde o e-mail e o @usuário na conta.
     streamer_mode: bool = false,
+    /// Proxy (socks5h://127.0.0.1:9050…): vazio = conexão direta. Só a mídia
+    /// de fora passa por ele, ou tudo com `proxy_all` (net/proxy.zig).
+    proxy: Text = .{},
+    proxy_all: bool = false,
+    /// Últimas mensagens de cada canal em disco (abrir na hora, busca offline).
+    message_cache: bool = true,
 
     /// Nosso status: 0 online, 1 ausente, 2 não perturbe, 3 invisível.
     /// Reaplicado ao conectar.
@@ -61,6 +91,10 @@ pub const Settings = struct {
     // Notificações (DMs e menções)
     desktop_notifs: bool = true,
     taskbar_flash: bool = true,
+
+    // Atalhos
+    /// Navegação estilo vim com a caixa de texto sem foco (ui/vim.zig).
+    vim_keys: bool = false,
 
     // Avançado
     developer_mode: bool = false,
@@ -80,7 +114,7 @@ pub const Settings = struct {
     }
 };
 
-pub const Field = struct { name: []const u8, kind: enum { boolean, float, byte }, offset: usize };
+pub const Field = struct { name: []const u8, kind: enum { boolean, float, byte, text }, offset: usize };
 
 /// Campos persistidos (todos menos `open` e `page`).
 pub fn fields() []const Field {
@@ -93,10 +127,10 @@ pub fn fields() []const Field {
                 if (std.mem.eql(u8, fname, "open") or std.mem.eql(u8, fname, "page")) continue;
                 // Só estes três tipos são salvos byte a byte; outro tipo aqui
                 // corromperia o arquivo (ou a memória) ao ler.
-                if (ftype != bool and ftype != f32 and ftype != u8) @compileError("configuração com tipo não suportado: " ++ fname);
+                if (ftype != bool and ftype != f32 and ftype != u8 and ftype != Text) @compileError("configuração com tipo não suportado: " ++ fname);
                 out[n] = .{
                     .name = fname,
-                    .kind = if (ftype == bool) .boolean else if (ftype == f32) .float else .byte,
+                    .kind = if (ftype == bool) .boolean else if (ftype == f32) .float else if (ftype == Text) .text else .byte,
                     .offset = @offsetOf(Settings, fname),
                 };
                 n += 1;
@@ -108,6 +142,34 @@ pub fn fields() []const Field {
     return &S.list;
 }
 
+/// Lê um campo booleano ou de um byte pelo índice em `fields()` (para a
+/// paleta de comandos). Número quebrado não tem como ler assim: null.
+pub fn getByte(s: *const Settings, index: usize) ?u8 {
+    const fs = fields();
+    if (index >= fs.len or fs[index].kind == .float or fs[index].kind == .text) return null;
+    return (@as([*]const u8, @ptrCast(s)) + fs[index].offset)[0];
+}
+
+/// Muda um campo booleano (0/1) ou de um byte pelo índice em `fields()`.
+pub fn setByte(s: *Settings, index: usize, value: u8) bool {
+    const fs = fields();
+    if (index >= fs.len) return false;
+    const p = @as([*]u8, @ptrCast(s)) + fs[index].offset;
+    switch (fs[index].kind) {
+        .boolean => @as(*bool, @ptrCast(p)).* = value != 0,
+        .byte => p[0] = value,
+        .float, .text => return false,
+    }
+    return true;
+}
+
+/// Índice do campo em `fields()` (para tabelas montadas em tempo de compilação).
+pub fn fieldIndex(comptime name: []const u8) usize {
+    if (!@hasField(Settings, name)) @compileError("configuração inexistente: " ++ name);
+    for (fields(), 0..) |f, i| if (std.mem.eql(u8, f.name, name)) return i;
+    unreachable;
+}
+
 /// Serializa em KDL: `settings theme="vidro" compact=#true font_scale=1.1 …`
 pub fn write(s: *const Settings, theme_name: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
     try out.print(gpa, "// gerado pelo larperCord\nsettings theme=\"{s}\"", .{theme_name});
@@ -117,6 +179,14 @@ pub fn write(s: *const Settings, theme_name: []const u8, out: *std.ArrayList(u8)
             .boolean => try out.print(gpa, " {s}={s}", .{ f.name, if (@as(*const bool, @ptrCast(base + f.offset)).*) "#true" else "#false" }),
             .float => try out.print(gpa, " {s}={d:.3}", .{ f.name, @as(*const f32, @ptrCast(@alignCast(base + f.offset))).* }),
             .byte => try out.print(gpa, " {s}={d}", .{ f.name, (base + f.offset)[0] }),
+            .text => {
+                // Aspas e barras não passam na validação; se aparecerem, somem.
+                try out.print(gpa, " {s}=\"", .{f.name});
+                for (@as(*const Text, @ptrCast(@alignCast(base + f.offset))).slice()) |ch| {
+                    if (ch != '"' and ch != '\\' and ch >= 0x20) try out.append(gpa, ch);
+                }
+                try out.append(gpa, '"');
+            },
         }
     }
     try out.append(gpa, '\n');
@@ -135,6 +205,9 @@ pub fn apply(s: *Settings, node: anytype) void {
             .byte => if (node.num(f.name)) |v| {
                 (base + f.offset)[0] = @intFromFloat(std.math.clamp(v, 0, 255));
             },
+            .text => if (node.str(f.name)) |v| {
+                @as(*Text, @ptrCast(@alignCast(base + f.offset))).set(v);
+            },
         }
     }
 }
@@ -145,6 +218,7 @@ test "configurações vão e voltam pelo KDL" {
     s.compact = true;
     s.font_scale = 1.2;
     s.language = 2;
+    s.proxy.set("socks5h://127.0.0.1:9050");
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.testing.allocator);
     try write(&s, "vidro", &out, std.testing.allocator);
@@ -157,5 +231,18 @@ test "configurações vão e voltam pelo KDL" {
     try std.testing.expect(back.compact);
     try std.testing.expectApproxEqAbs(@as(f32, 1.2), back.font_scale, 0.001);
     try std.testing.expectEqual(@as(u8, 2), back.language);
+    try std.testing.expectEqualStrings("socks5h://127.0.0.1:9050", back.proxy.slice());
     try std.testing.expectEqualStrings("vidro", nodes[0].str("theme").?);
+}
+
+test "campos pelo índice (paleta de comandos)" {
+    var s: Settings = .{};
+    const i = fieldIndex("compact");
+    try std.testing.expectEqual(@as(?u8, 0), getByte(&s, i));
+    try std.testing.expect(setByte(&s, i, 1));
+    try std.testing.expect(s.compact);
+    try std.testing.expect(setByte(&s, fieldIndex("color_mode"), 2));
+    try std.testing.expectEqual(@as(u8, 2), s.color_mode);
+    try std.testing.expect(!setByte(&s, fieldIndex("font_scale"), 1));
+    try std.testing.expect(!s.vim_keys and s.md_preview);
 }

@@ -7,6 +7,7 @@ const Store = @import("../core/store.zig").Store;
 const d = @import("draw.zig");
 const i18n = @import("i18n.zig");
 const qa = @import("qa.zig");
+const syntax = @import("syntax.zig");
 
 pub const Opts = struct {
     family: *d.Family,
@@ -22,6 +23,10 @@ pub const Opts = struct {
     sel_from: u32 = 1,
     sel_to: u32 = 0,
     probe: ?*Probe = null,
+    /// Com o contexto, os blocos de código ganham o botão "Copiar".
+    ctx: ?*d.Ctx = null,
+    /// Mensagem dona do texto (só para a marcação do QA).
+    msg_id: u64 = 0,
 };
 
 /// Pergunta "qual byte do texto está sob este ponto?".
@@ -128,8 +133,16 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
     var it: Words = .{ .spans = spans };
     var buf: [96]u8 = undefined;
     var line_start = true;
+    // Realce: o que ficou aberto na linha anterior do bloco (comentário…).
+    var syn: syntax.State = .normal;
+    // "Copiar" do bloco: desenhado depois da última linha, para ficar por cima.
+    var copy: ?struct { sp: *const md.Span, x: f32, y: f32, at_top: bool } = null;
     while (it.next()) |word| {
         const sp = word.span;
+        if (copy) |cp| if (cp.sp != sp) {
+            copyButton(o.ctx.?, dl.?, cp.sp, cp.x, cp.y, wrap, cp.at_top, o, mouse);
+            copy = null;
+        };
         const font = fontFor(o, sp);
         const s = if (sp.mention != .none) label(store, sp, &buf) else word.text;
         const size = if (sp.flags.code) o.size - 1.5 else o.size;
@@ -147,14 +160,18 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
             line_start = true;
         }
         if (dl) |l| {
+            const block_top = sp.flags.block and word.text.ptr == sp.text.ptr;
+            if (block_top) syn = .normal;
             if (o.base) |base| select(l, th_col, base, word, sp, font, size, pad, x0 + x, y0 + y, w, space_w, o, line_start);
-            drawWord(l, th_col, sp, font, size, s, x0 + x, y0 + y, w, pad, o, mouse);
+            drawWord(l, th_col, sp, font, size, s, x0 + x, y0 + y, w, pad, o, mouse, &syn);
+            if (block_top and o.ctx != null) copy = .{ .sp = sp, .x = x0 + x, .y = y0 + y, .at_top = y == 0 };
         }
         line_start = false;
         x += w;
         max_w = @max(max_w, x);
         if (word.space_after) x += space_w;
     }
+    if (copy) |cp| copyButton(o.ctx.?, dl.?, cp.sp, cp.x, cp.y, wrap, cp.at_top, o, mouse);
     return .{ .h = y + o.line_h, .w = max_w, .last_x = x };
 }
 
@@ -192,7 +209,7 @@ fn select(dl: *c.ImDrawList, th: anytype, base: [*]const u8, word: Word, sp: *co
     };
 }
 
-fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont, size: f32, s: []const u8, x: f32, y: f32, w: f32, pad: f32, o: Opts, mouse: c.ImVec2) void {
+fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont, size: f32, s: []const u8, x: f32, y: f32, w: f32, pad: f32, o: Opts, mouse: c.ImVec2, syn: *syntax.State) void {
     const lh = o.line_h;
     const ty = y + (lh - size * 1.2) / 2;
     const r: d.Rect = .{ .x = x, .y = y + 1, .w = w, .h = lh - 2 };
@@ -204,7 +221,19 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
         // Linhas encostadas formam a caixa do bloco.
         d.rect(dl, .{ .x = x, .y = y, .w = w, .h = lh }, if (o.on_accent) d.Rgba.black.alpha(0.18) else th.c(.code_bg), 0);
         c.ImDrawList_PushClipRect(dl, d.v(x, y), d.v(x + w - pad, y + lh), true);
-        d.text(dl, font, size, x + pad + 4, ty, if (o.on_accent) o.color else th.c(.text).mix(th.c(.accent), 0.15), s);
+        const plain = if (o.on_accent) o.color else th.c(.text).mix(th.c(.accent), 0.15);
+        if (sp.lang == .none) {
+            d.text(dl, font, size, x + pad + 4, ty, plain, s);
+        } else {
+            // Um pedaço por token, cada um na cor do seu tipo.
+            var lx = syntax.Lexer.init(sp.lang, s, syn);
+            var tx = x + pad + 4;
+            while (lx.next()) |t| {
+                if (tx > x + w) break;
+                d.text(dl, font, size, tx, ty, tokenColor(th, t.kind, plain, o.on_accent), t.text);
+                tx += d.width(font, size, t.text);
+            }
+        }
         c.ImDrawList_PopClipRect(dl);
         return;
     }
@@ -235,4 +264,53 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
     const color = if (sp.flags.bold) o.color.mix(th.c(.text), if (o.on_accent) 0 else 0.4) else o.color;
     d.text(dl, font, size, x, ty, color, s);
     if (sp.flags.strike) d.line(dl, x, ty + size * 0.62, x + w, ty + size * 0.62, color, 1.2);
+}
+
+/// Cores do realce, tiradas do tema (funcionam no claro e no escuro).
+fn tokenColor(th: anytype, k: syntax.Kind, plain: d.Rgba, on_accent: bool) d.Rgba {
+    // Em cima da cor de destaque (bolha própria) só o comentário muda.
+    if (on_accent) return if (k == .comment) plain.alpha(plain.a * 0.6) else plain;
+    const ink = th.c(.text);
+    return switch (k) {
+        .plain => plain,
+        .keyword => th.c(.accent).mix(ink, 0.2),
+        .type => th.c(.link).mix(ink, 0.25),
+        .string => th.c(.online).mix(ink, 0.3),
+        .number => th.c(.idle).mix(ink, 0.25),
+        .comment => th.c(.faint),
+        .add => th.c(.online),
+        .del => th.c(.danger),
+    };
+}
+
+/// "Copiar" no canto do bloco de código: aparece com o mouse em cima do
+/// bloco e copia o código (sem as crases). Fica embaixo quando o bloco
+/// abre a mensagem, para não brigar com a barra de ações.
+fn copyButton(ctx: *d.Ctx, dl: *c.ImDrawList, sp: *const md.Span, x: f32, y: f32, wrap: f32, at_top: bool, o: Opts, mouse: c.ImVec2) void {
+    const lines: f32 = @floatFromInt(std.mem.count(u8, sp.text, "\n") + 1);
+    const block: d.Rect = .{ .x = x, .y = y, .w = wrap, .h = lines * o.line_h };
+    const font = o.family.get(.semibold);
+    const caption = i18n.tr("Copiar", "Copy");
+    const fs: f32 = 12;
+    const bh = @min(o.line_h - 2, 20);
+    const bw = d.width(font, fs, caption) + 16;
+    const by = if (at_top and lines > 1) block.bottom() - bh - 2 else block.y + 1;
+    const br: d.Rect = .{ .x = block.right() - bw - 4, .y = by, .w = bw, .h = bh };
+    const off = if (o.base) |b| @intFromPtr(sp.text.ptr) -% @intFromPtr(b) else 0;
+    qa.mark(br, "code-copy:{d}:{d}", .{ o.msg_id, off });
+    const in_window = c.ImGui_IsWindowHovered(c.ImGuiHoveredFlags_RootAndChildWindows);
+    if (!in_window or !block.contains(mouse.x, mouse.y) or ctx.st.popup != .none) return;
+    const over = br.contains(mouse.x, mouse.y);
+    const th = ctx.th;
+    d.rect(dl, br, (if (over) th.c(.accent) else th.c(.elevated)).alpha(if (over) 1 else 0.92), 5);
+    if (!over) d.border(dl, br, th.c(.border), 5, 1);
+    d.text(dl, font, fs, br.x + 8, d.centerY(br, fs), if (over) th.c(.accent_text) else th.c(.muted), caption);
+    if (!over) return;
+    // A lista de mensagens não começa uma seleção neste clique.
+    ctx.hot = true;
+    c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_Hand);
+    if (c.ImGui_IsMouseClicked(0)) {
+        const copy = ctx.st.gpa.dupe(u8, sp.text) catch return;
+        ctx.act(.{ .copy = copy });
+    }
 }
