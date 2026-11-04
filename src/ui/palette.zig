@@ -47,6 +47,8 @@ fn rebuild(ctx: *d.Ctx) void {
         .{ .label = "Próximo tema", .label_en = "Next theme", .index = 3 },
         .{ .label = "Configurações", .label_en = "Settings", .index = 4 },
         .{ .label = "Aparência e temas", .label_en = "Appearance & themes", .index = 5 },
+        .{ .label = "Caixa de entrada (menções e não lidas)", .label_en = "Inbox (mentions and unreads)", .index = 6 },
+        .{ .label = "Mensagens salvas", .label_en = "Saved messages", .index = 7 },
     };
     for (actions) |ac| add(p, gpa, q, .{ .label = i18n.tr(ac.label, ac.label_en), .hint = i18n.tr("ação", "action"), .kind = .action, .index = ac.index });
 
@@ -71,6 +73,8 @@ fn choose(ctx: *d.Ctx, item: state.PaletteItem) void {
             1 => .toggle_deafen,
             2 => .leave_voice,
             3 => .{ .next_theme = 1 },
+            6 => .toggle_inbox,
+            7 => .toggle_saved,
             else => .open_settings,
         }),
     }

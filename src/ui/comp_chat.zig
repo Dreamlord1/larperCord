@@ -41,7 +41,8 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const t = std.fmt.bufPrint(&buf, "{s}", .{ch.name}) catch "";
         d.text(dl, fam.get(.bold), 22, r.x + 4, r.y + r.h / 2 - 22, ctx.col(.text), t);
         const sub = if (ch.guild == 0) i18n.tr("mensagem direta", "direct message") else std.fmt.bufPrint(&buf, "{s}  ·  {s}", .{ if (g) |x| x.name else "", ch.topic }) catch "";
-        _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - 8);
+        _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - 84);
+        inboxButtons(ctx, dl, r.right() - 32, r.y + r.h / 2 - 14);
         return;
     }
 
@@ -51,10 +52,11 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const search_w: f32 = 180;
     const sx = r.right() - 16 - search_w;
     const tx = r.x + 42 + name_w + 14;
-    if (ch.topic.len > 0 and sx - tx > 80) {
+    if (ch.topic.len > 0 and sx - tx > 150) {
         d.rect(dl, .{ .x = tx, .y = r.y + r.h / 2 - 10, .w = 1, .h = 20 }, ctx.col(.border).mix(ctx.col(.text), 0.05), 0);
-        _ = d.textClipped(dl, fam.get(.regular), 14, tx + 14, d.centerY(r, 14), ctx.col(.muted), ch.topic, sx - tx - 70);
+        _ = d.textClipped(dl, fam.get(.regular), 14, tx + 14, d.centerY(r, 14), ctx.col(.muted), ch.topic, sx - tx - 142);
     }
+    inboxButtons(ctx, dl, sx - 76, r.y + r.h / 2 - 14);
     const sr: d.Rect = .{ .x = sx, .y = r.y + r.h / 2 - 13, .w = search_w, .h = 26 };
     const sh = d.hit(ctx, 1, sr);
     qa.mark(sr, "header-search", .{});
@@ -71,6 +73,38 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     icons.members(dl, mr.x + 14, mr.y + 14, (if (ctx.st.settings.show_member_list or mh.hovered) ctx.col(.text) else ctx.col(.muted)).u());
     d.tip(ctx, mr, if (ctx.st.settings.show_member_list) i18n.tr("Esconder membros", "Hide Member List") else i18n.tr("Mostrar membros", "Show Member List"), mh.hovered);
     if (d.pflag(n, "divider", true)) d.line(dl, r.x, r.bottom() - 0.5, r.right(), r.bottom() - 0.5, ctx.col(.border), 1);
+}
+
+/// Caixa de entrada (com o número de não lidas) e mensagens salvas, da
+/// direita para a esquerda a partir de `right_x` (o canto do mais à direita).
+fn inboxButtons(ctx: *d.Ctx, dl: *c.ImDrawList, right_x: f32, y: f32) void {
+    const ir: d.Rect = .{ .x = right_x - 36, .y = y, .w = 28, .h = 28 };
+    const ih = d.hit(ctx, 3, ir);
+    qa.mark(ir, "header-inbox", .{});
+    if (ih.clicked) ctx.act(.toggle_inbox);
+    const open = ctx.st.popup == .inbox;
+    icons.inbox(dl, ir.x + 14, ir.y + 14, (if (open or ih.hovered) ctx.col(.text) else ctx.col(.muted)).u());
+    const n = @import("inbox.zig").unreadCount(ctx);
+    if (n > 0) {
+        var nb: [8]u8 = undefined;
+        const lbl = std.fmt.bufPrint(&nb, "{d}", .{@min(n, 99)}) catch "";
+        const font = ctx.ui.get(.bold);
+        const lw = d.width(font, 10.5, lbl);
+        const bw = @max(15, lw + 8);
+        const br: d.Rect = .{ .x = ir.right() - bw + 4, .y = ir.y - 2, .w = bw, .h = 15 };
+        d.rect(dl, br.inset(-2, -2), ctx.col(.surface), 9);
+        d.rect(dl, br, ctx.col(.danger), 7.5);
+        d.text(dl, font, 10.5, br.x + (bw - lw) / 2, br.y + 0.5, d.Rgba.white, lbl);
+    }
+    d.tip(ctx, ir, i18n.tr("Caixa de entrada  Ctrl+I", "Inbox  Ctrl+I"), ih.hovered);
+
+    const sr: d.Rect = .{ .x = right_x, .y = y, .w = 28, .h = 28 };
+    const sh = d.hit(ctx, 4, sr);
+    qa.mark(sr, "header-saved", .{});
+    if (sh.clicked) ctx.act(.toggle_saved);
+    const sopen = ctx.st.popup == .saved;
+    icons.bookmark(dl, sr.x + 14, sr.y + 14, (if (sopen or sh.hovered) ctx.col(.text) else ctx.col(.muted)).u(), sopen);
+    d.tip(ctx, sr, i18n.tr("Mensagens salvas  Ctrl+Shift+S", "Saved messages  Ctrl+Shift+S"), sh.hovered);
 }
 
 // --- tabs -------------------------------------------------------------------

@@ -1997,12 +1997,37 @@ pub const Gateway = struct {
                 const v = std.json.parseFromSliceLeaky(Value, arena.allocator(), resp.body.items, .{}) catch return;
                 if (g.channelValue(v, 0) catch null) |ch| g.emit(.{ .channel_upsert = ch });
             },
+            .fetch_mentions => {
+                // Só leitura: as mesmas menções da caixa de entrada do cliente oficial.
+                const none: ev.Event = .{ .recent_mentions = &.{} };
+                var resp = g.request("GET", "/users/@me/mentions?limit=25", null) orelse return g.emit(none);
+                defer resp.body.deinit(alloc);
+                if (resp.status != 200) {
+                    g.noticeHttp(i18n.tr("não consegui carregar as menções", "couldn't load the mentions"), &resp);
+                    return g.emit(none);
+                }
+                g.mentionList(resp.body.items) catch g.emit(none);
+            },
             .join_voice => if (!g.voice_warned) {
                 g.voice_warned = true;
                 g.notice("voz ainda não funciona na conexão real", "voice doesn't work on the real connection yet", .{});
             },
             .shutdown => {},
         }
+    }
+
+    /// GET /users/@me/mentions: lista de mensagens (da mais nova para a mais
+    /// antiga), cada uma com o `channel_id` de onde veio.
+    fn mentionList(g: *Gateway, body: []const u8) !void {
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const root = try std.json.parseFromSliceLeaky(Value, arena.allocator(), body, .{});
+        var list: std.ArrayList(types.Message) = .empty;
+        for (j.array(root)) |m| {
+            g.upsertUsers(m);
+            if (try g.message(m)) |msg| try list.append(alloc, msg);
+        }
+        g.emit(.{ .recent_mentions = try list.toOwnedSlice(alloc) });
     }
 
     fn history(g: *Gateway, ch: Id, body: []const u8, older: bool) !void {

@@ -16,6 +16,9 @@ pub const Popup = union(enum) {
     profile_full: struct { user: Id },
     /// `target` = mensagem que vai receber a reação (0 = caixa de texto).
     emoji: struct { target: Id, x: f32, y: f32 },
+    /// Caixa de entrada (aba 0 = não lidas, 1 = menções) e mensagens salvas.
+    inbox: struct { tab: u8 = 0 },
+    saved,
 };
 
 /// Seleção de texto entre mensagens: âncora e cabeça (mensagem + byte).
@@ -151,6 +154,8 @@ pub const State = struct {
     nonce: u64 = 1,
     /// Último "digitando" enviado (o Discord pede no máximo um a cada 8 s).
     typing_sent_ms: i64 = 0,
+    /// Mensagens salvas da conta (ui/saved.zig lê e grava o arquivo).
+    saved: @import("../core/saved.zig").List = .{},
     /// Buffers reaproveitados a cada quadro pela lista de mensagens.
     offsets: std.ArrayList(f32) = .empty,
     groups: std.ArrayList(u8) = .empty,

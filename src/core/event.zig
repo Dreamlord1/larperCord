@@ -80,6 +80,8 @@ pub const Event = union(enum) {
     note: struct { user: Id, text: []const u8 },
     /// Ícone de uma aplicação (jogo), para a atividade sem imagem.
     app_icon: struct { app: Id, icon: []const u8 },
+    /// Menções recentes (GET /users/@me/mentions), para a caixa de entrada.
+    recent_mentions: []types.Message,
 };
 
 pub const Connection = enum { connecting, ready, reconnecting, failed, offline };
@@ -114,6 +116,8 @@ pub const Command = union(enum) {
     fetch_app: Id,
     /// Move alguém para outro canal de voz (null = desconecta da call).
     move_member: struct { guild: Id, user: Id, channel: ?Id },
+    /// As 25 menções mais recentes (só leitura), chegam como `recent_mentions`.
+    fetch_mentions,
     shutdown,
 };
 
@@ -178,4 +182,14 @@ pub const Action = union(enum) {
     /// Atividade sem imagem: busca o ícone do jogo (uma vez por aplicação).
     want_app_icon: Id,
     move_member: struct { guild: Id, user: Id, channel: ?Id },
+    /// Abre/fecha a caixa de entrada (Ctrl+I) e as mensagens salvas.
+    toggle_inbox,
+    toggle_saved,
+    /// Busca (de novo) as menções recentes da aba "Menções".
+    fetch_mentions,
+    /// Mensagens salvas: só locais (nada vai para o Discord).
+    save_message: Id,
+    unsave_message: Id,
+    /// Troca a anotação (texto alocado com o gpa da interface).
+    saved_note: struct { id: Id, text: []const u8 },
 };

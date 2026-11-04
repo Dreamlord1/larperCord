@@ -14,6 +14,8 @@ const Id = types.Id;
 const rich = @import("rich.zig");
 const att = @import("attachments.zig");
 const profile = @import("profile.zig");
+const icons = @import("icons.zig");
+const saved_ui = @import("saved.zig");
 
 pub const emojis = [_][]const u8{
     "😂", "😭", "💀", "🔥", "❤️", "👍", "👎", "👀", "🎉", "😍", "🙏", "😎",
@@ -46,6 +48,8 @@ fn popupKey(p: state.Popup) u64 {
         .profile => |pr| 2 +% pr.user *% 31,
         .profile_full => |pr| 4 +% pr.user *% 31,
         .emoji => |e| 3 +% e.target *% 31,
+        .inbox => 4,
+        .saved => 5,
     };
 }
 
@@ -85,7 +89,9 @@ pub fn draw(ctx: *d.Ctx) void {
     const outside = c.ImGui_IsItemClickedEx(0) or c.ImGui_IsItemClickedEx(1);
     c.ImGui_End();
     if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null and (outside or appearing)) std.debug.print("[popup] appearing={} outside={} mouse={d:.0},{d:.0}\n", .{ appearing, outside, ctx.mouse.x, ctx.mouse.y });
-    if (outside or c.ImGui_IsKeyPressed(c.ImGuiKey_Escape)) return close(ctx);
+    // Esc com uma anotação aberta só cancela a edição (ui/saved.zig).
+    const editing_note = ctx.st.popup == .saved and saved_ui.isEditing();
+    if (outside or (c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and !editing_note)) return close(ctx);
 
     const saved = ctx.dl;
     defer ctx.dl = saved;
@@ -94,6 +100,8 @@ pub fn draw(ctx: *d.Ctx) void {
         .profile => |p| profile.card(ctx, p.user, p.x, p.y),
         .profile_full => |p| profile.full(ctx, p.user),
         .emoji => |e| emojiPicker(ctx, e.target, e.x, e.y),
+        .inbox => |ib| @import("inbox.zig").draw(ctx, ib.tab),
+        .saved => saved_ui.draw(ctx),
         .none => {},
     }
 }
@@ -148,6 +156,13 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "Adicionar reação", .en = "Add Reaction", .id = 3 });
             add(&items, &n, .{ .label = if (ctx.st.selection.empty()) "Copiar texto" else "Copiar seleção", .en = if (ctx.st.selection.empty()) "Copy Text" else "Copy Selection", .id = 4 });
             add(&items, &n, .{ .label = "Copiar link da mensagem", .en = "Copy Message Link", .id = 5 });
+            // Salvas: só neste computador (ui/saved.zig).
+            if (found.m.msg.id != 0) {
+                if (ctx.st.saved.find(id) != null)
+                    add(&items, &n, .{ .label = "Remover dos salvos", .en = "Remove from Saved", .id = 10 })
+                else
+                    add(&items, &n, .{ .label = "Salvar mensagem", .en = "Save Message", .id = 10 });
+            }
             add(&items, &n, .{ .label = "Marcar como não lida", .en = "Mark Unread", .id = 7 });
             if (dev) add(&items, &n, .{ .label = "Copiar ID da mensagem", .en = "Copy Message ID", .id = 8 });
             // Dos outros também, para quem pode gerenciar mensagens no servidor.
@@ -299,6 +314,7 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             f.cs.info.unread = true;
         },
         8, 25, 44, 63 => copyFmt(ctx, "{d}", .{id}),
+        10 => ctx.act(if (st.saved.find(id) != null) .{ .unsave_message = id } else .{ .save_message = id }),
         80, 81, 82, 83 => ctx.act(.{ .set_status = @enumFromInt(item - 80) }),
         84 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y - 200 } },
         85 => {

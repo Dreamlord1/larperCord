@@ -58,6 +58,10 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 - **Plugins em Lua**: arquivos `.lua` em `~/.config/larpercord/plugins/` que reagem a mensagens e
   criam comandos locais (`/shrug`) e atalhos, num sandbox com limite de instruções; liga/desliga e
   erros em Configurações → Plugins. [Guia e API →](docs/plugins.md)
+- **Caixa de entrada** (`Ctrl+I`): DMs e menções não lidas de todos os servidores, por canal, com
+  prévia, ir até a mensagem e "marcar tudo como lido"; aba com as menções recentes do Discord.
+- **Mensagens salvas com anotação** (`Ctrl+Shift+S`, botão direito → Salvar mensagem): só no seu
+  computador, em `~/.config/larpercord/saved-<conta>.json`; nada vai para o Discord.
 - **Configurações no estilo Discord** (`Ctrl+,`): 13 páginas, troca de tema com miniaturas,
   cor de destaque/cantos, **cores personalizadas por tema e modo em hex**, escala de fonte,
   modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
@@ -149,7 +153,7 @@ zig build -Doptimize=ReleaseFast
 larpercord [--theme NOME] [--demo] [--settings] [--list-themes] [--no-live] [--shot ARQ.png] [--stats]
 ```
 
-Atalhos: `Ctrl+K` paleta · `Ctrl+,` configurações · `F2` próximo tema · `Ctrl+Tab` abas ·
+Atalhos: `Ctrl+K` paleta · `Ctrl+,` configurações · `Ctrl+I` caixa de entrada · `Ctrl+Shift+S` salvas · `F2` próximo tema · `Ctrl+Tab` abas ·
 `Alt+1…9` · `Ctrl+W` fecha aba · `Ctrl+Clique` abre canal em nova aba · `↑` edita a última
 mensagem · `Esc` cancela resposta/edição · `Ctrl+C` copia a seleção · botão direito em tudo.
 
