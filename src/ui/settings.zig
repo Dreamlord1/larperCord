@@ -30,6 +30,7 @@ const sections = [_]Section{
     } },
     .{ .title = "LARPERCORD", .title_en = "LARPERCORD", .items = &.{
         .{ .page = .desempenho, .label = "Desempenho", .label_en = "Performance" },
+        .{ .page = .plugins, .label = "Plugins", .label_en = "Plugins" },
         .{ .page = .sobre, .label = "Sobre", .label_en = "About" },
     } },
 };
@@ -48,35 +49,35 @@ const Page = struct {
         return p.ids;
     }
 
-    fn font(p: *Page, wt: d.Weight) *c.ImFont {
+    pub fn font(p: *Page, wt: d.Weight) *c.ImFont {
         return p.ctx.ui.get(wt);
     }
 
-    fn title(p: *Page, t: []const u8) void {
+    pub fn title(p: *Page, t: []const u8) void {
         d.text(p.dl, p.font(.bold), 22, p.x, p.y, p.ctx.col(.text), t);
         p.y += 44;
     }
 
-    fn heading(p: *Page, t: []const u8) void {
+    pub fn heading(p: *Page, t: []const u8) void {
         p.y += 8;
         var buf: [96]u8 = undefined;
         d.text(p.dl, p.font(.bold), 12, p.x, p.y, p.ctx.col(.muted), d.upper(&buf, t));
         p.y += 26;
     }
 
-    fn note(p: *Page, t: []const u8) void {
+    pub fn note(p: *Page, t: []const u8) void {
         d.text(p.dl, p.font(.regular), 13.5, p.x, p.y, p.ctx.col(.faint), t);
         p.y += 26;
     }
 
-    fn divider(p: *Page) void {
+    pub fn divider(p: *Page) void {
         p.y += 10;
         d.line(p.dl, p.x, p.y, p.x + p.w, p.y, p.ctx.col(.border).mix(p.ctx.col(.text), 0.03), 1);
         p.y += 20;
     }
 
     /// Linha com título, descrição e um interruptor à direita.
-    fn toggle(p: *Page, label: []const u8, desc: []const u8, value: *bool) void {
+    pub fn toggle(p: *Page, label: []const u8, desc: []const u8, value: *bool) void {
         const ctx = p.ctx;
         const row_h: f32 = if (desc.len > 0) 58 else 40;
         const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = row_h };
@@ -208,7 +209,7 @@ const Page = struct {
         p.y += 60;
     }
 
-    fn button(p: *Page, label: []const u8, danger: bool) bool {
+    pub fn button(p: *Page, label: []const u8, danger: bool) bool {
         const ctx = p.ctx;
         const f = p.font(.semibold);
         const tw = d.width(f, 14, label);
@@ -560,6 +561,7 @@ fn page(p: *Page, previews: []const Preview) void {
         },
         .conta => account(p),
         .desempenho => performance(p),
+        .plugins => @import("plugins_page.zig").draw(p),
         .sobre => about(p),
     }
 }
@@ -772,5 +774,5 @@ fn about(p: *Page) void {
     p.note(i18n.tr("Cliente não oficial: usar contas de usuário fora do app oficial vai contra os termos do Discord.", "Unofficial client: using user accounts outside the official app is against Discord's terms."));
     p.divider();
     p.heading(i18n.tr("Feito com", "Built with"));
-    for ([_][]const u8{ "Zig 0.17", "SDL 3.4", "Dear ImGui 1.93 (dear_bindings)", "FreeType + fontconfig", "libcurl + zlib", "stb_image", "Inter, JetBrains Mono, Noto Color Emoji" }) |t| p.note(t);
+    for ([_][]const u8{ "Zig 0.17", "SDL 3.4", "Dear ImGui 1.93 (dear_bindings)", "FreeType + fontconfig", "libcurl + zlib", "stb_image", "Lua 5.4 (plugins)", "Inter, JetBrains Mono, Noto Color Emoji" }) |t| p.note(t);
 }

@@ -1,6 +1,25 @@
 const std = @import("std");
 
 /// Temas embutidos (usados também pelo passo `snapshots`).
+/// Lua 5.4 dos plugins (third_party/lua). Sem io, package, debug e
+/// coroutine: o sandbox não abre essas bibliotecas (ver src/plugins/engine.zig).
+const lua_sources = [_][]const u8{
+    "lapi.c",     "lcode.c",   "lctype.c",  "ldebug.c",   "ldo.c",      "ldump.c",   "lfunc.c",
+    "lgc.c",      "llex.c",    "lmem.c",    "lobject.c",  "lopcodes.c", "lparser.c", "lstate.c",
+    "lstring.c",  "ltable.c",  "ltm.c",     "lundump.c",  "lvm.c",      "lzio.c",    "lauxlib.c",
+    "lbaselib.c", "lstrlib.c", "ltablib.c", "lmathlib.c", "lutf8lib.c", "loslib.c",
+};
+
+fn addLua(b: *std.Build, m: *std.Build.Module) void {
+    m.addCSourceFiles(.{
+        .root = b.path("third_party/lua"),
+        .files = &lua_sources,
+        // Sem o sanitizador de UB do Zig: o Lua conta com aritmética de C
+        // que ele marcaria (e o QA roda em debug).
+        .flags = &.{ "-std=gnu99", "-O2", "-DLUA_USE_POSIX", "-fno-sanitize=undefined" },
+    });
+}
+
 const theme_names = [_][]const u8{ "classico", "vidro", "terminal", "subsolo", "bolhas", "zen", "papel", "escritorio" };
 
 pub fn build(b: *std.Build) void {
@@ -70,6 +89,7 @@ pub fn build(b: *std.Build) void {
     // Decodificador de imagens (PNG/JPEG/GIF) dos anexos; WebP vem da libwebp.
     mod.addIncludePath(b.path("third_party/stb"));
     mod.addCSourceFile(.{ .file = b.path("third_party/stb/stb_image.c"), .flags = &.{"-O2"} });
+    addLua(b, mod);
     mod.linkSystemLibrary("sdl3", .{});
     mod.linkSystemLibrary("freetype2", .{});
     mod.linkSystemLibrary("fontconfig", .{});
@@ -93,6 +113,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     test_mod.addImport("builtin_themes", builtin_themes);
+    addLua(b, test_mod);
     const tests = b.addTest(.{ .root_module = test_mod });
     b.step("test", "Roda os testes").dependOn(&b.addRunArtifact(tests).step);
 

@@ -19,6 +19,7 @@ test {
     _ = @import("net/media_url.zig");
     _ = @import("net/settings_proto.zig");
     _ = @import("ui/apng.zig");
+    _ = @import("plugins/engine.zig");
 }
 
 /// Componentes que a interface sabe desenhar (manter igual a ui/root.zig).

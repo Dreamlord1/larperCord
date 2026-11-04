@@ -572,6 +572,95 @@ fn mentionResolved(app: *App) bool {
 fn popupClosed(app: *App) bool {
     return app.st.popup == .none;
 }
+// Plugins: os dois exemplos de docs/plugins e três de teste.
+const qa_plugins = [_]struct { name: []const u8, src: []const u8 }{
+    .{ .name = "qa.lua", .src =
+    \\larper.on("message", function(msg)
+    \\  if msg.content == "ping-plugin" then larper.notify("pong-plugin de " .. msg.author.name) end
+    \\  if msg.content == "spam-plugin" then larper.send(msg.channel, "spam!") end
+    \\end)
+    \\larper.keybind("ctrl+shift+y", function() larper.send(nil, "atalho do plugin") end)
+    },
+    .{ .name = "trava.lua", .src = "larper.command('/trava', function() while true do end end)" },
+    .{ .name = "quebrado.lua", .src = "larper.on('message', function( end" },
+};
+
+fn writePlugins(_: *App) void {
+    _ = c.SDL_CreateDirectory("qa-out/plugins");
+    for ([_][]const u8{ "shrug.lua", "alerta.lua" }) |n| {
+        var a: [96]u8 = undefined;
+        var b: [96]u8 = undefined;
+        const from = std.fmt.bufPrintSentinel(&a, "docs/plugins/{s}", .{n}, 0) catch continue;
+        const to = std.fmt.bufPrintSentinel(&b, "qa-out/plugins/{s}", .{n}, 0) catch continue;
+        var size: usize = 0;
+        const data = c.SDL_LoadFile(from.ptr, &size) orelse continue;
+        defer c.SDL_free(data);
+        _ = c.SDL_SaveFile(to.ptr, data, size);
+    }
+    for (qa_plugins) |p| {
+        var b: [96]u8 = undefined;
+        const to = std.fmt.bufPrintSentinel(&b, "qa-out/plugins/{s}", .{p.name}, 0) catch continue;
+        _ = c.SDL_SaveFile(to.ptr, p.src.ptr, p.src.len);
+    }
+}
+fn plugin(app: *App, name: []const u8) ?*@import("plugins/engine.zig").Plugin {
+    for (app.plugins.list.items) |p| if (std.mem.eql(u8, p.name, name)) return p;
+    return null;
+}
+fn pluginErr(app: *App, name: []const u8, needle: []const u8) bool {
+    const p = plugin(app, name) orelse return false;
+    return std.mem.indexOf(u8, p.err() orelse return false, needle) != null;
+}
+fn lastIs(app: *App, text: []const u8) bool {
+    const m = lastMsg(app, 0) orelse return false;
+    return m.msg.author == app.store.me and std.mem.eql(u8, m.msg.content, text);
+}
+fn noPlugins(app: *App) bool {
+    return app.plugins.list.items.len == 0 and qa.find("button:Recarregar") != null;
+}
+fn pluginsLoaded(app: *App) bool {
+    return app.plugins.list.items.len == 5 and qa.find("toggle:shrug.lua") != null;
+}
+fn syntaxShown(app: *App) bool {
+    const p = plugin(app, "quebrado.lua") orelse return false;
+    return p.status() == .failed and qa.find("plugin-error:quebrado.lua") != null;
+}
+fn shrugSent(app: *App) bool {
+    return lastIs(app, "sei lá ¯\\_(ツ)_/¯");
+}
+fn travaStopped(app: *App) bool {
+    const p = plugin(app, "trava.lua") orelse return false;
+    return p.status() == .failed and pluginErr(app, "trava.lua", "limite") and !lastIs(app, "/trava");
+}
+fn keySent(app: *App) bool {
+    return lastIs(app, "atalho do plugin");
+}
+fn pongToast(app: *App) bool {
+    return std.mem.indexOf(u8, app.st.toast.text(), "pong-plugin") != null;
+}
+fn fakeUrgent(app: *App) void {
+    const id = app.st.activeChannel() orelse return;
+    @import("plugins/host.zig").onMessage(app, .{ .id = 1, .channel = id, .author = 1001, .timestamp = 0, .content = "isso é URGENTE, gente" });
+}
+fn alertToast(app: *App) bool {
+    return std.mem.indexOf(u8, app.st.toast.text(), "falou \"urgente\"") != null;
+}
+fn spamBlocked(app: *App) bool {
+    const p = plugin(app, "qa.lua") orelse return false;
+    return p.status() == .running and pluginErr(app, "qa.lua", "larper.send") and !lastIs(app, "spam!");
+}
+fn shrugOff(app: *App) bool {
+    const p = plugin(app, "shrug.lua") orelse return false;
+    return p.status() == .off;
+}
+fn shrugOn(app: *App) bool {
+    const p = plugin(app, "shrug.lua") orelse return false;
+    return p.status() == .running;
+}
+fn shrugLiteral(app: *App) bool {
+    return lastIs(app, "/shrug sei lá");
+}
+
 fn toDemoStart(app: *App) void {
     app.st.reply_to = 0;
     app.st.editing = 0;
@@ -900,6 +989,54 @@ const ops = [_]Op{
     expect("ver mensagens antigas mostra o botão de ir ao fim", jumpBottomShown),
     click("jump-bottom"),
     expect("o botão de ir ao fim volta para a última mensagem", atBottom),
+
+    s("plugins"),
+    .{ .run = writePlugins },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    expect("sem plugins carregados, a página diz como começar", noPlugins),
+    click("button:Recarregar"),
+    expect("Recarregar lê os .lua da pasta", pluginsLoaded),
+    expect("erro de sintaxe aparece na página", syntaxShown),
+    .{ .shot = "35-plugins" },
+    key(c.ImGuiKey_Escape),
+    expect("fecha as configurações", settingsClosed),
+    click("composer"),
+    .{ .text = "/shrug sei lá" },
+    key(c.ImGuiKey_Enter),
+    expect("/shrug (docs/plugins/shrug.lua) manda o texto com ¯\\_(ツ)_/¯", shrugSent),
+    click("composer"),
+    .{ .text = "/trava" },
+    key(c.ImGuiKey_Enter),
+    expect("plugin em laço infinito é parado pelo limite de instruções", travaStopped),
+    .{ .key = .{ .key = c.ImGuiKey_Y, .ctrl = true, .shift = true } },
+    expect("atalho Ctrl+Shift+Y do plugin manda mensagem", keySent),
+    click("composer"),
+    .{ .text = "ping-plugin" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "evento message chega ao plugin e larper.notify avisa", .check = pongToast, .timeout_ms = 3000 } },
+    .{ .run = clearToast },
+    .{ .run = fakeUrgent },
+    expect("alerta.lua (docs/plugins) avisa a palavra de outra pessoa", alertToast),
+    click("composer"),
+    .{ .text = "spam-plugin" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "larper.send em resposta a mensagem é bloqueado", .check = spamBlocked, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("toggle:shrug.lua"),
+    expect("desligar um plugin", shrugOff),
+    key(c.ImGuiKey_Escape),
+    click("composer"),
+    .{ .text = "/shrug sei lá" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "desligado, /shrug vai como texto normal", .check = shrugLiteral, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("toggle:shrug.lua"),
+    expect("religar o plugin", shrugOn),
+    .{ .sweep = &.{ "toggle:", "button:" } },
+    key(c.ImGuiKey_Escape),
 
     s("clicar em tudo: servidor"),
     .{ .run = toClassico },
@@ -1382,6 +1519,7 @@ pub const Runner = struct {
         h.update(std.mem.asBytes(&st.toast.until_ms));
         h.update(std.mem.asBytes(&st.jump));
         h.update(std.mem.asBytes(&app.themes.current));
+        h.update(std.mem.asBytes(&app.plugins.generation));
         h.update(std.mem.asBytes(&@as(u32, st.open_folders.count())));
         h.update(std.mem.asBytes(&@as(u32, st.collapsed.count())));
         h.update(std.mem.asBytes(&@as(u32, st.muted_channels.count())));
