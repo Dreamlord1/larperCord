@@ -120,6 +120,9 @@ pub const Settings = struct {
     voice_denoise: u8 = 1,
     voice_sounds: bool = true,
 
+    /// Volume dos vídeos em % (0..100; 0 = mudo).
+    video_volume: u8 = 100,
+
     // Erros no código (ui/settings_lsp.zig): uma linguagem de core/lsp.zig `known`
     // em cada par. Tudo desligado por padrão; ligar é sempre a pessoa quem faz.
     lsp_on_zig: bool = false,
@@ -146,6 +149,8 @@ pub const Settings = struct {
     // Avançado
     developer_mode: bool = false,
     hot_reload: bool = true,
+    /// Fechar a janela deixa o app na bandeja (sem bandeja, fechar sai igual).
+    close_to_tray: bool = true,
     /// 0 = seguir o sistema, 1 = português, 2 = inglês.
     language: u8 = 0,
     /// 0 = escuro, 1 = claro, 2 = seguir o sistema.
@@ -162,6 +167,13 @@ pub const Settings = struct {
         return h;
     }
 };
+
+/// Volume do slider para o ganho do som. O ouvido é logarítmico: ao quadrado, o
+/// meio da barra soa como metade do volume, e não quase igual ao máximo.
+pub fn videoGain(volume: u8) f32 {
+    const k = @as(f32, @floatFromInt(@min(volume, 100))) / 100;
+    return k * k;
+}
 
 pub fn lspOn(s: *Settings, i: usize) *bool {
     return switch (i) {
@@ -361,6 +373,38 @@ test "configurações de voz vão e voltam (volume acima de 3x e nome com acento
     try std.testing.expectEqual(@as(usize, 0), fresh.voice_mic.slice().len);
     try std.testing.expect(fresh.voice_highpass and fresh.voice_sounds and !fresh.voice_ptt);
     try std.testing.expectEqual(@as(u8, 1), fresh.voice_denoise);
+}
+
+test "volume dos vídeos e fechar para a bandeja vão e voltam" {
+    const kdl = @import("../theme/kdl.zig");
+    var s: Settings = .{};
+    try std.testing.expect(s.close_to_tray);
+    try std.testing.expectEqual(@as(u8, 100), s.video_volume);
+    s.video_volume = 35;
+    s.close_to_tray = false;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try write(&s, "vidro", &out, std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const nodes = try kdl.parse(arena.allocator(), out.items, null);
+    var back: Settings = .{};
+    apply(&back, &nodes[0]);
+    try std.testing.expectEqual(@as(u8, 35), back.video_volume);
+    try std.testing.expect(!back.close_to_tray);
+    // Arquivo antigo: os padrões. Volta para a bandeja ligada e som cheio.
+    const old = try kdl.parse(arena.allocator(), "settings compact=#true\n", null);
+    var fresh: Settings = .{};
+    apply(&fresh, &old[0]);
+    try std.testing.expect(fresh.close_to_tray);
+    try std.testing.expectEqual(@as(u8, 100), fresh.video_volume);
+}
+
+test "ganho do vídeo: mudo em 0, cheio em 100, e um arquivo editado à mão não estoura" {
+    try std.testing.expectEqual(@as(f32, 0), videoGain(0));
+    try std.testing.expectEqual(@as(f32, 1), videoGain(100));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), videoGain(50), 0.001);
+    try std.testing.expectEqual(@as(f32, 1), videoGain(255));
 }
 
 test "comandos de LSP vão e voltam, com aspas e barras" {

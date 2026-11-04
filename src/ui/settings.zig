@@ -12,6 +12,8 @@ const i18n = @import("i18n.zig");
 const custom = @import("../theme/custom.zig");
 const Preview = @import("../theme/manager.zig").Preview;
 const proxy = @import("../net/proxy.zig");
+const dropdown = @import("dropdown.zig");
+const tray = @import("../platform/tray.zig");
 
 const Section = struct { title: []const u8, title_en: []const u8, items: []const struct { page: S.Page, label: []const u8, label_en: []const u8 } };
 
@@ -336,10 +338,12 @@ pub fn draw(ctx: *d.Ctx, previews: []const Preview) void {
     d.line(dl, cx + 6, cr.y + 12, cx - 6, cr.y + 24, xc, 2);
     const ew = d.width(fam.get(.bold), 12, "ESC");
     d.text(dl, fam.get(.bold), 12, cx - ew / 2, cr.bottom() + 8, ctx.col(.muted), "ESC");
-    if (hb.clicked or c.ImGui_IsKeyPressed(c.ImGuiKey_Escape)) ctx.act(.close_settings);
+    if (hb.clicked or (c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and !dropdown.ownsEsc())) ctx.act(.close_settings);
 }
 
 var color_slot: i32 = -1;
+const color_key: usize = 0x8c000;
+var color_cell: d.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 var color_buf: [10]u8 = @splat(0);
 var color_sync = false;
 var color_bad = false;
@@ -397,40 +401,6 @@ fn themeColors(p: *Page) void {
     p.note(i18n.tr("#RRGGBB ou #RRGGBBAA. Vale só para este tema e este modo.", "#RRGGBB or #RRGGBBAA. Applies only to this theme and mode."));
     p.note(i18n.tr("Cores personalizadas têm prioridade sobre a cor de destaque.", "Custom colors take priority over the accent color."));
 
-    if (color_slot >= 0) {
-        const slot: usize = @intCast(color_slot);
-        if (color_sync) {
-            color_sync = false;
-            syncColorBuf(ctx, slot);
-        }
-        var lbuf: [24]u8 = undefined;
-        p.heading(slotLabel(&lbuf, slot));
-        const sw: d.Rect = .{ .x = p.x, .y = p.y + 6, .w = 28, .h = 28 };
-        const cur = slotColor(ctx, slot);
-        d.rect(p.dl, sw, cur, 6);
-        d.border(p.dl, sw, ctx.col(.text).alpha(0.35), 6, 1);
-        c.ImGui_SetCursorScreenPos(d.v(p.x + 38, p.y));
-        c.ImGui_SetNextItemWidth(@max(120, p.w - 38));
-        const enter = c.ImGui_InputText("##theme-color", &color_buf, color_buf.len, c.ImGuiInputTextFlags_CharsNoBlank | c.ImGuiInputTextFlags_EnterReturnsTrue);
-        qa.mark(.{ .x = p.x + 38, .y = p.y, .w = @max(120, p.w - 38), .h = 30 }, "theme-color-input", .{});
-        p.y += 38;
-        if (color_bad) {
-            p.note(i18n.tr("hex inválido — use #RRGGBB ou #RRGGBBAA", "invalid hex — use #RRGGBB or #RRGGBBAA"));
-        }
-        if (enter or p.button(i18n.tr("Aplicar", "Apply"), false)) applyColor(ctx);
-        p.y += 44;
-        if (p.button(i18n.tr("Limpar esta cor", "Clear this color"), false)) {
-            ctx.act(.{ .set_theme_color = .{ .slot = @intCast(color_slot), .rgba = null } });
-            color_sync = true;
-        }
-        p.y += 44;
-        if (p.button(i18n.tr("Restaurar tema", "Reset theme"), false)) {
-            ctx.act(.reset_theme_colors);
-            color_sync = true;
-        }
-        p.y += 44;
-    }
-
     const cols: usize = 2;
     const gap: f32 = 10;
     const cell_w = (p.w - gap) / @as(f32, @floatFromInt(cols));
@@ -451,8 +421,11 @@ fn themeColors(p: *Page) void {
             color_slot = @intCast(i);
             color_sync = true;
             color_bad = false;
+            dropdown.toggle(color_key);
         }
-        if (color_slot == i) d.rect(p.dl, rr, ctx.col(.selected), 5) else if (hb.hovered) d.rect(p.dl, rr, ctx.col(.hover), 5);
+        const editing = color_slot == i and dropdown.isOpen(color_key);
+        if (editing) color_cell = rr;
+        if (editing) d.rect(p.dl, rr, ctx.col(.selected), 5) else if (hb.hovered) d.rect(p.dl, rr, ctx.col(.hover), 5);
         const colr = slotColor(ctx, i);
         const sw: d.Rect = .{ .x = rr.x + 5, .y = rr.y + 5, .w = 16, .h = 16 };
         d.rect(p.dl, sw, colr, 3);
@@ -464,6 +437,53 @@ fn themeColors(p: *Page) void {
         _ = d.textClipped(p.dl, p.font(.regular), 11, rr.right() - d.width(p.font(.regular), 11, hex) - 6, d.centerY(rr, 11), ctx.col(.faint), hex, 70);
     }
     p.y = top + @as(f32, @floatFromInt(rows)) * 30 + 10;
+    colorEditor(p);
+}
+
+/// O editor de uma cor: flutua sobre a grade, colado na cor clicada.
+fn colorEditor(p: *Page) void {
+    const ctx = p.ctx;
+    if (!dropdown.isOpen(color_key)) {
+        color_slot = -1;
+        return;
+    }
+    if (color_slot < 0) return;
+    const slot: usize = @intCast(color_slot);
+    if (color_sync) {
+        color_sync = false;
+        syncColorBuf(ctx, slot);
+    }
+    const content_h: f32 = 4 + 34 + 38 + (if (color_bad) @as(f32, 26) else 0) + 44 * 3;
+    const dd_opt = dropdown.begin(ctx, color_key, color_cell, 340, content_h);
+    if (dd_opt == null) return;
+    var dd = dd_opt.?;
+    defer dd.end();
+    // Uma "página" dentro do painel: os botões e textos de sempre.
+    var q: Page = .{ .ctx = ctx, .dl = dd.dl, .x = dd.x + 8, .y = dd.y + 4, .w = dd.w - 16, .ids = 0x8d00 };
+    var lbuf: [24]u8 = undefined;
+    q.heading(slotLabel(&lbuf, slot));
+    const sw: d.Rect = .{ .x = q.x, .y = q.y + 1, .w = 28, .h = 28 };
+    d.rect(q.dl, sw, slotColor(ctx, slot), 6);
+    d.border(q.dl, sw, ctx.col(.text).alpha(0.35), 6, 1);
+    c.ImGui_SetCursorScreenPos(d.v(q.x + 38, q.y));
+    c.ImGui_SetNextItemWidth(q.w - 38);
+    const enter = c.ImGui_InputText("##theme-color", &color_buf, color_buf.len, c.ImGuiInputTextFlags_CharsNoBlank | c.ImGuiInputTextFlags_EnterReturnsTrue);
+    qa.mark(.{ .x = q.x + 38, .y = q.y, .w = q.w - 38, .h = 30 }, "theme-color-input", .{});
+    q.y += 38;
+    if (color_bad) q.note(i18n.tr("hex inválido — use #RRGGBB ou #RRGGBBAA", "invalid hex — use #RRGGBB or #RRGGBBAA"));
+    if (enter or q.button(i18n.tr("Aplicar", "Apply"), false)) applyColor(ctx);
+    q.y += 44;
+    if (q.button(i18n.tr("Limpar esta cor", "Clear this color"), false)) {
+        ctx.act(.{ .set_theme_color = .{ .slot = @intCast(color_slot), .rgba = null } });
+        color_sync = true;
+    }
+    q.y += 44;
+    if (q.button(i18n.tr("Restaurar tema", "Reset theme"), false)) {
+        ctx.act(.reset_theme_colors);
+        color_sync = true;
+    }
+    q.y += 44;
+    dd.y = q.y;
 }
 
 // --- Rede (proxy) -----------------------------------------------------------
@@ -594,7 +614,7 @@ fn page(p: *Page, previews: []const Preview) void {
         .notificacoes => {
             p.title(i18n.tr("Notificações", "Notifications"));
             p.note(i18n.tr("Para mensagens diretas e menções, quando você não está olhando a conversa.", "For direct messages and mentions, when you're not looking at the conversation."));
-            p.toggle(i18n.tr("Notificações na área de trabalho", "Desktop notifications"), i18n.tr("Só com a janela fora de foco (usa o notify-send do sistema).", "Only while the window is unfocused (uses the system's notify-send)."), &s.desktop_notifs);
+            p.toggle(i18n.tr("Notificações na área de trabalho", "Desktop notifications"), i18n.tr("Só com a janela fora de foco ou escondida na bandeja.", "Only while the window is unfocused or hidden in the tray."), &s.desktop_notifs);
             p.toggle(i18n.tr("Piscar na barra de tarefas", "Flash taskbar"), i18n.tr("A janela chama atenção até você voltar para ela.", "The window asks for attention until you come back."), &s.taskbar_flash);
             p.note(i18n.tr("Canais silenciados (botão direito → Silenciar) não notificam.", "Muted channels (right-click → Mute) never notify."));
         },
@@ -655,6 +675,8 @@ fn page(p: *Page, previews: []const Preview) void {
             p.title(i18n.tr("Avançado", "Advanced"));
             p.toggle(i18n.tr("Modo desenvolvedor", "Developer Mode"), i18n.tr("Mostra o ID das mensagens e põe \"Copiar ID\" nos menus.", "Shows message IDs and adds \"Copy ID\" to menus."), &s.developer_mode);
             p.toggle(i18n.tr("Recarregar temas ao salvar", "Reload themes on save"), i18n.tr("Salvar um .kdl em themes/ ou ~/.config/larpercord/themes aplica na hora.", "Saving a .kdl in themes/ or ~/.config/larpercord/themes applies it right away."), &s.hot_reload);
+            p.toggle(i18n.tr("Fechar para a bandeja", "Close to tray"), i18n.tr("Fechar a janela deixa o app conectado, com um ícone na bandeja do sistema.", "Closing the window keeps the app connected, with an icon in the system tray."), &s.close_to_tray);
+            if (s.close_to_tray and !tray.hostSeen(ctx.now_ms)) p.note(i18n.tr("Este sistema não tem bandeja agora: fechar a janela encerra o app.", "This system has no tray right now: closing the window quits the app."));
         },
         .filtros => @import("settings_filtros.zig").page(ctx, p.dl, p.x, &p.y, p.w),
         .voz => @import("settings_voz.zig").draw(p),

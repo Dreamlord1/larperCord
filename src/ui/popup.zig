@@ -29,7 +29,6 @@ pub fn close(ctx: *d.Ctx) void {
     if (@import("qa.zig").on() and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[popup] fechou\n", .{});
     ctx.st.popup = .none;
     ctx.st.focus_input = true;
-    ctx.st.role_picker = false;
     ctx.st.note_editing = false;
 }
 
@@ -143,7 +142,8 @@ pub fn draw(ctx: *d.Ctx) void {
     if (@import("qa.zig").on() and c.SDL_getenv("QA_DEBUG") != null and (outside or appearing)) std.debug.print("[popup] appearing={} outside={} mouse={d:.0},{d:.0}\n", .{ appearing, outside, ctx.mouse.x, ctx.mouse.y });
     // Esc com uma anotação aberta só cancela a edição (ui/saved.zig).
     const editing_note = ctx.st.popup == .saved and saved_ui.isEditing();
-    if (outside or (c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and !editing_note)) return close(ctx);
+    const esc = c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and !editing_note and !@import("dropdown.zig").ownsEsc();
+    if (outside or esc) return close(ctx);
 
     const saved = ctx.dl;
     defer ctx.dl = saved;

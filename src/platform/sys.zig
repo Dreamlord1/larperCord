@@ -1,5 +1,6 @@
-//! O que muda entre Linux e Windows: sockets, pasta de dados, chaveiro, RAM e
-//! mapear arquivos. O resto do app fala com estas funções.
+//! O que muda entre Linux e Windows: sockets, pasta de dados, chaveiro, RAM,
+//! mapear arquivos, trava de instância, bandeja e avisos do sistema. O resto do
+//! app fala com estas funções.
 const std = @import("std");
 const builtin = @import("builtin");
 const c = @import("c");
@@ -117,6 +118,227 @@ pub const Wake = struct {
 
 pub fn wakeSignal(write_end: Socket) void {
     if (windows) _ = c.send(write_end, "x", 1, 0) else _ = c.write(write_end, "x", 1);
+}
+
+// --- TCP local (um larperCord fala com o outro) -----------------------------------
+
+/// Escuta em 127.0.0.1, numa porta livre. No Windows, sem isso o socket é
+/// herdado por quem o app abrir (e a porta fica presa depois de sair).
+pub fn tcpListenLocal(port: *u16) ?Socket {
+    const s = if (windows) c.socket(c.AF_INET, c.SOCK_STREAM, 0) else c.socket(c.AF_INET, c.SOCK_STREAM | c.SOCK_CLOEXEC, 0);
+    if (!valid(s)) return null;
+    if (windows) _ = c.SetHandleInformation(@ptrFromInt(s), c.HANDLE_FLAG_INHERIT, 0);
+    var addr = ipv4("127.0.0.1", 0) orelse {
+        closeSocket(s);
+        return null;
+    };
+    var len: if (windows) c_int else c.socklen_t = @sizeOf(SockAddrIn);
+    if (c.bind(s, @ptrCast(&addr), len) != 0 or c.listen(s, 4) != 0 or c.getsockname(s, @ptrCast(&addr), &len) != 0) {
+        closeSocket(s);
+        return null;
+    }
+    port.* = std.mem.bigToNative(u16, addr.sin_port);
+    return s;
+}
+
+pub fn tcpConnectLocal(port: u16) ?Socket {
+    const s = if (windows) c.socket(c.AF_INET, c.SOCK_STREAM, 0) else c.socket(c.AF_INET, c.SOCK_STREAM | c.SOCK_CLOEXEC, 0);
+    if (!valid(s)) return null;
+    const addr = ipv4("127.0.0.1", port) orelse {
+        closeSocket(s);
+        return null;
+    };
+    if (c.connect(s, @ptrCast(&addr), @sizeOf(SockAddrIn)) != 0) {
+        closeSocket(s);
+        return null;
+    }
+    return s;
+}
+
+pub fn tcpAccept(s: Socket) ?Socket {
+    const client = c.accept(s, null, null);
+    return if (valid(client)) client else null;
+}
+
+pub fn tcpSend(s: Socket, data: []const u8) void {
+    if (windows) _ = c.send(s, data.ptr, @intCast(data.len), 0) else _ = c.send(s, data.ptr, data.len, 0);
+}
+
+/// Espera chegar algo por até `timeout_ms` e lê uma vez.
+pub fn tcpRecv(s: Socket, buf: []u8, timeout_ms: c_int) []u8 {
+    var fds = [1]PollFd{.{ .fd = s, .events = c.POLLIN, .revents = 0 }};
+    poll(&fds, 1, timeout_ms);
+    if (fds[0].revents == 0) return buf[0..0];
+    const n = if (windows) c.recv(s, buf.ptr, @intCast(buf.len), 0) else c.recv(s, buf.ptr, buf.len, 0);
+    return if (n > 0) buf[0..@intCast(n)] else buf[0..0];
+}
+
+// --- Trava de instância -----------------------------------------------------------
+
+pub const FileLock = if (windows) c.HANDLE else c_int;
+pub const LockResult = union(enum) {
+    got: FileLock,
+    /// Outro processo está com ela.
+    held,
+    /// Não deu para saber (pasta sem escrita, sistema de arquivos sem trava).
+    failed,
+};
+
+/// Só um processo por vez. Se ele morrer, o sistema solta sozinho: nunca sobra
+/// trava velha para impedir o app de abrir.
+pub fn lockFile(path: [*:0]const u8) LockResult {
+    if (windows) {
+        const h = c.CreateFileA(path, c.GENERIC_READ | c.GENERIC_WRITE, 0, null, c.OPEN_ALWAYS, c.FILE_ATTRIBUTE_NORMAL, null);
+        if (h != c.INVALID_HANDLE_VALUE) return .{ .got = h };
+        return if (c.GetLastError() == c.ERROR_SHARING_VIOLATION) .held else .failed;
+    }
+    const fd = c.open(path, c.O_RDWR | c.O_CREAT | c.O_CLOEXEC, @as(c_uint, 0o600));
+    if (fd < 0) return .failed;
+    if (c.flock(fd, c.LOCK_EX | c.LOCK_NB) == 0) return .{ .got = fd };
+    const held = std.c._errno().* == @intFromEnum(std.c.E.AGAIN);
+    _ = c.close(fd);
+    return if (held) .held else .failed;
+}
+
+pub fn unlockFile(lock: FileLock) void {
+    if (windows) _ = c.CloseHandle(lock) else _ = c.close(lock);
+}
+
+// --- Bandeja e avisos -------------------------------------------------------------
+
+/// Um segundo processo deixa o primeiro vir para a frente (no Windows, só quem
+/// está em primeiro plano pode passar a vez).
+pub fn allowForeground() void {
+    if (windows) _ = c.AllowSetForegroundWindow(0xFFFFFFFF);
+}
+
+/// Tem quem mostre um ícone de bandeja? No Windows, a barra de tarefas. No Linux
+/// o SDL_CreateTray funciona mesmo sem painel nenhum (o ícone só não aparece),
+/// então a pergunta vai direto para o StatusNotifierWatcher, pelo D-Bus. Sem
+/// libdbus, sem sessão ou sem resposta conta como "não": fechar sai de verdade,
+/// que é o erro seguro.
+pub fn trayHostAvailable() bool {
+    if (windows) return true;
+    // Fica carregada: o próprio SDL já a usa, e a pergunta se repete com a janela escondida.
+    const Lib = struct {
+        var handle: ?*c.SDL_SharedObject = null;
+    };
+    const lib = Lib.handle orelse (c.SDL_LoadObject("libdbus-1.so.3") orelse return false);
+    Lib.handle = lib;
+    const Conn = opaque {};
+    const Msg = opaque {};
+    const Fns = struct {
+        threads_init: *const fn () callconv(.c) u32,
+        error_init: *const fn (*[64]u8) callconv(.c) void,
+        error_free: *const fn (*[64]u8) callconv(.c) void,
+        bus_get_private: *const fn (c_int, *[64]u8) callconv(.c) ?*Conn,
+        set_exit_on_disconnect: *const fn (*Conn, u32) callconv(.c) void,
+        conn_close: *const fn (*Conn) callconv(.c) void,
+        conn_unref: *const fn (*Conn) callconv(.c) void,
+        new_call: *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, [*:0]const u8) callconv(.c) ?*Msg,
+        msg_unref: *const fn (*Msg) callconv(.c) void,
+        iter_init_append: *const fn (*Msg, *[128]u8) callconv(.c) void,
+        iter_append_basic: *const fn (*[128]u8, c_int, *const anyopaque) callconv(.c) u32,
+        send_block: *const fn (*Conn, *Msg, c_int, *[64]u8) callconv(.c) ?*Msg,
+        iter_init: *const fn (*Msg, *[128]u8) callconv(.c) u32,
+        iter_type: *const fn (*[128]u8) callconv(.c) c_int,
+        iter_recurse: *const fn (*[128]u8, *[128]u8) callconv(.c) void,
+        iter_get_basic: *const fn (*[128]u8, *anyopaque) callconv(.c) void,
+    };
+    const names = [_][*:0]const u8{
+        "dbus_threads_init_default",     "dbus_error_init",               "dbus_error_free",
+        "dbus_bus_get_private",          "dbus_connection_set_exit_on_disconnect", "dbus_connection_close",
+        "dbus_connection_unref",         "dbus_message_new_method_call",  "dbus_message_unref",
+        "dbus_message_iter_init_append", "dbus_message_iter_append_basic", "dbus_connection_send_with_reply_and_block",
+        "dbus_message_iter_init",        "dbus_message_iter_get_arg_type", "dbus_message_iter_recurse",
+        "dbus_message_iter_get_basic",
+    };
+    var f: Fns = undefined;
+    inline for (@typeInfo(Fns).@"struct".field_names, 0..) |fname, i| {
+        const sym = c.SDL_LoadFunction(lib, names[i]) orelse return false;
+        @field(f, fname) = @ptrCast(sym);
+    }
+    _ = f.threads_init();
+    // DBusError tem 32 bytes e DBusMessageIter, 72: os dois com folga.
+    var err: [64]u8 align(8) = undefined;
+    f.error_init(&err);
+    defer f.error_free(&err);
+    const conn = f.bus_get_private(0, &err) orelse return false;
+    // Por padrão a libdbus derruba o processo quando a conexão cai.
+    f.set_exit_on_disconnect(conn, 0);
+    defer {
+        f.conn_close(conn);
+        f.conn_unref(conn);
+    }
+    const msg = f.new_call("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.freedesktop.DBus.Properties", "Get") orelse return false;
+    defer f.msg_unref(msg);
+    var args: [128]u8 align(8) = undefined;
+    f.iter_init_append(msg, &args);
+    var iface: [*:0]const u8 = "org.kde.StatusNotifierWatcher";
+    var prop: [*:0]const u8 = "IsStatusNotifierHostRegistered";
+    if (f.iter_append_basic(&args, 's', @ptrCast(&iface)) == 0 or f.iter_append_basic(&args, 's', @ptrCast(&prop)) == 0) return false;
+    const reply = f.send_block(conn, msg, 250, &err) orelse return false;
+    defer f.msg_unref(reply);
+    var it: [128]u8 align(8) = undefined;
+    var sub: [128]u8 align(8) = undefined;
+    if (f.iter_init(reply, &it) == 0 or f.iter_type(&it) != 'v') return false;
+    f.iter_recurse(&it, &sub);
+    if (f.iter_type(&sub) != 'b') return false;
+    var on: u32 = 0;
+    f.iter_get_basic(&sub, @ptrCast(&on));
+    return on != 0;
+}
+
+/// O ícone temporário do aviso do Windows (o do SDL não dá para usar: ele não
+/// expõe o identificador). Fica até o próximo `toastExpire` depois de 30 s.
+var toast_hwnd: ?*anyopaque = null;
+var toast_ms: i64 = 0;
+const toast_uid: u32 = 0x1A5C;
+
+/// Aviso do sistema no Windows. No Linux quem avisa é o notify-send (app.zig).
+pub fn toast(hwnd: ?*anyopaque, now_ms: i64, title: []const u8, body: []const u8) void {
+    if (!windows) return;
+    const h = hwnd orelse return;
+    var nid = std.mem.zeroes(c.NOTIFYICONDATAW);
+    nid.cbSize = @sizeOf(c.NOTIFYICONDATAW);
+    nid.hWnd = @ptrCast(@alignCast(h));
+    nid.uID = toast_uid;
+    if (toast_hwnd == null) {
+        nid.uFlags = c.NIF_ICON | c.NIF_TIP;
+        // O ícone 1 de assets/larpercord.rc.
+        nid.hIcon = c.LoadIconA(c.GetModuleHandleA(null), @ptrFromInt(1));
+        wide(&nid.szTip, "larperCord");
+        if (c.Shell_NotifyIconW(c.NIM_ADD, &nid) == 0) return;
+        toast_hwnd = h;
+    }
+    nid.uFlags = c.NIF_INFO;
+    nid.dwInfoFlags = c.NIIF_NONE;
+    wide(&nid.szInfoTitle, title);
+    wide(&nid.szInfo, body);
+    _ = c.Shell_NotifyIconW(c.NIM_MODIFY, &nid);
+    toast_ms = now_ms;
+}
+
+/// `force`: tira o ícone já (o app está fechando).
+pub fn toastExpire(now_ms: i64, force: bool) void {
+    if (!windows) return;
+    const h = toast_hwnd orelse return;
+    if (!force and now_ms - toast_ms < 30_000) return;
+    var nid = std.mem.zeroes(c.NOTIFYICONDATAW);
+    nid.cbSize = @sizeOf(c.NOTIFYICONDATAW);
+    nid.hWnd = @ptrCast(@alignCast(h));
+    nid.uID = toast_uid;
+    _ = c.Shell_NotifyIconW(c.NIM_DELETE, &nid);
+    toast_hwnd = null;
+}
+
+/// UTF-8 para o campo de tamanho fixo do Windows, cortando o que não couber.
+fn wide(out: []u16, s: []const u8) void {
+    var tmp: [1024]u16 = undefined;
+    const n: usize = @intCast(c.MultiByteToWideChar(c.CP_UTF8, 0, s.ptr, @intCast(@min(s.len, 1024)), &tmp, tmp.len));
+    const m = @min(n, out.len - 1);
+    @memcpy(out[0..m], tmp[0..m]);
+    out[m] = 0;
 }
 
 // --- Pastas ---------------------------------------------------------------------

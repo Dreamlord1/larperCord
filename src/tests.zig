@@ -14,6 +14,7 @@ test {
     _ = @import("core/leitura.zig");
     _ = @import("core/links.zig");
     _ = @import("core/voz.zig");
+    _ = @import("core/janela.zig");
     _ = @import("core/ruido.zig");
     _ = @import("core/lsp.zig");
     _ = @import("ui/rascunhos.zig");

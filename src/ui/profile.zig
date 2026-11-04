@@ -13,6 +13,7 @@ const i18n = @import("i18n.zig");
 const rich = @import("rich.zig");
 const att = @import("attachments.zig");
 const icons = @import("icons.zig");
+const dropdown = @import("dropdown.zig");
 const logo = @import("logo.zig");
 const popup = @import("popup.zig");
 const Id = types.Id;
@@ -367,6 +368,8 @@ fn since(col: *Col, uid: Id, pf: ?types.Profile, gid: Id, friends: bool) void {
 }
 
 /// Cargos no servidor aberto: × tira (com permissão), + abre a lista para dar um.
+const role_key: usize = 0xDA000;
+
 fn roles(col: *Col, uid: Id, gid: Id) void {
     const ctx = col.ctx;
     const info = ctx.store.memberInfo(gid, uid) orelse return;
@@ -439,28 +442,26 @@ fn roles(col: *Col, uid: Id, gid: Id) void {
             icons.plus(dl, pr.x + 13, pr.y + 11, 4.5, ctx.col(.muted).u());
             d.tip(ctx, pr, i18n.tr("Dar cargo", "Add role"), hb.hovered);
         }
-        if (hb.clicked) ctx.st.role_picker = !ctx.st.role_picker;
+        if (hb.clicked) dropdown.toggle(role_key);
+        // Os cargos para dar: por cima do cartão, que não muda de tamanho. Sem
+        // desenho é só a medição do cartão.
+        if (col.dl != null) if (dropdown.begin(ctx, role_key, pr, 220, 26 * @as(f32, @floatFromInt(ncand)))) |dd_c| {
+            var dd = dd_c;
+            defer dd.end();
+            for (cands[0..ncand]) |rid| {
+                const rl = ctx.store.roles.get(rid).?;
+                const ro = dd.row(26, false);
+                qa.mark(ro.rect, "role-pick:{d}", .{rid});
+                d.circle(dd.dl, ro.rect.x + 12, ro.rect.y + 13, 4, if (rl.color != 0) d.Rgba.hex(rl.color) else ctx.col(.faint));
+                _ = d.textClipped(dd.dl, fam.get(.medium), 13, ro.rect.x + 24, d.centerY(ro.rect, 13), ctx.col(.text), rl.name, ro.rect.w - 30);
+                if (ro.hit.clicked) {
+                    ctx.act(.{ .member_role = .{ .guild = gid, .user = uid, .role = rid, .add = true } });
+                    dropdown.close();
+                }
+            }
+        };
     }
     col.y += 30;
-    if (ctx.st.role_picker and manage) {
-        for (cands[0..@min(ncand, 8)], 0..) |rid, ci| {
-            const rl = ctx.store.roles.get(rid).?;
-            const rr: d.Rect = .{ .x = col.x - 4, .y = col.y, .w = col.w + 8, .h = 24 };
-            const hb = col.hit(130 + ci, rr);
-            if (col.dl) |dl| {
-                qa.mark(rr, "role-pick:{d}", .{rid});
-                d.rect(dl, rr, ctx.col(.hover).alpha(anim.to(anim.id("pf-hover", col.ids + 10000 + ci), if (hb.hovered) 1 else 0, 22)), 4);
-                d.circle(dl, rr.x + 12, rr.y + 12, 4, if (rl.color != 0) d.Rgba.hex(rl.color) else ctx.col(.faint));
-                _ = d.textClipped(dl, fam.get(.medium), 13, rr.x + 24, d.centerY(rr, 13), ctx.col(.text), rl.name, rr.w - 30);
-            }
-            if (hb.clicked) {
-                ctx.act(.{ .member_role = .{ .guild = gid, .user = uid, .role = rid, .add = true } });
-                ctx.st.role_picker = false;
-            }
-            col.y += 26;
-        }
-        col.y += 4;
-    }
 }
 
 /// Cor e letra de cada serviço (não temos os logotipos).

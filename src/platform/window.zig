@@ -5,7 +5,17 @@ const std = @import("std");
 const sys = @import("sys.zig");
 const c = @import("c");
 
-pub const Wake = enum(i32) { gateway = 1, theme = 2, tick = 3, media = 4, token = 5 };
+pub const Wake = enum(i32) {
+    gateway = 1,
+    theme = 2,
+    tick = 3,
+    media = 4,
+    token = 5,
+    /// Abrir a janela: menu da bandeja ou um segundo larperCord.
+    show = 6,
+    /// Sair de verdade: menu da bandeja.
+    quit = 7,
+};
 
 pub const Window = struct {
     window: *c.SDL_Window,
@@ -14,12 +24,19 @@ pub const Window = struct {
 
     pub fn init(title: [*:0]const u8, w: c_int, h: c_int) !Window {
         preferNvidiaEgl();
+        // Fechar a janela é o app quem decide (ficar na bandeja ou sair). Sem
+        // isto o SDL ainda manda um QUIT junto, e QUIT aqui é sempre sair.
+        _ = c.SDL_SetHint(c.SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
         _ = c.SDL_SetAppMetadata("larperCord", "0.2.0", "dev.larpercord");
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) return error.SdlInit;
         var flags = c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | c.SDL_WINDOW_TRANSPARENT;
         // LARPER_HIDDEN=1: janela escondida (medir desempenho com a GPU de verdade).
         if (c.SDL_getenv("LARPER_HIDDEN") != null) flags |= c.SDL_WINDOW_HIDDEN;
         const window = c.SDL_CreateWindow(title, w, h, flags) orelse return error.SdlWindow;
+        if (decodeIcon(icon_64)) |icon| {
+            _ = c.SDL_SetWindowIcon(window, icon);
+            c.SDL_DestroySurface(icon);
+        }
         // LARPER_RENDERER escolhe o backend do SDL (opengl, vulkan, gpu, software).
         const renderer = c.SDL_CreateRenderer(window, c.SDL_getenv("LARPER_RENDERER")) orelse return error.SdlRenderer;
         _ = c.SDL_SetRenderVSync(renderer, 1);
@@ -48,6 +65,22 @@ pub const Window = struct {
         return c.SDL_SavePNG(surface, path);
     }
 };
+
+/// Ícones embutidos (tools/gen_icons.py).
+pub const icon_64 = @embedFile("icon_64");
+pub const icon_32 = @embedFile("icon_32");
+
+/// PNG embutido para uma superfície do SDL (quem chama destrói).
+pub fn decodeIcon(png: []const u8) ?*c.SDL_Surface {
+    var iw: c_int = 0;
+    var ih: c_int = 0;
+    var comp: c_int = 0;
+    const px = c.stbi_load_from_memory(png.ptr, @intCast(png.len), &iw, &ih, &comp, 4) orelse return null;
+    defer c.stbi_image_free(px);
+    const borrowed = c.SDL_CreateSurfaceFrom(iw, ih, c.SDL_PIXELFORMAT_RGBA32, px, iw * 4) orelse return null;
+    defer c.SDL_DestroySurface(borrowed);
+    return c.SDL_DuplicateSurface(borrowed);
+}
 
 /// Em máquinas só com GPU NVIDIA, o glvnd carrega também o EGL do Mesa (e o
 /// LLVM junto, ~23 MB) sem necessidade. Restringe ao EGL da NVIDIA nesse caso.
