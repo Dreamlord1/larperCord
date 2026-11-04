@@ -1212,6 +1212,49 @@ fn cacheReplaced(app: *App) bool {
     const sc = app.st.scrollOf(cs.info.id);
     return !cs.cached and cs.history == .loaded and cs.messages.items.len > 0 and sc.stick_bottom;
 }
+/// Uma mensagem nova no canal aberto (como se viesse do Discord): a
+/// conversa muda e, ao trocar de canal, tem que ir para o disco.
+var cache_left: struct { ch: Id = 0, id: Id = 0 } = .{};
+fn cacheTouchActive(app: *App) void {
+    const cs = active(app) orelse return;
+    const last = lastMsg(app, 0) orelse return;
+    const content = std.heap.c_allocator.dupe(u8, "qa: a conversa que ficou para trás vai para o disco") catch return;
+    const id = types.makeSnowflake(gw.nowMs(), 0x3c000);
+    app.events.push(.{ .message_create = .{ .id = id, .channel = cs.info.id, .author = last.msg.author, .timestamp = @divTrunc(gw.nowMs(), 1000), .content = content } });
+    @import("platform/window.zig").Window.wake(app.win.wake_type, .gateway);
+    cache_left = .{ .ch = cs.info.id, .id = id };
+}
+fn cacheTouched(app: *App) bool {
+    const cs = app.store.channel(cache_left.ch) orelse return false;
+    return app.store.find(cs, cache_left.id) != null;
+}
+fn cacheLeftSaved(app: *App) bool {
+    if (app.st.activeChannel() == cache_left.ch) return false;
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    const dec = msg_cache.readChannel(arena.allocator(), cache_left.ch) orelse return false;
+    for (dec.entries) |e| if (e.msg.id == cache_left.id) return true;
+    return false;
+}
+/// Gravação de arquivo privado (configurações, rascunhos, salvas, cache, token):
+/// arquivo 600, pasta nossa 700, troca sem sobrar .tmp, e regravar por cima.
+fn privateWrite(_: *App) bool {
+    const fsutil = @import("platform/fsutil.zig");
+    const p = "qa-out/privado/larpercord/sub/x.kdl";
+    if (!fsutil.writePrivate(p, "um") or !fsutil.writePrivate(p, "dois")) return false;
+    var st: c.struct_stat = undefined;
+    if (c.stat(p, &st) != 0 or st.st_mode & 0o777 != 0o600 or st.st_size != 4) return false;
+    if (c.stat("qa-out/privado/larpercord/sub", &st) != 0 or st.st_mode & 0o777 != 0o700) return false;
+    if (c.stat("qa-out/privado/larpercord", &st) != 0 or st.st_mode & 0o777 != 0o700) return false;
+    return c.stat(p ++ ".tmp", &st) != 0;
+}
+var disk_reads_before: u32 = 0;
+fn searchMarkReads(_: *App) void {
+    disk_reads_before = search.disk_reads;
+}
+fn searchNoReread(_: *App) bool {
+    return !search.scanning and search.found_disk > 0 and search.disk_reads == disk_reads_before;
+}
 fn searchOpen(_: *App) bool {
     return search.open and qa.find("search-input") != null;
 }
@@ -1806,6 +1849,61 @@ const ops = [_]Op{
     expect("ver mensagens antigas mostra o botão de ir ao fim", jumpBottomShown),
     click("jump-bottom"),
     expect("o botão de ir ao fim volta para a última mensagem", atBottom),
+
+    s("cache em disco"),
+    expect("arquivo privado: 600, pasta 700, troca inteira", privateWrite),
+    click("guild:500000"),
+    click("channel:500005"),
+    expect("pronto", ready),
+    .{ .run = cacheTouchActive },
+    expect("mensagem nova chega na conversa", cacheTouched),
+    click("channel:500006"),
+    expect("trocar de canal grava a conversa que ficou para trás", cacheLeftSaved),
+    click("channel:500005"),
+    expect("pronto", ready),
+    .{ .run = cacheFlush },
+    expect("a conversa vai para o disco (no máximo 200 por canal)", cacheHasActive),
+    .{ .run = cacheReopen },
+    expect("reabrir mostra o cache na hora", cacheShown),
+    .{ .shot = "47-cache" },
+    .{ .expect = .{ .name = "o histórico de verdade substitui o cache sem pular a rolagem", .check = cacheReplaced, .timeout_ms = 4000 } },
+
+    s("busca local"),
+    ctrl(c.ImGuiKey_F),
+    expect("Ctrl+F abre a busca", searchOpen),
+    .{ .shot = "48-busca-vazia" },
+    .{ .text = "from:ana" },
+    expect("from:ana só acha mensagens da ana", searchFromAna),
+    .{ .shot = "49-busca" },
+    .{ .run = searchClear },
+    .{ .wait = 100 },
+    .{ .text = "has:imagem" },
+    expect("has:imagem só acha mensagens com imagem", searchImages),
+    key(c.ImGuiKey_Escape),
+    expect("Esc fecha a busca", searchClosed),
+    click("header-find"),
+    expect("a lupa do cabeçalho abre a busca", searchOpen),
+    key(c.ImGuiKey_Escape),
+    .{ .run = unloadMemes },
+    ctrl(c.ImGuiKey_F),
+    .{ .text = "in:memes" },
+    expect("canal fora da memória: a busca acha no cache em disco", searchFromDisk),
+    .{ .shot = "50-busca-disco" },
+    .{ .run = searchMarkReads },
+    key(c.ImGuiKey_Escape),
+    ctrl(c.ImGuiKey_F),
+    .{ .text = "in:memes" },
+    expect("reabrir a busca usa o que já leu do disco (não lê de novo)", searchNoReread),
+    expect("e acha o mesmo no cache", searchFromDisk),
+    click("search-result:0"),
+    .{ .expect = .{ .name = "clicar no resultado abre o canal e pula até a mensagem", .check = searchJumped, .timeout_ms = 4000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Privacidade"),
+    expect("Privacidade tem a opção do cache", privacyPage),
+    .{ .shot = "51-privacidade" },
+    .{ .click = .{ .dyn = tClearCache } },
+    expect("Apagar cache apaga os arquivos", cacheEmpty),
+    key(c.ImGuiKey_Escape),
 
     s("plugins"),
     .{ .run = writePlugins },

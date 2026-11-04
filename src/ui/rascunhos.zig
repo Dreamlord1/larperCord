@@ -103,11 +103,7 @@ pub const Drafts = struct {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(gpa);
         dr.write(&out, gpa) catch return;
-        const fd = c.open(path.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_CLOEXEC, @as(c_uint, 0o600));
-        if (fd < 0) return;
-        defer _ = c.close(fd);
-        _ = c.fchmod(fd, 0o600);
-        _ = c.write(fd, out.items.ptr, out.items.len);
+        _ = @import("../platform/fsutil.zig").writePrivate(path, out.items);
     }
 };
 

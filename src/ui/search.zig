@@ -1,6 +1,8 @@
 //! Busca local (Ctrl+F ou a lupa do cabeçalho): procura nas mensagens que
 //! estão na memória e no cache em disco (net/msg_cache.zig), a cada tecla e
-//! sem falar com o Discord, então funciona offline. Filtros:
+//! sem falar com o Discord, então funciona offline. O texto já vai dobrado
+//! (minúsculas, sem acento) uma vez por abertura (memória) ou por versão do
+//! arquivo (disco, lido aos poucos, ~2 ms por quadro). Filtros:
 //! from:nome, in:canal, has:link, has:imagem, has:arquivo.
 //! Clicar num resultado abre a conversa e pula até a mensagem.
 const std = @import("std");
@@ -28,15 +30,40 @@ var first: usize = 0;
 /// Muda a cada abertura: o campo do ImGui esquece o texto da vez anterior.
 var gen: c_int = 0;
 
-/// Mensagem que só está no disco (canal fora da memória), lida ao abrir.
+/// Mensagem que só está no disco (canal fora da memória).
 /// `hay` e `who` já vêm "dobrados" (minúsculas, sem acento): cada tecla vira
 /// só um `indexOf`, rápido mesmo com muitos MB de cache.
 const Doc = struct { channel: Id, id: Id, author_name: []const u8, content: []const u8, files: []const u8, hay: []const u8, who: []const u8, image: bool, file: bool };
-var disk_arena: std.heap.ArenaAllocator = .init(alloc);
-var disk: std.ArrayList(Doc) = .empty;
+/// Um arquivo do cache já lido. Fica de uma abertura para a outra e só é
+/// lido de novo quando o arquivo muda (data ou tamanho).
+const DiskFile = struct {
+    stamp: msg_cache.Stamp,
+    arena: std.heap.ArenaAllocator,
+    docs: []const Doc = &.{},
+    bytes: usize = 0,
+};
+var disk_files: std.AutoHashMapUnmanaged(Id, *DiskFile) = .empty;
+var disk_used: usize = 0;
+/// Conta do índice (outra conta, outra pasta: começa do zero).
+var disk_acct: [24]u8 = undefined;
+var disk_acct_len: usize = 0;
+/// Canais por conferir nesta abertura, um pouco por quadro.
+var todo: std.ArrayList(Id) = .empty;
+var todo_i: usize = 0;
+pub var scanning = false;
 var built = false;
-/// Teto do que a busca lê do disco de uma vez.
+/// Arquivos lidos do disco desde o início (o QA confere que reabrir não relê).
+pub var disk_reads: u32 = 0;
+/// Teto do que a busca guarda do disco.
 const disk_budget: usize = 16 * 1024 * 1024;
+/// Tempo de leitura do disco por quadro (a busca segue respondendo).
+const step_ns: u64 = 2 * std.time.ns_per_ms;
+
+/// Mensagem da memória já dobrada; `idx` vale enquanto a versão da conversa
+/// não mudar.
+const MemDoc = struct { idx: u32, hay: []const u8, who: []const u8, image: bool, file: bool };
+const MemFold = struct { version: u32, len: usize, arena: std.heap.ArenaAllocator, docs: std.ArrayList(MemDoc) = .empty };
+var mem_folds: std.AutoHashMapUnmanaged(Id, *MemFold) = .empty;
 
 pub const Result = struct {
     channel: Id,
@@ -69,69 +96,203 @@ pub fn start() void {
     selected = 0;
     first = 0;
     built = false;
+    scanning = false;
 }
 
+/// Fecha. O que veio do disco fica para a próxima vez; o resto sai.
 pub fn close() void {
     open = false;
+    scanning = false;
     results.clearAndFree(alloc);
-    disk.clearAndFree(alloc);
     _ = res_arena.reset(.free_all);
-    _ = disk_arena.reset(.free_all);
+    var it = mem_folds.valueIterator();
+    while (it.next()) |f| freeMemFold(f.*);
+    mem_folds.clearAndFree(alloc);
+    todo.clearAndFree(alloc);
     found = 0;
     found_disk = 0;
 }
 
 // --- Índice do disco --------------------------------------------------------------
 
-fn buildDisk(ctx: *d.Ctx) void {
-    built = true;
-    disk.clearRetainingCapacity();
-    _ = disk_arena.reset(.retain_capacity);
-    var ids: std.ArrayList(Id) = .empty;
-    defer ids.deinit(alloc);
-    msg_cache.listChannels(&ids);
-    const da = disk_arena.allocator();
-    var used: usize = 0;
-    for (ids.items) |ch| {
-        const cs = ctx.store.channel(ch) orelse continue;
-        // Na memória: a busca já olha lá (e é a versão mais nova).
-        if (cs.history == .loaded) continue;
-        var tmp = std.heap.ArenaAllocator.init(alloc);
-        defer tmp.deinit();
-        const dec = msg_cache.readChannel(tmp.allocator(), ch) orelse continue;
-        for (dec.entries) |*e| {
-            const m = &e.msg;
-            if (used > disk_budget) return;
-            var name: []const u8 = "?";
-            for (dec.users) |u| if (u.id == m.author) {
-                name = u.name;
-            };
-            if (ctx.store.user(m.author)) |u| name = u.name;
-            var image = false;
-            var file = false;
-            var files: std.ArrayList(u8) = .empty;
-            for (m.attachments) |a| {
-                if (a.isImage()) image = true else if (!a.embed) file = true;
-                files.appendSlice(da, a.filename) catch {};
-                files.append(da, ' ') catch {};
-            }
-            var fb: [fold_max]u8 = undefined;
-            var wb: [64]u8 = undefined;
-            const doc: Doc = .{
-                .channel = ch,
-                .id = m.id,
-                .author_name = da.dupe(u8, name) catch continue,
-                .content = da.dupe(u8, m.content) catch continue,
-                .files = files.items,
-                .hay = da.dupe(u8, foldHay(&fb, m.content, files.items)) catch continue,
-                .who = da.dupe(u8, sq.foldInto(&wb, name)) catch continue,
-                .image = image,
-                .file = file,
-            };
-            used += doc.content.len * 2 + doc.files.len + 96;
-            disk.append(alloc, doc) catch return;
-        }
+fn dropFile(ch: Id) void {
+    const kv = disk_files.fetchRemove(ch) orelse return;
+    disk_used -|= kv.value.bytes;
+    kv.value.arena.deinit();
+    alloc.destroy(kv.value);
+}
+
+fn forgetDisk() void {
+    var it = disk_files.valueIterator();
+    while (it.next()) |f| {
+        f.*.arena.deinit();
+        alloc.destroy(f.*);
     }
+    disk_files.clearRetainingCapacity();
+    disk_used = 0;
+}
+
+/// Abriu: confere quais arquivos existem; a leitura vai em `stepDisk`.
+fn beginDisk() void {
+    built = true;
+    const acct = msg_cache.account();
+    if (!std.mem.eql(u8, acct, disk_acct[0..disk_acct_len])) {
+        forgetDisk();
+        const n = @min(acct.len, disk_acct.len);
+        @memcpy(disk_acct[0..n], acct[0..n]);
+        disk_acct_len = n;
+    }
+    todo.clearRetainingCapacity();
+    todo_i = 0;
+    msg_cache.listChannels(&todo);
+    // Arquivo que sumiu (Apagar cache, teto do cache, cache desligado): sai do índice.
+    if (disk_files.count() > 0) {
+        var listed: std.AutoHashMapUnmanaged(Id, void) = .empty;
+        defer listed.deinit(alloc);
+        for (todo.items) |ch| listed.put(alloc, ch, {}) catch {};
+        var gone: std.ArrayList(Id) = .empty;
+        defer gone.deinit(alloc);
+        var it = disk_files.keyIterator();
+        while (it.next()) |ch| if (!listed.contains(ch.*)) gone.append(alloc, ch.*) catch {};
+        for (gone.items) |ch| dropFile(ch);
+    }
+    scanning = true;
+}
+
+/// Lê arquivos novos ou mudados por até `step_ns`. Retorna se o índice mudou.
+fn stepDisk(ctx: *d.Ctx) bool {
+    const t0 = c.SDL_GetTicksNS();
+    var changed = false;
+    while (todo_i < todo.items.len) {
+        if (c.SDL_GetTicksNS() - t0 >= step_ns) return changed;
+        const ch = todo.items[todo_i];
+        todo_i += 1;
+        const cs = ctx.store.channel(ch) orelse continue;
+        const st = msg_cache.stamp(ch) orelse {
+            if (disk_files.contains(ch)) changed = true;
+            dropFile(ch);
+            continue;
+        };
+        if (disk_files.get(ch)) |f| {
+            if (f.stamp.mtime_ns == st.mtime_ns and f.stamp.size == st.size) continue;
+            dropFile(ch);
+            changed = true;
+        }
+        // Na memória: a busca já olha lá (e é a versão mais nova).
+        if (cs.history == .loaded or disk_used > disk_budget) continue;
+        if (readFile(ctx, ch, st)) changed = true;
+    }
+    scanning = false;
+    return changed;
+}
+
+fn readFile(ctx: *d.Ctx, ch: Id, st: msg_cache.Stamp) bool {
+    var tmp = std.heap.ArenaAllocator.init(alloc);
+    defer tmp.deinit();
+    const ta = tmp.allocator();
+    const dec = msg_cache.readChannel(ta, ch) orelse return false;
+    disk_reads += 1;
+    const f = alloc.create(DiskFile) catch return false;
+    f.* = .{ .stamp = st, .arena = .init(alloc) };
+    const da = f.arena.allocator();
+    // Nome de cada autor do arquivo, sem procurar na lista a cada mensagem.
+    var names: std.AutoHashMapUnmanaged(Id, []const u8) = .empty;
+    for (dec.users) |u| names.put(ta, u.id, u.name) catch {};
+    const docs = da.alloc(Doc, dec.entries.len) catch {
+        f.arena.deinit();
+        alloc.destroy(f);
+        return false;
+    };
+    var n: usize = 0;
+    for (dec.entries) |*e| {
+        const m = &e.msg;
+        var name: []const u8 = names.get(m.author) orelse "?";
+        if (ctx.store.user(m.author)) |u| name = u.name;
+        var image = false;
+        var file = false;
+        var files: std.ArrayList(u8) = .empty;
+        for (m.attachments) |a| {
+            if (a.isImage()) image = true else if (!a.embed) file = true;
+            files.appendSlice(da, a.filename) catch {};
+            files.append(da, ' ') catch {};
+        }
+        var fb: [fold_max]u8 = undefined;
+        var wb: [64]u8 = undefined;
+        docs[n] = .{
+            .channel = ch,
+            .id = m.id,
+            .author_name = da.dupe(u8, name) catch continue,
+            .content = da.dupe(u8, m.content) catch continue,
+            .files = files.items,
+            .hay = da.dupe(u8, foldHay(&fb, m.content, files.items)) catch continue,
+            .who = da.dupe(u8, sq.foldInto(&wb, name)) catch continue,
+            .image = image,
+            .file = file,
+        };
+        f.bytes += docs[n].content.len * 2 + docs[n].files.len + 96;
+        n += 1;
+    }
+    f.docs = docs[0..n];
+    disk_files.put(alloc, ch, f) catch {
+        f.arena.deinit();
+        alloc.destroy(f);
+        return false;
+    };
+    disk_used += f.bytes;
+    return n > 0;
+}
+
+// --- Memória, dobrada uma vez por abertura ------------------------------------------
+
+fn freeMemFold(f: *MemFold) void {
+    f.arena.deinit();
+    alloc.destroy(f);
+}
+
+/// As mensagens da conversa já dobradas (refaz só se a conversa mudou).
+fn memFold(ctx: *d.Ctx, cs: *const store_mod.ChannelState) ?*const MemFold {
+    const gop = mem_folds.getOrPut(alloc, cs.info.id) catch return null;
+    if (gop.found_existing) {
+        const f = gop.value_ptr.*;
+        if (f.version == cs.version and f.len == cs.messages.items.len) return f;
+        f.docs = .empty;
+        _ = f.arena.reset(.retain_capacity);
+    } else {
+        const f = alloc.create(MemFold) catch {
+            _ = mem_folds.remove(cs.info.id);
+            return null;
+        };
+        f.* = .{ .version = 0, .len = 0, .arena = .init(alloc) };
+        gop.value_ptr.* = f;
+    }
+    const f = gop.value_ptr.*;
+    f.version = cs.version;
+    f.len = cs.messages.items.len;
+    const fa = f.arena.allocator();
+    f.docs.ensureTotalCapacity(fa, cs.messages.items.len) catch {};
+    var fbuf: [256]u8 = undefined;
+    var hay_buf: [fold_max]u8 = undefined;
+    var who_buf: [64]u8 = undefined;
+    for (cs.messages.items, 0..) |*m, i| {
+        if (m.pending or m.msg.id == 0) continue;
+        var image = false;
+        var file = false;
+        var fl: usize = 0;
+        for (m.msg.attachments) |a| {
+            if (a.isImage()) image = true else if (!a.embed) file = true;
+            const n = @min(a.filename.len, fbuf.len - fl);
+            @memcpy(fbuf[fl .. fl + n], a.filename[0..n]);
+            fl += n;
+            if (fl < fbuf.len) {
+                fbuf[fl] = ' ';
+                fl += 1;
+            }
+        }
+        const hay = fa.dupe(u8, foldHay(&hay_buf, m.msg.content, fbuf[0..fl])) catch continue;
+        const who = fa.dupe(u8, sq.foldInto(&who_buf, authorName(ctx, m.msg.author))) catch continue;
+        f.docs.append(fa, .{ .idx = @intCast(i), .hay = hay, .who = who, .image = image, .file = file }) catch continue;
+    }
+    return f;
 }
 
 // --- Busca -------------------------------------------------------------------------
@@ -170,52 +331,41 @@ fn channelOk(cs: *const store_mod.ChannelState, q: *const sq.Query) bool {
     return q.in_len == 0 or sq.containsFold(cs.info.name, q.in());
 }
 
-fn rebuild(ctx: *d.Ctx) void {
+/// `keep`: o índice do disco cresceu; a seleção fica onde estava.
+fn rebuild(ctx: *d.Ctx, keep: bool) void {
     results.clearRetainingCapacity();
     _ = res_arena.reset(.retain_capacity);
     found = 0;
     found_disk = 0;
-    selected = 0;
-    first = 0;
+    if (!keep) {
+        selected = 0;
+        first = 0;
+    }
     const q = sq.Query.parse(std.mem.sliceTo(&query, 0));
     if (q.empty()) return;
     var hits: std.ArrayList(Hit) = .empty;
     defer hits.deinit(alloc);
-    var fbuf: [256]u8 = undefined;
-    var hay_buf: [fold_max]u8 = undefined;
-    var who_buf: [64]u8 = undefined;
     var it = ctx.store.channels.valueIterator();
     while (it.next()) |csp| {
         const cs = csp.*;
         if (!channelOk(cs, &q)) continue;
-        for (cs.messages.items) |*m| {
-            if (m.pending or m.msg.id == 0) continue;
-            var image = false;
-            var file = false;
-            var fl: usize = 0;
-            for (m.msg.attachments) |a| {
-                if (a.isImage()) image = true else if (!a.embed) file = true;
-                const n = @min(a.filename.len, fbuf.len - fl);
-                @memcpy(fbuf[fl .. fl + n], a.filename[0..n]);
-                fl += n;
-                if (fl < fbuf.len) {
-                    fbuf[fl] = ' ';
-                    fl += 1;
-                }
-            }
-            const hay = foldHay(&hay_buf, m.msg.content, fbuf[0..fl]);
-            const who = sq.foldInto(&who_buf, authorName(ctx, m.msg.author));
-            if (!matches(&q, hay, who, image, file)) continue;
+        const f = memFold(ctx, cs) orelse continue;
+        for (f.docs.items) |*doc| {
+            if (!matches(&q, doc.hay, doc.who, doc.image, doc.file)) continue;
+            const m = &cs.messages.items[doc.idx];
             hits.append(alloc, .{ .id = m.msg.id, .channel = cs.info.id, .src = .{ .mem = m } }) catch return;
         }
     }
-    for (disk.items) |*doc| {
-        const cs = ctx.store.channel(doc.channel) orelse continue;
-        // Carregou depois que a busca abriu: a memória já respondeu.
+    var fit = disk_files.iterator();
+    while (fit.next()) |e| {
+        const cs = ctx.store.channel(e.key_ptr.*) orelse continue;
+        // Carregou depois de lido: a memória já respondeu.
         if (cs.history == .loaded or !channelOk(cs, &q)) continue;
-        if (!matches(&q, doc.hay, doc.who, doc.image, doc.file)) continue;
-        hits.append(alloc, .{ .id = doc.id, .channel = doc.channel, .src = .{ .disk = doc } }) catch return;
-        found_disk += 1;
+        for (e.value_ptr.*.docs) |*doc| {
+            if (!matches(&q, doc.hay, doc.who, doc.image, doc.file)) continue;
+            hits.append(alloc, .{ .id = doc.id, .channel = doc.channel, .src = .{ .disk = doc } }) catch return;
+            found_disk += 1;
+        }
     }
     found = hits.items.len;
     // Mais novas primeiro (o ID do Discord cresce com o tempo).
@@ -339,8 +489,13 @@ pub fn draw(ctx: *d.Ctx) void {
     // Outra camada por cima (paleta, configurações): a busca dá lugar.
     if (ctx.st.palette.open or ctx.st.settings.open) return close();
     if (!built) {
-        buildDisk(ctx);
-        rebuild(ctx);
+        beginDisk();
+        rebuild(ctx, false);
+    }
+    if (scanning) {
+        if (stepDisk(ctx)) rebuild(ctx, true);
+        // Continua no próximo quadro sem esperar evento.
+        anim.at(ctx.now_ms);
     }
     const win = ctx.win;
     // Fundo que pega o clique fora da caixa (fecha a busca).
@@ -381,11 +536,13 @@ pub fn draw(ctx: *d.Ctx) void {
     c.ImGui_SetNextItemWidth(ir.w);
     c.ImGui_PushIDInt(gen);
     defer c.ImGui_PopID();
-    if (c.ImGui_InputTextWithHint("##sq", i18n.trZ("Buscar mensagens…  from:nome  in:canal  has:link", "Search messages…  from:name  in:channel  has:link").ptr, &query, query.len, 0)) rebuild(ctx);
+    if (c.ImGui_InputTextWithHint("##sq", i18n.trZ("Buscar mensagens…  from:nome  in:canal  has:link", "Search messages…  from:name  in:channel  has:link").ptr, &query, query.len, 0)) rebuild(ctx, false);
     c.ImGui_PopFont();
     d.line(dl, box.x, box.y + 58, box.right(), box.y + 58, ctx.col(.border), 1);
 
     const n = results.items.len;
+    // O índice do disco cresceu e a lista encolheu por baixo da seleção.
+    if (selected >= n) selected = 0;
     const row_h: f32 = 54;
     const list_top = box.y + 64;
     const foot_h: f32 = 40;

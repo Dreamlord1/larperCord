@@ -2323,17 +2323,7 @@ pub fn saveToken(token: []const u8) enum { keyring, file, failed } {
     }
     var pbuf: [512]u8 = undefined;
     const path = tokenFilePath(&pbuf) orelse return .failed;
-    if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
-        var dbuf: [512]u8 = undefined;
-        const dir = std.fmt.bufPrintSentinel(&dbuf, "{s}", .{path[0..slash]}, 0) catch return .failed;
-        _ = c.SDL_CreateDirectory(dir.ptr);
-    }
-    const fd = c.open(path.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_CLOEXEC, @as(c_uint, 0o600));
-    if (fd < 0) return .failed;
-    defer _ = c.close(fd);
-    _ = c.fchmod(fd, 0o600);
-    if (c.write(fd, token.ptr, token.len) != @as(isize, @intCast(token.len))) return .failed;
-    return .file;
+    return if (@import("../platform/fsutil.zig").writePrivate(path, token)) .file else .failed;
 }
 
 /// "Sair": apaga o token do chaveiro e do arquivo.

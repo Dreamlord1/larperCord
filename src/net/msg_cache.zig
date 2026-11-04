@@ -7,9 +7,12 @@
 //! só o seu usuário lê. Teto de `total_cap` somando tudo (as conversas
 //! esquecidas há mais tempo saem primeiro) e de `channel_msgs` por canal.
 //!
-//! Grava só quando a conversa mudou: ao trocar de canal, uma vez por minuto
-//! (no tique do relógio, que já acorda o app), antes de a conversa sair da
-//! memória e ao fechar o app. Nada aqui acorda o laço.
+//! Grava só quando a conversa mudou: a que ficou para trás ao trocar de
+//! canal, algumas por minuto (no tique do relógio, que já acorda o app),
+//! antes de a conversa sair da memória e todas ao fechar o app. Nada aqui
+//! acorda o laço. Tudo roda na thread da interface, então cada gravação é
+//! enxuta: a pasta é criada uma vez por conta, o tamanho de cada arquivo
+//! fica guardado e o total só é somado do disco uma vez.
 const std = @import("std");
 const c = @import("c");
 const types = @import("../core/types.zig");
@@ -18,6 +21,7 @@ const store_mod = @import("../core/store.zig");
 const Store = store_mod.Store;
 const ChannelState = store_mod.ChannelState;
 const Id = types.Id;
+const fsutil = @import("../platform/fsutil.zig");
 
 const alloc = std.heap.c_allocator;
 
@@ -36,10 +40,18 @@ var root_len: usize = 0;
 /// Pasta da conta conectada: o ID dela, ou "demo".
 var acct_buf: [24]u8 = undefined;
 var acct_len: usize = 0;
-/// Versão de cada conversa da última vez que foi gravada (ou lida).
-var saved: std.AutoHashMapUnmanaged(Id, u32) = .empty;
+/// Cada conversa da última vez que foi gravada (ou lida): a versão e o
+/// tamanho do arquivo (para o total sem perguntar ao disco).
+const Saved = struct { version: u32, size: u64 };
+var saved: std.AutoHashMapUnmanaged(Id, Saved) = .empty;
 var total: u64 = 0;
 var total_known = false;
+/// A pasta da conta já existe (criada nesta sessão).
+var dirs_ok = false;
+/// Conversa aberta por último: a que fica para trás na próxima troca.
+var last_open: Id = 0;
+/// Onde `flushSome` parou (as que mudam sempre não passam na frente das outras).
+var rr: usize = 0;
 /// Conversas que abriram pelo cache (o QA confere).
 pub var restored: u32 = 0;
 
@@ -73,67 +85,40 @@ pub fn setAccount(id: Id) void {
     const s = if (id == 0) std.fmt.bufPrint(&acct_buf, "demo", .{}) catch "" else std.fmt.bufPrint(&acct_buf, "{d}", .{id}) catch "";
     acct_len = s.len;
     saved.clearRetainingCapacity();
+    dirs_ok = false;
+    last_open = 0;
+    // Começo da sessão: o único passeio pelo disco inteiro (depois o total
+    // é mantido a cada gravação e remoção).
+    _ = totalBytes();
 }
 
 /// Sem conta: nada é lido nem gravado (a conta aberta está sendo removida).
 pub fn detach() void {
     acct_len = 0;
     saved.clearRetainingCapacity();
+    dirs_ok = false;
+    last_open = 0;
 }
 
 fn channelPath(buf: []u8, ch: Id, suffix: []const u8) ?[:0]const u8 {
     return std.fmt.bufPrintSentinel(buf, "{s}/{s}/{d}{s}{s}", .{ root(), acct_buf[0..acct_len], ch, ext, suffix }, 0) catch null;
 }
 
-/// Cria a pasta da conta (e as de cima). As nossas (…/larpercord,
-/// …/messages e a da conta) ficam só para o dono; as que já existiam fora
-/// delas (o ~/.cache) não mudam de permissão.
+/// Cria a pasta da conta (e as de cima), uma vez por conta. As nossas
+/// (…/larpercord, …/messages e a da conta) ficam só para o dono; as que já
+/// existiam fora delas (o ~/.cache) não mudam de permissão.
 fn ensureDirs() bool {
+    if (dirs_ok) return true;
     var buf: [512]u8 = undefined;
-    const full = std.fmt.bufPrintSentinel(&buf, "{s}/{s}", .{ root(), acct_buf[0..acct_len] }, 0) catch return false;
-    var i: usize = 1;
-    while (i <= full.len) : (i += 1) {
-        if (i < full.len and full[i] != '/') continue;
-        const keep = buf[i];
-        buf[i] = 0;
-        const p: [*:0]const u8 = @ptrCast(&buf);
-        _ = c.mkdir(p, 0o700);
-        const part = full[0..i];
-        const ours = i >= root_len or std.mem.endsWith(u8, part, "/larpercord");
-        if (ours) _ = c.chmod(p, 0o700);
-        buf[i] = keep;
-    }
-    var st: c.struct_stat = undefined;
-    return c.stat(full.ptr, &st) == 0;
+    const full = std.fmt.bufPrint(&buf, "{s}/{s}", .{ root(), acct_buf[0..acct_len] }) catch return false;
+    dirs_ok = fsutil.ensureDir(full);
+    return dirs_ok;
 }
 
 fn fileSize(path: [*:0]const u8) u64 {
     var st: c.struct_stat = undefined;
     if (c.stat(path, &st) != 0) return 0;
     return @intCast(@max(st.st_size, 0));
-}
-
-/// Grava inteiro num .tmp e troca de nome: nunca fica um arquivo pela metade.
-fn writeFile(path: [:0]const u8, tmp: [:0]const u8, bytes: []const u8) bool {
-    const fd = c.open(tmp.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_CLOEXEC, @as(c_uint, 0o600));
-    if (fd < 0) return false;
-    _ = c.fchmod(fd, 0o600);
-    var off_: usize = 0;
-    while (off_ < bytes.len) {
-        const n = c.write(fd, bytes[off_..].ptr, bytes.len - off_);
-        if (n <= 0) {
-            _ = c.close(fd);
-            _ = c.unlink(tmp.ptr);
-            return false;
-        }
-        off_ += @intCast(n);
-    }
-    _ = c.close(fd);
-    if (c.rename(tmp.ptr, path.ptr) != 0) {
-        _ = c.unlink(tmp.ptr);
-        return false;
-    }
-    return true;
 }
 
 // --- Leitura: a conversa aparece na hora ------------------------------------------
@@ -170,6 +155,11 @@ fn dupeAttachments(list: []const types.Attachment) ![]const types.Attachment {
 
 /// Lê o arquivo de um canal (tudo em `arena`). null = não tem ou estragou.
 pub fn readChannel(arena: std.mem.Allocator, ch: Id) ?format.Decoded {
+    var size: usize = 0;
+    return readSized(arena, ch, &size);
+}
+
+fn readSized(arena: std.mem.Allocator, ch: Id, size_out: *usize) ?format.Decoded {
     if (!usable()) return null;
     var pbuf: [512]u8 = undefined;
     const path = channelPath(&pbuf, ch, "") orelse return null;
@@ -177,10 +167,11 @@ pub fn readChannel(arena: std.mem.Allocator, ch: Id) ?format.Decoded {
     const data = c.SDL_LoadFile(path.ptr, &size) orelse return null;
     defer c.SDL_free(data);
     const bytes = @as([*]const u8, @ptrCast(data))[0..size];
+    size_out.* = size;
     const dec = format.decode(arena, bytes) catch {
         // Estragado (gravação interrompida, versão antiga): sai do caminho.
-        _ = c.unlink(path.ptr);
-        total_known = false;
+        if (c.unlink(path.ptr) == 0) total -|= size;
+        _ = saved.remove(ch);
         return null;
     };
     if (dec.channel != ch) return null;
@@ -192,7 +183,8 @@ pub fn restore(store: *Store, cs: *ChannelState) void {
     if (!usable() or cs.history == .loaded) return;
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
-    const dec = readChannel(arena.allocator(), cs.info.id) orelse return;
+    var size: usize = 0;
+    const dec = readSized(arena.allocator(), cs.info.id, &size) orelse return;
     if (dec.entries.len == 0) return;
     // Autores que esta sessão ainda não viu (o nome vem junto no cache).
     for (dec.users) |u| if (store.user(u.id) == null) {
@@ -218,14 +210,15 @@ pub fn restore(store: *Store, cs: *ChannelState) void {
         n += 1;
     }
     store.loadCached(cs, msgs[0..n], reacts[0..n]) catch return;
-    saved.put(alloc, cs.info.id, cs.version) catch {};
+    saved.put(alloc, cs.info.id, .{ .version = cs.version, .size = size }) catch {};
     restored += 1;
 }
 
 // --- Escrita ---------------------------------------------------------------------
 
 fn dirty(cs: *const ChannelState) bool {
-    return cs.history == .loaded and (saved.get(cs.info.id) orelse cs.version +% 1) != cs.version;
+    const s = saved.get(cs.info.id) orelse return cs.history == .loaded;
+    return cs.history == .loaded and s.version != cs.version;
 }
 
 /// Grava as últimas mensagens da conversa (as pendentes e as apagadas, do
@@ -249,14 +242,13 @@ pub fn save(store: *Store, cs: *ChannelState) void {
         n += 1;
     }
     var pbuf: [512]u8 = undefined;
-    var tbuf: [520]u8 = undefined;
     const path = channelPath(&pbuf, cs.info.id, "") orelse return;
-    const tmp = channelPath(&tbuf, cs.info.id, ".tmp") orelse return;
-    const before = fileSize(path.ptr);
+    // Tamanho do que está no disco: já sabido se esta sessão leu ou gravou.
+    const before = if (saved.get(cs.info.id)) |sv| sv.size else fileSize(path.ptr);
     if (n == 0) {
         // Conversa vazia: nada a guardar (nem o que havia antes).
         if (before > 0 and c.unlink(path.ptr) == 0) total -|= before;
-        saved.put(alloc, cs.info.id, cs.version) catch {};
+        saved.put(alloc, cs.info.id, .{ .version = cs.version, .size = 0 }) catch {};
         return;
     }
     // Autores, sem repetir (o nome aparece mesmo sem a sessão conhecer a pessoa).
@@ -290,17 +282,60 @@ pub fn save(store: *Store, cs: *ChannelState) void {
         w.message(&m.msg, m.reactionSlice()) catch return;
     }
     if (!ensureDirs()) return;
-    if (!writeFile(path, tmp, out.items)) return;
-    saved.put(alloc, cs.info.id, cs.version) catch {};
+    // Num .tmp e depois troca de nome: nunca fica um arquivo pela metade.
+    if (!fsutil.replacePrivate(path, out.items)) {
+        // A pasta pode ter sumido por fora: cria de novo na próxima.
+        dirs_ok = false;
+        return;
+    }
+    saved.put(alloc, cs.info.id, .{ .version = cs.version, .size = out.items.len }) catch {};
     if (total_known) total = total - @min(total, before) + out.items.len;
     if (totalBytes() > total_cap) enforceCap();
 }
 
-/// Grava o que mudou desde a última vez.
+/// Grava tudo o que mudou desde a última vez (ao sair da conta e ao fechar).
 pub fn flushDirty(store: *Store) void {
     if (!usable()) return;
     var it = store.channels.valueIterator();
     while (it.next()) |cs| if (dirty(cs.*)) save(store, cs.*);
+}
+
+/// Trocou de conversa: só a que ficou para trás vai para o disco (as
+/// outras esperam o tique do relógio).
+pub fn leaving(store: *Store, opened: Id) void {
+    const prev = last_open;
+    last_open = opened;
+    if (prev == 0 or prev == opened or !usable()) return;
+    if (store.channel(prev)) |cs| if (dirty(cs)) save(store, cs);
+}
+
+/// Tique do relógio: no máximo `max` conversas por vez, continuando de onde
+/// parou. Retorna se ainda sobrou alguma por gravar.
+pub fn flushSome(store: *Store, max: usize) bool {
+    if (!usable()) return false;
+    const n_all = store.channels.count();
+    if (rr >= n_all) rr = 0;
+    const start = rr;
+    var done: usize = 0;
+    var more = false;
+    // Duas voltas: de `rr` até o fim e do começo até `rr`.
+    for (0..2) |pass| {
+        var it = store.channels.valueIterator();
+        var i: usize = 0;
+        while (it.next()) |cs| : (i += 1) {
+            if ((pass == 0) != (i >= start)) continue;
+            if (!dirty(cs.*)) continue;
+            if (done == max) {
+                more = true;
+                break;
+            }
+            save(store, cs.*);
+            done += 1;
+            rr = i + 1;
+        }
+        if (more) break;
+    }
+    return more;
 }
 
 /// Store.on_evict: a conversa vai sair da memória; o disco fica com ela.
@@ -387,18 +422,22 @@ fn enforceCap() void {
     saved.clearRetainingCapacity();
 }
 
-fn removeDir(path: [:0]const u8) void {
-    const dir = c.opendir(path.ptr) orelse return;
+/// Apaga a pasta de uma conta. Retorna quantos bytes saíram do disco.
+fn removeDir(path: [:0]const u8) u64 {
+    const dir = c.opendir(path.ptr) orelse return 0;
+    var freed: u64 = 0;
     while (c.readdir(dir)) |fe| {
         const name = std.mem.sliceTo(&fe.*.d_name, 0);
         if (std.mem.endsWith(u8, name, ext) or std.mem.endsWith(u8, name, ".tmp")) {
             var fbuf: [560]u8 = undefined;
             const fp = std.fmt.bufPrintSentinel(&fbuf, "{s}/{s}", .{ path, name }, 0) catch continue;
-            _ = c.unlink(fp.ptr);
+            const size = fileSize(fp.ptr);
+            if (c.unlink(fp.ptr) == 0) freed += size;
         }
     }
     _ = c.closedir(dir);
     _ = c.rmdir(path.ptr);
+    return freed;
 }
 
 /// "Apagar cache": tudo, de todas as contas. O que está na tela agora não é
@@ -420,13 +459,14 @@ pub fn clearAll(store: *Store) void {
             names.append(alloc, p) catch alloc.free(p);
         }
         _ = c.closedir(top);
-        for (names.items) |p| removeDir(p);
+        for (names.items) |p| _ = removeDir(p);
     }
     total = 0;
     total_known = true;
+    dirs_ok = false;
     saved.clearRetainingCapacity();
     var it = store.channels.valueIterator();
-    while (it.next()) |cs| saved.put(alloc, cs.*.info.id, cs.*.version) catch {};
+    while (it.next()) |cs| saved.put(alloc, cs.*.info.id, .{ .version = cs.*.version, .size = 0 }) catch {};
 }
 
 /// Conta removida: o cache dela vai junto.
@@ -434,8 +474,25 @@ pub fn removeAccount(id: Id) void {
     if (root_len == 0 or id == 0) return;
     var buf: [512]u8 = undefined;
     const p = std.fmt.bufPrintSentinel(&buf, "{s}/{d}", .{ root(), id }, 0) catch return;
-    removeDir(p);
-    total_known = false;
+    total -|= removeDir(p);
+    dirs_ok = false;
+}
+
+/// Muda quando o arquivo de um canal muda (a busca guarda o que já leu).
+pub const Stamp = struct { mtime_ns: i64, size: u64 };
+
+pub fn stamp(ch: Id) ?Stamp {
+    if (!usable()) return null;
+    var pbuf: [512]u8 = undefined;
+    const path = channelPath(&pbuf, ch, "") orelse return null;
+    var st: c.struct_stat = undefined;
+    if (c.stat(path.ptr, &st) != 0) return null;
+    return .{ .mtime_ns = @as(i64, st.st_mtim.tv_sec) * std.time.ns_per_s + st.st_mtim.tv_nsec, .size = @intCast(@max(st.st_size, 0)) };
+}
+
+/// Pasta da conta atual ("" sem conta): a busca esquece o índice se mudar.
+pub fn account() []const u8 {
+    return acct_buf[0..acct_len];
 }
 
 /// Canais da conta atual que têm cache em disco (para a busca).

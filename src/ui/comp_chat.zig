@@ -52,11 +52,12 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const search_w: f32 = 180;
     const sx = r.right() - 16 - search_w;
     const tx = r.x + 42 + name_w + 14;
-    if (ch.topic.len > 0 and sx - tx > 150) {
+    // Da direita para a esquerda: busca, membros, buscar mensagens, salvas, caixa de entrada.
+    if (ch.topic.len > 0 and sx - tx > 186) {
         d.rect(dl, .{ .x = tx, .y = r.y + r.h / 2 - 10, .w = 1, .h = 20 }, ctx.col(.border).mix(ctx.col(.text), 0.05), 0);
-        _ = d.textClipped(dl, fam.get(.regular), 14, tx + 14, d.centerY(r, 14), ctx.col(.muted), ch.topic, sx - tx - 142);
+        _ = d.textClipped(dl, fam.get(.regular), 14, tx + 14, d.centerY(r, 14), ctx.col(.muted), ch.topic, sx - tx - 178);
     }
-    inboxButtons(ctx, dl, sx - 76, r.y + r.h / 2 - 14);
+    inboxButtons(ctx, dl, sx - 112, r.y + r.h / 2 - 14);
     const sr: d.Rect = .{ .x = sx, .y = r.y + r.h / 2 - 13, .w = search_w, .h = 26 };
     const sh = d.hit(ctx, 1, sr);
     qa.mark(sr, "header-search", .{});
@@ -68,7 +69,7 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     icons.search(dl, sr.right() - 15, sr.y + 13, ctx.col(.faint).mix(ctx.col(.muted), sk).u());
     // Busca nas mensagens (local, também offline): Ctrl+F.
     const fr: d.Rect = .{ .x = sx - 76, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
-    const fh = d.hit(ctx, 3, fr);
+    const fh = d.hit(ctx, 5, fr);
     qa.mark(fr, "header-find", .{});
     if (fh.clicked) @import("search.zig").start();
     icons.search(dl, fr.x + 14, fr.y + 14, (if (fh.hovered) ctx.col(.text) else ctx.col(.muted)).u());

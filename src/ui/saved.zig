@@ -13,6 +13,7 @@ const popup = @import("popup.zig");
 const inbox = @import("inbox.zig");
 const saved = @import("../core/saved.zig");
 const Id = @import("../core/types.zig").Id;
+const fsutil = @import("../platform/fsutil.zig");
 
 /// Anotação sendo editada (0 = nenhuma) e o texto da caixa.
 var editing: Id = 0;
@@ -29,9 +30,8 @@ pub fn isEditing() bool {
 fn path(buf: []u8, owner: Id) ?[:0]const u8 {
     // O QA nunca mexe na configuração de verdade.
     if (qa.enabled) return std.fmt.bufPrintSentinel(buf, "qa-out/saved-{d}.json", .{owner}, 0) catch null;
-    if (c.SDL_getenv("XDG_CONFIG_HOME")) |x| return std.fmt.bufPrintSentinel(buf, "{s}/larpercord/saved-{d}.json", .{ std.mem.span(x), owner }, 0) catch null;
-    const home = c.SDL_getenv("HOME") orelse return null;
-    return std.fmt.bufPrintSentinel(buf, "{s}/.config/larpercord/saved-{d}.json", .{ std.mem.span(home), owner }, 0) catch null;
+    var nbuf: [48]u8 = undefined;
+    return fsutil.configPath(buf, std.fmt.bufPrint(&nbuf, "saved-{d}.json", .{owner}) catch return null);
 }
 
 /// Caminho do arquivo da conta (o QA confere o que foi gravado).
@@ -61,33 +61,10 @@ pub fn persist(list: *const saved.List, gpa: std.mem.Allocator) void {
     if (list.owner == 0) return;
     var buf: [512]u8 = undefined;
     const p = path(&buf, list.owner) orelse return;
-    if (std.mem.lastIndexOfScalar(u8, p, '/')) |slash| {
-        var dbuf: [512]u8 = undefined;
-        const dir = std.fmt.bufPrintSentinel(&dbuf, "{s}", .{p[0..slash]}, 0) catch return;
-        _ = c.SDL_CreateDirectory(dir.ptr);
-    }
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
     list.write(gpa, &out) catch return;
-    var tbuf: [520]u8 = undefined;
-    const tmp = std.fmt.bufPrintSentinel(&tbuf, "{s}.tmp", .{p}, 0) catch return;
-    const fd = c.open(tmp.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_CLOEXEC, @as(c_uint, 0o600));
-    if (fd < 0) return std.log.warn("mensagens salvas: não consegui gravar {s}", .{tmp});
-    var off: usize = 0;
-    var ok = true;
-    while (off < out.items.len) {
-        const n = c.write(fd, out.items[off..].ptr, out.items.len - off);
-        if (n <= 0) {
-            ok = false;
-            break;
-        }
-        off += @intCast(n);
-    }
-    _ = c.close(fd);
-    if (!ok or c.rename(tmp.ptr, p.ptr) != 0) {
-        _ = c.unlink(tmp.ptr);
-        std.log.warn("mensagens salvas: não consegui gravar {s}", .{p});
-    }
+    if (!fsutil.writePrivate(p, out.items)) std.log.warn("mensagens salvas: não consegui gravar {s}", .{p});
 }
 
 // --- Tela ------------------------------------------------------------------------

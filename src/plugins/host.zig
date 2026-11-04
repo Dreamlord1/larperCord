@@ -11,6 +11,7 @@ const types = @import("../core/types.zig");
 const kdl = @import("../theme/kdl.zig");
 const i18n = @import("../ui/i18n.zig");
 const nowMs = @import("../net/fake_gateway.zig").nowMs;
+const fsutil = @import("../platform/fsutil.zig");
 
 pub const Engine = engine.Engine;
 
@@ -37,15 +38,9 @@ pub fn init(app: *App) void {
     rescan(app);
 }
 
-fn configPath(buf: []u8, comptime tail: []const u8) ?[:0]const u8 {
-    if (c.SDL_getenv("XDG_CONFIG_HOME")) |x| return std.fmt.bufPrintSentinel(buf, "{s}/larpercord/" ++ tail, .{std.mem.span(x)}, 0) catch null;
-    const home = c.SDL_getenv("HOME") orelse return null;
-    return std.fmt.bufPrintSentinel(buf, "{s}/.config/larpercord/" ++ tail, .{std.mem.span(home)}, 0) catch null;
-}
-
 fn dirPath(app: *const App, buf: []u8) ?[:0]const u8 {
     if (app.opts.qa) return std.fmt.bufPrintSentinel(buf, "qa-out/plugins", .{}, 0) catch null;
-    return configPath(buf, "plugins");
+    return fsutil.configPath(buf, "plugins");
 }
 
 /// Lê os *.lua da pasta (em ordem alfabética) e recarrega todos.
@@ -94,7 +89,7 @@ fn rescan(ctx: *anyopaque) void {
 }
 
 fn prefsPath(buf: []u8) ?[:0]const u8 {
-    return configPath(buf, "plugins.kdl");
+    return fsutil.configPath(buf, "plugins.kdl");
 }
 
 /// `plugin "nome.lua" enabled=#false`
@@ -120,11 +115,6 @@ fn save(ctx: *anyopaque) void {
     if (app.opts.qa or app.opts.shot != null) return;
     var buf: [512]u8 = undefined;
     const path = prefsPath(&buf) orelse return;
-    if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
-        var dbuf: [512]u8 = undefined;
-        const d = std.fmt.bufPrintSentinel(&dbuf, "{s}", .{path[0..slash]}, 0) catch return;
-        _ = c.SDL_CreateDirectory(d.ptr);
-    }
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(app.gpa);
     out.appendSlice(app.gpa, "// gerado pelo larperCord: plugins desligados\n") catch return;
@@ -134,7 +124,7 @@ fn save(ctx: *anyopaque) void {
         if (std.mem.indexOfAny(u8, k.*, "\"\\\n") != null) continue;
         out.print(app.gpa, "plugin \"{s}\" enabled=#false\n", .{k.*}) catch return;
     }
-    _ = c.SDL_SaveFile(path.ptr, out.items.ptr, out.items.len);
+    _ = fsutil.writePrivate(path, out.items);
 }
 
 // --- Host -------------------------------------------------------------------
