@@ -6,6 +6,7 @@ const layout = @import("theme/layout.zig");
 
 test {
     _ = @import("core/types.zig");
+    _ = @import("core/image_uri.zig");
     _ = @import("core/markdown.zig");
     _ = @import("core/store.zig");
     _ = @import("core/filtros.zig");

@@ -94,6 +94,7 @@ fn popupKey(p: state.Popup) u64 {
         .threads => |t| 8 +% t.parent *% 31,
         .new_thread => |t| 9 +% t.message *% 31,
         .new_post => |t| 10 +% t.forum *% 31,
+        .edit_place => |t| 11 +% t.id *% 31,
     };
 }
 
@@ -158,6 +159,7 @@ pub fn draw(ctx: *d.Ctx) void {
         .threads => |t| forum.panel(ctx, t.parent, t.archived),
         .new_thread => |t| forum.newThread(ctx, t.message),
         .new_post => |t| forum.newPost(ctx, t.forum),
+        .edit_place => |t| @import("edit_place.zig").draw(ctx, t.id, t.group),
         .none => {},
     }
     animateOpen(ctx);
@@ -278,6 +280,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
                 add(&items, &n, .{ .label = "Ver threads", .en = "View Threads", .id = 49, .sep = true });
                 add(&items, &n, .{ .label = "Threads arquivadas", .en = "Archived Threads", .id = 48 });
             };
+            if (ctx.store.channel(id)) |gcs| if (gcs.info.group) add(&items, &n, .{ .label = "Editar grupo…", .en = "Edit Group…", .id = 53, .sep = true });
             add(&items, &n, .{ .label = "Copiar link", .en = "Copy Link", .id = 43, .sep = true });
             // Canal de voz em que estamos (mesmo que o app tenha perdido a
             // conexão e o Discord ainda nos mostre lá).
@@ -320,6 +323,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         },
         .guild => {
             add(&items, &n, .{ .label = "Marcar como lido", .en = "Mark As Read", .id = 60 });
+            if (ctx.store.can(id, types.perm.manage_guild)) add(&items, &n, .{ .label = "Editar servidor…", .en = "Edit Server…", .id = 64 });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do servidor", .en = "Copy Server ID", .id = 63 });
         },
     }
@@ -462,6 +466,8 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         50 => st.popup = .{ .menu = .{ .kind = .thread_delete, .id = id, .x = r.x, .y = r.y } },
         51 => ctx.act(.{ .delete_thread = id }),
         52 => {},
+        53 => @import("edit_place.zig").open(ctx, id, true),
+        64 => @import("edit_place.zig").open(ctx, id, false),
         48, 49 => if (ctx.store.channel(id)) |cs| {
             const parent = if (cs.info.thread != null) cs.info.parent orelse id else id;
             st.popup = .{ .threads = .{ .parent = parent, .archived = item == 48 } };

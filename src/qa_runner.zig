@@ -656,6 +656,29 @@ fn selectionInEmbed(app: *App) bool {
     const sel = &app.st.selection;
     return !sel.empty() and sel.b_id == m.msg.id and @max(sel.a_off, sel.b_off) > m.msg.content.len;
 }
+const edit_place = @import("ui/edit_place.zig");
+fn editDialogOpen(app: *App) bool {
+    return app.st.popup == .edit_place;
+}
+fn guildRenamed(app: *App) bool {
+    const g = app.store.guild(500_000) orelse return false;
+    return app.st.popup == .none and std.mem.eql(u8, g.name, "larperCord QA");
+}
+fn guildIconChanged(app: *App) bool {
+    const g = app.store.guild(500_000) orelse return false;
+    return app.st.popup == .none and g.icon != null;
+}
+fn guildRestored(app: *App) bool {
+    const g = app.store.guild(500_000) orelse return false;
+    return app.st.popup == .none and g.icon == null and !std.mem.eql(u8, g.name, "larperCord QA");
+}
+fn groupRenamed(app: *App) bool {
+    const cs = app.store.channel(900_006) orelse return false;
+    return app.st.popup == .none and std.mem.eql(u8, cs.info.name, "grupo QA") and cs.info.icon != null;
+}
+fn qaPickIcon(_: *App) void {
+    edit_place.qaPick("qa-out/06-selecao.png");
+}
 fn composerEditing(app: *App) bool {
     return app.st.editing != 0;
 }
@@ -1782,6 +1805,49 @@ const ops = [_]Op{
     ctrl(c.ImGuiKey_C),
     expect("Ctrl+C copia a seleção", toastCopied),
     key(c.ImGuiKey_Escape),
+
+    s("editar servidor e grupo"),
+    click("guild:500000"),
+    .{ .rclick = .{ .mark = "guild-header" } },
+    click("menu:Editar servidor…"),
+    expect("o menu abre a edição do servidor", editDialogOpen),
+    .{ .wait = 200 },
+    .{ .shot = "06a-editar-servidor" },
+    click("edit-name"),
+    ctrl(c.ImGuiKey_A),
+    .{ .text = "larperCord QA" },
+    .{ .wait = 100 },
+    click("edit-save"),
+    .{ .expect = .{ .name = "salvar troca o nome do servidor", .check = guildRenamed, .timeout_ms = 3000 } },
+    .{ .rclick = .{ .mark = "guild-header" } },
+    click("menu:Editar servidor…"),
+    .{ .run = qaPickIcon },
+    .{ .wait = 150 },
+    click("edit-save"),
+    .{ .expect = .{ .name = "salvar troca o ícone do servidor", .check = guildIconChanged, .timeout_ms = 3000 } },
+    .{ .rclick = .{ .mark = "guild-header" } },
+    click("menu:Editar servidor…"),
+    .{ .wait = 150 },
+    click("edit-remove:icon"),
+    click("edit-name"),
+    ctrl(c.ImGuiKey_A),
+    .{ .text = "larperCord dev" },
+    .{ .wait = 100 },
+    click("edit-save"),
+    .{ .expect = .{ .name = "remover o ícone e voltar o nome", .check = guildRestored, .timeout_ms = 3000 } },
+    click("guild:0"),
+    .{ .rclick = .{ .mark = "channel:900006" } },
+    click("menu:Editar grupo…"),
+    expect("o menu abre a edição do grupo", editDialogOpen),
+    click("edit-name"),
+    ctrl(c.ImGuiKey_A),
+    .{ .text = "grupo QA" },
+    .{ .run = qaPickIcon },
+    .{ .wait = 150 },
+    click("edit-save"),
+    .{ .expect = .{ .name = "salvar troca o nome e o ícone do grupo", .check = groupRenamed, .timeout_ms = 3000 } },
+    click("guild:500000"),
+    click("channel:500005"),
 
     s("componentes de bot"),
     .{ .run = scrollToV2 },

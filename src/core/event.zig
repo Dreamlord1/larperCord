@@ -165,12 +165,30 @@ pub const VoiceFlags = packed struct(u8) {
     }
 };
 
+pub const EditPlace = struct {
+    id: Id,
+    group: bool,
+    name: ?[]const u8 = null,
+    description: ?[]const u8 = null,
+    icon: ImageChange = .keep,
+    banner: ImageChange = .keep,
+};
+
+/// O que fazer com uma imagem ao editar (o caminho é alocado).
+pub const ImageChange = union(enum) {
+    keep,
+    remove,
+    path: [:0]const u8,
+};
+
 pub const Command = union(enum) {
     /// `files`: caminhos dos arquivos a enviar (alocados, terminados em 0).
     send_message: struct { channel: Id, content: []const u8, nonce: u64, reply_to: Id = 0, files: []const [:0]const u8 = &.{} },
     edit_message: struct { channel: Id, id: Id, content: []const u8 },
     delete_message: struct { channel: Id, id: Id },
     delete_thread: Id,
+    /// Editar servidor ou grupo: só o que mudou (null/keep = deixa como está).
+    edit_place: EditPlace,
     react: struct { channel: Id, id: Id, emoji: types.Reaction, add: bool },
     fetch_history: Id,
     /// Mais 50 mensagens antes de `before` (rolagem para cima).
@@ -262,6 +280,8 @@ pub const Action = union(enum) {
     cancel_compose,
     delete_message: Id,
     delete_thread: Id,
+    edit_place: EditPlace,
+    pick_image,
     react: struct { id: Id, emoji: types.Reaction },
     open_dm: Id,
     send_dm: struct { user: Id, text: []const u8 },

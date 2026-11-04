@@ -411,6 +411,7 @@ pub const Store = struct {
         ev_alloc.free(g.acronym);
         if (g.icon) |i| ev_alloc.free(i);
         if (g.banner) |b| ev_alloc.free(b);
+        if (g.description.len > 0) ev_alloc.free(g.description);
     }
 
     fn freeChannelInfo(ch: *const types.Channel) void {
@@ -540,11 +541,14 @@ pub const Store = struct {
             ev_alloc.free(old.acronym);
             if (old.icon) |i| ev_alloc.free(i);
             if (old.banner) |b| ev_alloc.free(b);
+            if (old.description.len > 0) ev_alloc.free(old.description);
             old.name = g.name;
             old.acronym = g.acronym;
             old.color = g.color;
             old.icon = g.icon;
             old.banner = g.banner;
+            old.can_banner = g.can_banner;
+            old.description = g.description;
             if (g.owner != 0) old.owner = g.owner;
             if (g.joined_id != 0) old.joined_id = g.joined_id;
             return;

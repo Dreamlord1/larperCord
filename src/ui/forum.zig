@@ -381,7 +381,7 @@ fn plainChip(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, x: f32, y: f32, lab
 }
 
 /// Botão cheio com a cor de destaque. Apagado (`on` = false) não reage.
-fn primary(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, id: usize, r: d.Rect, label: []const u8, on: bool) bool {
+pub fn primary(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, id: usize, r: d.Rect, label: []const u8, on: bool) bool {
     const hb = d.hit(ctx, id, r);
     const base = ctx.col(.accent);
     const radius = @max(ctx.th.radius, 2);
@@ -475,13 +475,13 @@ pub fn openNewThread(ctx: *d.Ctx, message: Id) void {
     ctx.st.popup = .{ .new_thread = .{ .message = message } };
 }
 
-fn dialogRect(ctx: *const d.Ctx, wd_in: f32, h_in: f32) d.Rect {
+pub fn dialogRect(ctx: *const d.Ctx, wd_in: f32, h_in: f32) d.Rect {
     const wd = @min(wd_in, ctx.win.w - 24);
     const h = @min(h_in, ctx.win.h - 24);
     return .{ .x = ctx.win.x + (ctx.win.w - wd) / 2, .y = ctx.win.y + (ctx.win.h - h) / 2, .w = wd, .h = h };
 }
 
-fn textInput(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, id: [*:0]const u8, hint: [*:0]const u8, buf: []u8, flags: c_int) bool {
+pub fn textInput(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, id: [*:0]const u8, hint: [*:0]const u8, buf: []u8, flags: c_int) bool {
     d.rect(dl, r, ctx.col(.rail).mix(ctx.col(.surface), 0.35), @max(ctx.th.radius, 2));
     c.ImGui_PushFontFloat(ctx.ui.get(.regular), 14);
     c.ImGui_SetCursorScreenPos(d.v(r.x + 8, r.y + (r.h - 22) / 2));

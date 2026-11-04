@@ -360,6 +360,13 @@ pub const App = struct {
         c.SDL_ShowOpenFileDialog(pickedCb, app, app.win.window, null, 0, null, true);
     }
 
+    /// Só uma imagem, para o ícone ou o banner (ui/edit_place.zig).
+    fn pickImage(app: *App) void {
+        if (app.opts.qa) return;
+        const filters = [_]c.SDL_DialogFileFilter{.{ .name = "Imagens", .pattern = "png;jpg;jpeg;gif;webp" }};
+        c.SDL_ShowOpenFileDialog(pickedCb, app, app.win.window, &filters, filters.len, null, false);
+    }
+
     /// Imagem colada: vai para um arquivo temporário e entra na bandeja.
     fn pasteImage(app: *App) void {
         var size: usize = 0;
@@ -1215,6 +1222,21 @@ pub const App = struct {
                 st.focus_input = true;
             },
             .delete_thread => |id| app.cmd(.{ .delete_thread = id }),
+            .pick_image => app.pickImage(),
+            .edit_place => |e| {
+                // A interface aloca em gpa; a rede libera com o alocador dela.
+                const ca = std.heap.c_allocator;
+                var out = e;
+                if (e.name) |t| {
+                    defer app.gpa.free(t);
+                    out.name = ca.dupe(u8, t) catch null;
+                }
+                if (e.description) |t| {
+                    defer app.gpa.free(t);
+                    out.description = ca.dupe(u8, t) catch null;
+                }
+                app.cmd(.{ .edit_place = out });
+            },
             .delete_message => |id| {
                 const f = app.store.findAny(id) orelse return;
                 const ch = f.cs.info.id;
@@ -2009,6 +2031,7 @@ pub const App = struct {
                 app.picked.drain(&picked);
                 for (picked.items) |p| {
                     defer std.heap.c_allocator.free(p);
+                    if (@import("ui/edit_place.zig").takePicked(&app.st, now(), p)) continue;
                     if (app.store.ready) app.attachFile(p);
                 }
                 if (picked.items.len > 0) pending = 3;

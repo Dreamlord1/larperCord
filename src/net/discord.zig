@@ -20,6 +20,7 @@ const Sink = @import("fake_gateway.zig").Sink;
 const nowMs = @import("fake_gateway.zig").nowMs;
 const j = @import("jsonx.zig");
 const i18n = @import("../ui/i18n.zig");
+const image_uri = @import("../core/image_uri.zig");
 const media_url = @import("media_url.zig");
 const proxy = @import("proxy.zig");
 const settings_proto = @import("settings_proto.zig");
@@ -687,6 +688,25 @@ pub const Gateway = struct {
         return null;
     }
 
+    /// O campo vem no servidor ou, no READY, dentro de `properties`.
+    fn guildField(v: Value, key: []const u8) ?Value {
+        if (j.get(v, key)) |x| return x;
+        return if (j.get(v, "properties")) |p| j.get(p, key) else null;
+    }
+
+    fn canBanner(v: Value) bool {
+        const list = guildField(v, "features") orelse return false;
+        for (j.array(list)) |f| {
+            const s = j.str(f) orelse continue;
+            if (std.mem.eql(u8, s, "BANNER") or std.mem.eql(u8, s, "ANIMATED_BANNER")) return true;
+        }
+        return false;
+    }
+
+    fn guildDescription(v: Value) []const u8 {
+        return dupeOpt(if (guildField(v, "description")) |x| j.str(x) orelse "" else "") catch "";
+    }
+
     fn guildIcon(v: Value) ?[]u8 {
         if (j.str(j.get(v, "icon"))) |i| return optDupe(i);
         if (j.get(v, "properties")) |p| return optDupe(j.str(j.get(p, "icon")));
@@ -989,6 +1009,8 @@ pub const Gateway = struct {
                     .color = @intCast((gid >> 22) % 8),
                     .icon = guildIcon(d),
                     .banner = guildBanner(d),
+                    .can_banner = canBanner(d),
+                    .description = guildDescription(d),
                 },
                 .channels = try alloc.alloc(types.Channel, 0),
                 .voice = try alloc.alloc([2]Id, 0),
@@ -1565,6 +1587,8 @@ pub const Gateway = struct {
                 .color = @intCast((gid >> 22) % 8),
                 .icon = guildIcon(d),
                 .banner = guildBanner(d),
+                .can_banner = canBanner(d),
+                .description = guildDescription(d),
                 .owner = ownerOf(d),
                 .joined_id = read_json.joinedId(d),
             },
@@ -2135,7 +2159,7 @@ pub const Gateway = struct {
             const gid = j.id(j.get(gv, "id")) orelse continue;
             const props = j.get(gv, "properties");
             const name = j.str(j.get(gv, "name")) orelse (if (props) |p| j.str(j.get(p, "name")) else null) orelse i18n.tr("servidor", "server");
-            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv), .banner = guildBanner(gv), .owner = ownerOf(gv), .joined_id = read_json.joinedId(gv) });
+            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv), .banner = guildBanner(gv), .can_banner = canBanner(gv), .description = guildDescription(gv), .owner = ownerOf(gv), .joined_id = read_json.joinedId(gv) });
             g.ingestRoles(gid, j.array(j.get(gv, "roles")));
             g.ingestEmojis(gid, j.array(j.get(gv, "emojis")));
             try appendChannels(&channels, gid, j.array(j.get(gv, "channels")));
@@ -2560,6 +2584,7 @@ pub const Gateway = struct {
             .edit_message => |m| alloc.free(m.content),
             .ack_bulk => |list| if (list.len > 0) alloc.free(list),
             .create_thread => |m| alloc.free(m.name),
+            .edit_place => |e| freeEdit(e),
             .create_post => |m| {
                 alloc.free(m.name);
                 alloc.free(m.content);
@@ -2567,6 +2592,78 @@ pub const Gateway = struct {
             },
             else => {},
         }
+    }
+
+    fn freeEdit(e: ev.EditPlace) void {
+        if (e.name) |t| alloc.free(t);
+        if (e.description) |t| alloc.free(t);
+        for ([_]ev.ImageChange{ e.icon, e.banner }) |ch| switch (ch) {
+            .path => |p| alloc.free(p),
+            else => {},
+        };
+    }
+
+    /// Uma imagem no corpo do PATCH: o `data:` URI, ou null para remover.
+    fn writeImage(b: *std.ArrayList(u8), key: []const u8, change: ev.ImageChange) !void {
+        switch (change) {
+            .keep => return,
+            .remove => {
+                try fieldStart(b, key);
+                try b.appendSlice(alloc, "null");
+            },
+            .path => |path| {
+                const mime = image_uri.mimeOf(path) orelse return error.BadImage;
+                const bytes = try readFile(path, image_uri.max_bytes);
+                defer alloc.free(bytes);
+                const uri = try image_uri.encode(alloc, mime, bytes);
+                defer alloc.free(uri);
+                try fieldStart(b, key);
+                try j.writeString(b, alloc, uri);
+            },
+        }
+    }
+
+    fn fieldStart(b: *std.ArrayList(u8), key: []const u8) !void {
+        if (b.items.len > 1) try b.append(alloc, ',');
+        try b.print(alloc, "\"{s}\":", .{key});
+    }
+
+    fn editBody(b: *std.ArrayList(u8), e: ev.EditPlace) !void {
+        try b.append(alloc, '{');
+        if (e.name) |t| {
+            try fieldStart(b, "name");
+            if (e.group and t.len == 0) try b.appendSlice(alloc, "null") else try j.writeString(b, alloc, t);
+        }
+        if (e.description) |t| {
+            try fieldStart(b, "description");
+            try j.writeString(b, alloc, t);
+        }
+        try writeImage(b, "icon", e.icon);
+        try writeImage(b, "banner", e.banner);
+        try b.append(alloc, '}');
+    }
+
+    fn readFile(path: [:0]const u8, max: u64) ![]u8 {
+        var size: usize = 0;
+        const data = c.SDL_LoadFile(path.ptr, &size) orelse return error.ReadFailed;
+        defer c.SDL_free(data);
+        if (size > max) return error.TooBig;
+        const bytes: [*]const u8 = @ptrCast(data);
+        return alloc.dupe(u8, bytes[0..size]);
+    }
+
+    /// PATCH /guilds/{id} ou /channels/{id} (grupo). A tela muda quando o
+    /// gateway avisa (GUILD_UPDATE, CHANNEL_UPDATE), como em outro cliente.
+    fn editPlace(g: *Gateway, e: ev.EditPlace) void {
+        var b: std.ArrayList(u8) = .empty;
+        defer b.deinit(alloc);
+        editBody(&b, e) catch return g.notice("não consegui ler a imagem", "couldn't read the image", .{});
+        var path_buf: [64]u8 = undefined;
+        const path = (if (e.group) std.fmt.bufPrint(&path_buf, "/channels/{d}", .{e.id}) else std.fmt.bufPrint(&path_buf, "/guilds/{d}", .{e.id})) catch return;
+        var resp = g.request("PATCH", path, b.items) orelse return g.notice("sem conexão: não salvou", "no connection: not saved", .{});
+        defer resp.body.deinit(alloc);
+        if (resp.status >= 300) return g.noticeHttp(if (e.group) i18n.tr("não foi possível editar o grupo", "couldn't edit the group") else i18n.tr("não foi possível editar o servidor", "couldn't edit the server"), &resp);
+        g.notice("salvo ✓", "saved ✓", .{});
     }
 
     /// POST /channels/{id}/messages/{mid}/ack, como o cliente oficial. Falha
@@ -2890,6 +2987,10 @@ pub const Gateway = struct {
                 var resp = g.request("PATCH", path, b.items) orelse return;
                 defer resp.body.deinit(alloc);
                 if (resp.status >= 300) g.noticeHttp(i18n.tr("não foi possível editar", "couldn't edit"), &resp);
+            },
+            .edit_place => |e| {
+                defer freeEdit(e);
+                g.editPlace(e);
             },
             .delete_thread => |id| {
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}", .{id}) catch return;

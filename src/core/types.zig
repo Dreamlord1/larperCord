@@ -87,6 +87,7 @@ pub const GuildFolder = struct {
 /// Permissões do Discord que o cliente usa.
 pub const perm = struct {
     pub const administrator: u64 = 1 << 3;
+    pub const manage_guild: u64 = 1 << 5;
     pub const manage_messages: u64 = 1 << 13;
     pub const mention_everyone: u64 = 1 << 17;
     pub const view_channel: u64 = 1 << 10;
@@ -208,6 +209,9 @@ pub const Guild = struct {
     joined_id: Id = 0,
     /// Hash do banner no CDN (null = sem banner).
     banner: ?[]const u8 = null,
+    /// O servidor tem o recurso de banner (o Discord recusa sem ele).
+    can_banner: bool = false,
+    description: []const u8 = "",
 };
 
 pub const Channel = struct {

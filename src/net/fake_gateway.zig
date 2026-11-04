@@ -104,6 +104,55 @@ pub const Gateway = struct {
         if (g.thread) |t| c.SDL_WaitThread(t, null);
     }
 
+    /// Editar servidor ou grupo: volta como o gateway de verdade, com o
+    /// servidor ou canal inteiro. O que não mudou vem da semente.
+    fn editPlace(g: *Gateway, e: ev.EditPlace) !void {
+        defer {
+            if (e.name) |t| alloc.free(t);
+            if (e.description) |t| alloc.free(t);
+            for ([_]ev.ImageChange{ e.icon, e.banner }) |ch| switch (ch) {
+                .path => |p| alloc.free(p),
+                else => {},
+            };
+        }
+        const new_image = struct {
+            fn f(ch: ev.ImageChange, demo: []const u8) !?[]const u8 {
+                return if (ch == .path) try alloc.dupe(u8, demo) else null;
+            }
+        }.f;
+        if (e.group) {
+            g.emit(.{ .channel_upsert = .{
+                .id = e.id,
+                .guild = 0,
+                .name = try alloc.dupe(u8, e.name orelse pick("rolê de sexta", "friday hangout")),
+                .topic = try alloc.dupe(u8, ""),
+                .position = 2,
+                .recipient = group_members[0],
+                .recipients = try alloc.dupe(Id, &group_members),
+                .group = true,
+                .icon = try new_image(e.icon, "demo:icon:3"),
+            } });
+            return;
+        }
+        const i: usize = @intCast((e.id - guildId(0)) / 1000);
+        const seed = guilds[i];
+        g.emit(.{ .guild_create = .{
+            .guild = .{
+                .id = e.id,
+                .name = try alloc.dupe(u8, e.name orelse pick(seed.name, seed.name_en)),
+                .acronym = try alloc.dupe(u8, pick(seed.acronym, seed.acronym_en)),
+                .color = seed.color,
+                .icon = try new_image(e.icon, "demo:icon:3"),
+                .banner = try new_image(e.banner, "demo:2"),
+                .can_banner = i < 2,
+                .description = if (e.description) |t| try alloc.dupe(u8, t) else "",
+                .owner = if (i == 0) me_id else 1001,
+            },
+            .channels = try alloc.alloc(types.Channel, 0),
+            .voice = try alloc.alloc([2]Id, 0),
+        } });
+    }
+
     fn emit(g: *Gateway, e: ev.Event) void {
         g.sink.push(g.sink.ctx, e);
     }
@@ -186,6 +235,7 @@ pub const Gateway = struct {
                 },
                 .delete_message => |m| g.emit(.{ .message_delete = .{ .channel = m.channel, .id = m.id } }),
                 .delete_thread => |id| g.emit(.{ .channel_delete = id }),
+                .edit_place => |e| try g.editPlace(e),
                 .react => |r| g.emit(.{ .reaction = .{ .channel = r.channel, .id = r.id, .emoji = r.emoji, .user = me_id, .add = r.add } }),
                 .fetch_history => |ch| {
                     g.hot_channel = ch;
@@ -982,6 +1032,7 @@ fn buildReady() !ev.Ready {
         .icon = if (g.icon) try std.fmt.allocPrint(alloc, "demo:icon:{d}", .{i}) else null,
         // O segundo servidor mostra o banner (o primeiro, o cabeçalho sem imagem).
         .banner = if (i == 1) try alloc.dupe(u8, "demo:2") else null,
+        .can_banner = i < 2,
         // O primeiro servidor é nosso (dá para mexer em cargos e mensagens).
         .owner = if (i == 0) me_id else 1001,
     };

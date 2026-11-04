@@ -28,6 +28,8 @@ pub const Popup = union(enum) {
     /// "Criar thread" a partir de uma mensagem e "Novo post" num fórum.
     new_thread: struct { message: Id },
     new_post: struct { forum: Id },
+    /// Editar um servidor ou um grupo de DM (ui/edit_place.zig).
+    edit_place: struct { id: Id, group: bool },
 };
 
 /// Seleção de texto entre mensagens: âncora e cabeça (mensagem + byte).
