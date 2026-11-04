@@ -18,6 +18,7 @@ pub const Family = struct {
 
 const load_color: c_uint = 1 << 8; // ImGuiFreeTypeLoaderFlags_LoadColor
 const load_bitmap: c_uint = 1 << 9; // ImGuiFreeTypeLoaderFlags_Bitmap (emoji CBDT)
+const light_hinting: c_uint = 1 << 3; // ImGuiFreeTypeLoaderFlags_LightHinting
 
 pub const Fonts = struct {
     gpa: std.mem.Allocator,
@@ -76,6 +77,12 @@ pub const Fonts = struct {
         var cfg = defaultConfig();
         cfg.FontNo = @intCast(index);
         cfg.PixelSnapH = true;
+        // Hinting leve: encaixa só na vertical (como o ClearType), sem o
+        // serrilhado do hinting completo nas letras pequenas; e um traço um
+        // pouco mais cheio, porque o SDL mistura em sRGB e o texto claro no
+        // fundo escuro sai fino demais.
+        cfg.FontLoaderFlags = light_hinting;
+        cfg.RasterizerMultiply = 1.15;
         cfg.FontDataOwnedByAtlas = false;
         if (f.emoji != null) cfg.GlyphExcludeRanges = &emoji_ranges;
         const font = c.ImFontAtlas_AddFontFromMemoryTTF(f.atlas, data.ptr, @intCast(data.len), 16, &cfg, null) orelse return error.FontLoad;

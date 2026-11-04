@@ -35,7 +35,7 @@ const Col = struct {
     }
 
     fn label(col: *Col, s: []const u8) void {
-        if (col.dl) |dl| d.text(dl, col.ctx.ui.get(.bold), 11.5, col.x, col.y, col.ctx.col(.muted), s);
+        if (col.dl) |dl| d.text(dl, col.ctx.ui.get(.bold), 12, col.x, col.y, col.ctx.col(.muted), s);
         col.y += 19;
     }
 
@@ -169,16 +169,16 @@ fn mutuals(col: *Col, uid: Id, pf: ?types.Profile) void {
     for (parts, 0..) |part, i| {
         if (!part.on) continue;
         if (!first) {
-            if (col.dl) |dl| d.text(dl, font, 12.5, x, col.y + 2, ctx.col(.faint), "•");
+            if (col.dl) |dl| d.text(dl, font, 13, x, col.y + 2, ctx.col(.faint), "•");
             x += 12;
         }
         first = false;
-        const tw = d.width(font, 12.5, part.s);
+        const tw = d.width(font, 13, part.s);
         const r: d.Rect = .{ .x = x, .y = col.y, .w = tw, .h = 18 };
         const hb = col.hit(70 + i, r);
         if (col.dl) |dl| {
             qa.mark(r, "profile-mutual:{d}", .{part.tab});
-            d.text(dl, font, 12.5, x, col.y + 2, if (hb.hovered) ctx.col(.text) else ctx.col(.muted), part.s);
+            d.text(dl, font, 13, x, col.y + 2, if (hb.hovered) ctx.col(.text) else ctx.col(.muted), part.s);
         }
         if (hb.clicked) ctx.act(.{ .open_full_profile = .{ .user = uid, .tab = part.tab } });
         x += tw + 6;
@@ -241,7 +241,7 @@ fn activities(col: *Col, uid: Id, big: bool) void {
             _ = d.textClipped(dl, ctx.ui.get(.semibold), 14, tx, ty, ctx.col(.text), a.name, tw);
             ty += 22;
             for ([_][]const u8{ a.details, a.state }) |t| if (t.len > 0) {
-                _ = d.textClipped(dl, ctx.ui.get(.regular), 12.5, tx, ty, ctx.col(.muted), t, tw);
+                _ = d.textClipped(dl, ctx.ui.get(.regular), 13, tx, ty, ctx.col(.muted), t, tw);
                 ty += 18;
             };
             if (a.start_ms > 0) {
@@ -249,7 +249,7 @@ fn activities(col: *Col, uid: Id, big: bool) void {
                 const now = anim.now_ms;
                 const e = elapsed(&eb, now - a.start_ms);
                 d.circle(dl, tx + 4, ty + 7, 3.5, ctx.col(.online));
-                d.text(dl, ctx.mono.get(.regular), 12.5, tx + 14, ty, ctx.col(.online).mix(ctx.col(.text), 0.3), e);
+                d.text(dl, ctx.mono.get(.regular), 13, tx + 14, ty, ctx.col(.online).mix(ctx.col(.text), 0.3), e);
                 // O relógio anda: redesenha a cada segundo enquanto aparece.
                 anim.every(1000);
             }
@@ -285,19 +285,29 @@ fn voice(col: *Col, uid: Id) void {
         _ = d.textClipped(dl, ctx.ui.get(.semibold), 14, tx + 21, cr.y + 33, ctx.col(.text), cs.info.name, cr.right() - tx - 110);
         if (ctx.store.guild(cs.info.guild)) |g| {
             var gb: [128]u8 = undefined;
-            _ = d.textClipped(dl, ctx.ui.get(.regular), 12.5, tx, cr.y + 52, ctx.col(.muted), i18n.fmt(&gb, "em {s}", "in {s}", .{g.name}), cr.right() - tx - 12);
+            _ = d.textClipped(dl, ctx.ui.get(.regular), 13, tx, cr.y + 52, ctx.col(.muted), i18n.fmt(&gb, "em {s}", "in {s}", .{g.name}), cr.right() - tx - 12);
         }
-        const here = ctx.st.voice != null and ctx.st.voice.? == ch;
+        // Nós mesmos nessa call (pelo app ou pelo que o servidor diz): Sair.
+        const here = (ctx.st.voice != null and ctx.st.voice.? == ch) or ctx.store.voiceChannelOf(ctx.store.me, cs.info.guild) == ch;
         const br: d.Rect = .{ .x = cr.right() - 86, .y = cr.y + 8, .w = 74, .h = 24 };
         if (here) {
-            d.text(dl, ctx.ui.get(.medium), 12, br.x, br.y + 5, ctx.col(.online), i18n.tr("Você está aqui", "You're here"));
+            const hb = col.hit(81, br);
+            qa.mark(br, "profile-leave-voice", .{});
+            d.rect(dl, br, if (hb.hovered) ctx.col(.danger) else ctx.col(.elevated), 5);
+            const lt = i18n.tr("Sair", "Leave");
+            const font = ctx.ui.get(.semibold);
+            d.text(dl, font, 13, br.x + (br.w - d.width(font, 13, lt)) / 2, d.centerY(br, 13), if (hb.hovered) d.Rgba.white else ctx.col(.danger), lt);
+            if (hb.clicked) {
+                ctx.st.voice_guild = cs.info.guild;
+                ctx.act(.leave_voice);
+            }
         } else {
             const hb = col.hit(80, br);
             qa.mark(br, "profile-join-voice", .{});
             d.rect(dl, br, if (hb.hovered) ctx.col(.accent) else ctx.col(.elevated), 5);
             const lt = i18n.tr("Entrar", "Join");
             const font = ctx.ui.get(.semibold);
-            d.text(dl, font, 12.5, br.x + (br.w - d.width(font, 12.5, lt)) / 2, d.centerY(br, 12.5), if (hb.hovered) ctx.col(.accent_text) else ctx.col(.text), lt);
+            d.text(dl, font, 13, br.x + (br.w - d.width(font, 13, lt)) / 2, d.centerY(br, 13), if (hb.hovered) ctx.col(.accent_text) else ctx.col(.text), lt);
             if (hb.clicked) {
                 ctx.act(.{ .toggle_voice = ch });
                 if (ctx.st.guild != cs.info.guild) ctx.act(.{ .select_guild = cs.info.guild });

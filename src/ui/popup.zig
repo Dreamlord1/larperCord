@@ -242,6 +242,10 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             if (mosaic.canOpenBeside(ctx, id)) add(&items, &n, .{ .label = "Abrir ao lado", .en = "Open to the Side", .id = 45 });
             add(&items, &n, .{ .label = if (ctx.st.muted_channels.contains(id)) "Reativar notificações" else "Silenciar canal", .en = if (ctx.st.muted_channels.contains(id)) "Unmute Channel" else "Mute Channel", .id = 42 });
             add(&items, &n, .{ .label = "Copiar link", .en = "Copy Link", .id = 43, .sep = true });
+            // Canal de voz em que estamos (mesmo que o app tenha perdido a
+            // conexão e o Discord ainda nos mostre lá).
+            if (ctx.store.channel(id)) |vcs| if (vcs.info.kind == .voice and ((ctx.st.voice != null and ctx.st.voice.? == id) or ctx.store.voiceChannelOf(ctx.store.me, vcs.info.guild) == id))
+                add(&items, &n, .{ .label = "Sair da call", .en = "Leave Call", .id = 46, .danger = true, .sep = true });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do canal", .en = "Copy Channel ID", .id = 44 });
         },
         .status => {
@@ -447,6 +451,10 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         42 => if (st.muted_channels.contains(id)) {
             _ = st.muted_channels.remove(id);
         } else st.muted_channels.put(st.gpa, id, {}) catch {},
+        46 => if (ctx.store.channel(id)) |cs| {
+            st.voice_guild = cs.info.guild;
+            ctx.act(.leave_voice);
+        },
         43 => if (ctx.store.channel(id)) |cs| {
             var gb: [24]u8 = undefined;
             copyFmt(ctx, "https://discord.com/channels/{s}/{d}", .{ guildPart(&gb, cs.info.guild), id });
