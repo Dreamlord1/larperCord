@@ -209,6 +209,8 @@ const Worker = struct {
     speaking_now: bool = false,
     last_voice_ms: i64 = 0,
     trailing_silence: u8 = 0,
+    /// O próximo pacote é o primeiro de uma fala (bit de marcação do RTP).
+    spurt_start: bool = true,
     // Diagnóstico (LARPER_VOICE_DEBUG).
     mic_peak_rms: f64 = 0,
     sent_frames: u64 = 0,
@@ -385,6 +387,9 @@ const Worker = struct {
         if (now >= w.next_frame) {
             w.sendFrame(now);
             w.next_frame += frame_ms;
+            // O relógio do RTP anda com o tempo, falando ou não: quem recebe
+            // usa ele para saber quanto tempo passou entre duas falas.
+            w.rtp_ts +%= frame_samples;
             if (w.next_frame < now - 100) w.next_frame = now + frame_ms; // não acumula atraso
         }
         w.expireSpeakers(now);
@@ -560,7 +565,10 @@ const Worker = struct {
                 w.resuming = false;
                 w.connected = w.have_secret;
                 w.next_frame = nowMs();
-                if (w.connected) w.v.status(.connected);
+                if (w.connected) {
+                    w.announceSpeaking();
+                    w.v.status(.connected);
+                }
             },
             5 => w.onSpeaking(d),
             11 => for (j.array(j.get(d, "user_ids"))) |u| {
@@ -733,6 +741,7 @@ const Worker = struct {
             w.initDave(dave_ver);
             w.sendKeyPackage();
         }
+        w.announceSpeaking();
         w.connected = true;
         w.next_frame = nowMs();
         w.next_keepalive = nowMs();
@@ -809,6 +818,7 @@ const Worker = struct {
         if (talking != w.speaking_now) {
             dbg("falando: {}", .{talking});
             w.speaking_now = talking;
+            if (talking) w.spurt_start = true;
             w.setSpeaking(talking);
             if (!talking) w.trailing_silence = 5;
         }
@@ -837,11 +847,18 @@ const Worker = struct {
         w.sendRtp(payload);
     }
 
+    /// O anel verde em volta da gente. O Discord não precisa saber de cada
+    /// cliente oficial); mandar "parei" fazia o servidor descartar o começo
+    /// da próxima fala, que chega pelo UDP antes do "voltei" pelo WebSocket.
     fn setSpeaking(w: *Worker, on: bool) void {
-        var b: [96]u8 = undefined;
-        const p = std.fmt.bufPrint(&b, "{{\"op\":5,\"d\":{{\"speaking\":{d},\"delay\":0,\"ssrc\":{d}}}}}", .{ @intFromBool(on), w.ssrc }) catch return;
-        _ = w.sendText(p);
         w.v.emit(.{ .voice_speaking = .{ .user = w.v.user, .speaking = on } });
+    }
+
+    /// Op 5: "este SSRC manda áudio de microfone".
+    fn announceSpeaking(w: *Worker) void {
+        var b: [96]u8 = undefined;
+        const p = std.fmt.bufPrint(&b, "{{\"op\":5,\"d\":{{\"speaking\":1,\"delay\":0,\"ssrc\":{d}}}}}", .{w.ssrc}) catch return;
+        _ = w.sendText(p);
     }
 
     fn sendRtp(w: *Worker, payload: []const u8) void {
@@ -850,7 +867,9 @@ const Worker = struct {
         const off = 12;
         if (payload.len + off + 16 + 4 > buf.len) return;
         buf[0] = 0x80;
-        buf[1] = 0x78;
+        // Payload 120 (Opus); o bit de marcação abre cada fala.
+        buf[1] = if (w.spurt_start) 0xF8 else 0x78;
+        w.spurt_start = false;
         std.mem.writeInt(u16, buf[2..4], w.rtp_seq, .big);
         std.mem.writeInt(u32, buf[4..8], w.rtp_ts, .big);
         std.mem.writeInt(u32, buf[8..12], w.ssrc, .big);
@@ -866,7 +885,6 @@ const Worker = struct {
         const rc = c.sendto(w.udp, &buf, total, 0, @ptrCast(&w.server), @sizeOf(std.posix.sockaddr.in));
         if (rc < 0) dbg("sendto falhou", .{}) else w.sent_frames += 1;
         w.rtp_seq +%= 1;
-        w.rtp_ts +%= frame_samples;
     }
 
     fn onRtp(w: *Worker, buf: []const u8) void {
