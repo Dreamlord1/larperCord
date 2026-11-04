@@ -9,6 +9,7 @@ test {
     _ = @import("core/markdown.zig");
     _ = @import("core/store.zig");
     _ = @import("core/filtros.zig");
+    _ = @import("core/voz.zig");
     _ = @import("ui/rascunhos.zig");
     _ = @import("core/inbox.zig");
     _ = @import("core/saved.zig");

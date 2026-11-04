@@ -60,11 +60,18 @@ pub const Event = union(enum) {
     /// `activity` vazio limpa a atividade; null mantém a anterior.
     /// `activities`: null mantém as anteriores, vazio limpa (o Store assume).
     presence_update: struct { user: Id, status: types.Status, activity: ?[]const u8 = null, activities: ?[]types.Activity = null },
-    voice_state: struct { channel: ?Id, user: Id },
+    voice_state: struct { channel: ?Id, user: Id, flags: VoiceFlags = .{} },
+    /// Mudo/surdo de quem já estava na call ao conectar (READY, GUILD_CREATE
+    /// trazem a lista de membros à parte).
+    voice_member_flags: struct { user: Id, flags: VoiceFlags },
     /// Estado da nossa conexão de voz (a barra "Voz conectada").
     voice_status: struct { status: VoiceStatus, channel: Id = 0 },
     /// Alguém começou/parou de falar na call (o anel verde).
     voice_speaking: struct { user: Id, speaking: bool },
+    /// Ping do gateway de voz (o heartbeat dá o RTT).
+    voice_ping: u32,
+    /// O microfone ou a saída da call abriram? (a barra de voz avisa)
+    voice_audio: struct { mic_ok: bool, out_ok: bool },
     latency: u32,
     /// Cargos de um servidor (nomes alocados), para os grupos da lista de membros.
     roles: struct { guild: Id, roles: []types.Role },
@@ -98,6 +105,29 @@ pub const Event = union(enum) {
 pub const Connection = enum { connecting, ready, reconnecting, failed, offline };
 
 pub const VoiceStatus = enum { disconnected, connecting, connected };
+
+/// O que o VOICE_STATE_UPDATE diz de cada pessoa na call. `mute` e `deaf` são
+/// impostos pelo servidor; `suppress` é a plateia de um palco.
+pub const VoiceFlags = packed struct(u8) {
+    self_mute: bool = false,
+    self_deaf: bool = false,
+    mute: bool = false,
+    deaf: bool = false,
+    suppress: bool = false,
+    _pad: u3 = 0,
+
+    pub fn serverMuted(f: VoiceFlags) bool {
+        return f.mute or f.suppress;
+    }
+
+    pub fn muted(f: VoiceFlags) bool {
+        return f.self_mute or f.self_deaf or f.mute or f.deaf or f.suppress;
+    }
+
+    pub fn deafened(f: VoiceFlags) bool {
+        return f.self_deaf or f.deaf;
+    }
+};
 
 pub const Command = union(enum) {
     /// `files`: caminhos dos arquivos a enviar (alocados, terminados em 0).

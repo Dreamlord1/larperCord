@@ -36,6 +36,7 @@ const jsonx = @import("net/jsonx.zig");
 const fsutil = @import("platform/fsutil.zig");
 const accounts_store = @import("net/accounts_store.zig");
 const app_accounts = @import("app_accounts.zig");
+const voz_audio = @import("net/voz_audio.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -154,6 +155,8 @@ pub const App = struct {
             var dbuf: [512]u8 = undefined;
             if (draftsPath(&dbuf)) |p| app.st.drafts.load(gpa, p);
         }
+        // No QA e nos prints ninguém abre o microfone de verdade.
+        voz_audio.force_dummy = opts.qa or opts.shot != null;
         app.themes.mode = app.wantedMode();
         // Já aqui: os dados da demonstração saem no idioma da interface.
         i18n.set(if (opts.qa) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language));
@@ -193,6 +196,7 @@ pub const App = struct {
 
     pub fn destroy(app: *App) void {
         app.saveSettings();
+        voz_audio.shutdown();
         _ = c.SDL_RemoveTimer(app.timer);
         app.plugins.deinit();
         // O que estava na caixa de texto vira o rascunho do canal.
@@ -389,6 +393,7 @@ pub const App = struct {
         st.voice_guild = 0;
         st.voice_status = .disconnected;
         st.voice_mixer = false;
+        app.resetCallState();
         st.popup = .none;
         st.palette.open = false;
         st.settings.open = false;
@@ -537,6 +542,43 @@ pub const App = struct {
             2 => if (c.SDL_GetSystemTheme() == c.SDL_SYSTEM_THEME_LIGHT) .light else .dark,
             else => .dark,
         };
+    }
+
+    /// O que só vale durante uma call (entrou, saiu, trocou de conta).
+    fn resetCallState(app: *App) void {
+        app.st.voice_ping_ms = 0;
+        app.st.voice_mic_failed = false;
+        app.st.voice_out_failed = false;
+        voz_audio.sh.server_mute.store(false, .release);
+        voz_audio.sh.server_deaf.store(false, .release);
+    }
+
+    /// O servidor nos mutou ou ensurdeceu (ou deixou de): a thread de voz para
+    /// de transmitir pelo mesmo caminho, na demonstração e na call de verdade.
+    fn serverFlags(app: *App, f: ev.VoiceFlags) void {
+        const sh = &voz_audio.sh;
+        const was_mute = sh.server_mute.load(.acquire);
+        const was_deaf = sh.server_deaf.load(.acquire);
+        sh.server_mute.store(f.serverMuted(), .release);
+        sh.server_deaf.store(f.deaf, .release);
+        if (f.deaf and !was_deaf) {
+            app.st.showToast(now(), true, "o servidor te ensurdeceu nesta call", "the server deafened you in this call", .{});
+        } else if (f.serverMuted() and !was_mute) {
+            app.st.showToast(now(), true, "o servidor te mutou nesta call", "the server muted you in this call", .{});
+        } else if ((was_mute or was_deaf) and !f.serverMuted() and !f.deaf) {
+            app.st.showToast(now(), false, "o servidor liberou seu microfone", "the server unmuted you", .{});
+        }
+    }
+
+    fn voiceAudio(app: *App, mic_ok: bool, out_ok: bool) void {
+        const st = &app.st;
+        if (!mic_ok and !st.voice_mic_failed) {
+            st.showToast(now(), true, "o microfone não abriu: ninguém está te ouvindo", "the microphone didn't open: nobody can hear you", .{});
+        } else if (!out_ok and !st.voice_out_failed) {
+            st.showToast(now(), true, "a saída de áudio não abriu: você não vai ouvir a call", "the audio output didn't open: you won't hear the call", .{});
+        }
+        st.voice_mic_failed = !mic_ok;
+        st.voice_out_failed = !out_ok;
     }
 
     fn loadSettings(app: *App, arena: std.mem.Allocator) ?[]const u8 {
@@ -797,7 +839,7 @@ pub const App = struct {
         return null;
     }
 
-    fn handle(app: *App, a: ev.Action) void {
+    pub fn handle(app: *App, a: ev.Action) void {
         const st = &app.st;
         if (app.opts.qa and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[ação] {t}\n", .{a});
         switch (a) {
@@ -1040,6 +1082,8 @@ pub const App = struct {
                     st.voice = null;
                     st.voice_status = .disconnected;
                     st.voice_mixer = false;
+                    app.resetCallState();
+                    voz_audio.play(.leave);
                     app.cmd(.{ .join_voice = .{ .guild = st.voice_guild, .channel = null, .mute = st.muted, .deaf = st.deafened } });
                 } else {
                     const cs = app.store.channel(ch) orelse return;
@@ -1048,12 +1092,15 @@ pub const App = struct {
                     st.voice_guild = cs.info.guild;
                     st.voice_status = .connecting;
                     st.voice_mixer = false;
+                    app.resetCallState();
                     app.cmd(.{ .join_voice = .{ .guild = cs.info.guild, .channel = ch, .mute = st.muted, .deaf = st.deafened } });
                     var vit = st.voice_volumes.iterator();
                     while (vit.next()) |e| app.cmd(.{ .voice_volume = .{ .user = e.key_ptr.*, .volume = e.value_ptr.* } });
                 }
             },
             .leave_voice => {
+                if (st.voice != null) voz_audio.play(.leave);
+                app.resetCallState();
                 st.voice = null;
                 st.voice_status = .disconnected;
                 st.voice_mixer = false;
@@ -1061,11 +1108,13 @@ pub const App = struct {
             },
             .toggle_mute => {
                 st.muted = !st.muted;
+                if (st.voice != null) voz_audio.play(if (st.muted) .mute else .unmute);
                 if (st.voice != null) app.cmd(.{ .voice_flags = .{ .mute = st.muted, .deaf = st.deafened } });
             },
             .toggle_deafen => {
                 st.deafened = !st.deafened;
                 if (st.deafened) st.muted = true;
+                if (st.voice != null) voz_audio.play(if (st.deafened) .mute else .unmute);
                 if (st.voice != null) app.cmd(.{ .voice_flags = .{ .mute = st.muted, .deaf = st.deafened } });
             },
             .toggle_voice_mixer => st.voice_mixer = !st.voice_mixer,
@@ -1196,6 +1245,7 @@ pub const App = struct {
             if (e == .voice_status) {
                 const mine = e.voice_status.channel == 0 or app.st.voice == e.voice_status.channel;
                 if (mine) {
+                    const was_connected = app.st.voice_status == .connected;
                     app.st.voice_status = e.voice_status.status;
                     if (e.voice_status.status == .disconnected and app.st.voice != null) {
                         // Sai de verdade (op 4 sem canal): senão os outros
@@ -1204,6 +1254,7 @@ pub const App = struct {
                         app.st.showToast(now(), true, "a call caiu", "the call dropped", .{});
                     } else if (e.voice_status.status == .connected) {
                         app.st.showToast(now(), false, "entrou na call", "joined the call", .{});
+                        if (!was_connected) voz_audio.play(.join);
                     }
                 }
             }
@@ -1211,12 +1262,17 @@ pub const App = struct {
             if (e == .voice_state and e.voice_state.user == app.store.me and app.st.voice != null and app.store.me != 0) {
                 if (e.voice_state.channel) |ch| {
                     app.st.voice = ch;
+                    app.serverFlags(e.voice_state.flags);
                 } else {
+                    voz_audio.play(.leave);
+                    app.resetCallState();
                     app.st.voice = null;
                     app.st.voice_status = .disconnected;
                     app.st.voice_mixer = false;
                 }
             }
+            if (e == .voice_ping) app.st.voice_ping_ms = e.voice_ping;
+            if (e == .voice_audio) app.voiceAudio(e.voice_audio.mic_ok, e.voice_audio.out_ok);
             if (e == .status and e.status == .failed) failed = true;
             // Antes de o Store ficar com a mensagem (se o canal não existe, ele a libera).
             const quiet: ?types.Id = if (e == .message_create and app.store.ready) app.incoming(e.message_create) else null;
@@ -1626,7 +1682,8 @@ pub const App = struct {
                     }
                 } else {
                     input = true;
-                    _ = c.cImGui_ImplSDL3_ProcessEvent(&e);
+                    // Aperte para falar (e "aperte uma tecla" nas Configurações).
+                    if (!voz_audio.onSdlEvent(&e)) _ = c.cImGui_ImplSDL3_ProcessEvent(&e);
                     if (e.type == c.SDL_EVENT_QUIT or e.type == c.SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
                         running = false;
                         // Some da tela na hora; o resto do encerramento é por trás.
@@ -1707,6 +1764,8 @@ pub const App = struct {
             anim.instant = set.reduce_motion;
             @import("net/media_url.zig").allow_gif_hosts.store(set.gif_hosts, .release);
             @import("net/proxy.zig").set(set.proxy.slice(), set.proxy_all);
+            voz_audio.apply(set);
+            voz_audio.setPageOpen(set.open and set.page == .voz and app.store.ready);
             @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
             app.store.keep_log = set.message_log;
             msg_cache.enabled = set.message_cache;

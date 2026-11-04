@@ -13,7 +13,13 @@
 //! Áudio: o SDL3 mistura. Cada pessoa da call tem um SDL_AudioStream ligado
 //! ao mesmo dispositivo de saída (o volume dela é o ganho do stream) e o
 //! microfone é um stream lido a cada 20 ms. Nada de callback de áudio nem
-//! buffer dividido entre threads.
+//! buffer dividido entre threads. O que abrir e como (dispositivo pelo nome,
+//! volumes, limiar, aperte para falar, filtros) vem de net/voz_audio.zig e de
+//! core/voz.zig; o medidor e o teste de microfone das Configurações usam o
+//! mesmo código numa thread à parte.
+//!
+//! `local` (a demonstração): só a metade do áudio, sem rede. O microfone, a
+//! detecção de voz e o aviso de falha valem de verdade; nada sai do computador.
 //!
 //! LARPER_VOICE_DEBUG=1 mostra no terminal o que acontece na call (opcodes,
 //! códigos de fechamento, DAVE). Nunca imprime token nem chaves.
@@ -24,6 +30,8 @@ const ev = @import("../core/event.zig");
 const Sink = @import("fake_gateway.zig").Sink;
 const i18n = @import("../ui/i18n.zig");
 const j = @import("jsonx.zig");
+const voz = @import("../core/voz.zig");
+const voz_audio = @import("voz_audio.zig");
 
 const Id = types.Id;
 const alloc = std.heap.c_allocator;
@@ -76,6 +84,8 @@ pub const Voice = struct {
     volumes: std.AutoHashMapUnmanaged(Id, f32) = .empty,
     /// Sobe a cada mudança de volume (a thread de voz reaplica os ganhos).
     volumes_gen: std.atomic.Value(u32) = .init(0),
+    /// Sem rede: só o microfone e a detecção de voz (a demonstração).
+    local: bool = false,
 
     pub fn init(sink: Sink, guild: Id, channel: Id, user: Id, endpoint: []const u8, token: []const u8, session: []const u8, mute: bool, deaf: bool) Voice {
         var v: Voice = .{ .sink = sink, .guild = guild, .user = user };
@@ -124,6 +134,16 @@ pub const Voice = struct {
         _ = v.volumes_gen.fetchAdd(1, .release);
     }
 
+    /// Mudo por nós ou pelo servidor: nada de transmitir (nem abrir o microfone).
+    fn micBlocked(v: *Voice) bool {
+        return v.muted.load(.acquire) or v.deafened.load(.acquire) or
+            voz_audio.sh.server_mute.load(.acquire) or voz_audio.sh.server_deaf.load(.acquire);
+    }
+
+    fn outBlocked(v: *Voice) bool {
+        return v.deafened.load(.acquire) or voz_audio.sh.server_deaf.load(.acquire);
+    }
+
     fn volumeOf(v: *Voice, user: Id) f32 {
         c.SDL_LockMutex(v.volume_mutex);
         defer c.SDL_UnlockMutex(v.volume_mutex);
@@ -145,7 +165,7 @@ pub const Voice = struct {
 
     fn threadMain(data: ?*anyopaque) callconv(.c) c_int {
         const v: *Voice = @ptrCast(@alignCast(data.?));
-        v.status(.connecting);
+        if (!v.local) v.status(.connecting);
         // O Worker tem buffers grandes: no heap, não na pilha da thread.
         const worker = alloc.create(Worker) catch {
             v.ended.store(.fatal, .release);
@@ -154,7 +174,7 @@ pub const Voice = struct {
         };
         defer alloc.destroy(worker);
         worker.* = .{ .v = v };
-        const how = worker.run();
+        const how = if (v.local) worker.runLocal() else worker.run();
         v.ended.store(how, .release);
         if (how == .fatal) v.status(.disconnected);
         return 0;
@@ -183,6 +203,7 @@ const Worker = struct {
     hb_interval: i64 = 13750,
     next_hb: i64 = std.math.maxInt(i64),
     hb_acked: bool = true,
+    hb_sent_ms: i64 = 0,
     next_frame: i64 = 0,
     next_keepalive: i64 = 0,
     last_seq: i64 = -1,
@@ -198,16 +219,20 @@ const Worker = struct {
     encoder: ?*c.OpusEncoder = null,
     // Áudio.
     audio_on: bool = false,
-    out_dev: c.SDL_AudioDeviceID = 0,
-    capture: ?*c.SDL_AudioStream = null,
-    mic_paused: bool = false,
+    out: voz_audio.Output = .{},
+    mic: voz_audio.Mic = .{},
+    /// O que já avisamos à interface sobre o microfone e a saída.
+    mic_ok_sent: bool = true,
+    out_ok_sent: bool = true,
     deaf_applied: bool = false,
     volumes_gen: u32 = 0,
     sources: [32]Source = undefined,
     n_sources: usize = 0,
     // Detecção de fala (nossa).
+    cap: voz.Capture = .{},
+    talk: voz.Talk = .{},
     speaking_now: bool = false,
-    last_voice_ms: i64 = 0,
+    speaking_emit_ms: i64 = 0,
     trailing_silence: u8 = 0,
     /// O próximo pacote é o primeiro de uma fala (bit de marcação do RTP).
     spurt_start: bool = true,
@@ -270,6 +295,26 @@ const Worker = struct {
         return .stopped;
     }
 
+    /// A demonstração: o áudio da call sem a call. Mesmo caminho até a hora de
+    /// mandar o pacote (`sendRtp` não faz nada sem a chave).
+    fn runLocal(w: *Worker) Ended {
+        defer w.cleanup();
+        _ = w.initAudio();
+        w.next_frame = nowMs();
+        while (!w.v.stopping.load(.acquire)) {
+            const now = nowMs();
+            w.applyAudioFlags();
+            w.audioPoll(now);
+            if (now >= w.next_frame) {
+                w.sendFrame(now);
+                w.next_frame += frame_ms;
+                if (w.next_frame < now - 100) w.next_frame = now + frame_ms;
+            }
+            c.SDL_Delay(@intCast(std.math.clamp(w.next_frame - nowMs(), 1, frame_ms)));
+        }
+        return .stopped;
+    }
+
     /// Espera sem travar o pedido de parar.
     fn pause(w: *Worker, ms: i64) void {
         const until = nowMs() + ms;
@@ -320,9 +365,9 @@ const Worker = struct {
     fn cleanup(w: *Worker) void {
         for (w.sources[0..w.n_sources]) |*s| s.deinit();
         w.n_sources = 0;
-        if (w.capture) |s| c.SDL_DestroyAudioStream(s);
-        if (w.out_dev != 0) c.SDL_CloseAudioDevice(w.out_dev);
-        if (w.audio_on) c.SDL_QuitSubSystem(c.SDL_INIT_AUDIO);
+        w.mic.close();
+        w.out.close();
+        if (w.audio_on) voz_audio.release();
         if (w.encoder) |e| c.opus_encoder_destroy(e);
         if (w.dave) |*d| d.deinit();
         if (w.udp >= 0) _ = c.close(w.udp);
@@ -382,6 +427,7 @@ const Worker = struct {
             w.next_hb = now + w.hb_interval;
         }
         w.applyAudioFlags();
+        w.audioPoll(now);
         if (!w.connected) return;
         if (now >= w.next_keepalive) {
             const keep = [_]u8{ 0x13, 0x37 };
@@ -447,6 +493,7 @@ const Worker = struct {
         var b: [96]u8 = undefined;
         const p = std.fmt.bufPrint(&b, "{{\"op\":3,\"d\":{{\"t\":{d},\"seq_ack\":{d}}}}}", .{ nowMs(), w.last_seq }) catch return;
         w.hb_acked = false;
+        w.hb_sent_ms = nowMs();
         _ = w.sendText(p);
     }
 
@@ -562,7 +609,10 @@ const Worker = struct {
                 w.next_hb = nowMs() + @divTrunc(w.hb_interval, 4);
                 if (w.resuming) w.sendResume() else w.identify();
             },
-            6 => w.hb_acked = true,
+            6 => {
+                w.hb_acked = true;
+                if (w.hb_sent_ms != 0) w.v.emit(.{ .voice_ping = @intCast(std.math.clamp(nowMs() - w.hb_sent_ms, 1, 60_000)) });
+            },
             2 => w.onReady(d),
             4 => w.onSession(d),
             9 => {
@@ -798,25 +848,28 @@ const Worker = struct {
         }
     }
 
-    /// Lê 20 ms do microfone; manda só enquanto há voz (mais 5 quadros de
-    /// silêncio no fim, como o cliente oficial), e nada quando mudo.
+    /// Lê 20 ms do microfone; manda só enquanto há voz (ou a tecla do aperte
+    /// para falar), mais 5 quadros de silêncio no fim, como o cliente oficial,
+    /// e nada quando mudo, por nós ou pelo servidor.
     fn sendFrame(w: *Worker, now: i64) void {
-        const muted = w.v.muted.load(.acquire) or w.v.deafened.load(.acquire);
+        const sh = &voz_audio.sh;
+        const blocked = w.v.micBlocked();
         var pcm: [frame_samples * channels]i16 = undefined;
-        const have = !muted and w.readMic(&pcm);
-        var loud = false;
+        const have = !blocked and w.mic.read(&pcm);
+        var voice = false;
         if (have) {
-            var sum: u64 = 0;
-            for (pcm) |s| sum += @intCast(@as(i32, s) * @as(i32, s));
-            const rms = std.math.sqrt(@as(f64, @floatFromInt(sum)) / @as(f64, pcm.len));
-            loud = rms > 120;
-            w.mic_peak_rms = @max(w.mic_peak_rms, rms);
+            const res = w.cap.process(&pcm, sh.captureCfg());
+            voice = res.voice;
+            w.mic_peak_rms = @max(w.mic_peak_rms, res.rms);
         }
-        if (loud) w.last_voice_ms = now;
-        // 300 ms de "rabo" para não cortar o fim das palavras.
-        const talking = have and now - w.last_voice_ms < 400;
+        const talking = w.talk.update(now, .{
+            .voice = voice,
+            .ptt = sh.ptt.load(.monotonic),
+            .key = sh.ptt_down.load(.monotonic),
+            .blocked = blocked or w.mic.stream == null,
+        });
         if (debug_on and now - w.stats_ms >= 3000) {
-            dbg("mic: {s}, rms máx {d:.0}, {d} quadros enviados, DAVE {s}", .{ if (w.capture == null) "sem microfone" else if (muted) "mudo" else "ligado", w.mic_peak_rms, w.sent_frames, if (w.dave) |dv| (if (dv.enabled) "cifrando" else "esperando") else "não" });
+            dbg("mic: {s}, rms máx {d:.0}, {d} quadros enviados, DAVE {s}", .{ if (w.mic.stream == null) "sem microfone" else if (blocked) "mudo" else "ligado", w.mic_peak_rms, w.sent_frames, if (w.dave) |dv| (if (dv.enabled) "cifrando" else "esperando") else "não" });
             w.stats_ms = now;
             w.mic_peak_rms = 0;
         }
@@ -825,7 +878,12 @@ const Worker = struct {
             w.speaking_now = talking;
             if (talking) w.spurt_start = true;
             w.setSpeaking(talking);
+            w.speaking_emit_ms = now;
             if (!talking) w.trailing_silence = 5;
+        } else if (talking and now - w.speaking_emit_ms >= 1000) {
+            // O anel apaga sozinho depois de 4 s sem notícia (Store.isSpeaking).
+            w.setSpeaking(true);
+            w.speaking_emit_ms = now;
         }
         if (!talking) {
             if (w.trailing_silence > 0) {
@@ -834,6 +892,9 @@ const Worker = struct {
             }
             return;
         }
+        // Falando, mas o microfone ainda não entregou este quadro: não é pausa
+        // na fala; vem no próximo tique.
+        if (!have) return;
         const enc = w.encoder orelse return;
         var packet: [1500]u8 = undefined;
         const len = c.opus_encode(enc, &pcm, frame_samples, &packet, packet.len);
@@ -936,7 +997,7 @@ const Worker = struct {
 
     // --- Áudio ------------------------------------------------------------
 
-    const spec: c.SDL_AudioSpec = .{ .format = c.SDL_AUDIO_S16, .channels = channels, .freq = opus_rate };
+    const spec: c.SDL_AudioSpec = voz_audio.spec;
 
     fn initAudio(w: *Worker) bool {
         var err: c_int = 0;
@@ -947,29 +1008,24 @@ const Worker = struct {
             _ = c.opus_encoder_ctl(w.encoder, c.OPUS_SET_INBAND_FEC_REQUEST, @as(c_int, 1));
             _ = c.opus_encoder_ctl(w.encoder, c.OPUS_SET_PACKET_LOSS_PERC_REQUEST, @as(c_int, 10));
         } else w.encoder = null;
-        if (!c.SDL_InitSubSystem(c.SDL_INIT_AUDIO)) return false;
-        w.audio_on = true;
-        w.out_dev = c.SDL_OpenAudioDevice(c.SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
-        w.capture = c.SDL_OpenAudioDeviceStream(c.SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &spec, null, null);
-        if (w.capture) |s| _ = c.SDL_ResumeAudioStreamDevice(s);
-        w.mic_paused = false;
+        if (voz_audio.acquire()) {
+            w.audio_on = true;
+            const now = nowMs();
+            w.out.open(now);
+            w.mic.paused = w.v.micBlocked();
+            w.mic.open(now);
+        }
         w.applyAudioFlags();
-        return w.out_dev != 0 or w.capture != null;
+        w.reportAudio();
+        return w.out.dev != 0 or w.mic.stream != null;
     }
 
     /// Mudo desliga o microfone de verdade; ensurdecer pausa a saída.
     fn applyAudioFlags(w: *Worker) void {
-        const muted = w.v.muted.load(.acquire) or w.v.deafened.load(.acquire);
-        if (w.capture) |s| if (muted != w.mic_paused) {
-            if (muted) _ = c.SDL_PauseAudioStreamDevice(s) else {
-                _ = c.SDL_ClearAudioStream(s);
-                _ = c.SDL_ResumeAudioStreamDevice(s);
-            }
-            w.mic_paused = muted;
-        };
-        const deaf = w.v.deafened.load(.acquire);
-        if (w.out_dev != 0 and deaf != w.deaf_applied) {
-            if (deaf) _ = c.SDL_PauseAudioDevice(w.out_dev) else _ = c.SDL_ResumeAudioDevice(w.out_dev);
+        w.mic.setPaused(w.v.micBlocked());
+        const deaf = w.v.outBlocked();
+        if (w.out.dev != 0 and deaf != w.deaf_applied) {
+            if (deaf) _ = c.SDL_PauseAudioDevice(w.out.dev) else _ = c.SDL_ResumeAudioDevice(w.out.dev);
             for (w.sources[0..w.n_sources]) |*s| if (s.stream) |st| {
                 _ = c.SDL_ClearAudioStream(st);
             };
@@ -982,17 +1038,33 @@ const Worker = struct {
         }
     }
 
-    /// Um quadro do microfone. Se acumulou atraso, joga fora o mais antigo.
-    fn readMic(w: *Worker, out: *[frame_samples * channels]i16) bool {
-        const s = w.capture orelse return false;
-        var avail = c.SDL_GetAudioStreamAvailable(s);
-        var scratch: [frame_bytes]u8 = undefined;
-        while (avail > frame_bytes * 4) {
-            _ = c.SDL_GetAudioStreamData(s, &scratch, frame_bytes);
-            avail -= frame_bytes;
+    /// Dispositivo escolhido mudou, sumiu ou voltou, em plena call: reabre o
+    /// microfone e passa cada pessoa para a saída nova. A conexão nem percebe.
+    fn audioPoll(w: *Worker, now: i64) void {
+        if (!w.audio_on) return;
+        w.mic.check(now);
+        w.out.applyGain();
+        if (w.out.check(now)) |dev| {
+            for (w.sources[0..w.n_sources]) |*s| {
+                if (s.stream == null) s.stream = c.SDL_CreateAudioStream(&spec, &spec);
+                if (s.stream) |st| voz_audio.Output.rebind(dev, st);
+            }
+            w.out.adopt(dev);
+            // Era um dispositivo novo, ainda sem a pausa do ensurdecer.
+            if (w.deaf_applied) _ = c.SDL_PauseAudioDevice(dev);
         }
-        if (avail < frame_bytes) return false;
-        return c.SDL_GetAudioStreamData(s, out, frame_bytes) == frame_bytes;
+        w.reportAudio();
+    }
+
+    /// Avisa a interface quando o microfone ou a saída mudam de situação: ela
+    /// mostra na barra de voz, em vez de ficar calada sem explicação.
+    fn reportAudio(w: *Worker) void {
+        const mic_ok = !w.mic.failed();
+        const out_ok = w.out.dev != 0;
+        if (mic_ok == w.mic_ok_sent and out_ok == w.out_ok_sent) return;
+        w.mic_ok_sent = mic_ok;
+        w.out_ok_sent = out_ok;
+        w.v.emit(.{ .voice_audio = .{ .mic_ok = mic_ok, .out_ok = out_ok } });
     }
 
     fn sourceFor(w: *Worker, ssrc: u32, user: Id) ?*Source {
@@ -1011,9 +1083,9 @@ const Worker = struct {
             return null;
         }
         var src: Source = .{ .ssrc = ssrc, .user = user, .dec = dec };
-        if (w.out_dev != 0) {
+        if (w.out.dev != 0) {
             src.stream = c.SDL_CreateAudioStream(&spec, &spec);
-            if (src.stream) |st| _ = c.SDL_BindAudioStream(w.out_dev, st);
+            if (src.stream) |st| _ = c.SDL_BindAudioStream(w.out.dev, st);
         }
         w.sources[w.n_sources] = src;
         w.n_sources += 1;
