@@ -23,6 +23,11 @@ pub const Popup = union(enum) {
     saved,
     /// Mensagens fixadas de um canal.
     pins: struct { channel: Id },
+    /// Threads de um canal de texto, ativas ou arquivadas (ui/forum.zig).
+    threads: struct { parent: Id, archived: bool = false },
+    /// "Criar thread" a partir de uma mensagem e "Novo post" num fórum.
+    new_thread: struct { message: Id },
+    new_post: struct { forum: Id },
 };
 
 /// Seleção de texto entre mensagens: âncora e cabeça (mensagem + byte).

@@ -5,7 +5,9 @@ pub const Id = u64;
 
 pub const Status = enum { online, idle, dnd, offline };
 
-pub const ChannelKind = enum { text, voice, category };
+/// `forum`: fórum e canal de mídia (tipos 15 e 16). Thread é `text` com
+/// `Channel.thread` preenchido: abre como conversa normal.
+pub const ChannelKind = enum { text, voice, category, forum };
 
 pub const User = struct {
     id: Id,
@@ -92,7 +94,42 @@ pub const perm = struct {
     pub const connect: u64 = 1 << 20;
     pub const move_members: u64 = 1 << 24;
     pub const manage_roles: u64 = 1 << 28;
+    pub const manage_threads: u64 = 1 << 34;
+    pub const create_public_threads: u64 = 1 << 35;
+    pub const send_messages_in_threads: u64 = 1 << 38;
 };
+
+/// O que só uma thread (ou post de fórum) tem. `Channel.parent` é o canal pai.
+pub const ThreadInfo = struct {
+    owner: Id = 0,
+    archived: bool = false,
+    locked: bool = false,
+    private: bool = false,
+    joined: bool = false,
+    /// O evento disse se estamos nela (THREAD_UPDATE não diz: fica o que era).
+    joined_known: bool = false,
+    message_count: u32 = 0,
+    member_count: u32 = 0,
+    /// 0 = não veio.
+    last_message: Id = 0,
+    /// Quando foi arquivada (s); é por onde as arquivadas paginam.
+    archive_ts: i64 = 0,
+    /// Tags aplicadas (alocadas com o c_allocator).
+    tags: []const Id = &.{},
+};
+
+/// Tag que um fórum oferece. Textos alocados com o c_allocator.
+pub const ForumTag = struct {
+    id: Id,
+    name: []const u8,
+    /// Emoji unicode ("" = não tem ou é personalizado).
+    emoji: []const u8 = "",
+    /// Só quem modera o fórum pode usar.
+    moderated: bool = false,
+};
+
+/// Primeira mensagem de um post, para a lista do fórum (texto alocado).
+pub const ThreadPreview = struct { thread: Id, author: Id, text: []const u8 };
 
 /// Cargo de um servidor. `color` é 0xRRGGBB (0 = sem cor).
 pub const Role = struct {
@@ -180,6 +217,12 @@ pub const Channel = struct {
     overwrites: []const Overwrite = &.{},
     /// A última mensagem que o Discord diz existir no canal (READY e o que chega).
     last_message: Id = 0,
+    /// Thread ou post de fórum (null nos outros canais).
+    thread: ?ThreadInfo = null,
+    /// Fórum: tags oferecidas (alocadas), canal de mídia, post precisa de tag.
+    tags: []const ForumTag = &.{},
+    media: bool = false,
+    require_tag: bool = false,
 };
 
 /// Registro de leitura de um canal (`read_state` do READY).
@@ -321,6 +364,8 @@ pub const Message = struct {
     mentions_me: bool = false,
     /// Fixada no canal.
     pinned: bool = false,
+    /// Thread aberta a partir desta mensagem (0 = nenhuma): o cartão clicável.
+    thread: Id = 0,
 
     /// O texto que vai para a caixa ao editar (e volta ao Discord).
     pub fn editable(m: *const Message) []const u8 {

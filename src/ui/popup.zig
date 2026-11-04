@@ -19,6 +19,7 @@ const saved_ui = @import("saved.zig");
 const mosaic = @import("mosaic.zig");
 const guild_color = @import("guild_color.zig");
 const accounts_menu = @import("accounts_menu.zig");
+const forum = @import("forum.zig");
 
 pub const emojis = [_][]const u8{
     "😂",
@@ -140,6 +141,9 @@ fn popupKey(p: state.Popup) u64 {
         .saved => 5,
         .mixer => 6,
         .pins => |x| 7 +% x.channel *% 31,
+        .threads => |t| 8 +% t.parent *% 31,
+        .new_thread => |t| 9 +% t.message *% 31,
+        .new_post => |t| 10 +% t.forum *% 31,
     };
 }
 
@@ -201,6 +205,9 @@ pub fn draw(ctx: *d.Ctx) void {
         .inbox => |ib| @import("inbox.zig").draw(ctx, ib.tab),
         .saved => saved_ui.draw(ctx),
         .pins => |x| @import("pins.zig").draw(ctx, x.channel),
+        .threads => |t| forum.panel(ctx, t.parent, t.archived),
+        .new_thread => |t| forum.newThread(ctx, t.message),
+        .new_post => |t| forum.newPost(ctx, t.forum),
         .none => {},
     }
     animateOpen(ctx);
@@ -263,6 +270,13 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
                 else
                     add(&items, &n, .{ .label = "Salvar mensagem", .en = "Save Message", .id = 10 });
             }
+            // Thread: abre a que já existe ou cria uma, se o pai deixa.
+            if (found.m.msg.id != 0) {
+                if (found.m.msg.thread != 0 and ctx.store.channel(found.m.msg.thread) != null)
+                    add(&items, &n, .{ .label = "Abrir thread", .en = "Open Thread", .id = 12 })
+                else if (ctx.store.canCreateThread(&found.cs.info))
+                    add(&items, &n, .{ .label = "Criar thread", .en = "Create Thread", .id = 11 });
+            }
             add(&items, &n, .{ .label = "Marcar como não lida", .en = "Mark Unread", .id = 7 });
             // Fixar pede "gerenciar mensagens" no canal (numa DM, qualquer um).
             if (found.m.msg.id != 0 and found.m.msg.system == .none and ctx.store.channelPermissions(&found.cs.info) & types.perm.manage_messages != 0)
@@ -295,6 +309,18 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             // Tela dividida: o canal ao lado do que está aberto (até 3).
             if (mosaic.canOpenBeside(ctx, id)) add(&items, &n, .{ .label = "Abrir ao lado", .en = "Open to the Side", .id = 45 });
             add(&items, &n, .{ .label = if (ctx.st.muted_channels.contains(id)) "Reativar notificações" else "Silenciar canal", .en = if (ctx.st.muted_channels.contains(id)) "Unmute Channel" else "Mute Channel", .id = 42 });
+            // Thread: entrar, sair e as arquivadas do mesmo canal pai. Num canal
+            // de texto: as threads dele (a lista de canais só mostra algumas).
+            if (ctx.store.channel(id)) |tcs| if (tcs.info.thread) |t| {
+                add(&items, &n, if (t.joined)
+                    .{ .label = "Sair da thread", .en = "Leave Thread", .id = 47, .sep = true }
+                else
+                    .{ .label = "Entrar na thread", .en = "Join Thread", .id = 47, .sep = true });
+                if (tcs.info.parent != null) add(&items, &n, .{ .label = "Threads arquivadas", .en = "Archived Threads", .id = 48 });
+            } else if (tcs.info.kind == .text and tcs.info.guild != 0) {
+                add(&items, &n, .{ .label = "Ver threads", .en = "View Threads", .id = 49, .sep = true });
+                add(&items, &n, .{ .label = "Threads arquivadas", .en = "Archived Threads", .id = 48 });
+            };
             add(&items, &n, .{ .label = "Copiar link", .en = "Copy Link", .id = 43, .sep = true });
             // Canal de voz em que estamos (mesmo que o app tenha perdido a
             // conexão e o Discord ainda nos mostre lá).
@@ -459,6 +485,15 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         11 => if (ctx.store.findAny(id)) |f| ctx.act(.{ .pin_message = .{ .channel = f.cs.info.id, .id = id, .add = !f.m.msg.pinned } }),
         8, 25, 44, 63 => copyFmt(ctx, "{d}", .{id}),
         10 => ctx.act(if (st.saved.find(id) != null) .{ .unsave_message = id } else .{ .save_message = id }),
+        11 => forum.openNewThread(ctx, id),
+        12 => if (ctx.store.findAny(id)) |f| ctx.act(.{ .select_channel = f.m.msg.thread }),
+        47 => if (ctx.store.channel(id)) |cs| if (cs.info.thread) |t| {
+            ctx.act(.{ .join_thread = .{ .thread = id, .join = !t.joined } });
+        },
+        48, 49 => if (ctx.store.channel(id)) |cs| {
+            const parent = if (cs.info.thread != null) cs.info.parent orelse id else id;
+            st.popup = .{ .threads = .{ .parent = parent, .archived = item == 48 } };
+        },
         80, 81, 82, 83 => ctx.act(.{ .set_status = @enumFromInt(item - 80) }),
         84 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y - 200 } },
         85 => {

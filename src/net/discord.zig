@@ -26,6 +26,7 @@ const settings_proto = @import("settings_proto.zig");
 const leitura = @import("../core/leitura.zig");
 const read_json = @import("read_state_json.zig");
 const voice_mod = @import("voice.zig");
+const thread_json = @import("thread_json.zig");
 const Id = types.Id;
 const Value = std.json.Value;
 
@@ -89,6 +90,7 @@ pub const Gateway = struct {
     /// Última lista de membros pedida (op 14): repetida depois de um READY.
     sub_guild: Id = 0,
     sub_channel: Id = 0,
+    sub_thread: Id = 0,
     /// Sessão do gateway, para o RESUME (op 6).
     session_id: [64]u8 = @splat(0),
     session_len: u8 = 0,
@@ -305,6 +307,7 @@ pub const Gateway = struct {
             .fetch_newer => |o| g.emit(.{ .history = .{ .channel = o.channel, .messages = &.{}, .newer = true } }),
             .fetch_pins => |ch| g.emit(.{ .pins = .{ .channel = ch, .messages = &.{}, .ok = false } }),
             .fetch_invite => |code| g.emit(.{ .invite = .{ .code = code, .invite = .{ .state = .failed } } }),
+            .fetch_threads => |ft| g.emit(.{ .threads_page = .{ .channel = ft.channel, .archived = ft.archived, .failed = true } }),
             else => {},
         }
         freeCommand(cmd);
@@ -831,12 +834,17 @@ pub const Gateway = struct {
     }
 
     /// Pede a lista de membros de um servidor vista de um canal (op 14,
-    fn subscribe(g: *Gateway, guild: Id, channel: Id) void {
+    /// Numa thread, a lista é a do canal pai (`channel`) e `thread` pede também
+    /// quem está nela, em THREAD_MEMBER_LIST_UPDATE.
+    fn subscribe(g: *Gateway, guild: Id, channel: Id, thread: Id) void {
         if (guild == 0 or channel == 0) return;
         g.sub_guild = guild;
         g.sub_channel = channel;
-        var buf: [320]u8 = undefined;
-        const payload = std.fmt.bufPrint(&buf, "{{\"op\":14,\"d\":{{\"guild_id\":\"{d}\",\"typing\":true,\"threads\":true,\"activities\":true,\"members\":[],\"channels\":{{\"{d}\":[[0,99]]}},\"thread_member_lists\":[]}}}}", .{ guild, channel }) catch return;
+        g.sub_thread = thread;
+        var tb: [32]u8 = undefined;
+        const lists = if (thread != 0) std.fmt.bufPrint(&tb, "\"{d}\"", .{thread}) catch "" else "";
+        var buf: [360]u8 = undefined;
+        const payload = std.fmt.bufPrint(&buf, "{{\"op\":14,\"d\":{{\"guild_id\":\"{d}\",\"typing\":true,\"threads\":true,\"activities\":true,\"members\":[],\"channels\":{{\"{d}\":[[0,99]]}},\"thread_member_lists\":[{s}]}}}}", .{ guild, channel, lists }) catch return;
         g.send(payload);
     }
 
@@ -877,12 +885,13 @@ pub const Gateway = struct {
             g.gatewayReady();
             g.emit(.{ .status = .ready });
             // Um pedido de lista feito bem na hora da queda se perdeu.
-            if (g.sub_guild != 0) g.subscribe(g.sub_guild, g.sub_channel);
+            if (g.sub_guild != 0) g.subscribe(g.sub_guild, g.sub_channel, g.sub_thread);
             return;
         }
         if (std.mem.eql(u8, t, "MESSAGE_CREATE")) {
             g.upsertUsers(d);
             if (j.get(d, "member")) |m| g.memberColor(j.id(j.get(d, "guild_id")) orelse 0, j.id(j.get(j.get(d, "author") orelse .null, "id")) orelse 0, m);
+            g.messageThread(d);
             if (try g.message(d)) |m| g.emit(.{ .message_create = m });
             return;
         }
@@ -959,9 +968,26 @@ pub const Gateway = struct {
             if (try g.channelValue(d, 0)) |ch| g.emit(.{ .channel_upsert = ch });
             return;
         }
-        if (std.mem.eql(u8, t, "CHANNEL_DELETE")) {
+        if (std.mem.eql(u8, t, "CHANNEL_DELETE") or std.mem.eql(u8, t, "THREAD_DELETE")) {
             if (j.id(j.get(d, "id"))) |id| g.emit(.{ .channel_delete = id });
             return;
+        }
+        if (std.mem.eql(u8, t, "THREAD_CREATE") or std.mem.eql(u8, t, "THREAD_UPDATE")) {
+            if (try g.channelValue(d, 0)) |ch| g.emit(.{ .channel_upsert = ch });
+            return;
+        }
+        if (std.mem.eql(u8, t, "THREAD_LIST_SYNC")) return g.onThreadListSync(d);
+        if (std.mem.eql(u8, t, "THREAD_MEMBER_UPDATE")) {
+            // É o nosso (o Discord só manda este sobre a própria conta).
+            if (j.id(j.get(d, "user_id"))) |uid| if (uid != g.me) return;
+            g.emit(.{ .thread_joined = .{ .thread = j.id(j.get(d, "id")) orelse return, .joined = true } });
+            return;
+        }
+        if (std.mem.eql(u8, t, "THREAD_MEMBERS_UPDATE")) return g.onThreadMembersUpdate(d);
+        if (std.mem.eql(u8, t, "THREAD_MEMBER_LIST_UPDATE")) {
+            const tid = j.id(j.get(d, "thread_id")) orelse return;
+            g.ingestPresences(j.array(j.get(d, "presences")));
+            return g.emitThreadMembers(tid, j.array(j.get(d, "members")));
         }
         if (std.mem.eql(u8, t, "GUILD_MEMBER_UPDATE") or std.mem.eql(u8, t, "USER_UPDATE")) {
             const u = j.get(d, "user") orelse d;
@@ -1283,6 +1309,9 @@ pub const Gateway = struct {
             1, 3 => .text,
             2, 13 => .voice,
             4 => .category,
+            // Thread abre como conversa; o que muda fica em `.thread`.
+            10, 11, 12 => .text,
+            15, 16 => .forum,
             else => return null,
         };
         var gid = j.id(j.get(cv, "guild_id")) orelse guild_hint;
@@ -1333,7 +1362,107 @@ pub const Gateway = struct {
             .icon = optDupe(j.str(j.get(cv, "icon"))),
             .overwrites = overwritesOf(cv),
             .last_message = j.id(j.get(cv, "last_message_id")) orelse 0,
+            .thread = thread_json.threadInfo(cv, kind_i),
+            .tags = thread_json.forumTags(cv),
+            .media = kind_i == 16,
+            .require_tag = thread_json.requiresTag(cv),
         };
+    }
+
+    /// Mensagem que abriu uma thread traz a thread junto: é assim que o cartão
+    /// tem o que mostrar mesmo arquivada, fora da lista das ativas.
+    fn messageThread(g: *Gateway, m: Value) void {
+        const tv = j.get(m, "thread") orelse return;
+        if (g.channelValue(tv, j.id(j.get(m, "guild_id")) orelse 0) catch null) |ch| g.emit(.{ .channel_upsert = ch });
+    }
+
+    /// THREAD_LIST_SYNC: as ativas de alguns canais (ou de todos, sem `channel_ids`).
+    fn onThreadListSync(g: *Gateway, d: Value) !void {
+        const gid = j.id(j.get(d, "guild_id")) orelse return;
+        var parents: ?[]Id = null;
+        if (j.get(d, "channel_ids")) |ids| {
+            var list: std.ArrayList(Id) = .empty;
+            for (j.array(ids)) |v| if (j.id(v)) |x| try list.append(alloc, x);
+            parents = try list.toOwnedSlice(alloc);
+        }
+        const threads = try g.threadList(j.array(j.get(d, "threads")), gid);
+        g.emit(.{ .thread_list_sync = .{ .guild = gid, .parents = parents, .threads = threads, .joined = memberThreads(j.array(j.get(d, "members"))) } });
+        // Dá para mostrar o último autor sem esperar ninguém abrir.
+        for (j.array(j.get(d, "most_recent_messages"))) |m| g.upsertUsers(m);
+    }
+
+    fn threadList(g: *Gateway, list: []const Value, gid: Id) ![]types.Channel {
+        var out: std.ArrayList(types.Channel) = .empty;
+        for (list) |tv| if (try g.channelValue(tv, gid)) |ch| try out.append(alloc, ch);
+        return out.toOwnedSlice(alloc);
+    }
+
+    /// Objetos "thread member" nossos: em quais threads estamos.
+    fn memberThreads(list: []const Value) []Id {
+        var out: std.ArrayList(Id) = .empty;
+        for (list) |mv| if (j.id(j.get(mv, "id"))) |x| out.append(alloc, x) catch {};
+        return out.toOwnedSlice(alloc) catch &.{};
+    }
+
+    /// Lista inteira de quem está numa thread (THREAD_MEMBER_LIST_UPDATE e o REST).
+    fn emitThreadMembers(g: *Gateway, thread: Id, members: []const Value) void {
+        var out: std.ArrayList(Id) = .empty;
+        for (members) |mv| {
+            const uid = g.threadMemberUser(mv) orelse continue;
+            out.append(alloc, uid) catch {};
+        }
+        g.emit(.{ .thread_members = .{ .thread = thread, .replace = true, .added = out.toOwnedSlice(alloc) catch &.{} } });
+    }
+
+    /// Quem é um "thread member", guardando o nome e a presença se vieram.
+    fn threadMemberUser(g: *Gateway, mv: Value) ?Id {
+        const uid = j.id(j.get(mv, "user_id")) orelse return null;
+        if (j.get(mv, "member")) |m| if (j.get(m, "user")) |u| g.upsert(u);
+        if (j.get(mv, "presence")) |p| g.emit(.{ .presence_update = .{ .user = uid, .status = statusOf(p), .activity = presenceActivity(p), .activities = presenceActivities(p) } });
+        return uid;
+    }
+
+    fn onThreadMembersUpdate(g: *Gateway, d: Value) !void {
+        const tid = j.id(j.get(d, "id")) orelse return;
+        var added: std.ArrayList(Id) = .empty;
+        for (j.array(j.get(d, "added_members"))) |mv| if (g.threadMemberUser(mv)) |uid| try added.append(alloc, uid);
+        var removed: std.ArrayList(Id) = .empty;
+        for (j.array(j.get(d, "removed_member_ids"))) |v| if (j.id(v)) |x| try removed.append(alloc, x);
+        g.emit(.{ .thread_members = .{
+            .thread = tid,
+            .count = if (j.int(j.get(d, "member_count"))) |n| @intCast(std.math.clamp(n, 0, std.math.maxInt(u32))) else null,
+            .added = try added.toOwnedSlice(alloc),
+            .removed = try removed.toOwnedSlice(alloc),
+        } });
+    }
+
+    /// Resposta com threads (busca do fórum, ativas, arquivadas): vira uma
+    /// página. `parent` != 0 filtra (a lista do servidor traz todos os canais).
+    fn emitThreadsPage(g: *Gateway, channel: Id, guild: Id, archived: bool, body: []const u8, parent: Id) !void {
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const root = try std.json.parseFromSliceLeaky(Value, arena.allocator(), body, .{});
+        var threads: std.ArrayList(types.Channel) = .empty;
+        for (j.array(j.get(root, "threads"))) |tv| {
+            if (parent != 0 and j.id(j.get(tv, "parent_id")) != parent) continue;
+            if (try g.channelValue(tv, guild)) |ch| try threads.append(alloc, ch);
+        }
+        var previews: std.ArrayList(types.ThreadPreview) = .empty;
+        for (j.array(j.get(root, "first_messages"))) |m| {
+            g.upsertUsers(m);
+            const author = j.get(m, "author") orelse continue;
+            const text = try j.simplifyContent(alloc, j.str(j.get(m, "content")) orelse "");
+            try previews.append(alloc, .{ .thread = j.id(j.get(m, "channel_id")) orelse j.id(j.get(m, "id")) orelse 0, .author = j.id(j.get(author, "id")) orelse 0, .text = text });
+        }
+        const more = if (j.get(root, "has_more")) |v| v == .bool and v.bool else false;
+        g.emit(.{ .threads_page = .{
+            .channel = channel,
+            .archived = archived,
+            .threads = try threads.toOwnedSlice(alloc),
+            .previews = try previews.toOwnedSlice(alloc),
+            .joined = memberThreads(j.array(j.get(root, "members"))),
+            .more = more,
+        } });
     }
 
     /// `read_state` e `user_guild_settings` (no READY ou no suplementar).
@@ -1384,6 +1513,7 @@ pub const Gateway = struct {
             channels.deinit(alloc);
         }
         try appendChannels(&channels, gid, j.array(j.get(d, "channels")));
+        for (j.array(j.get(d, "threads"))) |tv| if (try g.channelValue(tv, gid)) |ch| try channels.append(alloc, ch);
         var voice: std.ArrayList([2]Id) = .empty;
         errdefer voice.deinit(alloc);
         for (j.array(j.get(d, "voice_states"))) |vs| {
@@ -1412,6 +1542,17 @@ pub const Gateway = struct {
     fn message(g: *Gateway, m: Value) !?types.Message {
         const author = j.get(m, "author") orelse return null;
         const msg_id = j.id(j.get(m, "id")) orelse return null;
+        const msg_type = j.int(j.get(m, "type")) orelse 0;
+        // Primeira linha de uma thread aberta de uma mensagem: vem vazia, com a
+        // mensagem original em `referenced_message`. Mostra a original.
+        if (msg_type == 21) if (j.get(m, "referenced_message")) |ref| if (ref != .null) {
+            g.upsertUsers(ref);
+            var out = (try g.message(ref)) orelse return null;
+            out.id = msg_id;
+            out.channel = j.id(j.get(m, "channel_id")) orelse out.channel;
+            out.thread = 0;
+            return out;
+        };
         const raw_text = j.str(j.get(m, "content")) orelse "";
         var content = try j.simplifyContent(alloc, raw_text);
         errdefer alloc.free(content);
@@ -1435,8 +1576,14 @@ pub const Gateway = struct {
         const nonce: u64 = if (j.get(m, "nonce")) |n| @bitCast(j.int(n) orelse 0) else 0;
         var reply: Id = 0;
         if (j.get(m, "message_reference")) |ref| {
-            if ((j.int(j.get(m, "type")) orelse 0) == 19) reply = j.id(j.get(ref, "message_id")) orelse 0;
+            if (msg_type == 19) reply = j.id(j.get(ref, "message_id")) orelse 0;
         }
+        // Quem abriu a thread: o cartão na própria mensagem, ou na linha de
+        // sistema "fulano criou uma thread" (que aponta para ela).
+        var thread: Id = if (j.get(m, "thread")) |tv| j.id(j.get(tv, "id")) orelse 0 else 0;
+        if (msg_type == 18) if (j.get(m, "message_reference")) |ref| {
+            thread = j.id(j.get(ref, "channel_id")) orelse thread;
+        };
         return .{
             .id = msg_id,
             .channel = j.id(j.get(m, "channel_id")) orelse 0,
@@ -1455,6 +1602,7 @@ pub const Gateway = struct {
             .mentions_me = for (j.array(j.get(m, "mentions"))) |u| {
                 if (j.id(j.get(u, "id")) == g.me) break true;
             } else false,
+            .thread = thread,
         };
     }
 
@@ -1758,6 +1906,7 @@ pub const Gateway = struct {
             try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv), .owner = ownerOf(gv), .joined_id = read_json.joinedId(gv) });
             g.ingestRoles(gid, j.array(j.get(gv, "roles")));
             try appendChannels(&channels, gid, j.array(j.get(gv, "channels")));
+            for (j.array(j.get(gv, "threads"))) |tv| if (try g.channelValue(tv, gid)) |ch| try channels.append(alloc, ch);
             for (j.array(j.get(gv, "voice_states"))) |vs| {
                 const ch = j.id(j.get(vs, "channel_id")) orelse continue;
                 const uid = j.id(j.get(vs, "user_id")) orelse continue;
@@ -1836,7 +1985,7 @@ pub const Gateway = struct {
         g.emit(.{ .status = .ready });
         g.gatewayReady();
         // Sessão nova: a lista de membros que estava aberta precisa ser pedida de novo.
-        if (g.sub_guild != 0) g.subscribe(g.sub_guild, g.sub_channel);
+        if (g.sub_guild != 0) g.subscribe(g.sub_guild, g.sub_channel, g.sub_thread);
     }
 
     /// READY/RESUMED: o que esperava o gateway volta para a fila.
@@ -1889,6 +2038,7 @@ pub const Gateway = struct {
                 0, 5 => .text,
                 2, 13 => .voice,
                 4 => .category,
+                15, 16 => .forum,
                 else => continue,
             };
             try tmp.append(alloc, .{
@@ -1913,7 +2063,7 @@ pub const Gateway = struct {
         var pos: u16 = 0;
         const push = struct {
             fn f(o: *std.ArrayList(types.Channel), g: Id, ch: Ch, p: *u16) !void {
-                try o.append(alloc, .{ .id = ch.id, .guild = g, .parent = if (ch.parent == 0) null else ch.parent, .kind = ch.kind, .name = dupe(ch.name), .topic = dupe(ch.topic), .position = p.*, .overwrites = overwritesOf(ch.source), .last_message = j.id(j.get(ch.source, "last_message_id")) orelse 0 });
+                try o.append(alloc, .{ .id = ch.id, .guild = g, .parent = if (ch.parent == 0) null else ch.parent, .kind = ch.kind, .name = dupe(ch.name), .topic = dupe(ch.topic), .position = p.*, .overwrites = overwritesOf(ch.source), .last_message = j.id(j.get(ch.source, "last_message_id")) orelse 0, .tags = thread_json.forumTags(ch.source), .media = (j.int(j.get(ch.source, "type")) orelse 0) == 16, .require_tag = thread_json.requiresTag(ch.source) });
                 p.* +%= 1;
             }
         }.f;
@@ -2174,6 +2324,12 @@ pub const Gateway = struct {
             },
             .edit_message => |m| alloc.free(m.content),
             .ack_bulk => |list| if (list.len > 0) alloc.free(list),
+            .create_thread => |m| alloc.free(m.name),
+            .create_post => |m| {
+                alloc.free(m.name);
+                alloc.free(m.content);
+                alloc.free(m.tags);
+            },
             else => {},
         }
     }
@@ -2493,8 +2649,8 @@ pub const Gateway = struct {
                 resp.body.deinit(alloc);
             },
             .subscribe_guild => |sg| {
-                if (sg.guild == g.sub_guild and sg.channel == g.sub_channel) return;
-                g.subscribe(sg.guild, sg.channel);
+                if (sg.guild == g.sub_guild and sg.channel == g.sub_channel and sg.thread == g.sub_thread) return;
+                g.subscribe(sg.guild, sg.channel, sg.thread);
             },
             .relationship => |r| {
                 const path = std.fmt.bufPrint(&path_buf, "/users/@me/relationships/{d}", .{r.user}) catch return;
@@ -2587,6 +2743,81 @@ pub const Gateway = struct {
                 }
                 g.mentionList(resp.body.items) catch g.emit(none);
             },
+            .fetch_threads => |ft| {
+                const failed: ev.Event = .{ .threads_page = .{ .channel = ft.channel, .archived = ft.archived, .failed = true } };
+                var path_big: [320]u8 = undefined;
+                var iso: [32]u8 = undefined;
+                const path = if (ft.archived)
+                    (if (ft.before != 0)
+                        std.fmt.bufPrint(&path_big, "/channels/{d}/threads/archived/public?limit=50&before={s}", .{ ft.channel, thread_json.isoFromUnix(&iso, ft.before) }) catch return
+                    else
+                        std.fmt.bufPrint(&path_big, "/channels/{d}/threads/archived/public?limit=50", .{ft.channel}) catch return)
+                else
+                    std.fmt.bufPrint(&path_big, "/channels/{d}/threads/search?archived=false&sort_by=last_message_time&sort_order=desc&limit=25&tag_setting=match_some&offset={d}", .{ ft.channel, ft.offset }) catch return;
+                var resp = g.request("GET", path, null) orelse return g.emit(failed);
+                defer resp.body.deinit(alloc);
+                if (resp.status == 200) return g.emitThreadsPage(ft.channel, ft.guild, ft.archived, resp.body.items, 0) catch g.emit(failed);
+                // A busca não respondeu (202 = índice ainda não pronto): as ativas
+                // do servidor, filtradas, são o plano B (só tem uma página).
+                if (ft.archived or ft.offset != 0) {
+                    g.noticeHttp(i18n.tr("não consegui carregar as threads", "couldn't load the threads"), &resp);
+                    return g.emit(failed);
+                }
+                const gpath = std.fmt.bufPrint(&path_big, "/guilds/{d}/threads/active", .{ft.guild}) catch return g.emit(failed);
+                var gresp = g.request("GET", gpath, null) orelse return g.emit(failed);
+                defer gresp.body.deinit(alloc);
+                if (gresp.status != 200) {
+                    g.noticeHttp(i18n.tr("não consegui carregar as threads", "couldn't load the threads"), &gresp);
+                    return g.emit(failed);
+                }
+                g.emitThreadsPage(ft.channel, ft.guild, false, gresp.body.items, ft.channel) catch g.emit(failed);
+            },
+            .create_thread => |ct| {
+                var b: std.ArrayList(u8) = .empty;
+                defer b.deinit(alloc);
+                b.appendSlice(alloc, "{\"name\":") catch return;
+                j.writeString(&b, alloc, ct.name) catch return;
+                b.appendSlice(alloc, ",\"auto_archive_duration\":1440}") catch return;
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}/threads", .{ ct.channel, ct.message }) catch return;
+                var resp = g.request("POST", path, b.items) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status >= 300) return g.noticeHttp(i18n.tr("não deu para criar a thread", "couldn't create the thread"), &resp);
+                g.threadCreated(resp.body.items);
+            },
+            .create_post => |cp| {
+                var b: std.ArrayList(u8) = .empty;
+                defer b.deinit(alloc);
+                b.appendSlice(alloc, "{\"name\":") catch return;
+                j.writeString(&b, alloc, cp.name) catch return;
+                b.appendSlice(alloc, ",\"auto_archive_duration\":4320,\"applied_tags\":[") catch return;
+                for (cp.tags, 0..) |tag, i| b.print(alloc, "{s}\"{d}\"", .{ if (i > 0) "," else "", tag }) catch return;
+                b.appendSlice(alloc, "],\"message\":{\"content\":") catch return;
+                j.writeString(&b, alloc, cp.content) catch return;
+                b.appendSlice(alloc, "}}") catch return;
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/threads", .{cp.forum}) catch return;
+                var resp = g.request("POST", path, b.items) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status >= 300) return g.noticeHttp(i18n.tr("não deu para publicar o post", "couldn't publish the post"), &resp);
+                g.threadCreated(resp.body.items);
+            },
+            .join_thread => |jt| {
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/thread-members/@me", .{jt.thread}) catch return;
+                var resp = g.request(if (jt.join) "PUT" else "DELETE", path, null) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status >= 300) return g.noticeHttp(if (jt.join) i18n.tr("não deu para entrar na thread", "couldn't join the thread") else i18n.tr("não deu para sair da thread", "couldn't leave the thread"), &resp);
+                g.emit(.{ .thread_joined = .{ .thread = jt.thread, .joined = jt.join } });
+            },
+            .fetch_thread_members => |tid| {
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/thread-members?with_member=true&limit=100", .{tid}) catch return;
+                var resp = g.request("GET", path, null) orelse return;
+                defer resp.body.deinit(alloc);
+                // Sem resposta, a lista de membros continua sendo a do canal pai.
+                if (resp.status != 200) return;
+                var arena = std.heap.ArenaAllocator.init(alloc);
+                defer arena.deinit();
+                const v = std.json.parseFromSliceLeaky(Value, arena.allocator(), resp.body.items, .{}) catch return;
+                g.emitThreadMembers(tid, j.array(v));
+            },
             .join_voice => |v| {
                 if (g.voice != null) g.stopVoice();
                 g.voice_guild = v.guild;
@@ -2617,6 +2848,17 @@ pub const Gateway = struct {
             },
             .shutdown => {},
         }
+    }
+
+    /// Resposta de "criar thread" ou "novo post": a thread e o pedido de abrir.
+    fn threadCreated(g: *Gateway, body: []const u8) void {
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const v = std.json.parseFromSliceLeaky(Value, arena.allocator(), body, .{}) catch return;
+        const ch = (g.channelValue(v, 0) catch null) orelse return;
+        const id = ch.id;
+        g.emit(.{ .channel_upsert = ch });
+        g.emit(.{ .thread_open = id });
     }
 
     /// GET /users/@me/mentions: lista de mensagens (da mais nova para a mais
@@ -2672,6 +2914,7 @@ pub const Gateway = struct {
         while (i > 0) {
             i -= 1;
             g.upsertUsers(items[i]);
+            g.messageThread(items[i]);
             if (try g.message(items[i])) |m| try list.append(alloc, m);
         }
         // A ordem de `after` e `around` não é garantida; a lista conta com ela.

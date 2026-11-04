@@ -162,6 +162,14 @@ fn rebuild(ctx: *d.Ctx) void {
             const label = std.fmt.allocPrint(a, "{s}{s}", .{ prefix, cs.info.name }) catch continue;
             // Cópia: a paleta fica aberta e o nome do servidor pode mudar (READY).
             add(p, gpa, q, .{ .label = label, .hint = a.dupe(u8, g.name) catch continue, .kind = .channel, .id = id });
+            // As threads ativas, que não estão na lista do servidor.
+            for (ctx.store.threadsOf(id)) |tid| {
+                const ts = ctx.store.channel(tid) orelse continue;
+                if (ts.info.thread == null or ts.info.thread.?.archived) continue;
+                const tl = std.fmt.allocPrint(a, "↳ {s}", .{ts.info.name}) catch continue;
+                const hint = std.fmt.allocPrint(a, "{s} · {s}", .{ g.name, cs.info.name }) catch continue;
+                add(p, gpa, q, .{ .label = tl, .hint = hint, .kind = .channel, .id = tid });
+            }
         }
         const label = std.fmt.allocPrint(a, "{s}", .{g.name}) catch continue;
         add(p, gpa, q, .{ .label = label, .hint = i18n.tr("servidor", "server"), .kind = .guild, .id = g.id });

@@ -109,6 +109,19 @@ pub const Event = union(enum) {
     app_icon: struct { app: Id, icon: []const u8 },
     /// Menções recentes (GET /users/@me/mentions), para a caixa de entrada.
     recent_mentions: []types.Message,
+    /// THREAD_LIST_SYNC: todas as threads ativas de `parents` (null = do
+    /// servidor inteiro). A que não veio foi arquivada ou sumiu para nós.
+    /// `joined`: em quais delas estamos.
+    thread_list_sync: struct { guild: Id, parents: ?[]Id = null, threads: []types.Channel, joined: []Id = &.{} },
+    /// Uma página de threads de um canal, sob demanda (fórum ou arquivadas).
+    /// `failed`: não veio; nada do que já há na lista se perde.
+    threads_page: struct { channel: Id, archived: bool, threads: []types.Channel = &.{}, previews: []types.ThreadPreview = &.{}, joined: []Id = &.{}, more: bool = false, failed: bool = false },
+    /// Entramos ou saímos de uma thread (THREAD_MEMBER_UPDATE, ou o REST confirmou).
+    thread_joined: struct { thread: Id, joined: bool },
+    /// Quem está numa thread. `replace`: `added` é a lista inteira.
+    thread_members: struct { thread: Id, replace: bool = false, count: ?u32 = null, added: []Id = &.{}, removed: []Id = &.{} },
+    /// A thread que acabamos de criar existe: abre ela.
+    thread_open: Id,
 };
 
 pub const Connection = enum { connecting, ready, reconnecting, failed, offline };
@@ -133,7 +146,9 @@ pub const Command = union(enum) {
     /// Volume individual de quem está falando (0..2).
     voice_volume: struct { user: Id, volume: f32 },
     /// Pede a lista de membros de um servidor, vista do canal aberto (op 14).
-    subscribe_guild: struct { guild: Id, channel: Id },
+    /// `channel` é sempre um canal de verdade (o pai, se for thread); `thread`
+    /// pede também a lista de quem está nela.
+    subscribe_guild: struct { guild: Id, channel: Id, thread: Id = 0 },
     /// Aceita um pedido de amizade (true) ou remove/recusa/cancela (false).
     relationship: struct { user: Id, accept: bool },
     /// Abre (ou acha) a DM com alguém; chega como CHANNEL_CREATE.
@@ -166,6 +181,17 @@ pub const Command = union(enum) {
     fetch_pins: Id,
     pin: struct { channel: Id, id: Id, add: bool },
     fetch_invite: InviteCode,
+    /// Uma página de threads de um canal. Ativas: por `offset`; arquivadas:
+    /// as de antes de `before` (s; 0 = as mais recentes).
+    fetch_threads: struct { channel: Id, guild: Id, archived: bool, offset: u32 = 0, before: i64 = 0 },
+    /// Thread a partir de uma mensagem (nome alocado).
+    create_thread: struct { channel: Id, message: Id, name: []const u8 },
+    /// Post novo num fórum (textos e tags alocados).
+    create_post: struct { forum: Id, name: []const u8, content: []const u8, tags: []const Id },
+    /// Entrar (true) ou sair de uma thread.
+    join_thread: struct { thread: Id, join: bool },
+    /// Quem está na thread, pelo REST (a lista do op 14 pode não vir).
+    fetch_thread_members: Id,
     shutdown,
 };
 
@@ -282,4 +308,10 @@ pub const Action = union(enum) {
     remove_account: Id,
     /// Configurações → Privacidade → Apagar cache.
     clear_cache,
+    /// Textos alocados com o gpa da interface.
+    create_thread: struct { message: Id, name: []const u8 },
+    create_post: struct { forum: Id, name: []const u8, content: []const u8, tags: []const Id },
+    join_thread: struct { thread: Id, join: bool },
+    /// A primeira página (se ainda não veio ou falhou) ou a próxima.
+    fetch_threads: struct { channel: Id, archived: bool },
 };
