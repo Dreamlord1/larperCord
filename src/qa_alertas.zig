@@ -271,6 +271,8 @@ pub const ops = [_]Op{
     expect("a mensagem com a palavra fica destacada", alertHighlighted),
 
     s("ignorar sem bloquear"),
+    // A conversa acabou de abrir e ainda está rolando até o fim.
+    .{ .wait = 400 },
     .{ .rclick = .{ .dyn = tAna } },
     expect("botão direito no nome abre o menu da pessoa", userMenu),
     click("menu:Ignorar"),

@@ -1,14 +1,22 @@
-//! Voz de verdade: gateway de voz (v9), UDP, Opus, DAVE (E2EE) e SDL3.
+//! Voz de verdade: gateway de voz (v8), UDP, Opus, DAVE (E2EE) e SDL3.
 //!
 //! Tudo roda numa thread própria, criada só quando alguém entra numa call.
 //! Fora de uma call este módulo não consome CPU: o app nem inicializa o áudio.
 //!
-//! documentação do Discord:
-//!   - WebSocket v9 com heartbeat;
+//! discord.js e a documentação do Discord/DAVE (https://daveprotocol.com):
+//!   - WebSocket v8 com heartbeat (seq_ack) e RESUME quando a conexão cai;
 //!   - IP discovery (pacote de 74 bytes) e Select Protocol;
 //!   - RTP com aead_xchacha20_poly1305_rtpsize;
-//!   - Opus 48 kHz estéreo, 20 ms por pacote;
+//!   - Opus 48 kHz estéreo, 20 ms por pacote, só enquanto alguém fala;
 //!   - DAVE/MLS via libdave para as chamadas de hoje em dia.
+//!
+//! Áudio: o SDL3 mistura. Cada pessoa da call tem um SDL_AudioStream ligado
+//! ao mesmo dispositivo de saída (o volume dela é o ganho do stream) e o
+//! microfone é um stream lido a cada 20 ms. Nada de callback de áudio nem
+//! buffer dividido entre threads.
+//!
+//! LARPER_VOICE_DEBUG=1 mostra no terminal o que acontece na call (opcodes,
+//! códigos de fechamento, DAVE). Nunca imprime token nem chaves.
 const std = @import("std");
 const c = @import("c");
 const types = @import("../core/types.zig");
@@ -21,30 +29,37 @@ const Id = types.Id;
 const alloc = std.heap.c_allocator;
 const nowMs = @import("fake_gateway.zig").nowMs;
 
-/// Mutex simples: as seções críticas aqui são só copiar alguns KB de PCM.
-const Mutex = struct {
-    state: std.atomic.Mutex = .unlocked,
-
-    fn lock(m: *Mutex) void {
-        while (!m.state.tryLock()) std.Thread.yield() catch {};
-    }
-
-    fn unlock(m: *Mutex) void {
-        m.state.unlock();
-    }
-};
-
 const opus_rate = 48000;
 const frame_ms = 20;
 const frame_samples = opus_rate * frame_ms / 1000; // 960
 const channels = 2;
 const frame_bytes = frame_samples * channels * @sizeOf(i16); // 3840
-const sample_rate = opus_rate;
+const bytes_per_ms = opus_rate * channels * @sizeOf(i16) / 1000; // 192
+const silence = [_]u8{ 0xF8, 0xFF, 0xFE };
+
+var debug_on = false;
+
+fn dbg(comptime fmt: []const u8, args: anytype) void {
+    if (debug_on) std.log.info("voz: " ++ fmt, args);
+}
+
+/// Como a thread terminou (o gateway principal decide o que fazer).
+pub const Ended = enum(u8) {
+    running,
+    /// Pedido nosso (saiu da call, trocou de canal).
+    stopped,
+    /// O Discord encerrou de vez (sessão inválida, recusou…): já avisou o app.
+    fatal,
+    /// 4014: o servidor de voz mudou ou alguém nos moveu. Espera um
+    /// VOICE_SERVER_UPDATE novo para recomeçar.
+    moved,
+};
 
 pub const Voice = struct {
     sink: Sink,
     guild: Id = 0,
-    channel: Id = 0,
+    /// Muda quando alguém nos move de canal (o grupo do DAVE é o canal).
+    channel: std.atomic.Value(Id) = .init(0),
     user: Id = 0,
     endpoint: [256]u8 = @splat(0),
     endpoint_len: usize = 0,
@@ -55,12 +70,16 @@ pub const Voice = struct {
     muted: std.atomic.Value(bool) = .init(false),
     deafened: std.atomic.Value(bool) = .init(false),
     stopping: std.atomic.Value(bool) = .init(false),
+    ended: std.atomic.Value(Ended) = .init(.running),
     thread: ?*c.SDL_Thread = null,
-    volume_mutex: Mutex = .{},
+    volume_mutex: ?*c.SDL_Mutex = null,
     volumes: std.AutoHashMapUnmanaged(Id, f32) = .empty,
+    /// Sobe a cada mudança de volume (a thread de voz reaplica os ganhos).
+    volumes_gen: std.atomic.Value(u32) = .init(0),
 
     pub fn init(sink: Sink, guild: Id, channel: Id, user: Id, endpoint: []const u8, token: []const u8, session: []const u8, mute: bool, deaf: bool) Voice {
-        var v: Voice = .{ .sink = sink, .guild = guild, .channel = channel, .user = user };
+        var v: Voice = .{ .sink = sink, .guild = guild, .user = user };
+        v.channel = .init(channel);
         v.endpoint_len = @min(endpoint.len, v.endpoint.len - 1);
         @memcpy(v.endpoint[0..v.endpoint_len], endpoint[0..v.endpoint_len]);
         v.token_len = @min(token.len, v.token.len - 1);
@@ -69,10 +88,12 @@ pub const Voice = struct {
         @memcpy(v.session[0..v.session_len], session[0..v.session_len]);
         v.muted = .init(mute);
         v.deafened = .init(deaf);
+        v.volume_mutex = c.SDL_CreateMutex();
         return v;
     }
 
     pub fn start(v: *Voice) !void {
+        debug_on = c.SDL_getenv("LARPER_VOICE_DEBUG") != null;
         v.thread = c.SDL_CreateThread(threadMain, "voice", v) orelse return error.SdlThread;
     }
 
@@ -88,6 +109,7 @@ pub const Voice = struct {
         std.crypto.secureZero(u8, &v.token);
         std.crypto.secureZero(u8, &v.session);
         v.volumes.deinit(alloc);
+        if (v.volume_mutex) |m| c.SDL_DestroyMutex(m);
     }
 
     pub fn setFlags(v: *Voice, mute: bool, deaf: bool) void {
@@ -96,14 +118,15 @@ pub const Voice = struct {
     }
 
     pub fn setVolume(v: *Voice, user: Id, gain: f32) void {
-        v.volume_mutex.lock();
-        defer v.volume_mutex.unlock();
+        c.SDL_LockMutex(v.volume_mutex);
+        defer c.SDL_UnlockMutex(v.volume_mutex);
         v.volumes.put(alloc, user, std.math.clamp(gain, 0, 2)) catch {};
+        _ = v.volumes_gen.fetchAdd(1, .release);
     }
 
     fn volumeOf(v: *Voice, user: Id) f32 {
-        v.volume_mutex.lock();
-        defer v.volume_mutex.unlock();
+        c.SDL_LockMutex(v.volume_mutex);
+        defer c.SDL_UnlockMutex(v.volume_mutex);
         return v.volumes.get(user) orelse 1;
     }
 
@@ -112,7 +135,7 @@ pub const Voice = struct {
     }
 
     fn status(v: *Voice, st: ev.VoiceStatus) void {
-        v.emit(.{ .voice_status = .{ .status = st, .channel = v.channel } });
+        v.emit(.{ .voice_status = .{ .status = st, .channel = v.channel.load(.acquire) } });
     }
 
     fn notice(v: *Voice, comptime pt: []const u8, comptime en: []const u8, args: anytype) void {
@@ -123,9 +146,17 @@ pub const Voice = struct {
     fn threadMain(data: ?*anyopaque) callconv(.c) c_int {
         const v: *Voice = @ptrCast(@alignCast(data.?));
         v.status(.connecting);
-        var worker = Worker{ .v = v };
-        worker.run();
-        v.status(.disconnected);
+        // O Worker tem buffers grandes: no heap, não na pilha da thread.
+        const worker = alloc.create(Worker) catch {
+            v.ended.store(.fatal, .release);
+            v.status(.disconnected);
+            return 0;
+        };
+        defer alloc.destroy(worker);
+        worker.* = .{ .v = v };
+        const how = worker.run();
+        v.ended.store(how, .release);
+        if (how == .fatal) v.status(.disconnected);
         return 0;
     }
 };
@@ -133,6 +164,9 @@ pub const Voice = struct {
 // ---------------------------------------------------------------------------
 // Estado da conexão (só existe na thread de voz)
 // ---------------------------------------------------------------------------
+
+/// Por que o laço da conexão parou.
+const End = enum { stop, fatal, moved, resume_ws };
 
 const Worker = struct {
     v: *Voice,
@@ -142,47 +176,90 @@ const Worker = struct {
     server: std.posix.sockaddr.in = undefined,
     ssrc: u32 = 0,
     secret: [32]u8 = @splat(0),
-    mode_xchacha: bool = true,
-    seq: u32 = 0,
+    have_secret: bool = false,
     rtp_seq: u16 = 0,
     rtp_ts: u32 = 0,
     nonce: u32 = 0,
     hb_interval: i64 = 13750,
-    next_hb: i64 = 0,
+    next_hb: i64 = std.math.maxInt(i64),
+    hb_acked: bool = true,
     next_frame: i64 = 0,
     next_keepalive: i64 = 0,
-    last_seq: i64 = 0,
+    last_seq: i64 = -1,
     connected: bool = false,
-    speaking_sent: bool = false,
-    speaking_now: bool = false,
-    audio_on: bool = false,
+    resuming: bool = false,
+    end: ?End = null,
     dave: ?Dave = null,
     encoder: ?*c.OpusEncoder = null,
-    mic: Mic = .{},
-    mixer: Mixer = .{},
+    // Áudio.
+    audio_on: bool = false,
+    out_dev: c.SDL_AudioDeviceID = 0,
     capture: ?*c.SDL_AudioStream = null,
-    playback: ?*c.SDL_AudioStream = null,
+    mic_paused: bool = false,
+    deaf_applied: bool = false,
+    volumes_gen: u32 = 0,
+    sources: [32]Source = undefined,
+    n_sources: usize = 0,
+    // Detecção de fala (nossa).
+    speaking_now: bool = false,
+    last_voice_ms: i64 = 0,
+    trailing_silence: u8 = 0,
     ws_in: std.ArrayList(u8) = .empty,
     in_buf: [65536]u8 = undefined,
     url_buf: [320]u8 = undefined,
-    play_buf: [frame_samples * channels]i16 = undefined,
-    play_len: usize = 0,
-    play_pos: usize = 0,
 
-    fn run(w: *Worker) void {
+    fn run(w: *Worker) Ended {
         defer w.cleanup();
         const url = w.buildUrl() orelse {
             w.v.notice("endereço de voz inválido", "invalid voice endpoint", .{});
-            return;
+            return .fatal;
         };
-        if (!w.connectWs(url)) return;
         if (!w.initAudio()) {
-            // Sem microfone/placa ainda dá para ouvir? SDL falhou: segue sem
-            // áudio local em vez de derrubar a chamada.
+            // Sem placa/microfone ainda dá para ficar na call (o Discord
+            // derruba quem não responde, não quem não fala).
             std.log.warn("voz: sem dispositivo de áudio", .{});
         }
-        w.next_hb = nowMs() + 13750;
-        w.loop();
+        var tries: u8 = 0;
+        while (!w.v.stopping.load(.acquire)) {
+            if (!w.connectWs(url)) {
+                tries += 1;
+                if (tries > 3) {
+                    w.v.notice("não consegui abrir a conexão de voz", "couldn't open the voice connection", .{});
+                    return .fatal;
+                }
+                w.pause(@as(i64, tries) * 1000);
+                continue;
+            }
+            w.end = null;
+            w.next_hb = std.math.maxInt(i64);
+            w.hb_acked = true;
+            const how = w.loop();
+            w.closeWs();
+            switch (how) {
+                .stop => return .stopped,
+                .fatal => return .fatal,
+                .moved => return .moved,
+                .resume_ws => {
+                    tries += 1;
+                    if (tries > 3) {
+                        w.v.notice("a call caiu e não voltou", "the call dropped and didn't come back", .{});
+                        return .fatal;
+                    }
+                    // Sem sessão completa ainda (sem chave): começa do zero.
+                    w.resuming = w.have_secret;
+                    dbg("reconectando (tentativa {d}, resume={})", .{ tries, w.resuming });
+                    w.v.status(.connecting);
+                    w.pause(@as(i64, tries) * 500);
+                },
+            }
+        }
+        return .stopped;
+    }
+
+    /// Espera sem travar o pedido de parar.
+    fn pause(w: *Worker, ms: i64) void {
+        const until = nowMs() + ms;
+        while (nowMs() < until and !w.v.stopping.load(.acquire)) c.SDL_Delay(50);
     }
 
     fn buildUrl(w: *Worker) ?[:0]u8 {
@@ -190,7 +267,7 @@ const Worker = struct {
         if (std.mem.startsWith(u8, ep, "wss://")) ep = ep[6..];
         if (std.mem.startsWith(u8, ep, "https://")) ep = ep[8..];
         if (ep.len == 0) return null;
-        return std.fmt.bufPrintSentinel(&w.url_buf, "wss://{s}/?v=9", .{ep}, 0) catch null;
+        return std.fmt.bufPrintSentinel(&w.url_buf, "wss://{s}/?v=8", .{ep}, 0) catch null;
     }
 
     fn connectWs(w: *Worker, url: [:0]const u8) bool {
@@ -201,45 +278,56 @@ const Worker = struct {
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, 4000));
         _ = c.curl_easy_setopt(h, c.CURLOPT_HTTP_VERSION, @as(c_long, c.CURL_HTTP_VERSION_1_1));
         _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, @as([*c]const u8, @ptrCast("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.87 Safari/537.36")));
-
         const rc = c.curl_easy_perform(h);
         if (rc != c.CURLE_OK) {
-            std.log.warn("voz: curl {d}: {s} ({s})", .{ rc, c.curl_easy_strerror(rc), url });
-            w.v.notice("não consegui abrir a conexão de voz ({s})", "couldn't open the voice connection ({s})", .{c.curl_easy_strerror(rc)});
+            std.log.warn("voz: curl {d}: {s}", .{ rc, c.curl_easy_strerror(rc) });
+            w.closeWs();
             return false;
         }
         var sock: c.curl_socket_t = -1;
         _ = c.curl_easy_getinfo(h, c.CURLINFO_ACTIVESOCKET, &sock);
-        if (sock < 0) return false;
+        if (sock < 0) {
+            w.closeWs();
+            return false;
+        }
         w.ws_sock = sock;
+        dbg("websocket aberto", .{});
         return true;
     }
 
+    fn closeWs(w: *Worker) void {
+        if (w.ws) |h| c.curl_easy_cleanup(h);
+        w.ws = null;
+        w.ws_sock = -1;
+        w.ws_in.clearRetainingCapacity();
+    }
+
     fn cleanup(w: *Worker) void {
+        for (w.sources[0..w.n_sources]) |*s| s.deinit();
+        w.n_sources = 0;
         if (w.capture) |s| c.SDL_DestroyAudioStream(s);
-        if (w.playback) |s| c.SDL_DestroyAudioStream(s);
+        if (w.out_dev != 0) c.SDL_CloseAudioDevice(w.out_dev);
         if (w.audio_on) c.SDL_QuitSubSystem(c.SDL_INIT_AUDIO);
-        w.mixer.deinit();
         if (w.encoder) |e| c.opus_encoder_destroy(e);
         if (w.dave) |*d| d.deinit();
         if (w.udp >= 0) _ = c.close(w.udp);
-        if (w.ws) |h| c.curl_easy_cleanup(h);
+        w.closeWs();
         std.crypto.secureZero(u8, &w.secret);
         w.ws_in.deinit(alloc);
-        w.mic.deinit();
     }
 
-    fn loop(w: *Worker) void {
-        w.next_frame = nowMs();
-        w.next_keepalive = nowMs() + 10000;
-        while (!w.v.stopping.load(.acquire)) {
+    fn loop(w: *Worker) End {
+        while (w.end == null) {
+            if (w.v.stopping.load(.acquire)) return .stop;
             const now = nowMs();
-            const wait: c_int = @intCast(std.math.clamp(@min(w.next_hb - now, w.next_frame - now), 0, 50));
+            const next = if (w.connected) @min(w.next_hb, w.next_frame) else w.next_hb;
+            const wait: c_int = @intCast(std.math.clamp(next - now, 0, 50));
             w.waitSockets(wait);
             w.readWs();
             w.readUdp();
             w.tick(nowMs());
         }
+        return w.end.?;
     }
 
     fn waitSockets(w: *Worker, timeout_ms: c_int) void {
@@ -262,37 +350,51 @@ const Worker = struct {
 
     fn tick(w: *Worker, now: i64) void {
         if (now >= w.next_hb) {
+            // Dois heartbeats sem resposta: a conexão morreu sem avisar.
+            if (!w.hb_acked) {
+                dbg("heartbeat sem resposta", .{});
+                w.end = .resume_ws;
+                return;
+            }
             w.heartbeat();
             w.next_hb = now + w.hb_interval;
         }
-        if (w.connected and now >= w.next_keepalive) {
+        w.applyAudioFlags();
+        if (!w.connected) return;
+        if (now >= w.next_keepalive) {
             const keep = [_]u8{ 0x13, 0x37 };
             _ = c.sendto(w.udp, &keep, keep.len, 0, @ptrCast(&w.server), @sizeOf(std.posix.sockaddr.in));
-            w.next_keepalive = now + 10000;
+            w.next_keepalive = now + 5000;
         }
-        if (w.connected and now >= w.next_frame) {
-            w.sendFrame();
-            w.next_frame += 20;
-            if (w.next_frame < now - 100) w.next_frame = now + 20; // não acumula atraso
+        if (now >= w.next_frame) {
+            w.sendFrame(now);
+            w.next_frame += frame_ms;
+            if (w.next_frame < now - 100) w.next_frame = now + frame_ms; // não acumula atraso
         }
+        w.expireSpeakers(now);
     }
 
     // --- WebSocket ---------------------------------------------------------
 
-    fn sendText(w: *Worker, text: []const u8) bool {
+    fn sendFrame_(w: *Worker, flags0: c_uint, data: []const u8) bool {
         const h = w.ws orelse return false;
         var off: usize = 0;
         var first = true;
-        while (off < text.len) {
+        var waited: u8 = 0;
+        while (off < data.len) {
             var sent: usize = 0;
-            const flags: c_uint = if (first) c.CURLWS_TEXT else c.CURLWS_CONT;
-            const rc = c.curl_ws_send(h, text.ptr + off, text.len - off, &sent, 0, flags);
+            const flags: c_uint = if (first) flags0 else c.CURLWS_CONT;
+            const rc = c.curl_ws_send(h, data.ptr + off, data.len - off, &sent, 0, flags);
             if (rc == c.CURLE_AGAIN) {
+                waited += 1;
+                if (waited > 50) return false;
                 w.waitSockets(20);
                 continue;
             }
             if (rc != c.CURLE_OK) {
-                std.log.warn("voz: ws send rc={d} sent={d}/{d}", .{ rc, sent, text.len - off });
+                dbg("ws send rc={d}", .{rc});
+                // Socket morto: o laço reconecta em vez de insistir.
+                if (w.end == null) w.end = .resume_ws;
                 return false;
             }
             if (sent == 0) return false;
@@ -302,33 +404,24 @@ const Worker = struct {
         return true;
     }
 
+    fn sendText(w: *Worker, text: []const u8) bool {
+        return w.sendFrame_(c.CURLWS_TEXT, text);
+    }
+
     fn sendBinary(w: *Worker, opcode: u8, payload: []const u8) bool {
-        const h = w.ws orelse return false;
-        var buf: [32768]u8 = undefined;
-        const n = @min(payload.len, buf.len - 1);
-        buf[0] = opcode;
-        @memcpy(buf[1..][0..n], payload[0..n]);
-        var off: usize = 0;
-        var first = true;
-        while (off < n + 1) {
-            var sent: usize = 0;
-            const flags: c_uint = if (first) c.CURLWS_BINARY else c.CURLWS_CONT;
-            const rc = c.curl_ws_send(h, buf[off..].ptr, n + 1 - off, &sent, 0, flags);
-            if (rc == c.CURLE_AGAIN) {
-                w.waitSockets(20);
-                continue;
-            }
-            if (rc != c.CURLE_OK or sent == 0) return false;
-            off += sent;
-            first = false;
-        }
-        return true;
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(alloc);
+        buf.ensureTotalCapacity(alloc, payload.len + 1) catch return false;
+        buf.appendAssumeCapacity(opcode);
+        buf.appendSliceAssumeCapacity(payload);
+        dbg("enviou binário op {d} ({d} bytes)", .{ opcode, payload.len });
+        return w.sendFrame_(c.CURLWS_BINARY, buf.items);
     }
 
     fn heartbeat(w: *Worker) void {
-        std.log.debug("voz: heartbeat seq_ack={d}", .{w.last_seq});
         var b: [96]u8 = undefined;
         const p = std.fmt.bufPrint(&b, "{{\"op\":3,\"d\":{{\"t\":{d},\"seq_ack\":{d}}}}}", .{ nowMs(), w.last_seq }) catch return;
+        w.hb_acked = false;
         _ = w.sendText(p);
     }
 
@@ -343,50 +436,89 @@ const Worker = struct {
         out.appendSlice(alloc, ",\"token\":") catch return;
         j.writeString(&out, alloc, w.v.token[0..w.v.token_len]) catch return;
         out.print(alloc, ",\"video\":false,\"max_dave_protocol_version\":{d}}}}}", .{c.daveMaxSupportedProtocolVersion()}) catch return;
-        std.log.debug("voz: identify {d} bytes", .{out.items.len});
+        dbg("identify (DAVE até v{d})", .{c.daveMaxSupportedProtocolVersion()});
+        _ = w.sendText(out.items);
+    }
+
+    /// Op 7: retoma a mesma sessão depois de uma queda (o UDP continua).
+    fn sendResume(w: *Worker) void {
+        var out: std.ArrayList(u8) = .empty;
+        defer {
+            std.crypto.secureZero(u8, out.items);
+            out.deinit(alloc);
+        }
+        out.print(alloc, "{{\"op\":7,\"d\":{{\"server_id\":\"{d}\",\"session_id\":", .{w.v.guild}) catch return;
+        j.writeString(&out, alloc, w.v.session[0..w.v.session_len]) catch return;
+        out.appendSlice(alloc, ",\"token\":") catch return;
+        j.writeString(&out, alloc, w.v.token[0..w.v.token_len]) catch return;
+        out.print(alloc, ",\"seq_ack\":{d}}}}}", .{w.last_seq}) catch return;
+        dbg("resume", .{});
         _ = w.sendText(out.items);
     }
 
     fn readWs(w: *Worker) void {
         const h = w.ws orelse return;
-        while (true) {
+        while (w.end == null) {
             var got: usize = 0;
             var meta: [*c]const c.struct_curl_ws_frame = null;
             const rc = c.curl_ws_recv(h, &w.in_buf, w.in_buf.len, &got, &meta);
             if (rc == c.CURLE_AGAIN) return;
-            if (rc != c.CURLE_OK or meta == null) return;
+            if (rc != c.CURLE_OK or meta == null) {
+                // Conexão caiu sem o Discord fechar (rede, NAT, suspensão).
+                dbg("ws recv rc={d}", .{rc});
+                w.end = .resume_ws;
+                return;
+            }
             const flags = meta.*.flags;
             if (flags & c.CURLWS_CLOSE != 0) {
                 const code: u16 = if (got >= 2) (@as(u16, w.in_buf[0]) << 8) | w.in_buf[1] else 0;
                 const reason = if (got > 2) w.in_buf[2..got] else "";
                 std.log.warn("voz: fechou {d}: {s}", .{ code, reason });
-                w.onClose(code);
+                w.end = w.onClose(code);
                 return;
             }
             if (flags & (c.CURLWS_PING | c.CURLWS_PONG) != 0) continue;
             if (got > 0) w.ws_in.appendSlice(alloc, w.in_buf[0..got]) catch return;
             if (meta.*.bytesleft != 0) continue;
             const bytes = w.ws_in.items;
-            if (bytes.len == 0) continue;
-            if (flags & c.CURLWS_TEXT != 0) {
-                w.onText(bytes);
-            } else if (flags & c.CURLWS_BINARY != 0) {
-                w.onBinary(bytes);
+            if (bytes.len > 0) {
+                if (flags & c.CURLWS_TEXT != 0) {
+                    w.onText(bytes);
+                } else if (flags & c.CURLWS_BINARY != 0) {
+                    w.onBinary(bytes);
+                }
             }
             w.ws_in.clearRetainingCapacity();
         }
     }
 
-    fn onClose(w: *Worker, code: u16) void {
+    /// O que fazer com cada código de fechamento do gateway de voz.
+    fn onClose(w: *Worker, code: u16) End {
         w.connected = false;
-        if (w.v.stopping.load(.acquire)) return;
-        switch (code) {
-            4004 => w.v.notice("o Discord recusou a sessão de voz (4004).", "Discord refused the voice session (4004).", .{}),
-            4006, 4009 => w.v.notice("a sessão de voz expirou; entre de novo.", "voice session expired; join again.", .{}),
-            4014 => {},
-            4017 => w.v.notice("o Discord exigiu E2EE (DAVE) e a negociação falhou.", "Discord requires E2EE (DAVE) and negotiation failed.", .{}),
-            else => w.v.notice("a call caiu (código {d}).", "the call dropped (code {d}).", .{code}),
-        }
+        if (w.v.stopping.load(.acquire)) return .stop;
+        return switch (code) {
+            // Queda de rede / servidor reiniciou: retoma a mesma sessão.
+            0, 1000, 1001, 1006, 4015 => .resume_ws,
+            // Movido de canal, servidor de voz trocado ou desconectado por
+            // alguém: o gateway principal manda (ou não) o servidor novo.
+            4014 => .moved,
+            4004 => blk: {
+                w.v.notice("o Discord recusou a sessão de voz (4004).", "Discord refused the voice session (4004).", .{});
+                break :blk .fatal;
+            },
+            4006, 4009 => blk: {
+                w.v.notice("a sessão de voz não vale mais; entre na call de novo.", "the voice session is no longer valid; join the call again.", .{});
+                break :blk .fatal;
+            },
+            4016, 4017 => blk: {
+                w.v.notice("o Discord exigiu E2EE (DAVE) e a negociação falhou ({d}).", "Discord requires E2EE (DAVE) and negotiation failed ({d}).", .{code});
+                break :blk .fatal;
+            },
+            else => blk: {
+                w.v.notice("a call caiu (código {d}).", "the call dropped (code {d}).", .{code});
+                break :blk .fatal;
+            },
+        };
     }
 
     fn onText(w: *Worker, text: []const u8) void {
@@ -396,57 +528,51 @@ const Worker = struct {
         if (j.int(j.get(root, "seq"))) |s| w.last_seq = s;
         const op = j.int(j.get(root, "op")) orelse return;
         const d = j.get(root, "d") orelse std.json.Value{ .null = {} };
-        std.log.debug("voz: op {d} recebido", .{op});
+        if (op != 6) dbg("op {d}", .{op});
         switch (op) {
             8 => {
-                w.hb_interval = j.int(j.get(d, "heartbeat_interval")) orelse 13750;
-                w.next_hb = nowMs() + w.hb_interval;
-                w.identify();
+                w.hb_interval = @max(j.int(j.get(d, "heartbeat_interval")) orelse 13750, 1000);
+                // O primeiro heartbeat vai logo (com jitter), como o cliente oficial.
+                w.next_hb = nowMs() + @divTrunc(w.hb_interval, 4);
+                if (w.resuming) w.sendResume() else w.identify();
             },
+            6 => w.hb_acked = true,
             2 => w.onReady(d),
             4 => w.onSession(d),
+            9 => {
+                // Resumed: o UDP e a chave continuam valendo.
+                w.resuming = false;
+                w.connected = w.have_secret;
+                w.next_frame = nowMs();
+                if (w.connected) w.v.status(.connected);
+            },
             5 => w.onSpeaking(d),
-            11 => {
-                for (j.array(j.get(d, "user_ids"))) |u| {
-                    if (j.id(u)) |uid| {
-                        if (w.dave) |*dave| dave.addUser(uid);
-                    }
-                }
+            11 => for (j.array(j.get(d, "user_ids"))) |u| {
+                if (j.id(u)) |uid| if (w.dave) |*dave| dave.addUser(uid);
             },
-            13 => {
-                if (j.id(j.get(d, "user_id"))) |uid| {
-                    w.mixer.removeUser(uid);
-                    if (w.dave) |*dave| dave.removeUser(uid);
-                }
-            },
-            14 => {
-                if (j.id(j.get(d, "user_id"))) |uid| {
-                    const ssrc: u32 = @intCast(std.math.clamp(j.int(j.get(d, "audio_ssrc")) orelse 0, 0, std.math.maxInt(u32)));
-                    if (ssrc != 0) w.mixer.map(ssrc, uid);
-                    if (w.dave) |*dave| dave.addUser(uid);
-                }
+            13 => if (j.id(j.get(d, "user_id"))) |uid| {
+                w.removeSource(uid);
+                if (w.dave) |*dave| dave.removeUser(uid);
+                w.v.emit(.{ .voice_speaking = .{ .user = uid, .speaking = false } });
             },
             21 => {
+                const ver: u16 = @intCast(std.math.clamp(j.int(j.get(d, "protocol_version")) orelse 1, 0, 1));
+                const tid = j.int(j.get(d, "transition_id")) orelse 0;
                 if (w.dave) |*dave| {
-                    const ver: u16 = @intCast(std.math.clamp(j.int(j.get(d, "protocol_version")) orelse 1, 0, 1));
                     dave.prepareTransition(ver);
-                    const tid = j.int(j.get(d, "transition_id")) orelse 0;
-                    w.sendReady(tid);
-                }
+                    // 0 = (re)início: executa já, sem esperar o servidor.
+                    if (tid == 0) dave.executeTransition() else w.sendReady(tid);
+                } else if (tid != 0) w.sendReady(tid);
             },
-            22 => {
-                if (w.dave) |*dave| {
-                    const tid = j.int(j.get(d, "transition_id")) orelse 0;
-                    dave.executeTransition(tid);
-                }
-            },
+            22 => if (w.dave) |*dave| dave.executeTransition(),
             24 => {
                 const epoch = j.int(j.get(d, "epoch")) orelse 0;
                 const ver: u16 = @intCast(std.math.clamp(j.int(j.get(d, "protocol_version")) orelse 1, 0, 1));
-                if (epoch == 1) {
+                if (epoch == 1 and ver > 0) {
+                    // Grupo novo: esquece o estado local e manda outro key package.
                     if (w.dave == null) w.initDave(ver);
                     if (w.dave) |*dave| {
-                        dave.reinit(ver);
+                        dave.reinit(ver, w.v.channel.load(.acquire));
                         w.sendKeyPackage();
                     }
                 }
@@ -462,9 +588,12 @@ const Worker = struct {
     }
 
     fn onBinary(w: *Worker, data: []const u8) void {
+        // Do servidor: seq (u16, big endian) + opcode + dados.
         if (data.len < 3) return;
+        w.last_seq = std.mem.readInt(u16, data[0..2], .big);
         const opcode = data[2];
         const payload = data[3..];
+        dbg("binário op {d} ({d} bytes)", .{ opcode, payload.len });
         const dave = if (w.dave) |*d| d else return;
         switch (opcode) {
             25 => dave.setExternalSender(payload),
@@ -474,34 +603,22 @@ const Worker = struct {
                 dave.proposals(payload, &out);
                 if (out.items.len > 0) _ = w.sendBinary(28, out.items);
             },
-            29 => {
+            29, 30 => {
                 if (payload.len < 2) return;
                 const tid = std.mem.readInt(u16, payload[0..2], .big);
-                const res = dave.commit(tid, payload[2..]);
-                if (res == null) return;
-                if (res.?) {
-                    w.sendReady(tid);
-                    if (dave.enabled) dave.setLocalSsrc(w.ssrc);
+                const ok = if (opcode == 29) dave.commit(tid, payload[2..]) else dave.welcome(tid, payload[2..]);
+                const res = ok orelse return; // commit ignorado (nosso mesmo)
+                if (res) {
+                    if (tid != 0) w.sendReady(tid);
+                    dave.setLocalSsrc(w.ssrc);
                 } else {
+                    // Commit/welcome inválido: avisa (op 31), recomeça o MLS
+                    // e manda um key package novo.
+                    dbg("commit/welcome inválido (transição {d})", .{tid});
                     w.sendInvalid(tid);
+                    dave.reinit(dave.version, w.v.channel.load(.acquire));
                     w.sendKeyPackage();
                 }
-            },
-            30 => {
-                if (payload.len < 2) return;
-                const tid = std.mem.readInt(u16, payload[0..2], .big);
-                if (dave.welcome(tid, payload[2..])) {
-                    w.sendReady(tid);
-                    if (dave.enabled) dave.setLocalSsrc(w.ssrc);
-                } else {
-                    w.sendInvalid(tid);
-                    w.sendKeyPackage();
-                }
-            },
-            31 => {
-                // O gateway recusou nosso commit/welcome: recomeça o MLS.
-                dave.reinit(dave.version);
-                w.sendKeyPackage();
             },
             else => {},
         }
@@ -529,17 +646,21 @@ const Worker = struct {
         if (port == 0) return;
         w.server = parseIp4(ip, port) catch {
             w.v.notice("endereço UDP de voz inválido", "invalid voice UDP address", .{});
+            w.end = .fatal;
             return;
         };
+        if (w.udp >= 0) _ = c.close(w.udp);
         const fd = c.socket(c.AF_INET, c.SOCK_DGRAM | c.SOCK_CLOEXEC, 0);
         if (fd < 0) {
             w.v.notice("não consegui abrir o UDP da call", "couldn't open the call UDP", .{});
+            w.end = .fatal;
             return;
         }
         w.udp = fd;
         const local: std.posix.sockaddr.in = .{ .port = 0, .addr = 0 };
         if (c.bind(w.udp, @ptrCast(&local), @sizeOf(std.posix.sockaddr.in)) != 0) {
             w.v.notice("não consegui abrir o UDP da call", "couldn't open the call UDP", .{});
+            w.end = .fatal;
             return;
         }
         // IP discovery: o pedido tem 74 bytes (cabeçalho de 4 + ssrc + 66).
@@ -552,150 +673,139 @@ const Worker = struct {
             const deadline = nowMs() + 1000;
             while (nowMs() < deadline and !w.v.stopping.load(.acquire)) {
                 w.waitSockets(100);
-                var from: c.struct_sockaddr = undefined;
-                var from_len: c.socklen_t = @sizeOf(c.struct_sockaddr);
                 var resp: [256]u8 = undefined;
-                const nr = c.recvfrom(w.udp, &resp, resp.len, c.MSG_DONTWAIT, @ptrCast(&from), &from_len);
-                if (nr < 0) continue;
-                const n: usize = @intCast(nr);
-                if (n < 74) continue;
+                const nr = c.recv(w.udp, &resp, resp.len, c.MSG_DONTWAIT);
+                if (nr < 74) continue;
                 if (std.mem.readInt(u16, resp[0..2], .big) != 2) continue;
-                var ip_buf: [64]u8 = undefined;
                 const iplen = std.mem.indexOfScalar(u8, resp[8..72], 0) orelse 64;
-                @memcpy(ip_buf[0..iplen], resp[8..][0..iplen]);
                 const ext_port = std.mem.readInt(u16, resp[72..74], .big);
-                std.log.debug("voz: discovery {s}:{d}", .{ ip_buf[0..iplen], ext_port });
-                w.selectProtocol(ip_buf[0..iplen], ext_port);
+                dbg("discovery ok (porta {d})", .{ext_port});
+                w.selectProtocol(resp[8..][0..iplen], ext_port);
                 return;
             }
         }
         w.v.notice("a call não respondeu ao UDP (firewall/NAT?)", "the call didn't answer on UDP (firewall/NAT?)", .{});
+        w.end = .fatal;
     }
 
     fn selectProtocol(w: *Worker, ip: []const u8, port: u16) void {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(alloc);
-        out.appendSlice(alloc, "{\"op\":1,\"d\":{\"address\":") catch return;
+        out.appendSlice(alloc, "{\"op\":1,\"d\":{\"protocol\":\"udp\",\"data\":{\"address\":") catch return;
         j.writeString(&out, alloc, ip) catch return;
-        out.print(alloc, ",\"port\":{d},\"protocol\":\"udp\",\"mode\":\"aead_xchacha20_poly1305_rtpsize\",\"data\":{{\"address\":", .{port}) catch return;
-        j.writeString(&out, alloc, ip) catch return;
-        out.print(alloc, ",\"port\":{d},\"mode\":\"aead_xchacha20_poly1305_rtpsize\"", .{port}) catch return;
-        out.appendSlice(alloc, "}}}") catch return;
-        std.log.debug("voz: select protocol {s}", .{out.items});
+        out.print(alloc, ",\"port\":{d},\"mode\":\"aead_xchacha20_poly1305_rtpsize\"}}}}}}", .{port}) catch return;
         _ = w.sendText(out.items);
     }
 
     fn onSession(w: *Worker, d: std.json.Value) void {
         const mode = j.str(j.get(d, "mode")) orelse "";
-        w.mode_xchacha = std.mem.eql(u8, mode, "aead_xchacha20_poly1305_rtpsize");
-        if (!w.mode_xchacha) {
+        if (!std.mem.eql(u8, mode, "aead_xchacha20_poly1305_rtpsize")) {
             w.v.notice("modo de criptografia de voz não suportado ({s})", "unsupported voice encryption mode ({s})", .{mode});
+            w.end = .fatal;
             return;
         }
         const keys = j.array(j.get(d, "secret_key"));
         if (keys.len != 32) return;
-        for (keys, 0..) |kv, i| {
-            const n = j.int(kv) orelse return;
-            w.secret[i] = @intCast(std.math.clamp(n, 0, 255));
-        }
+        for (keys, 0..) |kv, i| w.secret[i] = @intCast(std.math.clamp(j.int(kv) orelse 0, 0, 255));
+        w.have_secret = true;
         const dave_ver: u16 = @intCast(std.math.clamp(j.int(j.get(d, "dave_protocol_version")) orelse 0, 0, 1));
-        if (dave_ver > 0) {
+        dbg("sessão pronta (DAVE v{d})", .{dave_ver});
+        if (dave_ver > 0 and w.dave == null) {
             w.initDave(dave_ver);
             w.sendKeyPackage();
         }
-        // Avisa uma vez que estamos falando (o gateway espera esse opcode).
-        var b: [96]u8 = undefined;
-        const sp = std.fmt.bufPrint(&b, "{{\"op\":5,\"d\":{{\"speaking\":1,\"delay\":0,\"ssrc\":{d}}}}}", .{w.ssrc}) catch return;
-        _ = w.sendText(sp);
-        w.speaking_sent = true;
-        // Um pacote de silêncio para o servidor abrir o caminho de mídia.
-        w.sendRtp(&.{ 0xF8, 0xFF, 0xFE });
         w.connected = true;
+        w.next_frame = nowMs();
+        w.next_keepalive = nowMs();
         w.v.status(.connected);
     }
 
     fn onSpeaking(w: *Worker, d: std.json.Value) void {
         const uid = j.id(j.get(d, "user_id")) orelse return;
         const ssrc: u32 = @intCast(std.math.clamp(j.int(j.get(d, "ssrc")) orelse 0, 0, std.math.maxInt(u32)));
-        const speaking = (j.int(j.get(d, "speaking")) orelse 0) != 0;
-        if (ssrc != 0) w.mixer.map(ssrc, uid);
+        if (ssrc == 0) return;
+        _ = w.sourceFor(ssrc, uid);
         if (w.dave) |*dave| {
             dave.addUser(uid);
-            if (ssrc != 0) dave.setSsrcUser(ssrc, uid);
+            dave.setSsrcUser(ssrc, uid);
         }
-        w.v.emit(.{ .voice_speaking = .{ .user = uid, .speaking = speaking } });
     }
 
     // --- DAVE --------------------------------------------------------------
 
     fn initDave(w: *Worker, version: u16) void {
-        var d = Dave.init(w.v.channel, w.v.user, version) orelse {
+        var d = Dave.init(w.v.channel.load(.acquire), w.v.user, version) orelse {
             std.log.warn("voz: DAVE indisponível", .{});
             return;
         };
-        d.addUser(w.v.user);
         d.setLocalSsrc(w.ssrc);
         w.dave = d;
-        std.log.debug("voz: DAVE v{d} iniciado", .{version});
-        if (w.encoder != null) {
-            // O codec do nosso SSRC é Opus; o SSRC só é conhecido no Ready.
-        }
     }
 
     fn sendKeyPackage(w: *Worker) void {
         const dave = if (w.dave) |*d| d else return;
         var kp: [4096]u8 = undefined;
         const n = dave.keyPackage(&kp);
-        if (n > 0) {
-            std.log.debug("voz: DAVE key package {d} bytes", .{n});
-            _ = w.sendBinary(26, kp[0..n]);
-        }
+        if (n > 0) _ = w.sendBinary(26, kp[0..n]);
     }
 
     // --- UDP / mídia -------------------------------------------------------
 
     fn readUdp(w: *Worker) void {
         if (w.udp < 0) return;
-        while (true) {
-            var from: c.struct_sockaddr = undefined;
-            var from_len: c.socklen_t = @sizeOf(c.struct_sockaddr);
+        // No máximo 64 pacotes por volta: o resto fica para a próxima.
+        for (0..64) |_| {
             var buf: [2048]u8 = undefined;
-            const nr = c.recvfrom(w.udp, &buf, buf.len, c.MSG_DONTWAIT, @ptrCast(&from), &from_len);
-            if (nr < 0) return;
-            const n: usize = @intCast(nr);
-            if (n == 0) return;
-            w.onRtp(buf[0..n]);
+            const nr = c.recv(w.udp, &buf, buf.len, c.MSG_DONTWAIT);
+            if (nr <= 0) return;
+            w.onRtp(buf[0..@intCast(nr)]);
         }
     }
 
-    fn sendFrame(w: *Worker) void {
+    /// Lê 20 ms do microfone; manda só enquanto há voz (mais 5 quadros de
+    /// silêncio no fim, como o cliente oficial), e nada quando mudo.
+    fn sendFrame(w: *Worker, now: i64) void {
         const muted = w.v.muted.load(.acquire) or w.v.deafened.load(.acquire);
         var pcm: [frame_samples * channels]i16 = undefined;
-        const got = w.mic.take(&pcm);
-        if (got == null) @memset(&pcm, 0);
-        var peak: i32 = 0;
-        for (pcm) |s| {
-            const v: i32 = s;
-            peak = @max(peak, if (v < 0) -v else v);
+        const have = !muted and w.readMic(&pcm);
+        var loud = false;
+        if (have) {
+            var sum: u64 = 0;
+            for (pcm) |s| sum += @intCast(@as(i32, s) * @as(i32, s));
+            const rms = std.math.sqrt(@as(f64, @floatFromInt(sum)) / @as(f64, pcm.len));
+            loud = rms > 180;
         }
-        const speaking = !muted and peak > 220;
+        if (loud) w.last_voice_ms = now;
+        // 300 ms de "rabo" para não cortar o fim das palavras.
+        const talking = have and now - w.last_voice_ms < 300;
+        if (talking != w.speaking_now) {
+            w.speaking_now = talking;
+            w.setSpeaking(talking);
+            if (!talking) w.trailing_silence = 5;
+        }
+        if (!talking) {
+            if (w.trailing_silence > 0) {
+                w.trailing_silence -= 1;
+                w.sendOpus(&silence);
+            }
+            return;
+        }
         const enc = w.encoder orelse return;
-        var packet: [4000]u8 = undefined;
+        var packet: [1500]u8 = undefined;
         const len = c.opus_encode(enc, &pcm, frame_samples, &packet, packet.len);
         if (len <= 0) return;
-        var payload: []const u8 = packet[0..@intCast(len)];
-        var dave_buf: [4096]u8 = undefined;
-        if (w.dave) |*dave| {
-            if (dave.enabled) {
-                const n = dave.encrypt(w.ssrc, payload, &dave_buf);
-                if (n > 0) payload = dave_buf[0..n] else return;
-            }
-        }
+        w.sendOpus(packet[0..@intCast(len)]);
+    }
+
+    fn sendOpus(w: *Worker, frame: []const u8) void {
+        var payload = frame;
+        var dave_buf: [2048]u8 = undefined;
+        if (w.dave) |*dave| if (dave.enabled and !std.mem.eql(u8, frame, &silence)) {
+            const n = dave.encrypt(w.ssrc, frame, &dave_buf);
+            if (n == 0) return;
+            payload = dave_buf[0..n];
+        };
         w.sendRtp(payload);
-        if (speaking != w.speaking_now) {
-            w.speaking_now = speaking;
-            w.setSpeaking(speaking);
-        }
     }
 
     fn setSpeaking(w: *Worker, on: bool) void {
@@ -706,8 +816,8 @@ const Worker = struct {
     }
 
     fn sendRtp(w: *Worker, payload: []const u8) void {
-        if (w.udp < 0 or payload.len == 0) return;
-        var buf: [12 + 4096 + 16 + 4]u8 = undefined;
+        if (w.udp < 0 or payload.len == 0 or !w.have_secret) return;
+        var buf: [12 + 2048 + 16 + 4]u8 = undefined;
         const off = 12;
         if (payload.len + off + 16 + 4 > buf.len) return;
         buf[0] = 0x80;
@@ -717,302 +827,212 @@ const Worker = struct {
         std.mem.writeInt(u32, buf[8..12], w.ssrc, .big);
         var nonce: [24]u8 = @splat(0);
         w.nonce +%= 1;
-        std.mem.writeInt(u32, nonce[0..4], w.nonce, .little);
+        std.mem.writeInt(u32, nonce[0..4], w.nonce, .big);
         var tag: [16]u8 = undefined;
         const aead = std.crypto.aead.chacha_poly.XChaCha20Poly1305;
         aead.encrypt(buf[off..][0..payload.len], &tag, payload, buf[0..off], nonce, w.secret);
         @memcpy(buf[off + payload.len ..][0..16], &tag);
-        std.mem.writeInt(u32, buf[off + payload.len + 16 ..][0..4], w.nonce, .little);
+        @memcpy(buf[off + payload.len + 16 ..][0..4], nonce[0..4]);
         const total = off + payload.len + 16 + 4;
-        _ = c.sendto(w.udp, buf[0..total].ptr, total, 0, @ptrCast(&w.server), @sizeOf(std.posix.sockaddr.in));
+        _ = c.sendto(w.udp, &buf, total, 0, @ptrCast(&w.server), @sizeOf(std.posix.sockaddr.in));
         w.rtp_seq +%= 1;
         w.rtp_ts +%= frame_samples;
     }
 
     fn onRtp(w: *Worker, buf: []const u8) void {
-        if (buf.len < 12 + 16 + 4) return;
+        if (buf.len < 12 + 16 + 4 or !w.have_secret) return;
         if ((buf[0] >> 6) != 2) return;
-        if ((buf[1] & 0x7f) != 120) return; // só Opus
+        if ((buf[1] & 0x7f) != 120) return; // só Opus (RTCP e o resto ficam de fora)
         const ssrc = std.mem.readInt(u32, buf[8..12], .big);
         if (ssrc == w.ssrc) return;
-        var off: usize = 12 + @as(usize, buf[0] & 0x0f) * 4;
-        if (off > buf.len) return;
+        // Nos modos "rtpsize" só o cabeçalho fixo, os CSRC e os 4 bytes do
+        // cabeçalho da extensão vão em claro; o corpo da extensão vai
+        // cifrado junto com o áudio e sai depois de decifrar.
+        var aad_len: usize = 12 + @as(usize, buf[0] & 0x0f) * 4;
+        var ext_words: usize = 0;
         if (buf[0] & 0x10 != 0) {
-            if (off + 4 > buf.len) return;
-            const words = std.mem.readInt(u16, buf[off + 2 ..][0..2], .big);
-            off += 4 + @as(usize, words) * 4;
-            if (off > buf.len) return;
+            if (aad_len + 4 > buf.len) return;
+            ext_words = std.mem.readInt(u16, buf[aad_len + 2 ..][0..2], .big);
+            aad_len += 4;
         }
-        if (buf.len < off + 16 + 4) return;
-        const cipher = buf[off .. buf.len - 20];
+        if (buf.len < aad_len + 16 + 4) return;
+        const cipher = buf[aad_len .. buf.len - 20];
         var tag: [16]u8 = undefined;
         @memcpy(&tag, buf[buf.len - 20 ..][0..16]);
-        const nonce_suffix = std.mem.readInt(u32, buf[buf.len - 4 ..][0..4], .little);
         var nonce: [24]u8 = @splat(0);
-        std.mem.writeInt(u32, nonce[0..4], nonce_suffix, .little);
-        var plain: [4096]u8 = undefined;
+        @memcpy(nonce[0..4], buf[buf.len - 4 ..]);
+        var plain: [2048]u8 = undefined;
+        if (cipher.len > plain.len) return;
         const aead = std.crypto.aead.chacha_poly.XChaCha20Poly1305;
-        aead.decrypt(plain[0..cipher.len], cipher, tag, buf[0..off], nonce, w.secret) catch return;
-        var frame: []const u8 = plain[0..cipher.len];
-        if (w.dave) |*dave| {
-            const silence = [_]u8{ 0xF8, 0xFF, 0xFE };
-            if (!dave.enabled) {
-                // Durante o handshake do MLS a mídia ainda não é E2EE; não
-                // tenta tocar lixo (o silêncio do SFU passa).
-                if (!std.mem.eql(u8, frame, &silence)) return;
-            } else if (!std.mem.eql(u8, frame, &silence)) {
-                var dave_out: [4096]u8 = undefined;
-                const n = dave.decrypt(ssrc, frame, &dave_out) orelse return;
-                frame = dave_out[0..n];
-            }
-        } else {
-            if (w.v.stopping.load(.acquire)) return;
+        aead.decrypt(plain[0..cipher.len], cipher, tag, buf[0..aad_len], nonce, w.secret) catch return;
+        if (ext_words * 4 > cipher.len) return;
+        var frame: []const u8 = plain[ext_words * 4 .. cipher.len];
+        if (frame.len == 0) return;
+        const src = w.sourceFor(ssrc, 0) orelse return;
+        if (std.mem.eql(u8, frame, &silence)) return;
+        // Quadro do DAVE (termina com o marcador 0xFAFA): decifra. Sem o
+        // marcador é Opus puro (call sem E2EE ou no meio de uma transição).
+        var dave_out: [2048]u8 = undefined;
+        if (frame.len >= 2 and frame[frame.len - 1] == 0xFA and frame[frame.len - 2] == 0xFA) {
+            const dave = if (w.dave) |*d| d else return;
+            const n = dave.decrypt(ssrc, src.user, frame, &dave_out) orelse return;
+            frame = dave_out[0..n];
         }
-        // Opus -> PCM e mistura.
-        const src = w.mixer.source(ssrc) orelse w.mixer.add(ssrc, 0);
-        if (src == null) return;
-        const dec = src.?.dec orelse return;
-        var pcm: [5760 * channels]i16 = undefined;
-        const n = c.opus_decode(dec, frame.ptr, @intCast(frame.len), &pcm, 5760, 0);
-        if (n <= 0) return;
-        w.mixer.push(src.?, pcm[0 .. @as(usize, @intCast(n)) * channels]);
+        w.play(src, frame);
     }
 
     // --- Áudio ------------------------------------------------------------
 
+    const spec: c.SDL_AudioSpec = .{ .format = c.SDL_AUDIO_S16, .channels = channels, .freq = opus_rate };
+
     fn initAudio(w: *Worker) bool {
-        if (!c.SDL_InitSubSystem(c.SDL_INIT_AUDIO)) return false;
-        w.audio_on = true;
-        w.mixer.v = w.v;
-        const spec: c.SDL_AudioSpec = .{ .format = c.SDL_AUDIO_S16, .channels = channels, .freq = sample_rate };
-        w.playback = c.SDL_OpenAudioDeviceStream(c.SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, playbackCb, w);
-        if (w.playback) |s| _ = c.SDL_ResumeAudioStreamDevice(s);
-        w.capture = c.SDL_OpenAudioDeviceStream(c.SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &spec, captureCb, &w.mic);
-        if (w.capture) |s| _ = c.SDL_ResumeAudioStreamDevice(s);
         var err: c_int = 0;
         w.encoder = c.opus_encoder_create(opus_rate, channels, c.OPUS_APPLICATION_VOIP, &err);
         if (err == c.OPUS_OK) {
             _ = c.opus_encoder_ctl(w.encoder, c.OPUS_SET_BITRATE_REQUEST, @as(c_int, 64000));
             _ = c.opus_encoder_ctl(w.encoder, c.OPUS_SET_COMPLEXITY_REQUEST, @as(c_int, 5));
+            _ = c.opus_encoder_ctl(w.encoder, c.OPUS_SET_INBAND_FEC_REQUEST, @as(c_int, 1));
+            _ = c.opus_encoder_ctl(w.encoder, c.OPUS_SET_PACKET_LOSS_PERC_REQUEST, @as(c_int, 10));
         } else w.encoder = null;
-        return w.playback != null or w.capture != null;
+        if (!c.SDL_InitSubSystem(c.SDL_INIT_AUDIO)) return false;
+        w.audio_on = true;
+        w.out_dev = c.SDL_OpenAudioDevice(c.SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
+        w.capture = c.SDL_OpenAudioDeviceStream(c.SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &spec, null, null);
+        if (w.capture) |s| _ = c.SDL_ResumeAudioStreamDevice(s);
+        w.mic_paused = false;
+        w.applyAudioFlags();
+        return w.out_dev != 0 or w.capture != null;
     }
 
-    fn playbackCb(userdata: ?*anyopaque, stream: ?*c.SDL_AudioStream, additional: c_int, _: c_int) callconv(.c) void {
-        const w: *Worker = @ptrCast(@alignCast(userdata.?));
-        if (additional <= 0) return;
-        const bytes = @min(@as(usize, @intCast(additional)), 16384);
-        const frames = @min(bytes / (channels * @sizeOf(i16)), 2048);
-        if (frames == 0) return;
-        var out: [4096]i16 = undefined;
-        var done: usize = 0;
-        const deaf = w.v.deafened.load(.acquire);
-        while (done < frames) {
-            if (w.play_pos >= w.play_len) {
-                w.mixer.render(w.play_buf[0..], deaf);
-                w.play_len = w.play_buf.len;
-                w.play_pos = 0;
+    /// Mudo desliga o microfone de verdade; ensurdecer pausa a saída.
+    fn applyAudioFlags(w: *Worker) void {
+        const muted = w.v.muted.load(.acquire) or w.v.deafened.load(.acquire);
+        if (w.capture) |s| if (muted != w.mic_paused) {
+            if (muted) _ = c.SDL_PauseAudioStreamDevice(s) else {
+                _ = c.SDL_ClearAudioStream(s);
+                _ = c.SDL_ResumeAudioStreamDevice(s);
             }
-            const avail = (w.play_len - w.play_pos) / channels;
-            const take = @min(frames - done, avail);
-            if (take == 0) break;
-            @memcpy(out[done * channels ..][0 .. take * channels], w.play_buf[w.play_pos..][0 .. take * channels]);
-            w.play_pos += take * channels;
-            done += take;
+            w.mic_paused = muted;
+        };
+        const deaf = w.v.deafened.load(.acquire);
+        if (w.out_dev != 0 and deaf != w.deaf_applied) {
+            if (deaf) _ = c.SDL_PauseAudioDevice(w.out_dev) else _ = c.SDL_ResumeAudioDevice(w.out_dev);
+            for (w.sources[0..w.n_sources]) |*s| if (s.stream) |st| {
+                _ = c.SDL_ClearAudioStream(st);
+            };
+            w.deaf_applied = deaf;
         }
-        if (done > 0 and stream != null) _ = c.SDL_PutAudioStreamData(stream, &out, @intCast(done * channels * @sizeOf(i16)));
+        const gen = w.v.volumes_gen.load(.acquire);
+        if (gen != w.volumes_gen) {
+            w.volumes_gen = gen;
+            for (w.sources[0..w.n_sources]) |*s| s.applyGain(w.v);
+        }
     }
 
-    fn captureCb(userdata: ?*anyopaque, stream: ?*c.SDL_AudioStream, additional: c_int, total_amount: c_int) callconv(.c) void {
-        const mic: *Mic = @ptrCast(@alignCast(userdata.?));
-        var buf: [8192]u8 = undefined;
-        var left: usize = @min(@as(usize, @intCast(@max(additional, 0))), 16384);
-        if (left == 0) left = @min(@as(usize, @intCast(@max(total_amount, 0))), 16384);
-        while (left > 0) {
-            const want = @min(left, buf.len);
-            var got: c_int = 0;
-            if (stream) |s| got = c.SDL_GetAudioStreamData(s, &buf, @intCast(want));
-            if (got <= 0) break;
-            mic.push(std.mem.bytesAsSlice(i16, buf[0..@intCast(got)]));
-            left -= @intCast(got);
+    /// Um quadro do microfone. Se acumulou atraso, joga fora o mais antigo.
+    fn readMic(w: *Worker, out: *[frame_samples * channels]i16) bool {
+        const s = w.capture orelse return false;
+        var avail = c.SDL_GetAudioStreamAvailable(s);
+        var scratch: [frame_bytes]u8 = undefined;
+        while (avail > frame_bytes * 4) {
+            _ = c.SDL_GetAudioStreamData(s, &scratch, frame_bytes);
+            avail -= frame_bytes;
         }
+        if (avail < frame_bytes) return false;
+        return c.SDL_GetAudioStreamData(s, out, frame_bytes) == frame_bytes;
+    }
+
+    fn sourceFor(w: *Worker, ssrc: u32, user: Id) ?*Source {
+        for (w.sources[0..w.n_sources]) |*s| if (s.ssrc == ssrc) {
+            if (user != 0 and s.user != user) {
+                s.user = user;
+                s.applyGain(w.v);
+            }
+            return s;
+        };
+        if (w.n_sources == w.sources.len) return null;
+        var err: c_int = 0;
+        const dec = c.opus_decoder_create(opus_rate, channels, &err) orelse return null;
+        if (err != c.OPUS_OK) {
+            c.opus_decoder_destroy(dec);
+            return null;
+        }
+        var src: Source = .{ .ssrc = ssrc, .user = user, .dec = dec };
+        if (w.out_dev != 0) {
+            src.stream = c.SDL_CreateAudioStream(&spec, &spec);
+            if (src.stream) |st| _ = c.SDL_BindAudioStream(w.out_dev, st);
+        }
+        w.sources[w.n_sources] = src;
+        w.n_sources += 1;
+        const s = &w.sources[w.n_sources - 1];
+        s.applyGain(w.v);
+        return s;
+    }
+
+    fn removeSource(w: *Worker, user: Id) void {
+        var i: usize = 0;
+        while (i < w.n_sources) {
+            if (w.sources[i].user == user) {
+                w.sources[i].deinit();
+                w.sources[i] = w.sources[w.n_sources - 1];
+                w.n_sources -= 1;
+            } else i += 1;
+        }
+    }
+
+    /// Opus -> PCM -> o stream da pessoa (o SDL mistura e toca).
+    fn play(w: *Worker, src: *Source, frame: []const u8) void {
+        const now = nowMs();
+        if (!src.speaking or now - src.last_emit_ms > 1000) {
+            src.speaking = true;
+            src.last_emit_ms = now;
+            if (src.user != 0) w.v.emit(.{ .voice_speaking = .{ .user = src.user, .speaking = true } });
+        }
+        src.last_ms = now;
+        if (w.deaf_applied) return;
+        const st = src.stream orelse return;
+        var pcm: [5760 * channels]i16 = undefined;
+        const n = c.opus_decode(src.dec, frame.ptr, @intCast(frame.len), &pcm, 5760, 0);
+        if (n <= 0) return;
+        const queued = c.SDL_GetAudioStreamQueued(st);
+        // Mais de 300 ms na fila: a rede engasgou; recomeça no presente.
+        if (queued > 300 * bytes_per_ms) _ = c.SDL_ClearAudioStream(st);
+        // Fila vazia (começo de uma fala): 40 ms de folga contra o jitter.
+        if (queued <= 0) {
+            const pad: [40 * bytes_per_ms]u8 = @splat(0);
+            _ = c.SDL_PutAudioStreamData(st, &pad, pad.len);
+        }
+        _ = c.SDL_PutAudioStreamData(st, &pcm, @intCast(@as(usize, @intCast(n)) * channels * @sizeOf(i16)));
+    }
+
+    /// Quem parou de mandar áudio há 300 ms parou de falar (o anel apaga).
+    fn expireSpeakers(w: *Worker, now: i64) void {
+        for (w.sources[0..w.n_sources]) |*s| if (s.speaking and now - s.last_ms > 300) {
+            s.speaking = false;
+            if (s.user != 0) w.v.emit(.{ .voice_speaking = .{ .user = s.user, .speaking = false } });
+        };
     }
 };
 
-// ---------------------------------------------------------------------------
-// Mic e mistura
-// ---------------------------------------------------------------------------
-
-const Mic = struct {
-    mutex: Mutex = .{},
-    pcm: std.ArrayList(i16) = .empty,
-
-    fn deinit(m: *Mic) void {
-        m.pcm.deinit(alloc);
-    }
-
-    fn push(m: *Mic, samples: []align(1) const i16) void {
-        m.mutex.lock();
-        defer m.mutex.unlock();
-        // 200 ms de folga: se a thread atrasar, o áudio antigo é descartado.
-        const max = frame_samples * channels * 10;
-        if (m.pcm.items.len + samples.len > max) {
-            const drop = m.pcm.items.len + samples.len - max;
-            const aligned = @min(drop, m.pcm.items.len);
-            std.mem.copyForwards(i16, m.pcm.items[0 .. m.pcm.items.len - aligned], m.pcm.items[aligned..]);
-            m.pcm.items.len -= aligned;
-        }
-        for (samples) |x| m.pcm.append(alloc, x) catch {};
-    }
-
-    /// Copia um quadro inteiro; se ainda não chegou, não come nada.
-    fn take(m: *Mic, out: []i16) ?usize {
-        m.mutex.lock();
-        defer m.mutex.unlock();
-        if (m.pcm.items.len < out.len) return null;
-        @memcpy(out, m.pcm.items[0..out.len]);
-        std.mem.copyForwards(i16, m.pcm.items[0 .. m.pcm.items.len - out.len], m.pcm.items[out.len..]);
-        m.pcm.items.len -= out.len;
-        return out.len;
-    }
-};
-
+/// Uma pessoa da call: o decodificador Opus e o stream de áudio dela.
 const Source = struct {
     ssrc: u32,
     user: Id = 0,
-    dec: ?*c.OpusDecoder = null,
-    pcm: std.ArrayList(i16) = .empty,
-    started: bool = false,
+    dec: *c.OpusDecoder,
+    stream: ?*c.SDL_AudioStream = null,
+    speaking: bool = false,
     last_ms: i64 = 0,
+    last_emit_ms: i64 = 0,
 
     fn deinit(s: *Source) void {
-        if (s.dec) |d| c.opus_decoder_destroy(d);
-        s.pcm.deinit(alloc);
-    }
-};
-
-const Mixer = struct {
-    v: ?*Voice = null,
-    mutex: Mutex = .{},
-    sources: [32]?*Source = @splat(null),
-    n: usize = 0,
-
-    fn deinit(m: *Mixer) void {
-        m.mutex.lock();
-        defer m.mutex.unlock();
-        for (m.sources[0..m.n]) |s| {
-            if (s) |src| {
-                src.deinit();
-                alloc.destroy(src);
-            }
-        }
-        m.n = 0;
+        c.opus_decoder_destroy(s.dec);
+        if (s.stream) |st| c.SDL_DestroyAudioStream(st);
+        s.stream = null;
     }
 
-    fn source(m: *Mixer, ssrc: u32) ?*Source {
-        m.mutex.lock();
-        defer m.mutex.unlock();
-        for (m.sources[0..m.n]) |s| {
-            if (s) |src| {
-                if (src.ssrc == ssrc) return src;
-            }
-        }
-        return null;
-    }
-
-    fn add(m: *Mixer, ssrc: u32, user: Id) ?*Source {
-        m.mutex.lock();
-        defer m.mutex.unlock();
-        for (m.sources[0..m.n]) |s| {
-            if (s) |src| {
-                if (src.ssrc == ssrc) {
-                    if (user != 0) src.user = user;
-                    return src;
-                }
-            }
-        }
-        if (m.n >= m.sources.len) return null;
-        const src = alloc.create(Source) catch return null;
-        var err: c_int = 0;
-        src.* = .{ .ssrc = ssrc, .user = user, .dec = c.opus_decoder_create(opus_rate, channels, &err) };
-        if (err != c.OPUS_OK) {
-            src.deinit();
-            alloc.destroy(src);
-            return null;
-        }
-        m.sources[m.n] = src;
-        m.n += 1;
-        return src;
-    }
-
-    fn map(m: *Mixer, ssrc: u32, user: Id) void {
-        _ = m.add(ssrc, user);
-    }
-
-    fn removeUser(m: *Mixer, user: Id) void {
-        m.mutex.lock();
-        defer m.mutex.unlock();
-        for (m.sources[0..m.n]) |*slot| {
-            if (slot.*) |src| {
-                if (src.user == user) {
-                    src.deinit();
-                    alloc.destroy(src);
-                    slot.* = null;
-                }
-            }
-        }
-        var w: usize = 0;
-        for (m.sources[0..m.n]) |s| {
-            if (s != null) {
-                m.sources[w] = s;
-                w += 1;
-            }
-        }
-        m.n = w;
-    }
-
-    fn push(m: *Mixer, src: *Source, samples: []const i16) void {
-        m.mutex.lock();
-        defer m.mutex.unlock();
-        const max = frame_samples * channels * 6;
-        if (src.pcm.items.len + samples.len > max) {
-            const drop = src.pcm.items.len + samples.len - max;
-            const aligned = @min(drop, src.pcm.items.len);
-            std.mem.copyForwards(i16, src.pcm.items[0 .. src.pcm.items.len - aligned], src.pcm.items[aligned..]);
-            src.pcm.items.len -= aligned;
-        }
-        src.pcm.appendSlice(alloc, samples) catch {};
-        src.last_ms = nowMs();
-    }
-
-    fn render(m: *Mixer, out: []i16, deaf: bool) void {
-        @memset(out, 0);
-        if (deaf) return;
-        m.mutex.lock();
-        defer m.mutex.unlock();
-        const frames = out.len / channels;
-        for (m.sources[0..m.n]) |s| {
-            if (s) |src| {
-                var gain: f32 = 1;
-                if (m.v) |v| gain = v.volumeOf(src.user);
-                if (gain <= 0.001) continue;
-                const avail = src.pcm.items.len / channels;
-                if (!src.started) {
-                    if (avail < 2) continue;
-                    src.started = true;
-                }
-                const take = @min(frames, avail);
-                if (take == 0) continue;
-                for (0..take * channels) |i| {
-                    const mixed = @as(i32, out[i]) + @as(i32, @intFromFloat(@as(f32, @floatFromInt(src.pcm.items[i])) * gain));
-                    out[i] = @intCast(std.math.clamp(mixed, -32768, 32767));
-                }
-                if (take > 0) {
-                    std.mem.copyForwards(i16, src.pcm.items[0 .. src.pcm.items.len - take * channels], src.pcm.items[take * channels ..]);
-                    src.pcm.items.len -= take * channels;
-                }
-            }
-        }
+    fn applyGain(s: *Source, v: *Voice) void {
+        const st = s.stream orelse return;
+        _ = c.SDL_SetAudioStreamGain(st, if (s.user != 0) v.volumeOf(s.user) else 1);
     }
 };
 
@@ -1026,8 +1046,10 @@ const Dave = struct {
     version: u16 = 0,
     group: Id,
     me: Id,
+    /// Nossa mídia sai cifrada (a chave do grupo atual já está valendo).
     enabled: bool = false,
     pending_version: u16 = 0,
+    /// Commit/welcome processado, esperando o "execute" do servidor.
     ready: bool = false,
     users: std.AutoHashMapUnmanaged(Id, void) = .empty,
     ssrc_users: std.AutoHashMapUnmanaged(u32, Id) = .empty,
@@ -1042,8 +1064,10 @@ const Dave = struct {
         const self = std.fmt.bufPrintSentinel(&idbuf, "{d}", .{me}, 0) catch return null;
         c.daveSessionInit(d.session, version, group, self.ptr);
         d.encryptor = c.daveEncryptorCreate();
-        if (d.encryptor == null) return null;
-        c.daveEncryptorAssignSsrcToCodec(d.encryptor, d.local_ssrc, c.DAVE_CODEC_OPUS);
+        if (d.encryptor == null) {
+            c.daveSessionDestroy(d.session);
+            return null;
+        }
         d.users.put(alloc, me, {}) catch {};
         return d;
     }
@@ -1093,20 +1117,22 @@ const Dave = struct {
         var n: usize = 0;
         c.daveSessionGetMarshalledKeyPackage(d.session, &p, &n);
         if (p == null or n == 0) return 0;
-        const len = @min(n, out.len);
-        @memcpy(out[0..len], p[0..len]);
-        c.daveFree(p);
-        return len;
+        defer c.daveFree(p);
+        if (n > out.len) return 0;
+        @memcpy(out[0..n], p[0..n]);
+        return n;
     }
 
-    fn reinit(d: *Dave, version: u16) void {
+    /// Recomeça o MLS do zero (grupo novo, commit inválido, fomos movidos).
+    fn reinit(d: *Dave, version: u16, group: Id) void {
         d.version = version;
         d.pending_version = version;
-        d.enabled = false;
+        d.group = group;
         d.ready = false;
         var idbuf: [24]u8 = undefined;
         const self = std.fmt.bufPrintSentinel(&idbuf, "{d}", .{d.me}, 0) catch return;
-        c.daveSessionInit(d.session, version, d.group, self.ptr);
+        c.daveSessionReset(d.session);
+        c.daveSessionInit(d.session, version, group, self.ptr);
         d.users.put(alloc, d.me, {}) catch {};
     }
 
@@ -1114,75 +1140,74 @@ const Dave = struct {
         c.daveSessionSetExternalSender(d.session, data.ptr, data.len);
     }
 
+    /// IDs de quem o gateway disse que está na call (o MLS recusa os outros).
+    fn recognized(d: *Dave, ids: *[64][24]u8, ptrs: *[64][*c]const u8) usize {
+        var n: usize = 0;
+        var it = d.users.keyIterator();
+        while (it.next()) |u| {
+            if (n == ids.len) break;
+            const s = std.fmt.bufPrintSentinel(&ids[n], "{d}", .{u.*}, 0) catch continue;
+            ptrs[n] = s.ptr;
+            n += 1;
+        }
+        return n;
+    }
+
     fn proposals(d: *Dave, data: []const u8, out: *std.ArrayList(u8)) void {
         var ids: [64][24]u8 = undefined;
         var ptrs: [64][*c]const u8 = undefined;
-        var n: usize = 0;
-        var it = d.users.keyIterator();
-        while (it.next()) |u| {
-            if (n == ids.len) break;
-            const s = std.fmt.bufPrintSentinel(&ids[n], "{d}", .{u.*}, 0) catch continue;
-            ptrs[n] = s.ptr;
-            n += 1;
-        }
+        const n = d.recognized(&ids, &ptrs);
         var p: [*c]u8 = null;
         var len: usize = 0;
         c.daveSessionProcessProposals(d.session, data.ptr, data.len, &ptrs, n, &p, &len);
-        if (p != null and len > 0) {
-            out.appendSlice(alloc, p[0..len]) catch {};
-            c.daveFree(p);
+        if (p != null) {
+            defer c.daveFree(p);
+            if (len > 0) out.appendSlice(alloc, p[0..len]) catch {};
         }
     }
 
-    fn commit(d: *Dave, tid: i64, data: []const u8) ?bool {
+    /// null = o servidor reenviou o nosso próprio commit (ignorado).
+    fn commit(d: *Dave, tid: u16, data: []const u8) ?bool {
         const res = c.daveSessionProcessCommit(d.session, data.ptr, data.len);
         if (res == null) return false;
-        const failed = c.daveCommitResultIsFailed(res);
-        const ignored = c.daveCommitResultIsIgnored(res);
-        c.daveCommitResultDestroy(res);
-        if (ignored) return null;
-        if (failed) return false;
-        // O commit pode ter mudado os membros; ainda usamos os usuários que o
-        // gateway anunciou (Clients Connect/Session Update).
+        defer c.daveCommitResultDestroy(res);
+        if (c.daveCommitResultIsIgnored(res)) return null;
+        if (c.daveCommitResultIsFailed(res)) return false;
         d.ready = true;
-        if (tid == 0) d.complete();
+        if (tid == 0) d.executeTransition();
         return true;
     }
 
-    fn welcome(d: *Dave, tid: i64, data: []const u8) bool {
+    fn welcome(d: *Dave, tid: u16, data: []const u8) ?bool {
         var ids: [64][24]u8 = undefined;
         var ptrs: [64][*c]const u8 = undefined;
-        var n: usize = 0;
-        var it = d.users.keyIterator();
-        while (it.next()) |u| {
-            if (n == ids.len) break;
-            const s = std.fmt.bufPrintSentinel(&ids[n], "{d}", .{u.*}, 0) catch continue;
-            ptrs[n] = s.ptr;
-            n += 1;
-        }
+        const n = d.recognized(&ids, &ptrs);
         const res = c.daveSessionProcessWelcome(d.session, data.ptr, data.len, &ptrs, n);
         if (res == null) return false;
         c.daveWelcomeResultDestroy(res);
         d.ready = true;
-        if (tid == 0) d.complete();
+        if (tid == 0) d.executeTransition();
         return true;
     }
 
     fn prepareTransition(d: *Dave, version: u16) void {
         d.pending_version = version;
-        if (version == 0) d.enabled = false;
+        // Indo para sem E2EE: já aceita mídia em claro de quem mudou antes.
+        if (version == 0) {
+            var it = d.decryptors.valueIterator();
+            while (it.next()) |h| if (h.* != null) c.daveDecryptorTransitionToPassthroughMode(h.*, true);
+        }
     }
 
-    fn executeTransition(d: *Dave, tid: i64) void {
-        _ = tid;
-        if (d.pending_version == 0) {
+    /// O servidor mandou executar (op 22) ou a transição era a 0.
+    fn executeTransition(d: *Dave) void {
+        d.version = d.pending_version;
+        if (d.version == 0) {
             d.enabled = false;
+            d.ready = false;
             return;
         }
-        if (d.ready) d.complete();
-    }
-
-    fn complete(d: *Dave) void {
+        if (!d.ready) return;
         d.ready = false;
         var idbuf: [24]u8 = undefined;
         const self = std.fmt.bufPrintSentinel(&idbuf, "{d}", .{d.me}, 0) catch return;
@@ -1198,16 +1223,14 @@ const Dave = struct {
     }
 
     fn ensureDecryptor(d: *Dave, ssrc: u32, user: Id) void {
-        if (d.decryptors.get(ssrc)) |_| {
-            d.setRatchet(ssrc, user);
-            return;
+        if (d.decryptors.get(ssrc) == null) {
+            const dec = c.daveDecryptorCreate();
+            if (dec == null) return;
+            d.decryptors.put(alloc, ssrc, dec) catch {
+                c.daveDecryptorDestroy(dec);
+                return;
+            };
         }
-        const dec = c.daveDecryptorCreate();
-        if (dec == null) return;
-        d.decryptors.put(alloc, ssrc, dec) catch {
-            c.daveDecryptorDestroy(dec);
-            return;
-        };
         d.setRatchet(ssrc, user);
     }
 
@@ -1230,7 +1253,14 @@ const Dave = struct {
         return written;
     }
 
-    fn decrypt(d: *Dave, ssrc: u32, frame: []const u8, out: []u8) ?usize {
+    fn decrypt(d: *Dave, ssrc: u32, user: Id, frame: []const u8, out: []u8) ?usize {
+        // O decryptor aparece quando o SSRC é anunciado (op 5); se o áudio
+        // chegou antes e já sabemos de quem é, cria agora.
+        if (d.decryptors.get(ssrc) == null) {
+            const owner = d.ssrc_users.get(ssrc) orelse user;
+            if (owner == 0) return null;
+            d.setSsrcUser(ssrc, owner);
+        }
         const dec = d.decryptors.get(ssrc) orelse return null;
         const cap = c.daveDecryptorGetMaxPlaintextByteSize(dec, c.DAVE_MEDIA_TYPE_AUDIO, frame.len);
         if (cap > out.len) return null;

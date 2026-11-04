@@ -1133,12 +1133,23 @@ pub const App = struct {
                 if (mine) {
                     app.st.voice_status = e.voice_status.status;
                     if (e.voice_status.status == .disconnected and app.st.voice != null) {
-                        app.st.voice = null;
-                        app.st.voice_mixer = false;
+                        // Sai de verdade (op 4 sem canal): senão os outros
+                        // continuam vendo a gente parado na call.
+                        app.handle(.leave_voice);
                         app.st.showToast(now(), true, "a call caiu", "the call dropped", .{});
                     } else if (e.voice_status.status == .connected) {
                         app.st.showToast(now(), false, "entrou na call", "joined the call", .{});
                     }
+                }
+            }
+            // Movido de canal por alguém (ou tirado da call): segue o servidor.
+            if (e == .voice_state and e.voice_state.user == app.store.me and app.st.voice != null and app.store.me != 0) {
+                if (e.voice_state.channel) |ch| {
+                    app.st.voice = ch;
+                } else {
+                    app.st.voice = null;
+                    app.st.voice_status = .disconnected;
+                    app.st.voice_mixer = false;
                 }
             }
             if (e == .status and e.status == .failed) failed = true;

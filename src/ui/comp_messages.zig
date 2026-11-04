@@ -293,7 +293,8 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         if (!found) st.showToast(ctx.now_ms, false, "essa mensagem é antiga e não está carregada; role para cima para ver", "that message is old and isn't loaded; scroll up to see it", .{});
         st.jump = 0;
     }
-    const hovered = ctx.hovering(r) and ctx.st.popup == .none;
+    // Com as configurações (ou um popup) por cima, a roda rola elas, não a conversa.
+    const hovered = ctx.hovering(r) and ctx.st.popup == .none and !st.settings.open;
     if (sc.pos < 0 or sc.stick_bottom) {
         sc.target = max_scroll;
         if (sc.pos < 0) sc.pos = max_scroll;
@@ -309,7 +310,9 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     c.ImGui_SetNextWindowScroll(d.v(-1, sc.pos));
     const dl = d.beginRegion(ctx, region, r, c.ImGuiWindowFlags_NoScrollWithMouse);
     const s = c.ImGui_GetScrollY();
-    if (@abs(s - sc.pos) > 1 and c.ImGui_IsMouseDown(0) and ctx.mouse.x >= r.right() - 14) {
+    // Arrastando a barra de rolagem (só a desta conversa: um clique nas
+    // configurações ou num popup por cima não conta).
+    if (@abs(s - sc.pos) > 1 and c.ImGui_IsMouseDown(0) and ctx.mouse.x >= r.right() - 14 and c.ImGui_IsWindowHovered(0) and !st.settings.open) {
         sc.pos = s;
         sc.target = s;
         sc.stick_bottom = s >= max_scroll - 1;

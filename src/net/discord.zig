@@ -73,6 +73,9 @@ pub const Gateway = struct {
     voice_token_len: usize = 0,
     /// Volume individual por pessoa (0..2), mantido entre calls.
     voice_volumes: std.AutoHashMapUnmanaged(Id, f32) = .empty,
+    /// A thread de voz parou com 4014 (movido / servidor trocado): até
+    /// quando espera o VOICE_SERVER_UPDATE novo antes de desistir.
+    voice_wait_until: i64 = 0,
     /// Status escolhido (também vai no IDENTIFY de uma sessão nova).
     status: types.Status = .online,
     /// Cargo -> cor e posição, para a cor do nome de cada membro.
@@ -305,6 +308,7 @@ pub const Gateway = struct {
                 g.execute(cmd);
             }
             cmds.clearRetainingCapacity();
+            g.voiceTick();
 
             // Espera o socket ou o próximo heartbeat (no máximo 50 ms, para
             // atender os comandos rápido).
@@ -873,11 +877,17 @@ pub const Gateway = struct {
             g.emit(.{ .voice_state = .{ .channel = chan, .user = user } });
             if (user == g.me) {
                 if (j.str(j.get(d, "session_id"))) |sid| {
-                    std.log.debug("voz: voice state session={d} canal={?d}", .{ sid.len, chan });
+                    // Sessão de voz nova (outro dispositivo, reconexão): a
+                    // conexão antiga não vale mais.
+                    if (g.voice != null and !std.mem.eql(u8, sid, g.voice_session[0..g.voice_session_len])) g.killVoice();
                     g.voice_session_len = @min(sid.len, g.voice_session.len - 1);
                     @memcpy(g.voice_session[0..g.voice_session_len], sid[0..g.voice_session_len]);
                 }
                 if (chan) |ch| {
+                    // Alguém nos moveu: a conexão segue (o servidor de voz
+                    // manda o grupo novo do DAVE) ou cai com 4014 e volta
+                    // pelo VOICE_SERVER_UPDATE.
+                    if (g.voice) |vc| vc.channel.store(ch, .release);
                     g.voice_channel = ch;
                     if (j.get(d, "self_mute")) |m| g.voice_mute = m == .bool and m.bool;
                     if (j.get(d, "self_deaf")) |m| g.voice_deaf = m == .bool and m.bool;
@@ -893,6 +903,11 @@ pub const Gateway = struct {
             if (g.voice_channel == 0) return;
             const gid = j.id(j.get(d, "guild_id")) orelse g.voice_guild;
             if (gid == g.voice_guild or g.voice_guild == 0) {
+                // Servidor de voz novo (ou nenhum ainda, endpoint null): a
+                // conexão atual morre; abre outra quando vier o endereço.
+                g.killVoice();
+                g.voice_endpoint_len = 0;
+                g.voice_wait_until = nowMs() + 8000;
                 if (j.str(j.get(d, "endpoint"))) |ep| {
                     g.voice_endpoint_len = @min(ep.len, g.voice_endpoint.len - 1);
                     @memcpy(g.voice_endpoint[0..g.voice_endpoint_len], ep[0..g.voice_endpoint_len]);
@@ -1926,15 +1941,47 @@ pub const Gateway = struct {
             return;
         };
         g.voice = vc;
+        g.voice_wait_until = 0;
     }
 
-    fn stopVoice(g: *Gateway) void {
+    /// Para a thread de voz mas guarda o que precisa para abrir de novo.
+    fn killVoice(g: *Gateway) void {
         if (g.voice) |vc| {
             vc.stop();
             vc.deinit();
             alloc.destroy(vc);
             g.voice = null;
         }
+    }
+
+    /// Recolhe a thread de voz que terminou sozinha. Movido (4014): espera
+    /// o servidor novo por alguns segundos; se não vier, tenta de novo com o
+    /// que tem e, na falha, avisa que caiu.
+    fn voiceTick(g: *Gateway) void {
+        if (g.voice) |vc| switch (vc.ended.load(.acquire)) {
+            .running => return,
+            .moved => {
+                g.killVoice();
+                if (g.voice_wait_until == 0) g.voice_wait_until = nowMs() + 5000;
+            },
+            .fatal, .stopped => {
+                g.killVoice();
+                g.voice_wait_until = 0;
+            },
+        };
+        if (g.voice_wait_until != 0 and nowMs() >= g.voice_wait_until) {
+            g.voice_wait_until = 0;
+            if (g.voice == null and g.voice_channel != 0) {
+                if (g.voice_endpoint_len > 0 and g.voice_token_len > 0) {
+                    g.tryStartVoice();
+                } else g.emit(.{ .voice_status = .{ .status = .disconnected, .channel = g.voice_channel } });
+            }
+        }
+    }
+
+    fn stopVoice(g: *Gateway) void {
+        g.killVoice();
+        g.voice_wait_until = 0;
         std.crypto.secureZero(u8, &g.voice_token);
         std.crypto.secureZero(u8, &g.voice_session);
         g.voice_token_len = 0;
