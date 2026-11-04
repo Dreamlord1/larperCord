@@ -158,12 +158,17 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "Perfil", .en = "Profile", .id = 20 });
             add(&items, &n, .{ .label = "Mencionar", .en = "Mention", .id = 21 });
             if (id != ctx.store.me) add(&items, &n, .{ .label = "Mensagem", .en = "Message", .id = 22 });
+            // Ignorar não bloqueia: as mensagens só ficam recolhidas aqui.
+            if (id != ctx.store.me) add(&items, &n, if (ctx.st.filtros.isIgnored(id))
+                .{ .label = "Deixar de ignorar", .en = "Unignore", .id = 26 }
+            else
+                .{ .label = "Ignorar", .en = "Ignore", .id = 26 });
             add(&items, &n, .{ .label = "Copiar nome de usuário", .en = "Copy Username", .id = 24, .sep = true });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do usuário", .en = "Copy User ID", .id = 25 });
             if (movable(ctx, id) != null) {
                 var tb: [24]Id = undefined;
-                if (voiceTargets(ctx, id, &tb).len > 0) add(&items, &n, .{ .label = "Mover para…", .en = "Move To…", .id = 26, .sep = true });
-                add(&items, &n, .{ .label = "Desconectar da call", .en = "Disconnect", .id = 27, .danger = true, .sep = voiceTargets(ctx, id, &tb).len == 0 });
+                if (voiceTargets(ctx, id, &tb).len > 0) add(&items, &n, .{ .label = "Mover para…", .en = "Move To…", .id = 28, .sep = true });
+                add(&items, &n, .{ .label = "Desconectar da call", .en = "Disconnect", .id = 29, .danger = true, .sep = voiceTargets(ctx, id, &tb).len == 0 });
             }
         },
         .channel => {
@@ -178,6 +183,18 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "◐  Ausente", .en = "◐  Idle", .id = 81 });
             add(&items, &n, .{ .label = "⊘  Não perturbe", .en = "⊘  Do Not Disturb", .id = 82 });
             add(&items, &n, .{ .label = "○  Invisível", .en = "○  Invisible", .id = 83 });
+            if (ctx.st.filtros.focusOn(ctx.now_ms)) {
+                add(&items, &n, .{ .label = "Sair do modo foco", .en = "End Focus Mode", .id = 85, .sep = true });
+            } else {
+                add(&items, &n, .{ .label = "Modo foco: 15 min", .en = "Focus mode: 15 min", .id = 86, .sep = true });
+                add(&items, &n, .{ .label = "Modo foco: 30 min", .en = "Focus mode: 30 min", .id = 87 });
+                add(&items, &n, .{ .label = "Modo foco: 1 h", .en = "Focus mode: 1 h", .id = 88 });
+                add(&items, &n, .{ .label = "Modo foco: até desligar", .en = "Focus mode: until I turn it off", .id = 89 });
+            }
+            add(&items, &n, if (ctx.st.settings.data_saver)
+                .{ .label = "Desligar modo economia", .en = "Turn Off Data Saver", .id = 90 }
+            else
+                .{ .label = "Ligar modo economia", .en = "Turn On Data Saver", .id = 90 });
             add(&items, &n, .{ .label = "Ver perfil", .en = "View Profile", .id = 84, .sep = true });
         },
         .voice_move => {
@@ -284,6 +301,31 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         8, 25, 44, 63 => copyFmt(ctx, "{d}", .{id}),
         80, 81, 82, 83 => ctx.act(.{ .set_status = @enumFromInt(item - 80) }),
         84 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y - 200 } },
+        85 => {
+            st.filtros.endFocus(ctx.store);
+            st.showToast(ctx.now_ms, false, "modo foco desligado", "focus mode off", .{});
+        },
+        86, 87, 88, 89 => {
+            st.filtros.startFocus(ctx.now_ms, ([_]u32{ 15, 30, 60, 0 })[item - 86]);
+            st.showToast(ctx.now_ms, false, "modo foco: só DMs e menções notificam", "focus mode: only DMs and mentions notify", .{});
+        },
+        90 => {
+            st.settings.data_saver = !st.settings.data_saver;
+            st.filtros.save = true;
+            if (st.settings.data_saver)
+                st.showToast(ctx.now_ms, false, "modo economia: imagens só ao clicar", "data saver: images load on click", .{})
+            else
+                st.showToast(ctx.now_ms, false, "modo economia desligado", "data saver off", .{});
+        },
+        26 => {
+            const on = !st.filtros.isIgnored(id);
+            st.filtros.setIgnored(st.gpa, id, on);
+            const name = if (ctx.store.user(id)) |u| u.name else "?";
+            if (on)
+                st.showToast(ctx.now_ms, false, "{s} ignorado: as mensagens ficam recolhidas", "ignoring {s}: their messages are collapsed", .{name})
+            else
+                st.showToast(ctx.now_ms, false, "{s} não é mais ignorado", "no longer ignoring {s}", .{name});
+        },
         9 => ctx.act(.{ .delete_message = id }),
         20 => st.popup = .{ .profile = .{ .user = id, .x = r.x, .y = r.y } },
         21 => if (ctx.store.user(id)) |u| {
@@ -291,8 +333,8 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         },
         22 => ctx.act(.{ .open_dm = id }),
         24 => if (ctx.store.user(id)) |u| copyFmt(ctx, "{s}", .{u.name}),
-        26 => st.popup = .{ .menu = .{ .kind = .voice_move, .id = id, .x = r.x + r.w - 8, .y = r.y + r.h - 70 } },
-        27 => if (movable(ctx, id)) |cs| ctx.act(.{ .move_member = .{ .guild = cs.info.guild, .user = id, .channel = null } }),
+        28 => st.popup = .{ .menu = .{ .kind = .voice_move, .id = id, .x = r.x + r.w - 8, .y = r.y + r.h - 70 } },
+        29 => if (movable(ctx, id)) |cs| ctx.act(.{ .move_member = .{ .guild = cs.info.guild, .user = id, .channel = null } }),
         40, 60 => ctx.act(.{ .mark_read = id }),
         41 => {
             st.tabs.append(st.gpa, id) catch {};

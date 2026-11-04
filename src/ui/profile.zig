@@ -594,8 +594,14 @@ fn header(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, uid: Id, pf: ?types.Profile
     const ar: d.Rect = .{ .x = acx - av / 2, .y = acy - av / 2, .w = av, .h = av };
     const hb = d.hit(ctx, ids + 2, ar);
     qa.mark(ar, "profile-avatar", .{});
-    d.tip(ctx, ar, i18n.tr("Ver foto", "View picture"), hb.hovered and u.avatar != null);
-    if (hb.clicked) if (u.avatar) |h| {
+    var sb: [160]u8 = undefined;
+    const small = if (u.avatar) |h| w.cdnUrl(&sb, .avatar, uid, h) else "";
+    // Modo economia: o primeiro clique só baixa a foto.
+    const held_back = small.len > 0 and ctx.images.blocked(small);
+    d.tip(ctx, ar, if (held_back) i18n.tr("Carregar foto", "Load picture") else i18n.tr("Ver foto", "View picture"), hb.hovered and u.avatar != null);
+    if (hb.clicked and held_back) {
+        ctx.images.allow(small);
+    } else if (hb.clicked) if (u.avatar) |h| {
         var zb: [192]u8 = undefined;
         const big = if (std.mem.startsWith(u8, h, "demo:")) h else std.fmt.bufPrint(&zb, "https://cdn.discordapp.com/avatars/{d}/{s}.png?size=1024", .{ uid, h }) catch "";
         att.openImage(ctx, big, u.name, 1024, 1024);

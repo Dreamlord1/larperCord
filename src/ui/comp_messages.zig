@@ -45,6 +45,8 @@ const Geo = struct {
 const flag_group: u8 = 1;
 const flag_day: u8 = 2;
 const flag_reply: u8 = 4;
+/// Recolhida: pessoa ignorada ou palavra do filtro (core/filtros.zig).
+const flag_hidden: u8 = 8;
 
 const reply_h: f32 = 22;
 const react_h: f32 = 30;
@@ -206,6 +208,8 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     // Topo: "carregando mensagens antigas…" ou "começo do canal".
     const top_h: f32 = 52;
     var total: f32 = 8 + top_h;
+    const filt = &st.filtros;
+    var prev_hidden = false;
     for (msgs, 0..) |*m, i| {
         var flags: u8 = 0;
         if (m.msg.reply_to != 0) flags |= flag_reply | flag_group;
@@ -220,9 +224,14 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         }
         // Linha de sistema ("fulano entrou"): nunca tem cabeçalho de grupo.
         if (m.msg.system != .none) flags &= ~(flag_group | flag_reply);
+        // Depois de uma recolhida (ignorado/filtro), começa um grupo novo.
+        if (prev_hidden) flags |= flag_group;
+        const hide = filt.hides(m, ctx.store.me);
+        prev_hidden = hide;
+        if (hide) flags |= flag_hidden;
         st.groups.items[i] = flags;
         st.offsets.items[i] = total;
-        total += measure(ctx, g, m, flags);
+        total += if (hide) collapsedH(g, flags, m) else measure(ctx, g, m, flags);
     }
     // Balão de "digitando" no fim da conversa (tema de bolhas).
     const typing_bubble = g.variant == .bubbles and d.pflag(n, "typing-bubble", false) and cs.typing.items.len > 0;
@@ -322,6 +331,11 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         const oy = st.offsets.items[i];
         if (oy > s + r.h) break;
         const y = base + oy;
+        if (st.groups.items[i] & flag_hidden != 0) {
+            drawCollapsed(ctx, dl, g, &msgs[i], st.groups.items[i], r, y);
+            qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = msgs[i].height }, "msg:{d}", .{msgs[i].msg.id});
+            continue;
+        }
         const under = hovered and ctx.mouse.y >= y and ctx.mouse.y < y + msgs[i].height;
         if (under) probe_idx = i;
         var from: u32 = 1;
@@ -385,6 +399,57 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     c.ImGui_EndChild();
 }
 
+/// Altura de uma mensagem recolhida: só uma linha (e o separador do dia).
+fn collapsedH(g: Geo, flags: u8, m: *StoredMessage) f32 {
+    const day = flags & flag_day != 0;
+    const h: f32 = switch (g.variant) {
+        .irc => (if (day) g.line_h + 10 else 0) + g.line_h + 4,
+        else => (if (day) @as(f32, 46) else 0) + 30,
+    };
+    // Quando for mostrada, mede de novo do zero.
+    m.layout_w = -1;
+    m.height = h;
+    return h;
+}
+
+/// "Mensagem de alguém ignorado — mostrar" no lugar da mensagem.
+fn drawCollapsed(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags: u8, r: d.Rect, y_in: f32) void {
+    var y = y_in;
+    const fam = g.fam;
+    const irc = g.variant == .irc;
+    if (flags & flag_day != 0) {
+        if (irc) {
+            daySeparator(ctx, dl, fam, r, y + (g.line_h + 10) / 2, m.msg.timestamp, true);
+            y += g.line_h + 10;
+        } else {
+            daySeparator(ctx, dl, fam, r, y + 23, m.msg.timestamp, false);
+            y += 46;
+        }
+    }
+    const row_h: f32 = if (irc) g.line_h + 4 else 30;
+    const cy = y + row_h / 2;
+    const x = switch (g.variant) {
+        .cozy => r.x + g.content_x,
+        .irc => r.x + 10,
+        .bubbles => r.x + 20,
+    };
+    const ignored = ctx.st.filtros.isIgnored(m.msg.author);
+    const label = if (ignored) i18n.tr("Mensagem de alguém ignorado — ", "Message from someone you ignored — ") else i18n.tr("Mensagem filtrada — ", "Filtered message — ");
+    const fs: f32 = 13;
+    const lw = d.width(fam.get(.italic), fs, label);
+    d.text(dl, fam.get(.italic), fs, x, cy - fs * 0.6, ctx.col(.faint), label);
+    const show = i18n.tr("mostrar", "show");
+    const sw = d.width(fam.get(.semibold), fs, show);
+    const sr: d.Rect = .{ .x = x + lw - 2, .y = cy - 11, .w = sw + 4, .h = 22 };
+    const hb = d.hit(ctx, @truncate(m.msg.id ^ 0x41DE_5EE), sr);
+    qa.mark(sr, "hidden-show:{d}", .{m.msg.id});
+    const lc = if (hb.hovered) ctx.col(.text) else ctx.col(.link);
+    d.text(dl, fam.get(.semibold), fs, x + lw, cy - fs * 0.6, lc, show);
+    if (hb.hovered) d.line(dl, x + lw, cy + fs * 0.55, x + lw + sw, cy + fs * 0.55, lc, 1);
+    if (hb.clicked) ctx.st.filtros.reveal(ctx.st.gpa, m.msg.id);
+    qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = row_h }, "hidden:{d}", .{m.msg.id});
+}
+
 fn selectWord(st: anytype, m: *const StoredMessage, off: u32) void {
     const s = m.msg.content;
     var a: usize = @min(off, s.len);
@@ -446,6 +511,13 @@ fn snippet(buf: []u8, s: []const u8) []const u8 {
     return buf[0..n];
 }
 
+/// Texto citado numa resposta: o da original, ou só um aviso se ela está
+/// recolhida (ignorado/filtro).
+fn quotedText(ctx: *d.Ctx, m: *StoredMessage) []const u8 {
+    if (ctx.st.filtros.hides(m, ctx.store.me)) return i18n.tr("mensagem recolhida", "collapsed message");
+    return m.msg.content;
+}
+
 /// Linha "↱ @fulano  texto da mensagem original" (clicável).
 fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x: f32, y: f32, max_w: f32, spine_x: ?f32, on_accent: bool) void {
     var buf: [160]u8 = undefined;
@@ -479,7 +551,7 @@ fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x:
         const nm = std.fmt.bufPrint(buf[0..40], "@{s}", .{name}) catch name;
         d.text(dl, fam.get(.semibold), 13, xx, y + 1, nc, nm);
         xx += d.width(fam.get(.semibold), 13, nm) + 6;
-        _ = d.textClipped(dl, fam.get(.regular), 13, xx, y + 1, if (hb.hovered) ctx.col(.text) else muted, snippet(buf[40..], f.m.msg.content), max_w - (xx - x));
+        _ = d.textClipped(dl, fam.get(.regular), 13, xx, y + 1, if (hb.hovered) ctx.col(.text) else muted, snippet(buf[40..], quotedText(ctx, f.m)), max_w - (xx - x));
     } else {
         d.text(dl, fam.get(.italic), 13, x, y + 1, muted, i18n.tr("mensagem original não carregada", "Original message could not be loaded"));
     }
@@ -645,7 +717,8 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
         break :blk @as(f32, @floatFromInt(flash_until - ctx.now_ms)) / 1600.0;
     } else 0;
     // Menção a mim: faixa amarela à esquerda, como no Discord.
-    var mentions_me = false;
+    // Palavra de alerta (Configurações → Alertas e filtros) destaca igual.
+    var mentions_me = ctx.st.filtros.flags(m) & @import("../core/filtros.zig").bit_alert != 0;
     for (m.spans) |sp| if (sp.mention == .user and sp.mention.user == ctx.store.me) {
         mentions_me = true;
     };
@@ -722,7 +795,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 const found = ctx.store.findAny(m.msg.reply_to);
                 const ru = if (found) |f| ctx.store.user(f.m.msg.author) else null;
                 var rb: [160]u8 = undefined;
-                const line = std.fmt.bufPrint(&rb, "↳ {s}: {s}", .{ if (ru) |x| x.name else "?", if (found) |f| snippet(rb[100..], f.m.msg.content) else "…" }) catch "";
+                const line = std.fmt.bufPrint(&rb, "↳ {s}: {s}", .{ if (ru) |x| x.name else "?", if (found) |f| snippet(rb[100..], quotedText(ctx, f.m)) else "…" }) catch "";
                 const lr: d.Rect = .{ .x = r.x + g.content_x, .y = y, .w = g.wrap, .h = g.line_h };
                 const hb = d.hitUnder(ctx, @truncate(m.msg.id ^ 0x5151), lr);
                 qa.mark(lr, "reply-line:{d}", .{m.msg.id});

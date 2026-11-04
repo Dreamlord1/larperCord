@@ -140,7 +140,14 @@ fn card(ctx: *d.Ctx, dl: ?*c.ImDrawList, e: *const types.Embed, spans: []const [
 fn image(ctx: *d.Ctx, dl: *c.ImDrawList, e: *const types.Embed, r: d.Rect, alpha: f32) void {
     const scale = ctx.io.*.DisplayFramebufferScale.x;
     const hb = d.hit(ctx, @truncate(@intFromPtr(e) +% 1), r);
-    switch (ctx.images.get(e.image, r.w * scale, r.h * scale)) {
+    const look = ctx.images.get(e.image, r.w * scale, r.h * scale);
+    // Modo economia: o clique baixa a imagem.
+    if (look == .failed and ctx.images.blocked(e.image)) {
+        att.savedPlaceholder(ctx, dl, r, 0, alpha);
+        if (hb.clicked) ctx.images.allow(e.image);
+        return;
+    }
+    switch (look) {
         .ready => |t| c.ImDrawList_AddImageRounded(dl, t.ref, d.v(r.x, r.y), d.v(r.right(), r.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(alpha), 6, 0),
         .loading => d.rect(dl, r, ctx.col(.text).alpha(0.05 * alpha), 6),
         .failed => d.rect(dl, r, ctx.col(.text).alpha(0.03 * alpha), 6),

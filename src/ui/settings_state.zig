@@ -6,6 +6,7 @@ const std = @import("std");
 pub const Page = enum {
     conta,
     privacidade,
+    filtros,
     aparencia,
     acessibilidade,
     chat,
@@ -44,6 +45,8 @@ pub const Settings = struct {
     autoplay_gifs: bool = true,
     /// Imagens e GIFs que vêm de links (embeds).
     show_embeds: bool = true,
+    /// Modo economia: imagens, avatares e anexos só baixam ao clicar.
+    data_saver: bool = false,
 
     // Privacidade
     send_typing: bool = true,
