@@ -23,6 +23,7 @@ test {
     _ = @import("ui/guild_color.zig");
     _ = @import("net/jsonx.zig");
     _ = @import("net/media_url.zig");
+    _ = @import("net/proxy.zig");
     _ = @import("net/settings_proto.zig");
     _ = @import("ui/apng.zig");
     _ = @import("plugins/engine.zig");

@@ -10,6 +10,7 @@ const types = @import("../core/types.zig");
 const StoredMessage = @import("../core/store.zig").StoredMessage;
 const state = @import("state.zig");
 const i18n = @import("i18n.zig");
+const video = @import("video.zig");
 
 const Attachment = types.Attachment;
 
@@ -82,7 +83,7 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, m: *const StoredMessage, x: f32, y_i
         if (a.isImage()) {
             const sz = imageSize(a, avail);
             const r: d.Rect = .{ .x = x, .y = y, .w = sz[0], .h = sz[1] };
-            image(ctx, dl, a, r, scale, alpha, hid, m.msg.id);
+            image(ctx, dl, a, r, scale, alpha, hid, m.msg.id, i);
             qa.mark(r, "att:{d}:{d}", .{ m.msg.id, i });
             y += sz[1];
         } else {
@@ -94,8 +95,15 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, m: *const StoredMessage, x: f32, y_i
     }
 }
 
-fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale: f32, alpha: f32, hid: usize, msg_id: types.Id) void {
+fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale: f32, alpha: f32, hid: usize, msg_id: types.Id, index: usize) void {
     const radius: f32 = 8;
+    // Vídeo tocando aqui: o player ocupa o lugar da prévia.
+    const vkey = video.keyOf(msg_id, index);
+    if (a.video and video.isActive(vkey)) {
+        const pv = ctx.images.get(a.url, r.w * scale, r.h * scale);
+        video.draw(ctx, dl, r, alpha, msg_id, if (pv == .ready) pv.ready else null);
+        return;
+    }
     const hb = d.hit(ctx, hid, r);
     const set = &ctx.st.settings;
     // GIF de fora (Tenor/Giphy) desligado nas configurações: fica a prévia.
@@ -150,13 +158,13 @@ fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale:
         d.text(dl, f, 11, br.x + (br.w - d.width(f, 11, "GIF")) / 2, d.centerY(br, 11), d.Rgba.white.alpha(alpha), "GIF");
     }
     if (hb.clicked) {
-        // Vídeo abre no navegador (ainda não tocamos vídeo aqui).
+        // Vídeo toca aqui (com FFmpeg) ou abre no navegador.
         if (held_back) {
             ctx.images.allow(url);
-        } else if (a.video and a.link.len > 0) openUrl(a.link) else open(ctx, a, url);
+        } else if (a.video and a.link.len > 0) video.click(ctx, vkey, a.link, a.link, r, a.size) else open(ctx, a, url);
     }
     if (held_back) d.tip(ctx, r, i18n.tr("Modo economia: clique para baixar", "Data saver: click to download"), hb.hovered);
-    if (a.video and !held_back) d.tip(ctx, r, i18n.tr("Abrir o vídeo no navegador", "Open video in browser"), hb.hovered);
+    if (a.video and !held_back) d.tip(ctx, r, if (video.canPlay(a.link, a.size)) i18n.tr("Tocar o vídeo", "Play video") else i18n.tr("Abrir o vídeo no navegador", "Open video in browser"), hb.hovered);
     if (hb.right and msg_id != 0) ctx.popup(.{ .menu = .{ .kind = .message, .id = msg_id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
 }
 

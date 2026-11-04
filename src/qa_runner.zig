@@ -288,6 +288,165 @@ fn toClassico(app: *App) void {
 fn scrollBottom(app: *App) void {
     if (app.st.activeChannel()) |id| app.st.scrollOf(id).stick_bottom = true;
 }
+// Vídeo (com ou sem FFmpeg no sistema: sem ele, o play só avisa).
+const video = @import("ui/video.zig");
+const ffmpeg = @import("platform/ffmpeg.zig");
+var video_pos: f64 = 0;
+fn hasFfmpeg() bool {
+    return ffmpeg.known() == true;
+}
+fn findVideo(app: *App) ?struct { id: Id, i: usize } {
+    const cs = active(app) orelse return null;
+    var k = cs.messages.items.len;
+    while (k > 0) {
+        k -= 1;
+        const m = &cs.messages.items[k];
+        for (m.msg.attachments, 0..) |a, i| if (a.video and std.mem.eql(u8, a.link, video.demo_link)) return .{ .id = m.msg.id, .i = i };
+    }
+    return null;
+}
+fn jumpToVideo(app: *App) void {
+    const f = findVideo(app) orelse return;
+    app.st.jump = f.id;
+}
+fn tDemoVideo(app: *App, b: []u8) []const u8 {
+    const f = findVideo(app) orelse return "";
+    return markFmt(b, "att:{d}:{d}", .{ f.id, f.i });
+}
+fn tVideoMark(b: []u8, name: []const u8) []const u8 {
+    if (!video.info().active) return "";
+    return markFmt(b, "{s}", .{name});
+}
+fn tVideoPlay(_: *App, b: []u8) []const u8 {
+    return tVideoMark(b, "video-play");
+}
+fn tVideoBar(_: *App, b: []u8) []const u8 {
+    return tVideoMark(b, "video-bar");
+}
+fn tVideoClose(_: *App, b: []u8) []const u8 {
+    return tVideoMark(b, "video-close");
+}
+fn tVideoMute(_: *App, b: []u8) []const u8 {
+    if (!video.info().has_audio) return "";
+    return tVideoMark(b, "video-mute");
+}
+fn videoPlaying(app: *App) bool {
+    if (!hasFfmpeg()) return !video.info().active and std.mem.indexOf(u8, app.st.toast.text(), "vídeo") != null;
+    const v = video.info();
+    return v.active and v.playing and v.shown >= 3 and qa.find("video") != null;
+}
+fn videoLimits(_: *App) bool {
+    if (!hasFfmpeg()) return true;
+    const v = video.info();
+    if (c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[vídeo] {d}x{d} pos={d:.0} dur={d} decodificados={d} mostrados={d} som={} fila={d}\n", .{ v.w, v.h, v.pos_ms, v.duration_ms, v.decoded, v.shown, v.has_audio, v.audio_queued });
+    if (v.pos_ms < 900) return false;
+    // 60 qps na origem: sem o limite seriam ~2 quadros a cada 33 ms.
+    const max_decoded: u32 = @intFromFloat(v.pos_ms / 30 + 6);
+    return v.w > 0 and v.w <= 854 and v.h <= 480 and v.decoded <= max_decoded and v.duration_ms == 3000;
+}
+fn videoAudio(_: *App) bool {
+    if (!hasFfmpeg() or !video.audioAvailable()) return true;
+    return video.info().has_audio;
+}
+fn videoPaused(_: *App) bool {
+    return !hasFfmpeg() or !video.info().playing;
+}
+fn rememberVideoPos(_: *App) void {
+    video_pos = video.info().pos_ms;
+}
+fn videoPosKept(_: *App) bool {
+    return !hasFfmpeg() or video.info().pos_ms == video_pos;
+}
+fn videoSeeked(_: *App) bool {
+    if (!hasFfmpeg()) return true;
+    const v = video.info();
+    // 75% de 3 s (a barra começa depois do tempo; a conta é aproximada).
+    return v.pos_ms > 1800 and v.pos_ms < 2700 and !v.playing;
+}
+fn videoResumed(_: *App) bool {
+    return !hasFfmpeg() or video.info().playing;
+}
+fn videoMuted(_: *App) bool {
+    const v = video.info();
+    return !hasFfmpeg() or !v.has_audio or v.muted;
+}
+fn videoEnded(_: *App) bool {
+    if (!hasFfmpeg()) return true;
+    const v = video.info();
+    return v.ended and !v.playing and v.pos_ms == 3000;
+}
+fn videoRestarted(_: *App) bool {
+    if (!hasFfmpeg()) return true;
+    const v = video.info();
+    return v.playing and !v.ended and v.pos_ms < 1500;
+}
+fn videoClosed(_: *App) bool {
+    return !video.info().active;
+}
+fn jumpToMp4Gif(app: *App) void {
+    const f = findAttachment(app, "demo:mp4") orelse return;
+    app.st.jump = f.id;
+}
+fn gifHostsOn(app: *App) void {
+    app.st.settings.gif_hosts = true;
+}
+fn gifHostsOff(app: *App) void {
+    app.st.settings.gif_hosts = false;
+}
+fn mp4GifStill(app: *App) bool {
+    var it = app.images.map.iterator();
+    var still = false;
+    while (it.next()) |e| {
+        if (std.mem.endsWith(u8, e.key_ptr.*, " demo:mp4")) return false;
+        if (std.mem.endsWith(u8, e.key_ptr.*, " demo:2") and e.value_ptr.state == .ready) still = true;
+    }
+    return still;
+}
+fn mp4GifAnimated(app: *App) bool {
+    var it = app.images.map.iterator();
+    if (c.SDL_getenv("QA_DEBUG") != null) {
+        var it2 = app.images.map.iterator();
+        while (it2.next()) |e| if (std.mem.indexOf(u8, e.key_ptr.*, "demo:mp4") != null) std.debug.print("[mp4] {s} {s} {d}\n", .{ e.key_ptr.*, @tagName(e.value_ptr.state), e.value_ptr.frames.len });
+    }
+    var mp4_failed = false;
+    var still_ok = false;
+    while (it.next()) |e| {
+        if (std.mem.endsWith(u8, e.key_ptr.*, " demo:mp4")) {
+            // 3 s a no máximo 30 qps (o MP4 é de 60).
+            if (e.value_ptr.state == .ready and e.value_ptr.frames.len > 10 and e.value_ptr.frames.len <= 91) return hasFfmpeg();
+            if (e.value_ptr.state == .failed) mp4_failed = true;
+        }
+        if (std.mem.endsWith(u8, e.key_ptr.*, " demo:2") and e.value_ptr.state == .ready) still_ok = true;
+    }
+    return ffmpeg.known() == false and mp4_failed and still_ok;
+}
+
+// Proxy.
+const proxy = @import("net/proxy.zig");
+fn proxyRejected(app: *App) bool {
+    return app.st.settings.proxy.len == 0 and std.mem.indexOf(u8, app.st.toast.text(), "inválido") != null and qa.find("proxy-input") != null;
+}
+fn proxyExternalOnly(app: *App) bool {
+    var b: proxy.Buf = undefined;
+    if (!std.mem.eql(u8, app.st.settings.proxy.slice(), "socks5h://127.0.0.1:9050")) return false;
+    const ext = proxy.forUrl(&b, "https://media.tenor.com/x.webp") orelse return false;
+    return std.mem.eql(u8, ext, "socks5h://127.0.0.1:9050") and proxy.forUrl(&b, "https://cdn.discordapp.com/x.png") == null and proxy.forDiscord(&b) == null;
+}
+fn proxyEverywhere(app: *App) bool {
+    var b: proxy.Buf = undefined;
+    return app.st.settings.proxy_all and proxy.forUrl(&b, "https://cdn.discordapp.com/x.png") != null and proxy.forDiscord(&b) != null;
+}
+fn proxyPersisted(app: *App) bool {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(app.gpa);
+    @import("ui/settings_state.zig").write(&app.st.settings, "classico", &out, app.gpa) catch return false;
+    return std.mem.indexOf(u8, out.items, "proxy=\"socks5h://127.0.0.1:9050\"") != null and std.mem.indexOf(u8, out.items, "proxy_all=#true") != null;
+}
+fn proxyRemoved(app: *App) bool {
+    var b: proxy.Buf = undefined;
+    return app.st.settings.proxy.len == 0 and proxy.forUrl(&b, "https://media.tenor.com/x.webp") == null and proxy.forDiscord(&b) == null;
+}
+
 fn jumpToGif(app: *App) void {
     const f = findAttachment(app, "demo:gif") orelse return;
     app.st.jump = f.id;
@@ -1438,6 +1597,38 @@ const ops = [_]Op{
     key(c.ImGuiKey_Enter),
     .{ .expect = .{ .name = "só a imagem, sem texto", .check = sentImageOnly, .timeout_ms = 3000 } },
 
+    s("vídeo"),
+    .{ .run = jumpToVideo },
+    .{ .wait = 500 },
+    .{ .click = .{ .dyn = tDemoVideo } },
+    .{ .expect = .{ .name = "play no vídeo: toca aqui (sem FFmpeg, avisa e não toca)", .check = videoPlaying, .timeout_ms = 5000 } },
+    .{ .shot = "35-video" },
+    .{ .expect = .{ .name = "vídeo em até 480p e ~30 qps (o de 60 qps pula quadros)", .check = videoLimits, .timeout_ms = 4000 } },
+    expect("som do vídeo vai para o SDL (quando há áudio)", videoAudio),
+    .{ .click = .{ .dyn = tVideoPlay } },
+    expect("o botão pausa", videoPaused),
+    .{ .run = rememberVideoPos },
+    .{ .wait = 400 },
+    expect("pausado, o tempo não anda", videoPosKept),
+    .{ .click = .{ .dyn_at = .{ .f = tVideoBar, .fx = 0.75, .fy = 0.5 } } },
+    .{ .expect = .{ .name = "clicar na barra pula para o ponto", .check = videoSeeked, .timeout_ms = 3000 } },
+    .{ .click = .{ .dyn = tVideoPlay } },
+    expect("o botão continua", videoResumed),
+    .{ .click = .{ .dyn = tVideoMute } },
+    expect("o botão de som silencia", videoMuted),
+    .{ .expect = .{ .name = "o vídeo chega ao fim e para no último quadro", .check = videoEnded, .timeout_ms = 5000 } },
+    .{ .click = .{ .dyn = tVideoPlay } },
+    expect("play no fim recomeça do começo", videoRestarted),
+    .{ .click = .{ .dyn = tVideoClose } },
+    expect("o X fecha o vídeo e volta a prévia", videoClosed),
+    .{ .run = jumpToMp4Gif },
+    .{ .wait = 400 },
+    .{ .expect = .{ .name = "GIF de fora desligado: GIF em MP4 fica na prévia parada", .check = mp4GifStill, .timeout_ms = 4000 } },
+    .{ .run = gifHostsOn },
+    .{ .expect = .{ .name = "GIF de fora ligado: o GIF em MP4 anima pelo FFmpeg (sem ele, prévia)", .check = mp4GifAnimated, .timeout_ms = 8000 } },
+    .{ .shot = "36-gif-mp4" },
+    .{ .run = gifHostsOff },
+
     s("amigos, grupos e membros"),
     expect("fotos de perfil carregam", avatarsLoaded),
     expect("ícones dos servidores carregam", iconsLoaded),
@@ -1679,6 +1870,28 @@ const ops = [_]Op{
     click("profile-tab:2"),
     .{ .sweep = &.{"profile-guild:"} },
     key(c.ImGuiKey_Escape),
+    s("proxy"),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Privacidade"),
+    .{ .wait = 200 },
+    click("proxy-input"),
+    .{ .text = "ftp://nao.serve:21" },
+    key(c.ImGuiKey_Enter),
+    expect("proxy com URL inválida é recusado", proxyRejected),
+    click("proxy-input"),
+    ctrl(c.ImGuiKey_A),
+    .{ .text = "socks5h://127.0.0.1:9050" },
+    click("button:Salvar proxy"),
+    expect("proxy salvo vale só para a mídia de fora", proxyExternalOnly),
+    .{ .shot = "37-proxy" },
+    click("toggle:Usar o proxy em tudo"),
+    expect("\"em tudo\" inclui o Discord (API, gateway, imagens)", proxyEverywhere),
+    expect("proxy vai para o settings.kdl", proxyPersisted),
+    click("button:Remover proxy"),
+    expect("remover volta à conexão direta", proxyRemoved),
+    click("toggle:Usar o proxy em tudo"),
+    click("settings-close"),
+
     s("clicar em tudo: configurações"),
     ctrl(c.ImGuiKey_Comma),
     click("settings:Aparência"),
@@ -2122,6 +2335,7 @@ pub const Runner = struct {
         st.settings = b.settings;
         st.popup = b.popup;
         st.viewer = null;
+        @import("ui/video.zig").stop();
         st.palette.open = false;
         st.role_picker = false;
         st.selection = .{};
@@ -2179,6 +2393,7 @@ pub const Runner = struct {
         h.update(att_mod.last_opened[0..att_mod.last_opened_len]);
         h.update(&.{ st.profile_tab, @intFromBool(st.note_editing) });
         h.update(std.mem.asBytes(&@as(u32, app.store.notes.count())));
+        h.update(std.mem.asBytes(&@import("ui/video.zig").qaState()));
         h.update(std.mem.asBytes(&@as(u32, @intCast(app.actions.items.len))));
         if (st.activeChannel()) |cid| {
             const sc = st.scrollOf(cid);

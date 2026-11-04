@@ -21,6 +21,7 @@ const nowMs = @import("fake_gateway.zig").nowMs;
 const j = @import("jsonx.zig");
 const i18n = @import("../ui/i18n.zig");
 const media_url = @import("media_url.zig");
+const proxy = @import("proxy.zig");
 const settings_proto = @import("settings_proto.zig");
 const Id = types.Id;
 const Value = std.json.Value;
@@ -259,6 +260,7 @@ pub const Gateway = struct {
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECT_ONLY, @as(c_long, 2));
         _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, web_user_agent.ptr);
         _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECTTIMEOUT, @as(c_long, 15));
+        useProxy(h);
         g.abortable(h);
         if (c.curl_easy_perform(h) != c.CURLE_OK) return .retry;
         var sock: c.curl_socket_t = -1;
@@ -1317,6 +1319,10 @@ pub const Gateway = struct {
             out.fields = try fields.toOwnedSlice(alloc);
             // Vídeo (YouTube…): a miniatura grande vira a imagem, com play.
             out.video = j.get(e, "video") != null;
+            // Só o arquivo pelo proxy do Discord toca aqui (o do YouTube é uma página).
+            if (j.get(e, "video")) |vv| if (j.str(j.get(vv, "proxy_url"))) |pu| {
+                if (media_url.discordHost(pu)) out.video_url = try alloc.dupe(u8, pu);
+            };
             const big = j.get(e, "image") orelse if (out.video) j.get(e, "thumbnail") else null;
             if (big) |iv| if (j.str(j.get(iv, "proxy_url"))) |u| {
                 out.image = try alloc.dupe(u8, u);
@@ -1624,6 +1630,13 @@ pub const Gateway = struct {
         global: bool = false,
     };
 
+    /// Configurações → Privacidade → Rede com "em tudo": gateway e API
+    /// também pelo proxy (o gateway muda na próxima conexão).
+    fn useProxy(h: *c.CURL) void {
+        var pb: proxy.Buf = undefined;
+        if (proxy.forDiscord(&pb)) |p| _ = c.curl_easy_setopt(h, c.CURLOPT_PROXY, p.ptr);
+    }
+
     /// Transferência que para assim que o app pede para encerrar.
     fn abortable(g: *Gateway, h: *c.CURL) void {
         _ = c.curl_easy_setopt(h, c.CURLOPT_NOPROGRESS, @as(c_long, 0));
@@ -1744,6 +1757,7 @@ pub const Gateway = struct {
             _ = c.curl_easy_setopt(h, c.CURLOPT_HTTPHEADER, headers);
             _ = c.curl_easy_setopt(h, c.CURLOPT_USERAGENT, web_user_agent.ptr);
             _ = c.curl_easy_setopt(h, c.CURLOPT_CUSTOMREQUEST, method.ptr);
+            useProxy(h);
             _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEFUNCTION, writeCb);
             _ = c.curl_easy_setopt(h, c.CURLOPT_WRITEDATA, &resp.body);
             _ = c.curl_easy_setopt(h, c.CURLOPT_HEADERFUNCTION, headerCb);

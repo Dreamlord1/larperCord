@@ -11,6 +11,7 @@ const S = @import("settings_state.zig");
 const i18n = @import("i18n.zig");
 const custom = @import("../theme/custom.zig");
 const Preview = @import("../theme/manager.zig").Preview;
+const proxy = @import("../net/proxy.zig");
 
 const Section = struct { title: []const u8, title_en: []const u8, items: []const struct { page: S.Page, label: []const u8, label_en: []const u8 } };
 
@@ -463,6 +464,68 @@ fn themeColors(p: *Page) void {
     p.y = top + @as(f32, @floatFromInt(rows)) * 30 + 10;
 }
 
+// --- Rede (proxy) -----------------------------------------------------------
+
+var proxy_buf: [256]u8 = @splat(0);
+/// O valor das configurações que está no campo (se mudar por fora, o campo
+/// acompanha).
+var proxy_seen: S.Text = .{};
+var proxy_bad = false;
+
+fn network(p: *Page) void {
+    const ctx = p.ctx;
+    const s = &ctx.st.settings;
+    p.heading(i18n.tr("Rede", "Network"));
+    p.note(i18n.tr("Proxy http, https, socks5 ou socks5h. Tor: socks5h://127.0.0.1:9050", "http, https, socks5 or socks5h proxy. Tor: socks5h://127.0.0.1:9050"));
+    if (!std.mem.eql(u8, proxy_seen.slice(), s.proxy.slice())) {
+        proxy_seen = s.proxy;
+        @memset(&proxy_buf, 0);
+        @memcpy(proxy_buf[0..s.proxy.len], s.proxy.slice());
+        proxy_bad = false;
+    }
+    const iw = @min(p.w, 420);
+    const ir: d.Rect = .{ .x = p.x, .y = p.y - 3, .w = iw, .h = 32 };
+    d.rect(p.dl, ir, ctx.col(.elevated), 6);
+    d.border(p.dl, ir, if (proxy_bad) ctx.col(.danger) else ctx.col(.border), 6, 1);
+    c.ImGui_SetCursorScreenPos(d.v(p.x + 10, p.y));
+    c.ImGui_SetNextItemWidth(iw - 20);
+    const enter = c.ImGui_InputTextWithHint("##proxy", "socks5h://127.0.0.1:9050", &proxy_buf, proxy_buf.len, c.ImGuiInputTextFlags_CharsNoBlank | c.ImGuiInputTextFlags_EnterReturnsTrue);
+    qa.mark(.{ .x = p.x, .y = p.y, .w = iw, .h = 30 }, "proxy-input", .{});
+    p.y += 40;
+    if (proxy_bad) p.note(i18n.tr("URL inválida: use esquema://host:porta (http, https, socks5 ou socks5h).", "Invalid URL: use scheme://host:port (http, https, socks5 or socks5h)."));
+    var nbuf: [360]u8 = undefined;
+    if (s.proxy.len > 0 and !proxy.valid(s.proxy.slice())) {
+        p.note(i18n.tr("O proxy salvo é inválido e está sendo ignorado.", "The saved proxy is invalid and is being ignored."));
+    } else if (s.proxy.len > 0) {
+        const scope = if (s.proxy_all) i18n.tr("todas as conexões", "every connection") else i18n.tr("só GIFs e mídia de fora do Discord", "only GIFs and media from outside Discord");
+        // Sem usuário e senha na tela.
+        const u = s.proxy.slice();
+        var shown_buf: [256]u8 = undefined;
+        const shown = if (std.mem.lastIndexOfScalar(u8, u, '@')) |at| (if (std.mem.indexOf(u8, u, "://")) |sch| std.fmt.bufPrint(&shown_buf, "{s}…@{s}", .{ u[0 .. sch + 3], u[at + 1 ..] }) catch u else u) else u;
+        p.note(i18n.fmt(&nbuf, "Em uso: {s} ({s}).", "In use: {s} ({s}).", .{ shown, scope }));
+    } else p.note(i18n.tr("Sem proxy: conexão direta.", "No proxy: direct connection."));
+    if (enter or p.button(i18n.tr("Salvar proxy", "Save proxy"), false)) {
+        const text = std.mem.trim(u8, std.mem.sliceTo(&proxy_buf, 0), " ");
+        if (text.len == 0) {
+            s.proxy = .{};
+            proxy_bad = false;
+        } else if (proxy.valid(text)) {
+            s.proxy.set(text);
+            proxy_bad = false;
+            ctx.st.showToast(ctx.now_ms, false, "proxy salvo", "proxy saved", .{});
+        } else {
+            proxy_bad = true;
+            ctx.st.showToast(ctx.now_ms, true, "proxy inválido", "invalid proxy", .{});
+        }
+    }
+    p.y += 44;
+    if (s.proxy.len > 0) {
+        if (p.button(i18n.tr("Remover proxy", "Remove proxy"), true)) s.proxy = .{};
+        p.y += 44;
+    }
+    p.toggle(i18n.tr("Usar o proxy em tudo", "Use the proxy for everything"), i18n.tr("Também o Discord: API, imagens, vídeos e o gateway (este a partir da próxima conexão).", "Discord too: API, images, videos and the gateway (from the next connection)."), &s.proxy_all);
+}
+
 fn page(p: *Page, previews: []const Preview) void {
     const ctx = p.ctx;
     const s = &ctx.st.settings;
@@ -538,6 +601,8 @@ fn page(p: *Page, previews: []const Preview) void {
             p.toggle(i18n.tr("Modo streamer", "Streamer Mode"), i18n.tr("Esconde o e-mail e o nome de usuário nas configurações.", "Hides your email and username in settings."), &s.streamer_mode);
             p.toggle(i18n.tr("Registro de mensagens", "Message log"), i18n.tr("Apagadas continuam na tela (marcadas) e editadas guardam o original. Só aqui.", "Deleted messages stay visible (marked) and edits keep the original. Local only."), &s.message_log);
             p.note(i18n.tr("Fora isso, imagens e avatares só vêm dos servidores do Discord.", "Everything else (images, avatars) only comes from Discord's servers."));
+            p.divider();
+            network(p);
         },
         .atalhos => {
             p.title(i18n.tr("Atalhos de teclado", "Keybinds"));

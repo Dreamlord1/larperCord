@@ -24,15 +24,24 @@ fn hostOf(url: []const u8) []const u8 {
 /// Domínios de onde a gente aceita baixar.
 pub fn allowedHost(url: []const u8) bool {
     if (!std.mem.startsWith(u8, url, "https://")) return false;
+    if (discordHost(url)) return true;
+    return allow_gif_hosts.load(.acquire) and isGifHost(hostOf(url));
+}
+
+/// É um servidor do Discord (CDN, proxy de mídia)? O resto é "de fora".
+pub fn discordHost(url: []const u8) bool {
+    if (!std.mem.startsWith(u8, url, "https://")) return false;
     const host = hostOf(url);
-    if (std.mem.eql(u8, host, "cdn.discordapp.com") or std.mem.eql(u8, host, "media.discordapp.net") or
-        std.mem.endsWith(u8, host, ".discordapp.net") or std.mem.endsWith(u8, host, ".discordapp.com")) return true;
-    return allow_gif_hosts.load(.acquire) and isGifHost(host);
+    return std.mem.eql(u8, host, "cdn.discordapp.com") or std.mem.eql(u8, host, "media.discordapp.net") or
+        std.mem.endsWith(u8, host, ".discordapp.net") or std.mem.endsWith(u8, host, ".discordapp.com");
 }
 
 fn isGifHost(host: []const u8) bool {
-    return std.mem.eql(u8, host, "media.tenor.com") or std.mem.eql(u8, host, "tenor.com") or std.mem.eql(u8, host, "i.giphy.com") or
-        (std.mem.startsWith(u8, host, "media") and std.mem.endsWith(u8, host, ".giphy.com"));
+    return std.mem.eql(u8, host, "media.tenor.com") or std.mem.eql(u8, host, "media.tenor.co") or std.mem.eql(u8, host, "tenor.com") or isGiphy(host);
+}
+
+fn isGiphy(host: []const u8) bool {
+    return std.mem.eql(u8, host, "i.giphy.com") or (std.mem.startsWith(u8, host, "media") and std.mem.endsWith(u8, host, ".giphy.com"));
 }
 
 /// O vídeo (og:video) da página de um GIF do Tenor, ou null.
@@ -42,7 +51,8 @@ pub fn tenorVideoFromPage(html: []const u8) ?[]const u8 {
     i += key.len;
     const end = std.mem.indexOfScalarPos(u8, html, i, '"') orelse return null;
     const url = html[i..end];
-    return if (std.mem.startsWith(u8, url, "https://media.tenor.com/")) url else null;
+    // media.tenor.co: o formato antigo, que só existe em MP4 (o FFmpeg toca).
+    return if (std.mem.startsWith(u8, url, "https://media.tenor.com/") or std.mem.startsWith(u8, url, "https://media.tenor.co/")) url else null;
 }
 
 /// O GIF de um embed "gifv" a partir do vídeo dele:
@@ -65,7 +75,7 @@ pub fn gifFromVideo(buf: []u8, video: []const u8) ?[]const u8 {
         const name = path[slash + 1 .. path.len - 4];
         return std.fmt.bufPrint(buf, "https://media.tenor.com/{s}AAAAx/{s}.webp", .{ path[start .. slash - 5], name }) catch null;
     }
-    if (isGifHost(host)) return std.fmt.bufPrint(buf, "{s}.gif", .{path[0 .. path.len - 4]}) catch null;
+    if (isGiphy(host)) return std.fmt.bufPrint(buf, "{s}.gif", .{path[0 .. path.len - 4]}) catch null;
     return null;
 }
 
@@ -74,6 +84,8 @@ test "vídeo do tenor a partir da página" {
     try std.testing.expectEqualStrings("https://media.tenor.com/XhYqu5fu4LgAAAPo/cat.mp4", tenorVideoFromPage(html).?);
     try std.testing.expect(tenorVideoFromPage("<html></html>") == null);
     try std.testing.expect(tenorVideoFromPage("<meta property=\"og:video\" content=\"https://evil.com/x.mp4\">") == null);
+    try std.testing.expectEqualStrings("https://media.tenor.co/videos/ab12/mp4", tenorVideoFromPage("<meta property=\"og:video\" content=\"https://media.tenor.co/videos/ab12/mp4\">").?);
+    try std.testing.expect(tenorVideoFromPage("<meta property=\"og:video\" content=\"https://media.tenor.co.evil.com/x.mp4\">") == null);
 }
 
 test "gif do tenor e do giphy a partir do vídeo" {
@@ -81,6 +93,7 @@ test "gif do tenor e do giphy a partir do vídeo" {
     try std.testing.expectEqualStrings("https://media.tenor.com/H5y5Fk9VdKcAAAAx/cat-dance.webp", gifFromVideo(&b, "https://media.tenor.com/H5y5Fk9VdKcAAAPo/cat-dance.mp4").?);
     try std.testing.expectEqualStrings("https://media.giphy.com/media/abc/giphy.gif", gifFromVideo(&b, "https://media.giphy.com/media/abc/giphy.mp4").?);
     try std.testing.expect(gifFromVideo(&b, "https://evil.com/x.mp4") == null);
+    try std.testing.expect(gifFromVideo(&b, "https://media.tenor.co/videos/abc.mp4") == null);
     allow_gif_hosts.store(false, .release);
     try std.testing.expect(!allowedHost("https://media.tenor.com/x.gif"));
     allow_gif_hosts.store(true, .release);
