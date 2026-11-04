@@ -164,6 +164,7 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
             if (d.pflag(p.node, "autohide", false)) autohide(ctx, p, i);
         }
     }
+    @import("lsp_ui.zig").panel(ctx);
     @import("autocomplete.zig").draw(ctx);
     c.ImGui_End();
 

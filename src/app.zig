@@ -40,6 +40,8 @@ const fsutil = @import("platform/fsutil.zig");
 const accounts_store = @import("net/accounts_store.zig");
 const app_accounts = @import("app_accounts.zig");
 const voz_audio = @import("net/voz_audio.zig");
+const lsp_net = @import("net/lsp.zig");
+const lsp_ui = @import("ui/lsp_ui.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -60,6 +62,26 @@ pub const Options = struct {
 };
 
 var wake_type_global: u32 = 0;
+
+fn lspWake() void {
+    platform.Window.wake(wake_type_global, .tick);
+}
+
+/// Só guarda o caminho: nada do LSP existe até um bloco de linguagem ligada aparecer.
+fn setupLsp(qa_mode: bool) void {
+    var buf: [512]u8 = undefined;
+    const dir = if (qa_mode)
+        "qa-out/lsp-scratch"
+    else if (c.SDL_getenv("XDG_CACHE_HOME")) |x|
+        std.fmt.bufPrint(&buf, "{s}/larpercord/lsp-scratch", .{std.mem.span(x)}) catch ""
+    else if (c.SDL_getenv("HOME")) |h|
+        std.fmt.bufPrint(&buf, "{s}/.cache/larpercord/lsp-scratch", .{std.mem.span(h)}) catch ""
+    else if (c.SDL_getenv("LOCALAPPDATA")) |w|
+        std.fmt.bufPrint(&buf, "{s}/larpercord/lsp-scratch", .{std.mem.span(w)}) catch ""
+    else
+        "";
+    lsp_net.setup(&lspWake, dir);
+}
 
 fn wakeTheme() void {
     platform.Window.wake(wake_type_global, .theme);
@@ -199,11 +221,14 @@ pub const App = struct {
         try app.images.start();
         app.picked = try Queue([:0]u8).init(std.heap.c_allocator);
         plugin_host.init(app);
+        setupLsp(opts.qa);
         return app;
     }
 
     pub fn destroy(app: *App) void {
         app.saveSettings();
+        // Primeiro: mesmo com um servidor travado, o filho morre antes do vigia de main.zig.
+        lsp_net.shutdown();
         voz_audio.shutdown();
         _ = c.SDL_RemoveTimer(app.timer);
         app.plugins.deinit();
@@ -2041,6 +2066,7 @@ pub const App = struct {
             @import("net/media_url.zig").allow_gif_hosts.store(set.gif_hosts, .release);
             @import("net/proxy.zig").set(set.proxy.slice(), set.proxy_all);
             voz_audio.apply(set);
+            lsp_ui.apply(set);
             voz_audio.setPageOpen(set.open and set.page == .voz and app.store.ready);
             @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
             app.store.keep_log = set.message_log;

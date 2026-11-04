@@ -19,11 +19,13 @@
 //! host.zig) e os testes usam um `Host` falso.
 const std = @import("std");
 const lua = @import("lua.zig");
+const lsp_core = @import("../core/lsp.zig");
 
 pub const max_plugins = 64;
 pub const max_source = 256 * 1024;
 const max_commands = 32;
 const max_keys = 32;
+const max_lsp = 8;
 /// Teto de memória de cada plugin.
 const mem_cap = 8 * 1024 * 1024;
 /// O gancho do Lua roda a cada tantas instruções.
@@ -104,6 +106,10 @@ pub const Keybind = struct {
     }
 };
 
+/// Servidor de linguagem proposto com larper.lsp. Só uma proposta: quem decide
+/// rodar é a pessoa, em Configurações (ui/settings_lsp.zig).
+pub const LspServer = struct { lang: lsp_core.Short, cmd: lsp_core.Command };
+
 pub const Status = enum { off, running, failed };
 
 pub const Plugin = struct {
@@ -126,6 +132,7 @@ pub const Plugin = struct {
     n_ready: u16 = 0,
     commands: std.ArrayList([]u8) = .empty,
     keys: std.ArrayList(Keybind) = .empty,
+    lsp: std.ArrayList(LspServer) = .empty,
 
     pub fn status(p: *const Plugin) Status {
         if (p.L != null) return .running;
@@ -207,6 +214,7 @@ pub const Engine = struct {
             e.gpa.free(p.src);
             p.commands.deinit(e.gpa);
             p.keys.deinit(e.gpa);
+            p.lsp.deinit(e.gpa);
             e.gpa.destroy(p);
         }
         e.list.clearRetainingCapacity();
@@ -381,6 +389,7 @@ pub const Engine = struct {
         for (p.commands.items) |cmd| p.engine.gpa.free(cmd);
         p.commands.clearRetainingCapacity();
         p.keys.clearRetainingCapacity();
+        p.lsp.clearRetainingCapacity();
         p.n_message = 0;
         p.n_ready = 0;
     }
@@ -611,6 +620,7 @@ fn setup(L: ?*lua.State) void {
         .{ .name = "send", .f = &lSend },
         .{ .name = "channel", .f = &lChannel },
         .{ .name = "guild", .f = &lGuild },
+        .{ .name = "lsp", .f = &lLsp },
     };
     lua.lua_createtable(L, 0, api.len);
     for (api) |a| {
@@ -873,6 +883,36 @@ fn lSend(L: ?*lua.State) callconv(.c) c_int {
     return 0;
 }
 
+/// larper.lsp("zig", {"zls", "--flag"}): propõe um servidor de linguagem. Aqui
+/// nada roda: a proposta aparece nas Configurações e só vale depois que a pessoa
+/// ligar, para este plugin, esta linguagem e este argv.
+fn lLsp(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    const lang = lua.checkSlice(L, 1);
+    lua.luaL_checktype(L, 2, lua.TTABLE);
+    if (!lsp_core.validLang(lang)) raise(L, tr("larper.lsp: a linguagem é a etiqueta do bloco: até 16 letras minúsculas, números, _, - ou +", "larper.lsp: the language is the block tag: up to 16 lowercase letters, digits, _, - or +"));
+    const n = lua.lua_rawlen(L, 2);
+    if (n == 0 or n > lsp_core.max_argv) raise(L, tr("larper.lsp: o comando é uma lista de 1 a 32 textos", "larper.lsp: the command is a list of 1 to 32 strings"));
+    var cmd: lsp_core.Command = .{};
+    var i: lua.Integer = 1;
+    while (i <= @as(lua.Integer, @intCast(n))) : (i += 1) {
+        const kind = lua.lua_rawgeti(L, 2, i);
+        const arg = (if (kind == lua.TSTRING) lua.toSlice(L, -1) else null) orelse raise(L, tr("larper.lsp: o comando é uma lista de textos", "larper.lsp: the command is a list of strings"));
+        if ((i == 1 and arg.len == 0) or !cmd.add(arg)) raise(L, tr("larper.lsp: comando vazio, longo demais ou com um byte nulo", "larper.lsp: command empty, too long or with a null byte"));
+        lua.pop(L, 1);
+    }
+    const entry: LspServer = .{ .lang = lsp_core.Short.of(lang), .cmd = cmd };
+    for (p.lsp.items) |*old| {
+        if (old.lang.eql(lang)) {
+            old.* = entry;
+            return 0;
+        }
+    }
+    if (p.lsp.items.len >= max_lsp) raise(L, tr("larper.lsp: servidores demais", "larper.lsp: too many servers"));
+    p.lsp.append(p.engine.gpa, entry) catch raise(L, "sem memória");
+    return 0;
+}
+
 /// larper.channel() -> {id, name} ou nil
 fn lChannel(L: ?*lua.State) callconv(.c) c_int {
     const p = plug(L);
@@ -973,6 +1013,42 @@ test "plugins: sandbox só com as bibliotecas permitidas" {
     try std.testing.expectEqual(Status.running, p.status());
     try std.testing.expectEqual(@as(usize, 1), T.n_notes);
     try std.testing.expectEqualStrings("ok", T.note(0));
+}
+
+test "plugins: larper.lsp só guarda a proposta e valida tudo" {
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e,
+        \\larper.lsp("zig", {"zls"})
+        \\larper.lsp("haskell", {"hls", "--lsp"})
+        \\larper.lsp("zig", {"/opt/zls", "--x"})
+        \\local ruins = {
+        \\  function() larper.lsp("Zig", {"a"}) end,
+        \\  function() larper.lsp("c#", {"a"}) end,
+        \\  function() larper.lsp("a/b", {"a"}) end,
+        \\  function() larper.lsp("", {"a"}) end,
+        \\  function() larper.lsp("x", {}) end,
+        \\  function() larper.lsp("x", {""}) end,
+        \\  function() larper.lsp("x", {1}) end,
+        \\  function() larper.lsp("x", {"a", {}}) end,
+        \\  function() larper.lsp("x", {"a\0b"}) end,
+        \\  function() larper.lsp("x", "zls") end,
+        \\  function() larper.lsp("x", {string.rep("a", 2000)}) end,
+        \\}
+        \\for i, f in ipairs(ruins) do assert(not pcall(f), "passou " .. i) end
+        \\for i = 1, 6 do larper.lsp("l" .. i, {"p"}) end
+        \\assert(not pcall(larper.lsp, "demais", {"p"}))
+    );
+    try std.testing.expectEqual(Status.running, p.status());
+    try std.testing.expectEqual(@as(usize, 8), p.lsp.items.len);
+    // Chamar de novo troca a proposta.
+    try std.testing.expectEqualStrings("zig", p.lsp.items[0].lang.slice());
+    var it = p.lsp.items[0].cmd.iterator();
+    try std.testing.expectEqualStrings("/opt/zls", it.next().?);
+    try std.testing.expectEqualStrings("--x", it.next().?);
+    // Desligado, a proposta some.
+    e.setEnabled(p, false);
+    try std.testing.expectEqual(@as(usize, 0), p.lsp.items.len);
 }
 
 test "plugins: laço infinito é parado, nem pcall segura" {

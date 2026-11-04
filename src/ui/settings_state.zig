@@ -2,6 +2,7 @@
 //! existe não aparece aqui até existir).
 //! São salvos em ~/.config/larpercord/settings.kdl.
 const std = @import("std");
+const L = @import("../core/lsp.zig");
 
 pub const Page = enum {
     conta,
@@ -16,6 +17,7 @@ pub const Page = enum {
     idioma,
     avancado,
     desempenho,
+    lsp,
     plugins,
     sobre,
 };
@@ -116,6 +118,25 @@ pub const Settings = struct {
     voice_gate: bool = false,
     voice_sounds: bool = true,
 
+    // Erros no código (ui/settings_lsp.zig): uma linguagem de core/lsp.zig `known`
+    // em cada par. Tudo desligado por padrão; ligar é sempre a pessoa quem faz.
+    lsp_on_zig: bool = false,
+    lsp_cmd_zig: Text = .{},
+    lsp_on_python: bool = false,
+    lsp_cmd_python: Text = .{},
+    lsp_on_rust: bool = false,
+    lsp_cmd_rust: Text = .{},
+    lsp_on_cpp: bool = false,
+    lsp_cmd_cpp: Text = .{},
+    lsp_on_go: bool = false,
+    lsp_cmd_go: Text = .{},
+    lsp_on_typescript: bool = false,
+    lsp_cmd_typescript: Text = .{},
+    lsp_on_lua: bool = false,
+    lsp_cmd_lua: Text = .{},
+    /// Servidores propostos por plugins que a pessoa liberou (ver `approvalKey`).
+    lsp_plugins_ok: Text = .{},
+
     // Atalhos
     /// Navegação estilo vim com a caixa de texto sem foco (ui/vim.zig).
     vim_keys: bool = false,
@@ -139,6 +160,38 @@ pub const Settings = struct {
         return h;
     }
 };
+
+pub fn lspOn(s: *Settings, i: usize) *bool {
+    return switch (i) {
+        inline 0...L.known.len - 1 => |k| &@field(s, "lsp_on_" ++ L.known[k].key),
+        else => unreachable,
+    };
+}
+pub fn lspOnC(s: *const Settings, i: usize) *const bool {
+    return switch (i) {
+        inline 0...L.known.len - 1 => |k| &@field(s, "lsp_on_" ++ L.known[k].key),
+        else => unreachable,
+    };
+}
+pub fn lspCmd(s: *Settings, i: usize) *Text {
+    return switch (i) {
+        inline 0...L.known.len - 1 => |k| &@field(s, "lsp_cmd_" ++ L.known[k].key),
+        else => unreachable,
+    };
+}
+pub fn lspCmdC(s: *const Settings, i: usize) *const Text {
+    return switch (i) {
+        inline 0...L.known.len - 1 => |k| &@field(s, "lsp_cmd_" ++ L.known[k].key),
+        else => unreachable,
+    };
+}
+
+/// Alguma linguagem ligada? Falso é o caso comum: o caminho de quem não usa.
+pub fn lspAnyOn(s: *const Settings) bool {
+    if (s.lsp_plugins_ok.len > 0) return true;
+    for (0..L.known.len) |i| if (lspOnC(s, i).*) return true;
+    return false;
+}
 
 pub const Field = struct { name: []const u8, kind: enum { boolean, float, byte, text }, offset: usize };
 
@@ -208,10 +261,11 @@ pub fn write(s: *const Settings, theme_name: []const u8, out: *std.ArrayList(u8)
             .float => try out.print(gpa, " {s}={d:.3}", .{ f.name, @as(*const f32, @ptrCast(@alignCast(base + f.offset))).* }),
             .byte => try out.print(gpa, " {s}={d}", .{ f.name, (base + f.offset)[0] }),
             .text => {
-                // Aspas e barras não passam na validação; se aparecerem, somem.
+                // Comandos têm aspas, e caminhos do Windows têm barras.
                 try out.print(gpa, " {s}=\"", .{f.name});
                 for (@as(*const Text, @ptrCast(@alignCast(base + f.offset))).slice()) |ch| {
-                    if (ch != '"' and ch != '\\' and ch >= 0x20) try out.append(gpa, ch);
+                    if (ch == '"' or ch == '\\') try out.append(gpa, '\\');
+                    if (ch >= 0x20) try out.append(gpa, ch);
                 }
                 try out.append(gpa, '"');
             },
@@ -302,6 +356,35 @@ test "configurações de voz vão e voltam (volume acima de 3x e nome com acento
     try std.testing.expectEqual(@as(u8, 100), fresh.voice_in_gain);
     try std.testing.expectEqual(@as(usize, 0), fresh.voice_mic.slice().len);
     try std.testing.expect(fresh.voice_highpass and fresh.voice_sounds and !fresh.voice_ptt);
+}
+
+test "comandos de LSP vão e voltam, com aspas e barras" {
+    const kdl = @import("../theme/kdl.zig");
+    var s: Settings = .{};
+    try std.testing.expect(!lspAnyOn(&s));
+    s.lsp_on_python = true;
+    s.lsp_cmd_python.set("\"/opt/meu servidor/ruff\" server");
+    s.lsp_cmd_zig.set("C:\\tools\\zls.exe --flag");
+    s.lsp_plugins_ok.set("0123456789abcdef");
+    try std.testing.expect(lspAnyOn(&s));
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try write(&s, "vidro", &out, std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const nodes = try kdl.parse(arena.allocator(), out.items, null);
+    var back: Settings = .{};
+    apply(&back, &nodes[0]);
+    try std.testing.expect(back.lsp_on_python and !back.lsp_on_zig);
+    try std.testing.expectEqualStrings("\"/opt/meu servidor/ruff\" server", back.lsp_cmd_python.slice());
+    try std.testing.expectEqualStrings("C:\\tools\\zls.exe --flag", back.lsp_cmd_zig.slice());
+    try std.testing.expectEqualStrings("0123456789abcdef", back.lsp_plugins_ok.slice());
+    // Cada linguagem conhecida tem o seu par de campos, e o padrão é desligado.
+    var fresh: Settings = .{};
+    for (0..L.known.len) |i| {
+        try std.testing.expect(!lspOn(&fresh, i).*);
+        try std.testing.expectEqual(@as(usize, 0), lspCmd(&fresh, i).slice().len);
+    }
 }
 
 test "campos pelo índice (paleta de comandos)" {

@@ -19,6 +19,7 @@ const icons = @import("icons.zig");
 const att = @import("attachments.zig");
 const emb = @import("embeds.zig");
 const md_preview = @import("md_preview.zig");
+const lsp_ui = @import("lsp_ui.zig");
 const vim = @import("vim.zig");
 const popup = @import("popup.zig");
 const mosaic = @import("mosaic.zig");
@@ -1343,6 +1344,8 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         const typing_gap: f32 = if (d.pflag(n, "typing", true) and cs.typing.items.len > 0) 22 else 6;
         const inset: f32 = if (pill) 18 else 0;
         md_preview.draw(ctx, dl, fam, r.x + inset, top - tray_h - typing_gap, r.w - inset * 2, typing_gap);
+        const preview_h = md_preview.height(st);
+        lsp_ui.place(fam, r.x + inset, top - tray_h - (if (preview_h > 0) preview_h + 4 else typing_gap), r.w - inset * 2);
     }
 
     if (d.pflag(n, "typing", true) and cs.typing.items.len > 0) {
@@ -1460,6 +1463,7 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     // Avisa o Discord quando o texto muda (o app limita a um a cada 8 s).
     if (c.ImGui_IsItemEdited() and st.input[0] != 0) ctx.act(.{ .typing = ch_id });
     const active = c.ImGui_IsItemActive();
+    lsp_ui.afterInput(ctx, dl, fam.get(.regular), .{ .x = input_x, .y = input_y, .w = input_w, .h = frame_h }, font_px, active, grown == composer_extra);
     // Seta para cima com a caixa vazia: edita a última mensagem.
     if (active and st.input[0] == 0 and c.ImGui_IsKeyPressed(c.ImGuiKey_UpArrow)) st.edit_last = true;
     if (keep) st.input = kept;

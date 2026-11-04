@@ -70,6 +70,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
             const gid = std.fmt.parseInt(u64, g, 10) catch return fail("servidor inválido");
             const cid = std.fmt.parseInt(u64, ch, 10) catch return fail("canal inválido");
             return voiceTest(gid, cid);
+        } else if (@import("builtin").mode == .debug and std.mem.eql(u8, arg, "--qa-lsp-server")) {
+            // O servidor de linguagem de mentira do QA (src/qa_lsp_server.zig), só em debug.
+            @import("qa_lsp_server.zig").run(it.next() orelse return fail("--qa-lsp-server precisa de um modo"));
         } else if (std.mem.eql(u8, arg, "--list-themes")) {
             for (builtin_themes.list) |t| std.debug.print("{s}\n", .{t.name});
             return;
