@@ -5,6 +5,8 @@ const d = @import("draw.zig");
 const qa = @import("qa.zig");
 const i18n = @import("i18n.zig");
 const engine = @import("../plugins/engine.zig");
+const exemplos = @import("plugin_examples");
+const c = @import("c");
 
 /// `p` é a página das configurações (settings.zig).
 pub fn draw(p: anytype) void {
@@ -20,6 +22,14 @@ pub fn draw(p: anytype) void {
         return;
     }
     p.y += 52;
+    if (missingExamples(e) > 0) {
+        if (p.button(i18n.tr("Instalar exemplos", "Install examples"), false)) {
+            installExamples(e);
+            return;
+        }
+        p.y += 44;
+        p.note(i18n.tr("Copia para a pasta acima os plugins de exemplo que faltam: /dado, /calc, /mock, /hora, /resumo e outros.", "Copies the missing example plugins to the folder above: /dado, /calc, /mock, /hora, /resumo and more."));
+    }
 
     if (e.list.items.len == 0) {
         p.note(i18n.tr("Nenhum plugin encontrado. Ponha arquivos .lua na pasta acima e clique em Recarregar.", "No plugins found. Put .lua files in the folder above and click Reload."));
@@ -40,6 +50,36 @@ pub fn draw(p: anytype) void {
     p.note(i18n.tr("Um plugin travado é parado pelo limite de instruções; erros aparecem aqui.", "A stuck plugin is stopped by the instruction limit; errors show up here."));
     p.note(i18n.tr("larper.send só manda quando você usa um comando ou atalho do plugin.", "larper.send only sends when you use one of the plugin's commands or keybinds."));
     _ = ctx;
+}
+
+fn loaded(e: *const engine.Engine, name: []const u8) bool {
+    for (e.list.items) |pl| if (std.mem.eql(u8, pl.name, name)) return true;
+    return false;
+}
+
+fn missingExamples(e: *const engine.Engine) usize {
+    var n: usize = 0;
+    for (exemplos.list) |ex| {
+        if (!loaded(e, ex.name)) n += 1;
+    }
+    return n;
+}
+
+/// Grava só o que não existe: um exemplo que a pessoa editou não é sobrescrito.
+fn installExamples(e: *engine.Engine) void {
+    if (e.dir().len == 0) return;
+    var dbuf: [512]u8 = undefined;
+    const dir = std.fmt.bufPrintSentinel(&dbuf, "{s}", .{e.dir()}, 0) catch return;
+    _ = c.SDL_CreateDirectory(dir.ptr);
+    for (exemplos.list) |ex| {
+        if (loaded(e, ex.name)) continue;
+        var buf: [600]u8 = undefined;
+        const path = std.fmt.bufPrintSentinel(&buf, "{s}/{s}", .{ e.dir(), ex.name }, 0) catch continue;
+        var info: c.SDL_PathInfo = undefined;
+        if (c.SDL_GetPathInfo(path.ptr, &info)) continue;
+        _ = c.SDL_SaveFile(path.ptr, ex.source.ptr, ex.source.len);
+    }
+    e.reload();
 }
 
 /// "ligado · /shrug · Ctrl+Shift+X" (ou desligado/parado).

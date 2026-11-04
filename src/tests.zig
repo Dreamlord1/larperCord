@@ -18,6 +18,8 @@ test {
     _ = @import("theme/kdl.zig");
     _ = @import("theme/color.zig");
     _ = @import("theme/theme.zig");
+    _ = @import("theme/fx.zig");
+    _ = @import("ui/procgen.zig");
     _ = @import("theme/custom.zig");
     _ = @import("theme/layout.zig");
     _ = @import("ui/anim.zig");
@@ -34,7 +36,7 @@ test {
 }
 
 /// Componentes que a interface sabe desenhar (manter igual a ui/root.zig).
-const known = [_][]const u8{ "row", "column", "stack", "guild-bar", "channel-list", "user-panel", "header", "tabs", "messages", "composer", "member-list", "status-bar", "label", "spacer", "logo", "topbar", "crt" };
+const known = [_][]const u8{ "row", "column", "stack", "guild-bar", "channel-list", "user-panel", "header", "tabs", "messages", "composer", "member-list", "status-bar", "label", "spacer", "logo", "topbar", "crt", "shape", "rule", "span", "starfield", "orbit", "aurora", "dunes", "topography", "radar", "window-controls" };
 
 fn checkNames(n: anytype) !void {
     for (n.children) |*ch| {

@@ -148,6 +148,140 @@ const Parser = struct {
     }
 };
 
+/// Expressão de cor guardada em vez de resolvida: as primitivas novas dos temas
+/// avaliam no quadro, com os tokens do momento (cor de destaque escolhida, cor
+/// do servidor, `c-…` do pedaço do layout, modo claro/escuro).
+pub const Expr = union(enum) {
+    lit: Rgba,
+    tok: u8,
+    mix: struct { a: *const Expr, b: *const Expr, k: f32 },
+    alpha: struct { a: *const Expr, k: f32 },
+    lighten: struct { a: *const Expr, k: f32 },
+    darken: struct { a: *const Expr, k: f32 },
+
+    pub fn eval(e: *const Expr, toks: []const Rgba) Rgba {
+        return switch (e.*) {
+            .lit => |c| c,
+            .tok => |i| toks[i],
+            .mix => |m| m.a.eval(toks).mix(m.b.eval(toks), m.k),
+            .alpha => |m| m.a.eval(toks).alpha(m.k),
+            .lighten => |m| blk: {
+                const a = m.a.eval(toks);
+                break :blk a.mix(Rgba.white.alpha(a.a), m.k);
+            },
+            .darken => |m| blk: {
+                const a = m.a.eval(toks);
+                break :blk a.mix(Rgba.black.alpha(a.a), m.k);
+            },
+        };
+    }
+
+    fn isLit(e: *const Expr) bool {
+        return e.* == .lit;
+    }
+};
+
+pub const CompileError = Error || error{OutOfMemory};
+
+/// Compila uma expressão de cor. `tokens` diz o índice de um token (`@surface`,
+/// ou só `surface`, sem o arroba, quando a expressão inteira é um token).
+pub fn compile(a: std.mem.Allocator, src: []const u8, palette: *const [16]Rgba, tokens: *const fn (name: []const u8) ?u8) CompileError!*const Expr {
+    var p: Compiler = .{ .s = src, .a = a, .palette = palette, .tokens = tokens };
+    const trimmed = std.mem.trim(u8, src, " \t");
+    if (tokens(trimmed)) |i| return p.node(.{ .tok = i });
+    const e = try p.expr();
+    p.skip();
+    if (p.i != p.s.len) return error.InvalidColor;
+    return e;
+}
+
+const Compiler = struct {
+    s: []const u8,
+    i: usize = 0,
+    a: std.mem.Allocator,
+    palette: *const [16]Rgba,
+    tokens: *const fn (name: []const u8) ?u8,
+
+    fn node(p: *Compiler, e: Expr) CompileError!*const Expr {
+        const out = try p.a.create(Expr);
+        out.* = e;
+        return out;
+    }
+
+    fn skip(p: *Compiler) void {
+        while (p.i < p.s.len and (p.s[p.i] == ' ' or p.s[p.i] == '\t')) p.i += 1;
+    }
+
+    fn word(p: *Compiler) []const u8 {
+        const start = p.i;
+        while (p.i < p.s.len) : (p.i += 1) {
+            const ch = p.s[p.i];
+            if (!(std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == ':' or ch == '@' or ch == '#' or ch == '.')) break;
+        }
+        return p.s[start..p.i];
+    }
+
+    fn expect(p: *Compiler, ch: u8) Error!void {
+        p.skip();
+        if (p.i >= p.s.len or p.s[p.i] != ch) return error.InvalidColor;
+        p.i += 1;
+    }
+
+    fn number(p: *Compiler) Error!f32 {
+        p.skip();
+        return std.fmt.parseFloat(f32, p.word()) catch error.InvalidColor;
+    }
+
+    fn expr(p: *Compiler) CompileError!*const Expr {
+        p.skip();
+        const w = p.word();
+        if (w.len == 0) return error.InvalidColor;
+        p.skip();
+        if (p.i >= p.s.len or p.s[p.i] != '(') return p.atom(w);
+        p.i += 1;
+        const a = try p.expr();
+        if (std.mem.eql(u8, w, "mix")) {
+            try p.expect(',');
+            const b = try p.expr();
+            try p.expect(',');
+            const k = try p.number();
+            try p.expect(')');
+            return p.fold(.{ .mix = .{ .a = a, .b = b, .k = k } }, a.isLit() and b.isLit());
+        }
+        try p.expect(',');
+        const k = try p.number();
+        try p.expect(')');
+        const e: Expr = if (std.mem.eql(u8, w, "alpha"))
+            .{ .alpha = .{ .a = a, .k = k } }
+        else if (std.mem.eql(u8, w, "lighten"))
+            .{ .lighten = .{ .a = a, .k = k } }
+        else if (std.mem.eql(u8, w, "darken"))
+            .{ .darken = .{ .a = a, .k = k } }
+        else
+            return error.InvalidColor;
+        return p.fold(e, a.isLit());
+    }
+
+    /// Sem tokens no meio, a conta já pode ser feita agora.
+    fn fold(p: *Compiler, e: Expr, constant: bool) CompileError!*const Expr {
+        return if (constant) p.node(.{ .lit = e.eval(&.{}) }) else p.node(e);
+    }
+
+    fn atom(p: *Compiler, w: []const u8) CompileError!*const Expr {
+        if (w[0] == '@') return p.node(.{ .tok = p.tokens(w[1..]) orelse return error.InvalidColor });
+        if (w[0] == '#') return p.node(.{ .lit = try parseHex(w[1..]) });
+        if (std.mem.startsWith(u8, w, "wal:")) {
+            const idx = std.fmt.parseInt(usize, w[4..], 10) catch return error.InvalidColor;
+            if (idx >= 16) return error.InvalidColor;
+            return p.node(.{ .lit = p.palette[idx] });
+        }
+        if (std.mem.eql(u8, w, "black")) return p.node(.{ .lit = Rgba.black });
+        if (std.mem.eql(u8, w, "white")) return p.node(.{ .lit = Rgba.white });
+        if (std.mem.eql(u8, w, "transparent")) return p.node(.{ .lit = Rgba.transparent });
+        return error.InvalidColor;
+    }
+};
+
 pub fn parseHex(h: []const u8) Error!Rgba {
     const v = std.fmt.parseInt(u32, h, 16) catch return error.InvalidColor;
     return switch (h.len) {
@@ -201,4 +335,33 @@ test "mix aninhado demais é erro" {
         }
     }.f };
     try std.testing.expectError(error.InvalidColor, eval(&buf, r));
+}
+
+test "expressões compiladas seguem os tokens do momento" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var pal: [16]Rgba = undefined;
+    for (&pal, 0..) |*c, i| c.* = Rgba.hex(@intCast(i * 0x101010));
+    const T = struct {
+        fn f(name: []const u8) ?u8 {
+            if (std.mem.eql(u8, name, "bg")) return 0;
+            if (std.mem.eql(u8, name, "accent")) return 1;
+            return null;
+        }
+    };
+    const e = try compile(a, "alpha(mix(@bg, @accent, 0.5), 0.5)", &pal, T.f);
+    const toks = [_]Rgba{ Rgba.black, Rgba.white };
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), e.eval(&toks).r, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), e.eval(&toks).a, 0.001);
+    const toks2 = [_]Rgba{ Rgba.white, Rgba.white };
+    try std.testing.expectApproxEqAbs(@as(f32, 1), e.eval(&toks2).r, 0.001);
+    // Token sem arroba só quando é a expressão inteira.
+    try std.testing.expect((try compile(a, "accent", &pal, T.f)).* == .tok);
+    // Sem token nenhum a conta é feita ao compilar.
+    try std.testing.expect((try compile(a, "mix(black, white, 0.5)", &pal, T.f)).* == .lit);
+    try std.testing.expect((try compile(a, "lighten(wal:2, 0.1)", &pal, T.f)).* == .lit);
+    try std.testing.expectError(error.InvalidColor, compile(a, "nao-existe", &pal, T.f));
+    try std.testing.expectError(error.InvalidColor, compile(a, "mix(@bg, 0.5)", &pal, T.f));
+    try std.testing.expectError(error.InvalidColor, compile(a, "@bg lixo", &pal, T.f));
 }

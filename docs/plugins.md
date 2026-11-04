@@ -29,11 +29,20 @@ Type `/shrug no idea` in the message box and the channel receives `no idea ¯\_(
 
 The full examples are in [`docs/plugins/`](plugins/):
 
-- [`shrug.lua`](plugins/shrug.lua): the command above;
-- [`alerta.lua`](plugins/alerta.lua): notifies you when someone writes a word from your list.
+| Plugin | What it does |
+|---|---|
+| [`shrug.lua`](plugins/shrug.lua) | `/shrug`: the command above |
+| [`alerta.lua`](plugins/alerta.lua) | notifies you when someone writes a word from your list |
+| [`dado.lua`](plugins/dado.lua) | `/dado 2d20+3`, `/moeda` and `/escolhe pizza, sushi`, with the result in the channel |
+| [`zoeira.lua`](plugins/zoeira.lua) | `/mock`, `/vapor`, `/palmas`, `/contrario` and `/spoiler` rewrite the text |
+| [`calc.lua`](plugins/calc.lua) | `/calc 2+3*4` answers only you; `/conta` sends it to the channel. A hand-written parser, a good model for your own syntax |
+| [`relogio.lua`](plugins/relogio.lua) | `/hora tokyo`, `/horario lisboa` and a `/cronometro` (also on `Ctrl+Alt+T`) |
+| [`resumo.lua`](plugins/resumo.lua) | `/resumo` (or `Ctrl+Alt+R`): how many messages, who talked most and where, since the app opened |
 
-To install: `mkdir -p ~/.config/larpercord/plugins && cp docs/plugins/*.lua ~/.config/larpercord/plugins/`
-and click **Reload** (or open the app again).
+To install: **Settings → Plugins → Install examples** copies the missing ones to your folder
+(without overwriting what you've edited). Or by hand:
+`mkdir -p ~/.config/larpercord/plugins && cp docs/plugins/*.lua ~/.config/larpercord/plugins/`
+and **Reload**.
 
 ## API
 

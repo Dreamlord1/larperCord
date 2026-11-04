@@ -1,5 +1,6 @@
-// editorial — uma revista impressa: masthead em serifa, conversa em coluna
-// central, colaboradores à esquerda e o índice de canais à direita.
+// editorial — uma revista impressa: papel com grão, masthead centrado em serifa
+// entre réguas de jornal, colunas separadas por fios finos, colaboradores à
+// esquerda e o índice de canais à direita. No escuro, a edição noturna.
 theme "editorial" description="Revista impressa: masthead em serifa, conversa em coluna central e índice à direita." description-en="Print magazine: serif masthead, conversation column in the middle and an index on the right." author="larperCord" preview=mirror
 
 options {
@@ -69,42 +70,63 @@ roles mode=dark "#e8a0a4" "#9db8d6" "#a9c98a" "#e0c070" "#c4a3d9" "#9fb0b8" "#7f
 fonts ui="Inter" mono="JetBrains Mono" size=15
 metrics radius=0
 
+// O grão e o escurecimento das bordas mudam com o papel.
+styles mode=light {
+    style "pagina" gradient="lighten(@bg, 0.02) darken(@bg, 0.025)" grain="alpha(@text, 0.075)" vignette="alpha(@muted, 0.16)" vignette-size=0.45
+}
+styles mode=dark {
+    style "pagina" gradient="lighten(@bg, 0.015) darken(@bg, 0.2)" grain="alpha(@text, 0.026)" vignette="alpha(black, 0.45)" vignette-size=0.45
+}
+
 layout {
-    column {
-        topbar height=30 bg=rail
-        row height=92 bg=bg padding-x=32 when=manchete {
-            column width=330 {
-                label height=58 text="larperCord" font="Liberation Serif" size=40 weight=bold color=text
-                label height=16 text="REVISTA DE CONVERSA" size=10 weight=semibold color=accent
+    column style=pagina {
+        topbar height=30 border-bottom="@border"
+        column height=122 padding-x=32 when=manchete {
+            spacer height=6
+            rule height=7 kind=oxford color=text
+            row height=66 {
+                label width=240 size=10 weight=semibold color=muted span-gap=6 {
+                    span "Nº 08" en="No. 08" font="Liberation Serif" size=15 weight=italic color=accent
+                    span "EDIÇÃO" en="ISSUE" tracking=3 size=9
+                }
+                label flex=1 text="larperCord" font="Liberation Serif" size=56 weight=bold color=text align=center tracking=-0.8
+                label width=240 text="REVISTA DE CONVERSA" text-en="A MAGAZINE OF TALK" tracking=2.5 size=9 weight=semibold color=muted align=right
             }
-            column flex=1 {
-                spacer flex=1
-                guild-bar height=44 orientation=horizontal variant=bar shape=square size=34 icon-style=outline labels=#false indicators=#false
-                spacer flex=1
-            }
-            label width=150 align=right text="EDIÇÃO 08" size=10 weight=semibold color=faint font=mono
+            rule height=11 kind=double color=text ornament=star ornament-color=accent ornament-size=11
+            spacer flex=1
         }
-        row flex=1 padding-x=32 padding-y=8 gap=24 {
-            column width=210 hide-below=1150 {
-                label height=28 text="COLABORADORES" size=10 weight=semibold color=faint font=mono
+        row height=48 padding-x=32 gap=4 when=manchete {
+            label width=104 text="SEÇÕES" text-en="SECTIONS" tracking=2.5 size=9 weight=bold color=text font="Inter"
+            guild-bar flex=1 orientation=horizontal variant=bar shape=square size=32 icon-style=outline labels=#false indicators=#false
+        }
+        rule height=1 inset-x=32 color=border when=manchete
+        row flex=1 padding-x=32 padding-y=10 gap=22 {
+            column width=196 hide-below=1150 {
+                label height=26 text="COLABORADORES" text-en="CONTRIBUTORS" tracking=2.5 size=9 weight=bold color=text
+                rule height=5 kind=double color=border
                 member-list flex=1 variant=tty font=mono
             }
+            rule width=1 vertical=#true color=border hide-below=1150
             column flex=1 {
                 tabs height=36 variant=underline when=abas
-                header height=70 variant=minimal font="Liberation Serif"
+                header height=66 variant=minimal font="Liberation Serif"
+                rule height=9 color="alpha(@text, 0.45)" ornament=diamond ornament-color=accent ornament-size=6
                 messages flex=1 avatar=none spacing=20 font="Liberation Serif"
-                column height=80 {
+                column height=76 {
                     spacer flex=1
                     composer height=44 variant=box font="Liberation Serif"
-                    spacer height=16
+                    spacer height=12
                 }
             }
-            column width=240 {
-                label height=28 text="ÍNDICE" size=10 weight=semibold color=faint font=mono
+            rule width=1 vertical=#true color=border
+            column width=232 {
+                label height=26 text="ÍNDICE" text-en="INDEX" tracking=2.5 size=9 weight=bold color=text
+                rule height=5 kind=double color=border
                 channel-list flex=1 header=#false font=mono
+                rule height=1 kind=dotted color=muted
                 user-panel height=52 variant=tty font=mono
             }
         }
-        status-bar height=24 variant=plain when=status items="conn theme ping ram spacer clock"
+        status-bar height=24 variant=plain when=status border-top="@border" items="conn theme ping ram spacer clock"
     }
 }

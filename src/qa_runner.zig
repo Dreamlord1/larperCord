@@ -7,6 +7,7 @@ const std = @import("std");
 const c = @import("c");
 const App = @import("app.zig").App;
 const qa = @import("ui/qa.zig");
+const qa_temas = @import("qa_temas.zig");
 const gw = @import("net/fake_gateway.zig");
 const types = @import("core/types.zig");
 const Id = types.Id;
@@ -852,6 +853,8 @@ const qa_plugins = [_]struct { name: []const u8, src: []const u8 }{
 
 fn writePlugins(_: *App) void {
     _ = c.SDL_CreateDirectory("qa-out/plugins");
+    // Sem as sobras de outra rodada (o "Instalar exemplos" grava aqui).
+    for ([_][:0]const u8{ "qa-out/plugins/calc.lua", "qa-out/plugins/dado.lua", "qa-out/plugins/relogio.lua", "qa-out/plugins/resumo.lua", "qa-out/plugins/zoeira.lua" }) |n| _ = c.SDL_RemovePath(n.ptr);
     for ([_][]const u8{ "shrug.lua", "alerta.lua" }) |n| {
         var a: [96]u8 = undefined;
         var b: [96]u8 = undefined;
@@ -885,6 +888,21 @@ fn noPlugins(app: *App) bool {
 }
 fn pluginsLoaded(app: *App) bool {
     return app.plugins.list.items.len == 5 and qa.find("toggle:shrug.lua") != null;
+}
+fn examplesLoaded(app: *App) bool {
+    for ([_][]const u8{ "calc.lua", "dado.lua", "relogio.lua", "resumo.lua", "zoeira.lua" }) |n| {
+        const p = plugin(app, n) orelse return false;
+        if (p.status() != .running) return false;
+    }
+    return app.plugins.list.items.len == 10 and qa.find("button:Instalar exemplos") == null;
+}
+fn contaSent(app: *App) bool {
+    const m = lastMsg(app, 0) orelse return false;
+    return std.mem.eql(u8, m.msg.content, "`2+3*4 = 14`");
+}
+fn mockSent(app: *App) bool {
+    const m = lastMsg(app, 0) orelse return false;
+    return std.mem.eql(u8, m.msg.content, "iSsO");
 }
 fn syntaxShown(app: *App) bool {
     const p = plugin(app, "quebrado.lua") orelse return false;
@@ -2124,6 +2142,19 @@ const ops = [_]Op{
     click("settings:Plugins"),
     click("toggle:shrug.lua"),
     expect("religar o plugin", shrugOn),
+    click("button:Instalar exemplos"),
+    expect("Instalar exemplos põe os 5 plugins novos na pasta", examplesLoaded),
+    key(c.ImGuiKey_Escape),
+    click("composer"),
+    .{ .text = "/conta 2+3*4" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "/conta (calc.lua) manda a conta no canal", .check = contaSent, .timeout_ms = 3000 } },
+    click("composer"),
+    .{ .text = "/mock isso" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "/mock (zoeira.lua) reescreve o texto", .check = mockSent, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
     .{ .sweep = &.{ "toggle:", "button:" } },
     key(c.ImGuiKey_Escape),
 
@@ -2481,6 +2512,7 @@ const ops_theme = [_]Op{
     expect("carrega e mostra a conversa", ready),
     expect("caixa de texto e mensagens na tela", composerVisible),
     .{ .shot = "tema" },
+} ++ qa_temas.ops_static ++ qa_temas.ops_motion ++ qa_temas.ops_window ++ [_]Op{
     click("composer"),
     .{ .text = "oi deste tema" },
     key(c.ImGuiKey_Enter),
@@ -2572,8 +2604,10 @@ const ops_theme = [_]Op{
     .{ .shot = "tema-config" },
     key(c.ImGuiKey_Escape),
     expect("Esc fecha as configurações", settingsClosed),
+} ++ qa_temas.ops_resize_before ++ [_]Op{
     .{ .resize = .{ 860, 600 } },
-    .{ .wait = 200 },
+    .{ .wait = 300 },
+} ++ qa_temas.ops_resize_after ++ [_]Op{
     expect("janela pequena: ainda dá pra usar", composerVisible),
     .{ .shot = "tema-pequena" },
     .{ .resize = .{ 1280, 800 } },

@@ -1,8 +1,10 @@
 // papel — um caderno: títulos em serifa, o índice na margem direita.
 // Exclusivo: folha pautada com a margem vermelha, que rola junto com a conversa.
+// Papel com grão, furos de fichário, a dobra da folha e o índice em página pontilhada.
 theme "papel" description="Caderno: folha pautada com margem vermelha, títulos em serifa e índice." description-en="Notebook: ruled paper with a red margin, serif headings and an index." author="larperCord" preview=mirror
 
 options {
+    option "furos" label="Furos de fichário" description="Os três furos na beirada da folha." label-en="Binder holes" description-en="The three holes at the edge of the page." default=#true
     option "pautado" label="Folha pautada" description="Linhas de caderno atrás da conversa." label-en="Ruled paper" description-en="Notebook lines behind the conversation." default=#true
     option "margem" label="Margem vermelha" description="A linha dupla da margem, como num caderno escolar." label-en="Red margin" description-en="The double margin line, like a school notebook." default=#true
     option "indice" label="Índice" description="O título \"Índice\" no topo da margem direita." label-en="Index" description-en="The \"Index\" title at the top of the right margin." default=#true
@@ -62,9 +64,27 @@ roles mode=dark "#e8a083" "#86b3e0" "#a9c98a" "#c4a3d9" "#e0c070" "#7fc4c4" "#e0
 fonts ui="Inter" mono="JetBrains Mono" size=16
 metrics radius=4
 
+styles mode=light {
+    style "folha" gradient="lighten(@surface, 0.25) @surface" gradient-angle=0 grain="alpha(@text, 0.06)" vignette="alpha(@muted, 0.14)" vignette-size=0.5
+    style "verso" gradient="mix(@sidebar, @muted, 0.20) @sidebar @sidebar" gradient-angle=0 grain="alpha(@text, 0.06)" pattern=dots pattern-size=18 pattern-width=1 pattern-color="alpha(@text, 0.14)"
+}
+styles mode=dark {
+    style "folha" gradient="lighten(@surface, 0.02) @surface" gradient-angle=0 grain="alpha(@text, 0.025)" vignette="alpha(black, 0.35)" vignette-size=0.5
+    style "verso" gradient="mix(@sidebar, black, 0.45) @sidebar @sidebar" gradient-angle=0 grain="alpha(@text, 0.025)" pattern=dots pattern-size=18 pattern-width=1 pattern-color="alpha(@text, 0.08)"
+}
+
 layout {
     row {
-        column flex=1 bg=surface {
+        column width=38 when=furos style=folha {
+            spacer flex=1
+            shape height=26 kind=ring size=16 thickness=1 color=border fill=rail
+            spacer flex=3
+            shape height=26 kind=ring size=16 thickness=1 color=border fill=rail
+            spacer flex=3
+            shape height=26 kind=ring size=16 thickness=1 color=border fill=rail
+            spacer flex=1
+        }
+        column flex=1 style=folha {
             header height=86 variant=minimal inset-x=44 font="Liberation Serif"
             tabs height=36 variant=underline when=abas
             messages flex=1 avatar=none spacing=22 inset-x=28 ruled="$pautado" margin-line="$margem"
@@ -74,10 +94,13 @@ layout {
                 spacer height=24
             }
         }
-        column width=272 bg=sidebar {
-            label height=68 text="Índice" font="Liberation Serif" size=24 weight=bold color=text when=indice
+        column width=272 style=verso {
+            label height=62 text="Índice" text-en="Index" font="Liberation Serif" size=26 weight=italic color=text tracking=0.5 when=indice
+            rule height=7 inset-x=10 kind=oxford color=text when=indice
             guild-bar height=206 variant=list shape=circle size=22 icon-style=soft
+            rule height=9 inset-x=10 color=border ornament-text="§" ornament-size=13 ornament-color=accent font="Liberation Serif"
             channel-list flex=1 header=#false
+            rule height=1 inset-x=10 kind=dotted color=muted
             user-panel height=56
         }
     }

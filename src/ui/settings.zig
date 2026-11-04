@@ -699,6 +699,21 @@ fn miniature(dl: *c.ImDrawList, pv: Preview, m: d.Rect) void {
     const u = m.w / 100;
     const line_col = pv.text.alpha(0.35);
     switch (pv.kind) {
+        .desktop => {
+            // Papel de parede, janela flutuante com semáforo e Dock.
+            d.rect(dl, m, pv.accent.mix(pv.bg, 0.45), radius);
+            d.rect(dl, .{ .x = m.x, .y = m.y, .w = m.w, .h = 4 * u }, pv.bg.alpha(0.5), 0);
+            const win: d.Rect = .{ .x = m.x + 8 * u, .y = m.y + 8 * u, .w = m.w - 16 * u, .h = m.h - 21 * u };
+            d.shadow(dl, win, 3 * u, 3 * u, d.Rgba.black.alpha(0.4));
+            d.rect(dl, win, pv.surface, 3 * u);
+            d.rectFlags(dl, .{ .x = win.x, .y = win.y, .w = 22 * u, .h = win.h }, pv.sidebar.mix(pv.accent, 0.12), 3 * u, c.ImDrawFlags_RoundCornersLeft);
+            for ([_]u32{ 0xff5f57, 0xfebc2e, 0x28c840 }, 0..) |hex, i| d.circle(dl, win.x + (3 + 3 * @as(f32, @floatFromInt(i))) * u, win.y + 3 * u, 1.1 * u, d.Rgba.hex(hex));
+            for (0..4) |i| d.rect(dl, .{ .x = win.x + 3 * u, .y = win.y + 8 * u + @as(f32, @floatFromInt(i)) * 5 * u, .w = 15 * u, .h = 2 * u }, line_col, u);
+            for (0..3) |i| d.rect(dl, .{ .x = win.x + 27 * u, .y = win.y + 7 * u + @as(f32, @floatFromInt(i)) * 7 * u, .w = (28 + @as(f32, @floatFromInt((i * 11) % 18))) * u, .h = 3 * u }, if (i == 1) pv.accent else line_col, 1.5 * u);
+            const dock: d.Rect = .{ .x = m.x + 30 * u, .y = m.bottom() - 10 * u, .w = 40 * u, .h = 7 * u };
+            d.rect(dl, dock, pv.surface.alpha(0.75), 2.5 * u);
+            for (0..5) |i| d.rect(dl, .{ .x = dock.x + (3 + 7.2 * @as(f32, @floatFromInt(i))) * u, .y = dock.y + 1.5 * u, .w = 4 * u, .h = 4 * u }, pv.accent.alpha(if (i == 0) 1 else 0.6), u);
+        },
         .classic => {
             d.rectFlags(dl, .{ .x = m.x, .y = m.y, .w = 9 * u, .h = m.h }, pv.rail, radius, c.ImDrawFlags_RoundLeft);
             for (0..4) |i| d.circle(dl, m.x + 4.5 * u, m.y + 7 * u + @as(f32, @floatFromInt(i)) * 9 * u, 3 * u, pv.accent.alpha(if (i == 0) 1 else 0.45));

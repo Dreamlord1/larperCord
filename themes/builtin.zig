@@ -12,4 +12,5 @@ pub const list = [_]Builtin{
     .{ .name = "zen", .source = @embedFile("zen.kdl") },
     .{ .name = "papel", .source = @embedFile("papel.kdl") },
     .{ .name = "escritorio", .source = @embedFile("escritorio.kdl") },
+    .{ .name = "cupertino", .source = @embedFile("cupertino.kdl") },
 };

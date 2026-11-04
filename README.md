@@ -109,12 +109,13 @@ Todos têm **modo claro e escuro** e **opções próprias** em Configurações �
 | `vidro` | cartões translúcidos com o blur do compositor | reflexo de luz nos cartões |
 | `terminal` | tmux + IRC; no claro, papel de impressora matricial | efeito CRT, logo em ASCII, fósforo verde |
 | `subsolo` | terminal de hacking underground, verde ácido e scanlines | rack horizontal, ultravioleta, logo em ASCII |
-| `orbital` | console de bordo em grafite e menta, com sistemas numerados | wordmark no topo, composer de comando, faixa de servidores no rodapé |
-| `editorial` | revista impressa, masthead em serifa e índice à direita | layout invertido, conversa em serifa, colofão |
+| `orbital` | console de bordo entre as estrelas, com sistemas numerados | campo de estrelas e órbitas ao fundo, composer de comando, faixa de servidores no rodapé |
+| `editorial` | revista impressa em papel com grão, masthead entre réguas e índice à direita | layout invertido, conversa em serifa, colofão |
 | `bolhas` | mensageiro com balões de conversa | "Entregue ✓✓" e balão de digitando |
 | `zen` | uma coluna central, letras maiores | a navegação se esconde sozinha |
 | `papel` | caderno com índice na margem e títulos em serifa | folha pautada com margem vermelha |
 | `escritorio` | ferramenta de trabalho, barra lateral escura | barra superior com busca e ajuda |
+| `cupertino` | mesa de trabalho estilo Mac: papel de parede e janela flutuante | semáforo que funciona, barra lateral translúcida, Dock com lupa, balões |
 
 ## Conectando sua conta
 
@@ -209,10 +210,10 @@ gateway falso pelo real não toca na interface.
 - [x] Gateway real (WebSocket, heartbeat, reconexão) e REST respeitando o rate limit
 - [x] RESUME de sessão e zlib-stream
 - [x] Presenças, membros e eventos de servidor/canal (GUILD_CREATE, CHANNEL_*)
-- [ ] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
+- [x] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
 - [ ] Permissões por canal (esconder o que não dá pra ler), threads e fóruns
 - [ ] Notificações nativas via D-Bus
-- [ ] Voz (DAVE/MLS + Opus + RNNoise)
+- [x] Voz (DAVE/MLS + Opus)
 - [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB
 - [ ] Componentes de tema escritos em Lua (sandbox)
 

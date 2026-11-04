@@ -1,6 +1,7 @@
 // escritorio — ferramenta de trabalho: barra lateral berinjela com os
 // servidores em lista e a conversa no branco. Exclusivo: barra superior com
-// voltar/avançar entre abas, busca no servidor e ajuda.
+// voltar/avançar entre abas, busca no servidor e ajuda. Berinjela em degradê,
+// fios finos e a caixa de texto flutuando.
 theme "escritorio" description="Ferramenta de trabalho: barra superior com busca, servidores em lista." description-en="Work tool: top bar with search, servers in a list." author="larperCord" preview=office
 
 options {
@@ -63,28 +64,37 @@ roles mode=dark "#36c5f0" "#e8678a" "#2bac76" "#ecb22e" "#c58af9" "#f2994a" "#4f
 fonts ui="Inter" mono="JetBrains Mono" size=15
 metrics radius=6
 
+styles {
+    style "berinjela" gradient="lighten(@sidebar, 0.07) @sidebar darken(@sidebar, 0.10)"
+    style "topo" gradient="darken(@rail, 0.08) @rail" gradient-angle=0 border-bottom="alpha(#ffffff, 0.10)"
+    style "pe" gradient="@rail darken(@rail, 0.14)" border-top="alpha(#ffffff, 0.10)"
+    style "lateral" gradient="@elevated darken(@elevated, 0.015)" border-left="@border"
+}
+
 layout {
     column {
-        topbar height=42 bg=rail when=topo c-text="#ffffff" c-muted="#cdbdcd" c-faint="#9f8aa0" c-hover="alpha(#ffffff, 0.1)"
+        topbar height=42 style=topo when=topo c-text="#ffffff" c-muted="#cdbdcd" c-faint="#9f8aa0" c-hover="alpha(#ffffff, 0.1)"
         row flex=1 {
-            column width=264 bg=sidebar c-text="#ffffff" c-muted="#cdbdcd" c-faint="#9f8aa0" c-selected="#1164a3" c-hover="alpha(#ffffff, 0.08)" c-elevated="#5a2a5c" c-rail="#350d36" c-border="alpha(#ffffff, 0.12)" cd-selected="#1164a3" cd-elevated="#2a2830" cd-rail="#121016" {
+            column width=264 style=berinjela c-text="#ffffff" c-muted="#cdbdcd" c-faint="#9f8aa0" c-selected="#1164a3" c-hover="alpha(#ffffff, 0.08)" c-elevated="#5a2a5c" c-rail="#350d36" c-border="alpha(#ffffff, 0.12)" cd-selected="#1164a3" cd-elevated="#2a2830" cd-rail="#121016" {
                 logo height=48 variant=wordmark size=16
+                rule height=1 color=border
                 guild-bar height=206 variant=list shape=squircle size=24 when=servidores
+                rule height=1 color=border when=servidores
                 channel-list flex=1 header=#false
-                user-panel height=58 bg=rail
+                user-panel height=58 style=pe
             }
             column flex=1 bg=surface {
-                header height=52 c-rail="#ffffff" c-sidebar="#f1f1f3" cd-rail="#222529" cd-sidebar="#2a2d31"
+                header height=52 border-bottom="@border" c-rail="#ffffff" c-sidebar="#f1f1f3" cd-rail="#222529" cd-sidebar="#2a2d31"
                 tabs height=36 variant=underline when=abas
-                messages flex=1 avatar=square avatar-size=36
+                messages flex=1 avatar=square avatar-size=36 c-rail="#f4f4f6" cd-rail="#222529"
                 column height=90 padding-x=18 {
                     spacer flex=1
                     composer height=46
                     spacer height=22
                 }
             }
-            member-list width=232 bg=elevated hide-below=1150
+            member-list width=232 style=lateral hide-below=1150
         }
-        status-bar height=26 variant=plain bg=elevated when=status items="conn ping ram clock"
+        status-bar height=26 variant=plain bg=elevated border-top="@border" when=status items="conn ping ram clock"
     }
 }

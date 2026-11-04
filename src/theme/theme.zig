@@ -3,6 +3,7 @@
 const std = @import("std");
 const kdl = @import("kdl.zig");
 const color = @import("color.zig");
+pub const fx = @import("fx.zig");
 pub const Rgba = color.Rgba;
 
 pub const Token = enum {
@@ -44,6 +45,8 @@ pub const Style = struct {
     glow: ?Rgba = null,
     /// Reflexo de vidro no topo (degradê claro + linha de luz).
     sheen: bool = false,
+    /// Primitivas novas (gradiente, grão, borda por lado…); null = estilo simples.
+    box: ?*const fx.Box = null,
 };
 
 pub const Mode = enum { dark, light };
@@ -89,6 +92,8 @@ pub const Theme = struct {
     layout: ?*const kdl.Node = null,
     /// Sobrescritas efetivas de cada nó (já incluindo as dos pais).
     node_colors: std.AutoHashMapUnmanaged(*const kdl.Node, []const Override) = .empty,
+    /// Primitivas novas dos nós que usam alguma (`fx.zig`). Vazio na maioria.
+    node_fx: std.AutoHashMapUnmanaged(*const kdl.Node, *const fx.NodeFx) = .empty,
     mode: Mode = .dark,
     options: []const Option = &.{},
     option_values: std.StringHashMapUnmanaged(bool) = .empty,
@@ -113,6 +118,16 @@ pub const Theme = struct {
 
     pub fn role(t: *const Theme, i: u8) Rgba {
         return t.roles[i % t.roles.len];
+    }
+
+    /// Valores atuais dos tokens, na ordem que as expressões guardadas usam.
+    pub fn tokenValues(t: *const Theme) []const Rgba {
+        return &t.colors.values;
+    }
+
+    pub fn nodeFx(t: *const Theme, n: *const kdl.Node) ?*const fx.NodeFx {
+        if (t.node_fx.count() == 0) return null;
+        return t.node_fx.get(n);
     }
 };
 
@@ -201,6 +216,9 @@ pub fn loadWith(gpa: std.mem.Allocator, src: []const u8, lo: LoadOptions, diag: 
         }
     }
     t.options = try opts.toOwnedSlice(a);
+    // O modo também vale como condição: `when=modo-claro`, `motion="$modo-escuro"`.
+    try t.option_values.put(a, "modo-claro", lo.mode == .light);
+    try t.option_values.put(a, "modo-escuro", lo.mode == .dark);
 
     for (nodes) |*n| {
         if (!std.mem.eql(u8, n.name, "palette") or !applies(&t, n, lo.mode)) continue;
@@ -230,6 +248,7 @@ pub fn loadWith(gpa: std.mem.Allocator, src: []const u8, lo: LoadOptions, diag: 
         }
     };
     const resolver: color.Resolver = .{ .palette = &pal, .ctx = &t, .lookup = Look.f };
+    var fcx: fx.Cx = .{ .a = a, .palette = &pal, .tokens = tokenIndex };
 
     for (nodes) |*n| {
         if (!applies(&t, n, lo.mode)) continue;
@@ -272,6 +291,7 @@ pub fn loadWith(gpa: std.mem.Allocator, src: []const u8, lo: LoadOptions, diag: 
                 if (ch.num("border-width")) |v| st.border_width = @floatCast(v);
                 if (ch.num("shadow")) |v| st.shadow = @floatCast(v);
                 st.sheen = flagOrOption(&t, ch, "sheen") orelse false;
+                st.box = fx.parseBox(&fcx, ch, true) catch |err| return fxFail(err, fcx, diag);
                 try t.styles.put(a, sname, st);
             }
         } else if (std.mem.eql(u8, n.name, "layout")) {
@@ -280,6 +300,7 @@ pub fn loadWith(gpa: std.mem.Allocator, src: []const u8, lo: LoadOptions, diag: 
     }
     if (t.layout == null) return fail(diag, null, "o tema precisa de um nó `layout`");
     try collectOverrides(&t, a, t.layout.?, &.{}, resolver, lo.mode, diag);
+    collectFx(&t, a, t.layout.?, &fcx) catch |err| return fxFail(err, fcx, diag);
     t.transparent = t.transparent or t.colors.get(.bg).a < 0.999;
     return t;
 }
@@ -306,6 +327,27 @@ fn collectOverrides(t: *Theme, a: std.mem.Allocator, n: *const kdl.Node, inherit
     const effective = try list.toOwnedSlice(a);
     if (effective.len > 0) try t.node_colors.put(a, n, effective);
     for (n.children) |*ch| try collectOverrides(t, a, ch, effective, r, mode, diag);
+}
+
+/// Primitivas novas de cada nó do layout (`gradient=`, `label … tracking=`, …).
+fn collectFx(t: *Theme, a: std.mem.Allocator, n: *const kdl.Node, cx: *fx.Cx) fx.Error!void {
+    for (n.children) |*ch| {
+        const bg_is_token = if (ch.str("bg")) |s| tokenFromName(s) != null else true;
+        if (try fx.parseNode(cx, ch, bg_is_token)) |x| try t.node_fx.put(a, ch, x);
+        // Os `span` são parte do `label`, não nós do layout.
+        if (!std.mem.eql(u8, ch.name, "label")) try collectFx(t, a, ch, cx);
+    }
+}
+
+fn fxFail(err: fx.Error, cx: fx.Cx, diag: ?*Diagnostic) LoadError {
+    if (err == error.OutOfMemory) return error.OutOfMemory;
+    const p = cx.problem orelse return error.InvalidTheme;
+    return fail(diag, p.node, p.message);
+}
+
+fn tokenIndex(name: []const u8) ?u8 {
+    const tok = tokenFromName(name) orelse return null;
+    return @intCast(@intFromEnum(tok));
 }
 
 fn fail(diag: ?*Diagnostic, n: ?*const kdl.Node, msg: []const u8) LoadError {
@@ -456,4 +498,51 @@ test "cores sobrescritas valem para os filhos" {
     const comp = &col.children[1].children[0];
     try std.testing.expectEqual(@as(usize, 1), t.node_colors.get(msgs).?.len);
     try std.testing.expectEqual(@as(usize, 2), t.node_colors.get(comp).?.len);
+}
+
+test "primitivas novas: estilo, nó e erro com a linha" {
+    var t = try load(std.testing.allocator,
+        \\styles {
+        \\    style "simples" bg="@surface" radius=4
+        \\    style "rico" bg="@surface" gradient="@surface @elevated" grain="alpha(@text, 0.05)" hover-bg="@hover"
+        \\}
+        \\layout {
+        \\    stack {
+        \\        starfield color=faint color2="alpha(@accent, 0.5)"
+        \\        column grain="alpha(@text, 0.04)" {
+        \\            label text="a" tracking=3
+        \\            label text="b"
+        \\            row height=1 bg="alpha(@accent, 0.4)"
+        \\            row height=2 bg=sidebar
+        \\        }
+        \\    }
+        \\}
+    , null, null);
+    defer t.deinit();
+    try std.testing.expect(t.style("simples").?.box == null);
+    try std.testing.expect(t.style("rico").?.box.?.gradient != null);
+    const stack = &t.layout.?.children[0];
+    try std.testing.expect(t.nodeFx(&stack.children[0]).?.color("color2") != null);
+    const col = &stack.children[1];
+    try std.testing.expect(t.nodeFx(col).?.box.?.grain != null);
+    try std.testing.expect(t.nodeFx(&col.children[0]).?.text != null);
+    try std.testing.expect(t.nodeFx(&col.children[1]) == null);
+    try std.testing.expect(t.nodeFx(&col.children[2]).?.bg != null);
+    try std.testing.expect(t.nodeFx(&col.children[3]) == null);
+    // A expressão acompanha os tokens do momento (cor escolhida, `c-…`).
+    const e = t.style("rico").?.box.?.gradient.?.stops[0];
+    t.colors.set(.surface, Rgba.hex(0x102030));
+    try std.testing.expectApproxEqAbs(@as(f32, 0x20) / 255.0, e.eval(t.tokenValues()).g, 0.001);
+
+    var d: Diagnostic = .{};
+    try std.testing.expectError(error.InvalidTheme, load(std.testing.allocator, "layout {\n  row {\n    label tracking=2 color=\"@nada\"\n  }\n}", null, &d));
+    try std.testing.expectEqual(@as(u32, 3), d.line);
+}
+
+test "modo vale como condição" {
+    var t = try loadWith(std.testing.allocator, "layout { messages }", .{ .mode = .light }, null);
+    defer t.deinit();
+    try std.testing.expect(t.option("modo-claro").?);
+    try std.testing.expect(!t.option("modo-escuro").?);
+    try std.testing.expectEqual(@as(usize, 0), t.options.len);
 }

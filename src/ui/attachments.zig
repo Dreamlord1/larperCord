@@ -84,15 +84,28 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, m: *const StoredMessage, x: f32, y_i
             const sz = imageSize(a, avail);
             const r: d.Rect = .{ .x = x, .y = y, .w = sz[0], .h = sz[1] };
             image(ctx, dl, a, r, scale, alpha, hid, m.msg.id, i);
-            qa.mark(r, "att:{d}:{d}", .{ m.msg.id, i });
+            markVisible(r, m.msg.id, i);
             y += sz[1];
         } else {
             const r: d.Rect = .{ .x = x, .y = y, .w = fileWidth(avail), .h = file_h };
             fileCard(ctx, dl, a, r, alpha, hid);
-            qa.mark(r, "att:{d}:{d}", .{ m.msg.id, i });
+            markVisible(r, m.msg.id, i);
             y += file_h;
         }
     }
+}
+
+/// A marca do QA cobre só o pedaço à vista: rolado para trás do cabeçalho, o
+/// centro do anexo inteiro cairia num botão de outra coisa.
+fn markVisible(r: d.Rect, msg_id: types.Id, index: usize) void {
+    if (!qa.enabled) return;
+    const p = c.ImGui_GetWindowPos();
+    const s = c.ImGui_GetWindowSize();
+    const x0 = @max(r.x, p.x);
+    const y0 = @max(r.y, p.y);
+    const x1 = @min(r.right(), p.x + s.x);
+    const y1 = @min(r.bottom(), p.y + s.y);
+    if (x1 > x0 and y1 > y0) qa.mark(.{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 }, "att:{d}:{d}", .{ msg_id, index });
 }
 
 fn image(ctx: *d.Ctx, dl: *c.ImDrawList, a: *const Attachment, r: d.Rect, scale: f32, alpha: f32, hid: usize, msg_id: types.Id, index: usize) void {

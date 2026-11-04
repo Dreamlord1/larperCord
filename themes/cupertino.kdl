@@ -1,0 +1,131 @@
+// cupertino — uma mesa de trabalho de Mac: papel de parede de colinas, barra de
+// menus translúcida, janela flutuante com semáforo que funciona, barra lateral
+// que deixa o fundo passar e o Dock com lupa. Mensagens em balões.
+theme "cupertino" description="Mesa de trabalho estilo Mac: papel de parede, janela flutuante com semáforo, barra lateral translúcida e Dock com lupa." description-en="Mac-style desktop: wallpaper, floating window with traffic lights, translucent sidebar and a magnifying Dock." author="larperCord" preview=desktop
+
+options {
+    option "baloes" label="Balões" description="A conversa em balões, como no app de mensagens." label-en="Bubbles" description-en="The conversation in bubbles, like a messaging app." default=#true
+    option "dock" label="Dock" description="Os servidores no Dock, com lupa. Desligado, ficam na barra lateral." label-en="Dock" description-en="Servers in the Dock, with magnification. Off, they move to the sidebar." default=#true
+    option "movimento" label="Papel de parede em movimento" description="As colinas deslizam bem devagar, a 10 quadros por segundo. Desliga sozinho com \"Reduzir movimento\" e com a janela em segundo plano." label-en="Moving wallpaper" description-en="The hills drift very slowly, at 10 frames per second. Turns itself off with \"Reduce motion\" and when the window is in the background." default=#false
+    option "abas" label="Abas de canal" description="Os canais abertos em abas acima da conversa." label-en="Channel tabs" description-en="Open channels as tabs above the conversation." default=#false
+    option "transparente" label="Transparência de verdade" description="Tira o papel de parede: o seu aparece atrás da janela, com o desfoque do compositor." label-en="Real transparency" description-en="Removes the wallpaper: yours shows behind the window, with the compositor's blur." default=#false
+}
+
+// Crepúsculo: céu índigo, colinas em ameixa e carvão.
+palette mode=dark "#141a3c" "#1b2150" "#4a2c7d" "#a8437f" "#5a2a78" "#2a1b52" "#120f2c" "#ffffff" "#000000" "#ff5f57" "#febc2e" "#28c840" "#0a84ff" "#000000" "#000000" "#f5f5f7"
+// Meio-dia: céu claro, colinas em verde e azul petróleo.
+palette mode=light "#7fc4f7" "#a9d9fb" "#ffe6c9" "#79d0a4" "#35a795" "#1d7a8c" "#135a78" "#ffffff" "#000000" "#ff5f57" "#febc2e" "#28c840" "#007aff" "#000000" "#000000" "#1d1d1f"
+
+colors mode=dark {
+    bg          "#1c1c1e"
+    rail        "#161618"
+    sidebar     "#232326"
+    surface     "#1e1e20"
+    elevated    "#2c2c2e"
+    overlay     "#2a2a2c"
+    text        "#f5f5f7"
+    muted       "#a1a1a6"
+    faint       "#6e6e73"
+    accent      "#0a84ff"
+    accent-text "#ffffff"
+    border      "alpha(white, 0.10)"
+    hover       "alpha(white, 0.06)"
+    selected    "alpha(white, 0.13)"
+    online      "#30d158"
+    idle        "#ffd60a"
+    dnd         "#ff453a"
+    danger      "#ff453a"
+    mention     "#0a84ff"
+    link        "#409cff"
+    code-bg     "#2c2c2e"
+    bubble-self "#0a84ff"
+    bubble-self-text "#ffffff"
+    bubble-other "#3a3a3c"
+    shadow      "alpha(black, 0.55)"
+}
+roles mode=dark "#64d2ff" "#ff9f0a" "#bf5af2" "#30d158" "#ff6482" "#ffd60a" "#5e5ce6" "#ac8e68"
+
+colors mode=light {
+    bg          "#f5f5f7"
+    rail        "#e8e8ed"
+    sidebar     "#f0f0f3"
+    surface     "#ffffff"
+    elevated    "#f2f2f7"
+    overlay     "#ffffff"
+    text        "#1d1d1f"
+    muted       "#6e6e73"
+    faint       "#aeaeb2"
+    accent      "#007aff"
+    accent-text "#ffffff"
+    border      "alpha(black, 0.10)"
+    hover       "alpha(black, 0.05)"
+    selected    "alpha(black, 0.08)"
+    online      "#34c759"
+    idle        "#ff9f0a"
+    dnd         "#ff3b30"
+    danger      "#ff3b30"
+    mention     "#007aff"
+    link        "#0066cc"
+    code-bg     "#f2f2f7"
+    bubble-self "#007aff"
+    bubble-self-text "#ffffff"
+    bubble-other "#e9e9eb"
+    shadow      "alpha(black, 0.28)"
+}
+roles mode=light "#0071a4" "#c93400" "#8944ab" "#248a3d" "#d30f45" "#a05a00" "#3634a3" "#7f6545"
+
+window transparent=#true when=transparente
+colors mode=dark when=transparente { bg "alpha(#000000, 0.18)" }
+colors mode=light when=transparente { bg "alpha(#ffffff, 0.14)" }
+
+fonts ui="Inter" mono="JetBrains Mono" size=14
+metrics radius=7
+
+styles {
+    style "janela" radius=12 drop-shadow="alpha(black, 0.42)" drop-shadow-size=44 drop-shadow-y=16 border-gradient="alpha(white, 0.28) alpha(white, 0.06) alpha(white, 0.10)" border-width=1
+    style "lateral" radius=12 corners=left gradient="alpha(@sidebar, 0.74) alpha(@sidebar, 0.60)" grain="alpha(@text, 0.028)"
+    style "conteudo" radius=12 corners=right gradient="@surface @surface"
+    style "menus" gradient="alpha(@bg, 0.42) alpha(@bg, 0.30)" border-bottom="alpha(white, 0.08)"
+}
+
+layout {
+    stack gradient="wal:0 wal:1 wal:2" gradient-angle=90 {
+        dunes seed=11 color="alpha(wal:3, 0.85)" color2="wal:4" color3="wal:5" motion="$movimento" unless=transparente
+        column {
+            row height=28 style=menus padding-x=14 gap=10 {
+                label width=112 text="larperCord" size=13 weight=bold color=text font="Inter Display"
+                status-bar flex=1 variant=plain items="conn ping ram spacer clock"
+            }
+            row flex=1 padding-x=26 padding-y=14 {
+                row flex=1 style=janela padding=1 {
+                    column width=270 style=lateral {
+                        row height=46 padding-x=16 {
+                            window-controls width=64 size=12 gap=8 color="wal:9" color2="wal:10" color3="wal:11"
+                            spacer flex=1
+                        }
+                        guild-bar height=206 variant=list shape=squircle size=22 unless=dock
+                        channel-list flex=1 variant=pills inset-x=6 header=#true
+                        rule height=1 color=border inset-x=14
+                        user-panel height=56 inset-x=6
+                    }
+                    rule width=1 vertical=#true color=border
+                    row flex=1 style=conteudo {
+                    column flex=1 {
+                        header height=56 variant=minimal inset-x=18 border-bottom=border
+                        tabs height=38 variant=pills when=abas border-bottom=border
+                        messages flex=1 variant=bubbles avatar=circle avatar-size=28 spacing=12 ticks=#true typing-bubble=#true when=baloes
+                        messages flex=1 variant=cozy avatar=circle avatar-size=34 spacing=14 unless=baloes
+                        column height=70 padding-x=16 {
+                            spacer flex=1
+                            composer height=42 variant=pill
+                            spacer height=14
+                        }
+                    }
+                    member-list width=214 hide-below=1180 border-left=border
+                    }
+                }
+            }
+            guild-bar height=72 variant=dock size=40 shape=squircle icon-style=fill when=dock c-elevated="alpha(@surface, 0.55)" c-border="alpha(white, 0.28)" cl-elevated="alpha(white, 0.55)"
+        }
+    }
+}
