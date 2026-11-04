@@ -66,6 +66,13 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     d.rect(dl, sr, ctx.col(.rail).mix(ctx.col(.sidebar), 0.3 + 0.3 * sk), ctx.th.radius);
     d.text(dl, fam.get(.regular), 14, sr.x + 9, d.centerY(sr, 14), ctx.col(.faint).mix(ctx.col(.muted), sk), i18n.tr("Buscar  Ctrl+K", "Search  Ctrl+K"));
     icons.search(dl, sr.right() - 15, sr.y + 13, ctx.col(.faint).mix(ctx.col(.muted), sk).u());
+    // Busca nas mensagens (local, também offline): Ctrl+F.
+    const fr: d.Rect = .{ .x = sx - 76, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
+    const fh = d.hit(ctx, 3, fr);
+    qa.mark(fr, "header-find", .{});
+    if (fh.clicked) @import("search.zig").start();
+    icons.search(dl, fr.x + 14, fr.y + 14, (if (fh.hovered) ctx.col(.text) else ctx.col(.muted)).u());
+    d.tip(ctx, fr, i18n.tr("Buscar mensagens (Ctrl+F)", "Search messages (Ctrl+F)"), fh.hovered);
     const mr: d.Rect = .{ .x = sx - 40, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
     const mh = d.hit(ctx, 2, mr);
     qa.mark(mr, "header-members", .{});

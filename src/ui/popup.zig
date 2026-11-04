@@ -18,6 +18,7 @@ const icons = @import("icons.zig");
 const saved_ui = @import("saved.zig");
 const mosaic = @import("mosaic.zig");
 const guild_color = @import("guild_color.zig");
+const accounts_menu = @import("accounts_menu.zig");
 
 pub const emojis = [_][]const u8{
     "😂", "😭", "💀", "🔥", "❤️", "👍", "👎", "👀", "🎉", "😍", "🙏", "😎",
@@ -239,8 +240,10 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         if (it.sep) seps += 9;
     }
     const mw: f32 = 220;
-    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + colors_h + 12;
-    const r = fit(ctx, x + 2, y + 2, mw, mh);
+    // Menu do usuário: as contas embaixo (o menu cresce para cima).
+    const acc_h: f32 = if (kind == .status) accounts_menu.height(ctx) else 0;
+    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + colors_h + 12 + acc_h;
+    const r = fit(ctx, x + 2, y + 2 - acc_h, mw, mh);
     const k = anim.to(anim.id("menu", @intFromEnum(kind)), 1, 30);
     const dl = beginWindow("##menu", r);
     defer c.ImGui_End();
@@ -284,6 +287,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         yy += row_h;
     }
     if (colors_h > 0) guildColors(ctx, dl, id, r, yy);
+    if (kind == .status and accounts_menu.draw(ctx, dl, r, yy)) close(ctx);
 }
 
 /// Fileira "Cor do servidor": a primeira bolinha volta para a cor de sempre,

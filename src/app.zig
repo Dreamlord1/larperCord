@@ -31,6 +31,9 @@ const theme_mod = @import("theme/theme.zig");
 const plugin_host = @import("plugins/host.zig");
 const inbox_core = @import("core/inbox.zig");
 const saved_ui = @import("ui/saved.zig");
+const msg_cache = @import("net/msg_cache.zig");
+const accounts_store = @import("net/accounts_store.zig");
+const app_accounts = @import("app_accounts.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -100,6 +103,8 @@ pub const App = struct {
     last_notice_len: usize = 0,
     /// Plugins em Lua (~/.config/larpercord/plugins).
     plugins: plugin_host.Engine = undefined,
+    /// Última gravação do cache de mensagens (no máximo uma por minuto pelo relógio).
+    cache_flush_ms: i64 = 0,
 
     pub fn create(gpa: std.mem.Allocator, opts: Options) !*App {
         const started = c.SDL_GetTicksNS();
@@ -129,6 +134,13 @@ pub const App = struct {
             .io = io,
             .started_ns = started,
         };
+
+        app.store.on_evict = msg_cache.onEvict;
+        // Cache de mensagens e contas: o QA e os prints nunca usam os de verdade.
+        msg_cache.init(opts.qa);
+        msg_cache.off = opts.shot != null;
+        accounts_store.memory_only = opts.qa or opts.shot != null;
+        accounts_store.load();
 
         // Configurações salvas (ignoradas nos prints, para serem reprodutíveis).
         var saved_theme: ?[]const u8 = null;
@@ -161,7 +173,7 @@ pub const App = struct {
         } else if (opts.demo or opts.qa or (opts.shot != null and c.SDL_getenv("LARPER_SHOT_REAL") == null)) {
             // (LARPER_SHOT_REAL=1: print com a conta de verdade, para depurar.)
             try app.startDemo();
-        } else if (discord.loadToken()) |t| {
+        } else if (app_accounts.startupToken()) |t| {
             try app.startReal(t);
             app.login.begin(.connecting);
         } else app.login.begin(.form);
@@ -191,6 +203,8 @@ pub const App = struct {
         for (app.notifiers.items) |p| c.SDL_DestroyProcess(p);
         app.notifiers.deinit(app.gpa);
         app.stopNet();
+        msg_cache.flushDirty(&app.store);
+        msg_cache.deinit();
         if (app.curl_on) c.curl_global_cleanup();
         app.login.clearToken();
         app.events.deinit();
@@ -217,7 +231,7 @@ pub const App = struct {
     }
 
     /// Conecta na conta de verdade. O gateway passa a ser dono do token.
-    fn startReal(app: *App, token: [:0]u8) !void {
+    pub fn startReal(app: *App, token: [:0]u8) !void {
         // Só inicia o libcurl/OpenSSL quando vai usar (~5 MB a menos no modo demonstração).
         if (!app.curl_on) _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
         app.curl_on = true;
@@ -230,7 +244,7 @@ pub const App = struct {
         try app.net.real.start();
     }
 
-    fn startDemo(app: *App) !void {
+    pub fn startDemo(app: *App) !void {
         app.store.demo = true;
         app.net = .{ .fake = .{
             .commands = try Queue(ev.Command).init(app.gpa),
@@ -241,7 +255,7 @@ pub const App = struct {
         try app.net.fake.start();
     }
 
-    fn stopNet(app: *App) void {
+    pub fn stopNet(app: *App) void {
         switch (app.net) {
             .none => {},
             .fake => |*g| {
@@ -334,7 +348,10 @@ pub const App = struct {
     }
 
     /// Volta ao estado de antes do login: sem conta, sem abas, sem nada.
-    fn resetSession(app: *App) void {
+    pub fn resetSession(app: *App) void {
+        // O que estava na tela vai para o cache antes de sumir.
+        msg_cache.flushDirty(&app.store);
+        @import("ui/search.zig").close();
         _ = app.st.drafts.switchTo(app.gpa, 0, &app.st.input, app.st.editing == 0);
         app.st.filtros.resetSession();
         app.asked_profiles.clearRetainingCapacity();
@@ -344,6 +361,7 @@ pub const App = struct {
         app.st.saved.owner = 0;
         app.store.deinit();
         app.store = Store.init(app.gpa);
+        app.store.on_evict = msg_cache.onEvict;
         const st = &app.st;
         st.tabs.clearRetainingCapacity();
         st.tab = 0;
@@ -378,7 +396,11 @@ pub const App = struct {
                 }
                 const owned = std.heap.c_allocator.dupeSentinel(u8, t, 0) catch return lg.fail(i18n.tr("Sem memória.", "Out of memory."));
                 lg.clearToken();
+                // Adicionando conta: a que estava aberta desconecta agora.
+                app.stopNet();
                 app.resetSession();
+                lg.back_len = 0;
+                app_accounts.token_source = .typed;
                 app.save_token = lg.remember;
                 app.last_notice_len = 0;
                 app.startReal(owned) catch return lg.fail(i18n.tr("Não consegui iniciar a conexão.", "Couldn't start the connection."));
@@ -388,6 +410,7 @@ pub const App = struct {
                 lg.clearToken();
                 app.stopNet();
                 app.resetSession();
+                app_accounts.token_source = .none;
                 app.startDemo() catch return;
                 lg.setPhase(.connecting);
             },
@@ -395,6 +418,15 @@ pub const App = struct {
                 app.stopNet();
                 app.resetSession();
                 lg.setPhase(.form);
+                app_accounts.offerBack(app, 0);
+            },
+            .back => {
+                lg.clearToken();
+                lg.back_len = 0;
+                // Adicionando conta com a sessão aberta: só fecha o login.
+                if (app.store.ready) return lg.setPhase(.leaving);
+                if (accounts_store.list.find(app_accounts.prev_account) != null and app_accounts.switchAccount(app, app_accounts.prev_account)) return;
+                lg.fail(i18n.tr("Não achei o token dessa conta no chaveiro.", "Couldn't find that account's token in the keyring."));
             },
         }
     }
@@ -541,7 +573,7 @@ pub const App = struct {
         return app.theme_colors.getPtr(key);
     }
 
-    fn saveSettings(app: *App) void {
+    pub fn saveSettings(app: *App) void {
         if (app.opts.shot != null or app.opts.qa) return;
         var buf: [512]u8 = undefined;
         const path = settingsPath(&buf) orelse return;
@@ -649,8 +681,12 @@ pub const App = struct {
         app.store.markRead(cs.info.id);
         app.st.filtros.clear(&app.store, cs.info.id);
         app.st.focus_input = true;
+        // Trocou de conversa: o que mudou nas outras vai para o disco.
+        msg_cache.flushDirty(&app.store);
         if (cs.history == .none) {
             cs.history = .loading;
+            // O cache do disco aparece na hora; o histórico chega por cima.
+            msg_cache.restore(&app.store, cs);
             app.cmd(.{ .fetch_history = cs.info.id });
         }
     }
@@ -782,7 +818,8 @@ pub const App = struct {
             },
             .load_older => |id| {
                 const cs = app.store.channel(id) orelse return;
-                if (cs.older != .idle or cs.history != .loaded) return;
+                // (Ainda no cache do disco: espera o histórico de verdade.)
+                if (cs.older != .idle or cs.history != .loaded or cs.cached) return;
                 // A mais antiga que já veio do servidor (a pendente não tem ID).
                 const before = for (cs.messages.items) |m| {
                     if (m.msg.id != 0) break m.msg.id;
@@ -1020,13 +1057,10 @@ pub const App = struct {
                 defer app.gpa.free(sn.text);
                 if (st.saved.setNote(app.gpa, sn.id, sn.text) catch false) app.persistSaved();
             },
-            .logout => {
-                app.saveSettings();
-                if (!app.opts.qa) discord.forgetToken();
-                app.stopNet();
-                app.resetSession();
-                app.login.begin(.form);
-                app.login.t = 10; // sem a abertura de novo
+            .logout, .switch_account, .add_account, .remove_account => app_accounts.handle(app, a),
+            .clear_cache => {
+                msg_cache.clearAll(&app.store);
+                st.showToast(now(), false, "cache apagado", "cache cleared", .{});
             },
         }
     }
@@ -1039,7 +1073,9 @@ pub const App = struct {
         app.events.drain(&batch);
         const was_ready = app.store.ready;
         var failed = false;
+        var reconnected = false;
         for (batch.items) |e| {
+            if (e == .status and e.status == .ready) reconnected = true;
             if (e == .notice) {
                 app.st.showToast(now(), true, "{s}", "{s}", .{e.notice});
                 const n = @min(e.notice.len, app.last_notice.len);
@@ -1064,21 +1100,23 @@ pub const App = struct {
             app.onReady();
             app.plugins.fireReady();
             if (app.login.phase == .connecting) app.login.setPhase(.leaving);
-            // O Discord aceitou: agora sim guarda o token, se pediram.
-            if (app.save_token and app.net == .real) {
-                app.save_token = false;
-                switch (discord.saveToken(app.net.real.token)) {
-                    .keyring => app.st.showToast(now(), false, "token guardado no chaveiro do sistema", "token saved to the system keyring", .{}),
-                    .file => app.st.showToast(now(), false, "token guardado em ~/.config/larpercord/token", "token saved to ~/.config/larpercord/token", .{}),
-                    .failed => app.st.showToast(now(), true, "não consegui guardar o token", "couldn't save the token", .{}),
-                }
-            }
+            // O Discord aceitou: agora sim guarda a conta (e o token, se pediram).
+            app_accounts.ready(app);
+        } else if (reconnected and was_ready) {
+            // Voltou a conexão: as conversas que ficaram só no cache do disco
+            // (abertas sem rede) buscam o histórico de novo.
+            var it = app.store.channels.valueIterator();
+            while (it.next()) |cs| if (cs.*.cached) app.cmd(.{ .fetch_history = cs.*.info.id });
         }
         if (failed and app.net == .real and !app.store.ready) {
             // Token recusado (ou erro fatal) antes de entrar: volta ao login.
             app.stopNet();
             app.resetSession();
             app.login.fail(if (app.last_notice_len > 0) app.last_notice[0..app.last_notice_len] else i18n.tr("Não deu pra entrar com esse token.", "Couldn't sign in with that token."));
+            app_accounts.offerBack(app, switch (app_accounts.token_source) {
+                .saved => |id| id,
+                else => 0,
+            });
             return;
         }
         // GUILD_DELETE/CHANNEL_DELETE: não deixa a interface apontando para
@@ -1387,7 +1425,14 @@ pub const App = struct {
                             app.applyThemeStyle();
                             app.st.showToast(now(), false, "tema recarregado: {s}", "theme reloaded: {s}", .{app.themes.name()});
                         } else app.st.showToast(now(), true, "{s}", "{s}", .{app.themes.last_error orelse i18n.tr("erro no tema", "theme error")}),
-                        .tick => pending = @max(pending, 1),
+                        .tick => {
+                            pending = @max(pending, 1);
+                            // O relógio já acorda o app: aproveita para gravar o cache.
+                            if (now() - app.cache_flush_ms >= 60_000) {
+                                app.cache_flush_ms = now();
+                                msg_cache.flushDirty(&app.store);
+                            }
+                        },
                         .media => bg_dirty = true,
                     }
                 } else {
@@ -1455,6 +1500,7 @@ pub const App = struct {
             @import("net/proxy.zig").set(set.proxy.slice(), set.proxy_all);
             @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
             app.store.keep_log = set.message_log;
+            msg_cache.enabled = set.message_cache;
             widgets.hour12 = !set.clock_24h;
             app.images.data_saver = set.data_saver;
             // Modo foco venceu: o que chegou nos outros canais volta como não lido.
@@ -1473,7 +1519,8 @@ pub const App = struct {
             if (app.store.ready and (app.opts.stats or app.opts.shot != null)) app.scene(settled_frames >= 3);
             c.ImGui_NewFrame();
             qa_mod.beginFrame();
-            if (app.store.ready) {
+            // (O login por cima da conta aberta, ao adicionar outra, cobre tudo.)
+            if (app.store.ready and app.login.phase != .form) {
                 const th = app.customTheme();
                 // Trocou de servidor (ou de cor do servidor): seleção e cursor do texto acompanham.
                 if (guild_color.changed(app.st.guild)) app.applyImGuiColors(th);

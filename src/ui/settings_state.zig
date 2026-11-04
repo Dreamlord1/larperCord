@@ -81,6 +81,8 @@ pub const Settings = struct {
     /// de fora passa por ele, ou tudo com `proxy_all` (net/proxy.zig).
     proxy: Text = .{},
     proxy_all: bool = false,
+    /// Últimas mensagens de cada canal em disco (abrir na hora, busca offline).
+    message_cache: bool = true,
 
     /// Nosso status: 0 online, 1 ausente, 2 não perturbe, 3 invisível.
     /// Reaplicado ao conectar.

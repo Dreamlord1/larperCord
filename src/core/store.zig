@@ -37,6 +37,8 @@ pub const StoredMessage = struct {
     /// Cache das palavras de alerta/filtro que o texto contém (core/filtros.zig).
     flt_key: u32 = 0,
     flt: u8 = 0,
+    /// Veio do cache em disco (ver `loadCached`), não do servidor.
+    from_cache: bool = false,
 
     pub fn reactionSlice(m: *const StoredMessage) []const types.Reaction {
         return m.reactions[0..m.n_reactions];
@@ -63,6 +65,8 @@ pub const ChannelState = struct {
     /// Marcador de leitura: a última mensagem quando o canal foi lido
     /// (0 = não foi lido nesta sessão). A caixa de entrada usa.
     read_id: Id = 0,
+    /// Mostrando o cache do disco enquanto o histórico de verdade não chega.
+    cached: bool = false,
 };
 
 /// Lista de membros de um servidor, no formato do Discord: posições fixas
@@ -121,6 +125,9 @@ pub const Store = struct {
     recent_mentions: std.ArrayList(StoredMessage) = .empty,
     mentions_state: History = .none,
     mentions_ms: i64 = 0,
+    /// Chamado antes de uma conversa sair da memória (o cache em disco
+    /// guarda o que ela tinha).
+    on_evict: ?*const fn (*Store, *ChannelState) void = null,
 
     pub fn init(gpa: std.mem.Allocator) Store {
         return .{ .gpa = gpa };
@@ -467,11 +474,40 @@ pub const Store = struct {
                     for (h.messages) |m| freeRaw(m);
                     return;
                 };
+                // Falhou (sem rede, por exemplo) com o cache na tela: fica com ele.
+                if (!h.older and cs.cached and h.messages.len == 0 and h.more) return;
+                // Página nova por cima do cache do disco: troca o cache pelo
+                // que veio, mas fica com as do cache mais antigas que a página
+                // quando as duas se encostam (a conversa não pula).
+                var keep_before: Id = 0;
+                const replacing = !h.older and cs.cached;
+                if (replacing) {
+                    cs.cached = false;
+                    cs.older = .idle;
+                    var newest_cached: Id = 0;
+                    for (cs.messages.items) |m| if (m.from_cache) {
+                        newest_cached = @max(newest_cached, m.msg.id);
+                    };
+                    if (h.messages.len > 0 and newest_cached >= h.messages[0].id) keep_before = h.messages[0].id;
+                }
+                const newest_page: Id = if (h.messages.len > 0) h.messages[h.messages.len - 1].id else 0;
                 // O histórico vem antes do que já temos.
                 var fresh: std.ArrayList(StoredMessage) = .empty;
                 try fresh.ensureTotalCapacity(s.gpa, h.messages.len + cs.messages.items.len);
+                if (replacing) for (cs.messages.items) |m| if (m.from_cache and m.msg.id < keep_before) fresh.appendAssumeCapacity(m);
                 for (h.messages) |m| fresh.appendAssumeCapacity(try s.stored(m));
-                fresh.appendSliceAssumeCapacity(cs.messages.items);
+                for (cs.messages.items) |*m| {
+                    if (replacing and m.from_cache) {
+                        if (m.msg.id >= keep_before) s.freeMessage(m);
+                        continue;
+                    }
+                    // Chegou ao vivo enquanto a página carregava e veio nela também.
+                    if (!h.older and m.msg.id != 0 and m.msg.id <= newest_page) {
+                        s.freeMessage(m);
+                        continue;
+                    }
+                    fresh.appendAssumeCapacity(m.*);
+                }
                 cs.messages.deinit(s.gpa);
                 cs.messages = fresh;
                 cs.history = .loaded;
@@ -992,6 +1028,47 @@ pub const Store = struct {
         cs.version +%= 1;
     }
 
+    /// Conversa lida do cache em disco, mostrada enquanto o histórico de
+    /// verdade não chega (ele substitui o cache em `.history`). Assume os
+    /// textos de cada mensagem (ev_alloc), não a lista; `reactions[i]` vai
+    /// para `msgs[i]`.
+    pub fn loadCached(s: *Store, cs: *ChannelState, msgs: []const types.Message, reactions: []const []const types.Reaction) !void {
+        if (cs.history == .loaded) {
+            for (msgs) |m| freeRaw(m);
+            return;
+        }
+        const newest: Id = if (msgs.len > 0) msgs[msgs.len - 1].id else 0;
+        var fresh: std.ArrayList(StoredMessage) = .empty;
+        errdefer fresh.deinit(s.gpa);
+        try fresh.ensureTotalCapacity(s.gpa, msgs.len + cs.messages.items.len);
+        for (msgs, 0..) |m, i| {
+            var sm = s.stored(m) catch {
+                freeRaw(m);
+                continue;
+            };
+            sm.from_cache = true;
+            if (i < reactions.len) {
+                const rs = reactions[i][0..@min(reactions[i].len, sm.reactions.len)];
+                @memcpy(sm.reactions[0..rs.len], rs);
+                sm.n_reactions = @intCast(rs.len);
+            }
+            fresh.appendAssumeCapacity(sm);
+        }
+        // As que chegaram ao vivo antes de abrir ficam depois (sem repetir).
+        for (cs.messages.items) |*m| {
+            if (m.msg.id != 0 and m.msg.id <= newest) {
+                s.freeMessage(m);
+                continue;
+            }
+            fresh.appendAssumeCapacity(m.*);
+        }
+        cs.messages.deinit(s.gpa);
+        cs.messages = fresh;
+        cs.history = .loaded;
+        cs.cached = true;
+        cs.version +%= 1;
+    }
+
     /// Mostra na hora uma mensagem que acabamos de enviar.
     /// `attachments` passa a pertencer ao Store (alocado com o c_allocator).
     pub fn addPending(s: *Store, channel_id: Id, content: []const u8, nonce: u64, reply_to: Id, now_ms: i64, attachments: []const types.Attachment) !void {
@@ -1025,13 +1102,19 @@ pub const Store = struct {
                 if (victim == null or cs.*.seen_ms < victim.?.seen_ms) victim = cs.*;
             }
             if (total <= global_budget) return;
-            const v = victim orelse return;
-            for (v.messages.items) |*m| s.freeMessage(m);
-            v.messages.clearAndFree(s.gpa);
-            v.history = .none;
-            v.older = .idle;
-            v.version +%= 1;
+            s.unload(victim orelse return);
         }
+    }
+
+    /// Tira a conversa da memória (é buscada de novo quando voltar para a tela).
+    pub fn unload(s: *Store, cs: *ChannelState) void {
+        if (s.on_evict) |f| f(s, cs);
+        for (cs.messages.items) |*m| s.freeMessage(m);
+        cs.messages.clearAndFree(s.gpa);
+        cs.history = .none;
+        cs.older = .idle;
+        cs.cached = false;
+        cs.version +%= 1;
     }
 
     fn trim(s: *Store, cs: *ChannelState) void {
@@ -1212,4 +1295,65 @@ test "reações, edição e exclusão" {
 
     try s.apply(.{ .message_delete = .{ .channel = 10, .id = 7 } }, 0);
     try std.testing.expectEqual(@as(usize, 0), s.channel(10).?.messages.items.len);
+}
+
+fn testMsgs(ids: []const Id, channel: Id) ![]types.Message {
+    const c_alloc = std.heap.c_allocator;
+    const out = try c_alloc.alloc(types.Message, ids.len);
+    for (ids, out) |id, *m| m.* = .{ .id = id, .channel = channel, .author = 2, .timestamp = @intCast(id), .content = try c_alloc.dupe(u8, "x") };
+    return out;
+}
+
+test "cache do disco aparece na hora e o histórico funde sem pular" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    const chans = try c_alloc.alloc(types.Channel, 1);
+    chans[0] = .{ .id = 10, .guild = 5, .name = try c_alloc.dupe(u8, "g"), .topic = try c_alloc.dupe(u8, "") };
+    try s.apply(.{ .ready = .{ .me = 1, .users = try c_alloc.alloc(types.User, 0), .guilds = try c_alloc.alloc(types.Guild, 0), .channels = chans, .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
+    const cs = s.channel(10).?;
+    cs.history = .loading;
+
+    // Cache: 100..105. Uma ao vivo (104, repetida) chegou antes de abrir.
+    try s.apply(.{ .message_create = .{ .id = 104, .channel = 10, .author = 2, .timestamp = 0, .content = try c_alloc.dupe(u8, "ao vivo") } }, 0);
+    const cached = try testMsgs(&.{ 100, 101, 102, 103, 104, 105 }, 10);
+    defer c_alloc.free(cached);
+    try s.loadCached(cs, cached, &.{});
+    try std.testing.expect(cs.cached and cs.history == .loaded);
+    try std.testing.expectEqual(@as(usize, 6), cs.messages.items.len);
+    try std.testing.expect(cs.messages.items[0].from_cache);
+
+    // Página do servidor 103..108: as do cache antes de 103 ficam, o resto troca.
+    try s.apply(.{ .history = .{ .channel = 10, .messages = try testMsgs(&.{ 103, 104, 105, 106, 107, 108 }, 10) } }, 0);
+    try std.testing.expect(!cs.cached);
+    const ids = [_]Id{ 100, 101, 102, 103, 104, 105, 106, 107, 108 };
+    try std.testing.expectEqual(ids.len, cs.messages.items.len);
+    for (ids, cs.messages.items) |id, m| try std.testing.expectEqual(id, m.msg.id);
+    try std.testing.expect(cs.messages.items[0].from_cache and !cs.messages.items[3].from_cache);
+
+    // Mais antigas depois disso não apagam as do cache que ficaram.
+    try s.apply(.{ .history = .{ .channel = 10, .messages = try testMsgs(&.{ 90, 91 }, 10), .older = true } }, 0);
+    try std.testing.expectEqual(ids.len + 2, cs.messages.items.len);
+    try std.testing.expectEqual(@as(Id, 100), cs.messages.items[2].msg.id);
+}
+
+test "cache sem encostar no histórico é trocado; sem rede, fica" {
+    const c_alloc = std.heap.c_allocator;
+    var s = Store.init(std.testing.allocator);
+    defer s.deinit();
+    const chans = try c_alloc.alloc(types.Channel, 1);
+    chans[0] = .{ .id = 10, .guild = 5, .name = try c_alloc.dupe(u8, "g"), .topic = try c_alloc.dupe(u8, "") };
+    try s.apply(.{ .ready = .{ .me = 1, .users = try c_alloc.alloc(types.User, 0), .guilds = try c_alloc.alloc(types.Guild, 0), .channels = chans, .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
+    const cs = s.channel(10).?;
+    const cached = try testMsgs(&.{ 1, 2, 3 }, 10);
+    defer c_alloc.free(cached);
+    try s.loadCached(cs, cached, &.{});
+    // Pedido falhou (página vazia, "pode ter mais"): o cache continua.
+    try s.apply(.{ .history = .{ .channel = 10, .messages = &.{} } }, 0);
+    try std.testing.expect(cs.cached);
+    try std.testing.expectEqual(@as(usize, 3), cs.messages.items.len);
+    // Página bem mais nova, sem encostar: o cache sai inteiro.
+    try s.apply(.{ .history = .{ .channel = 10, .messages = try testMsgs(&.{ 50, 51 }, 10) } }, 0);
+    try std.testing.expectEqual(@as(usize, 2), cs.messages.items.len);
+    try std.testing.expectEqual(@as(Id, 50), cs.messages.items[0].msg.id);
 }

@@ -197,4 +197,11 @@ pub const Action = union(enum) {
     saved_note: struct { id: Id, text: []const u8 },
     /// "Cor do servidor": destaque enquanto o servidor está aberto; null limpa.
     set_guild_color: struct { guild: Id, rgb: ?u32 },
+    /// Várias contas: troca (desconecta e entra na outra), volta à tela de
+    /// login sem esquecer as guardadas, esquece uma conta.
+    switch_account: Id,
+    add_account,
+    remove_account: Id,
+    /// Configurações → Privacidade → Apagar cache.
+    clear_cache,
 };
