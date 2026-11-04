@@ -9,6 +9,8 @@ test {
     _ = @import("core/markdown.zig");
     _ = @import("core/store.zig");
     _ = @import("core/filtros.zig");
+    _ = @import("core/leitura.zig");
+    _ = @import("core/links.zig");
     _ = @import("ui/rascunhos.zig");
     _ = @import("core/inbox.zig");
     _ = @import("core/saved.zig");
@@ -28,6 +30,7 @@ test {
     _ = @import("ui/settings_state.zig");
     _ = @import("ui/guild_color.zig");
     _ = @import("net/jsonx.zig");
+    _ = @import("net/read_state_json.zig");
     _ = @import("net/media_url.zig");
     _ = @import("net/proxy.zig");
     _ = @import("net/settings_proto.zig");

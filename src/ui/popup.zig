@@ -139,6 +139,7 @@ fn popupKey(p: state.Popup) u64 {
         .inbox => 4,
         .saved => 5,
         .mixer => 6,
+        .pins => |x| 7 +% x.channel *% 31,
     };
 }
 
@@ -199,6 +200,7 @@ pub fn draw(ctx: *d.Ctx) void {
         .mixer => |m| mixer(ctx, m.x, m.y),
         .inbox => |ib| @import("inbox.zig").draw(ctx, ib.tab),
         .saved => saved_ui.draw(ctx),
+        .pins => |x| @import("pins.zig").draw(ctx, x.channel),
         .none => {},
     }
     animateOpen(ctx);
@@ -262,6 +264,9 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
                     add(&items, &n, .{ .label = "Salvar mensagem", .en = "Save Message", .id = 10 });
             }
             add(&items, &n, .{ .label = "Marcar como não lida", .en = "Mark Unread", .id = 7 });
+            // Fixar pede "gerenciar mensagens" no canal (numa DM, qualquer um).
+            if (found.m.msg.id != 0 and found.m.msg.system == .none and ctx.store.channelPermissions(&found.cs.info) & types.perm.manage_messages != 0)
+                add(&items, &n, if (found.m.msg.pinned) .{ .label = "Desafixar mensagem", .en = "Unpin Message", .id = 11 } else .{ .label = "Fixar mensagem", .en = "Pin Message", .id = 11 });
             if (dev) add(&items, &n, .{ .label = "Copiar ID da mensagem", .en = "Copy Message ID", .id = 8 });
             // Dos outros também, para quem pode gerenciar mensagens no servidor.
             const mod = found.m.msg.id != 0 and ctx.store.can(found.cs.info.guild, types.perm.manage_messages);
@@ -450,9 +455,8 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             var gb: [24]u8 = undefined;
             copyFmt(ctx, "https://discord.com/channels/{s}/{d}/{d}", .{ guildPart(&gb, f.cs.info.guild), f.cs.info.id, id });
         },
-        7 => if (ctx.store.findAny(id)) |f| {
-            f.cs.info.unread = true;
-        },
+        7 => ctx.act(.{ .mark_unread = id }),
+        11 => if (ctx.store.findAny(id)) |f| ctx.act(.{ .pin_message = .{ .channel = f.cs.info.id, .id = id, .add = !f.m.msg.pinned } }),
         8, 25, 44, 63 => copyFmt(ctx, "{d}", .{id}),
         10 => ctx.act(if (st.saved.find(id) != null) .{ .unsave_message = id } else .{ .save_message = id }),
         80, 81, 82, 83 => ctx.act(.{ .set_status = @enumFromInt(item - 80) }),
@@ -497,9 +501,12 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             ctx.act(.{ .focus_tab = st.tabs.items.len - 1 });
         },
         45 => mosaic.openBeside(ctx, id),
-        42 => if (st.muted_channels.contains(id)) {
-            _ = st.muted_channels.remove(id);
-        } else st.muted_channels.put(st.gpa, id, {}) catch {},
+        42 => {
+            if (st.muted_channels.contains(id)) {
+                _ = st.muted_channels.remove(id);
+            } else st.muted_channels.put(st.gpa, id, {}) catch {};
+            if (ctx.store.channel(id)) |cs| ctx.store.refreshGuildUnread(cs.info.guild);
+        },
         46 => if (ctx.store.channel(id)) |cs| {
             st.voice_guild = cs.info.guild;
             ctx.act(.leave_voice);

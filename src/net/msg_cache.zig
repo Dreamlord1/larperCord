@@ -217,6 +217,8 @@ pub fn restore(store: *Store, cs: *ChannelState) void {
 // --- Escrita ---------------------------------------------------------------------
 
 fn dirty(cs: *const ChannelState) bool {
+    // Fora do presente (página do passado): o disco fica com o que tinha.
+    if (cs.detached) return false;
     const s = saved.get(cs.info.id) orelse return cs.history == .loaded;
     return cs.history == .loaded and s.version != cs.version;
 }
@@ -224,7 +226,7 @@ fn dirty(cs: *const ChannelState) bool {
 /// Grava as últimas mensagens da conversa (as pendentes e as apagadas, do
 /// registro de mensagens, ficam de fora).
 pub fn save(store: *Store, cs: *ChannelState) void {
-    if (!usable() or cs.history != .loaded) return;
+    if (!usable() or cs.history != .loaded or cs.detached) return;
     const items = cs.messages.items;
     var pick: [channel_msgs]u32 = undefined;
     var n: usize = 0;

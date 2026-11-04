@@ -1570,7 +1570,8 @@ fn oldMentionOpened(app: *App) bool {
     const want = for (app.store.recent_mentions.items) |m| {
         if (m.msg.id == saved_id) break m.msg.channel;
     } else return false;
-    return cs.info.id == want and cs.history == .loaded and app.st.popup == .none and app.st.jump == 0 and !noOldToast(app);
+    // Fora do que carrega ao abrir: buscou em volta dela e ela está na lista.
+    return cs.info.id == want and cs.history == .loaded and app.st.popup == .none and app.st.jump == 0 and noOldToast(app) and app.store.find(cs, saved_id) != null;
 }
 fn rememberOther(app: *App) void {
     if (lastOther(app)) |m| saved_id = m.msg.id;
@@ -1640,7 +1641,7 @@ const ops = [_]Op{
     expect("app conecta e carrega o histórico", ready),
     expect("abre com 3 abas e #geral ativo", threeTabs),
     .{ .shot = "01-inicio" },
-
+} ++ @import("qa_leitura.zig").startup ++ [_]Op{
     s("navegação"),
     click("channel:500006"),
     expect("clicar num canal abre ele na aba", onMemes),
@@ -2158,7 +2159,7 @@ const ops = [_]Op{
     .{ .sweep = &.{ "toggle:", "button:" } },
     key(c.ImGuiKey_Escape),
 
-} ++ @import("qa_alertas.zig").ops ++ [_]Op{
+} ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ [_]Op{
     s("caixa de entrada"),
     click("guild:500000"),
     click("channel:500005"),
@@ -2191,7 +2192,7 @@ const ops = [_]Op{
     .{ .shot = "42-mencoes" },
     .{ .run = clearToast },
     .{ .click = .{ .dyn = tFirstMention } },
-    .{ .expect = .{ .name = "menção antiga abre o canal e avisa que não está carregada", .check = oldMentionOpened, .timeout_ms = 3000 } },
+    .{ .expect = .{ .name = "menção antiga abre o canal e busca em volta dela", .check = oldMentionOpened, .timeout_ms = 3000 } },
 
     s("mensagens salvas"),
     click("guild:500000"),

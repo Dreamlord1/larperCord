@@ -23,6 +23,8 @@ const i18n = @import("../ui/i18n.zig");
 const media_url = @import("media_url.zig");
 const proxy = @import("proxy.zig");
 const settings_proto = @import("settings_proto.zig");
+const leitura = @import("../core/leitura.zig");
+const read_json = @import("read_state_json.zig");
 const voice_mod = @import("voice.zig");
 const Id = types.Id;
 const Value = std.json.Value;
@@ -59,6 +61,10 @@ pub const Gateway = struct {
     /// Pedido de encerrar visto também de dentro de uma transferência do
     /// libcurl (que pode levar até 180 s): o app fecha sem esperar.
     abort: std.atomic.Value(bool) = .init(false),
+    /// Confirmações de leitura esperando a vez (core/leitura.zig).
+    acks: leitura.AckQueue = .{},
+    /// Fechando: até quando os últimos acks podem demorar (0 = não está).
+    flush_until: i64 = 0,
     /// Call em andamento (dona da thread de voz).
     voice: ?*voice_mod.Voice = null,
     voice_guild: Id = 0,
@@ -155,6 +161,7 @@ pub const Gateway = struct {
         g.zout.deinit(alloc);
         g.role_info.deinit(alloc);
         g.voice_volumes.deinit(alloc);
+        g.acks.deinit(alloc);
     }
 
     const RoleInfo = struct { color: u32, pos: i64 };
@@ -247,6 +254,7 @@ pub const Gateway = struct {
                 },
             }
         }
+        g.flushAcksOnExit();
     }
 
     /// Monta a URL do gateway com a query que o cliente oficial usa.
@@ -293,6 +301,10 @@ pub const Gateway = struct {
             .send_message => |m| g.emit(.{ .send_failed = .{ .channel = m.channel, .nonce = m.nonce } }),
             .fetch_history => |ch| g.emit(.{ .history = .{ .channel = ch, .messages = &.{} } }),
             .fetch_older => |o| g.emit(.{ .history = .{ .channel = o.channel, .messages = &.{}, .older = true } }),
+            .fetch_around => |o| g.emit(.{ .history = .{ .channel = o.channel, .messages = &.{}, .around = true } }),
+            .fetch_newer => |o| g.emit(.{ .history = .{ .channel = o.channel, .messages = &.{}, .newer = true } }),
+            .fetch_pins => |ch| g.emit(.{ .pins = .{ .channel = ch, .messages = &.{}, .ok = false } }),
+            .fetch_invite => |code| g.emit(.{ .invite = .{ .code = code, .invite = .{ .state = .failed } } }),
             else => {},
         }
         freeCommand(cmd);
@@ -417,6 +429,8 @@ pub const Gateway = struct {
             }
             cmds.clearRetainingCapacity();
             if (g.stopping) return .reconnect;
+            g.flushAcks();
+            if (g.stopping) return .reconnect;
             g.voiceTick();
             if (g.ws_end) |e| return e;
 
@@ -425,7 +439,7 @@ pub const Gateway = struct {
             const now = nowMs();
             const voice_busy = g.voice != null or g.voice_wait_until != 0;
             const cap: i64 = if (voice_busy or g.wake_pipe[0] < 0) 50 else 1000;
-            const due = if (g.next_hb == std.math.maxInt(i64)) g.hello_until else g.next_hb;
+            const due = @min(if (g.next_hb == std.math.maxInt(i64)) g.hello_until else g.next_hb, g.acks.nextDue());
             const wait: c_int = @intCast(std.math.clamp(due - now, 0, cap));
             var pfd = [2]c.struct_pollfd{
                 .{ .fd = sock, .events = c.POLLIN, .revents = 0 },
@@ -896,6 +910,7 @@ pub const Gateway = struct {
                 .raw = raw,
                 .embeds = if (has_embeds) try embedsOf(d) else null,
                 .attachments = atts,
+                .pinned = if (j.get(d, "pinned")) |p| p == .bool and p.bool else null,
             } });
             return;
         }
@@ -999,7 +1014,12 @@ pub const Gateway = struct {
             return;
         }
         if (std.mem.eql(u8, t, "MESSAGE_ACK")) {
-            if (j.id(j.get(d, "channel_id"))) |id| g.emit(.{ .read = id });
+            const a = read_json.ack(d) orelse return;
+            g.emit(.{ .read = .{ .channel = a.channel, .message = a.message, .mentions = a.mentions, .manual = a.manual } });
+            return;
+        }
+        if (std.mem.eql(u8, t, "CHANNEL_PINS_UPDATE")) {
+            if (j.id(j.get(d, "channel_id"))) |id| g.emit(.{ .pins_changed = id });
             return;
         }
         if (std.mem.eql(u8, t, "VOICE_STATE_UPDATE")) {
@@ -1241,6 +1261,7 @@ pub const Gateway = struct {
     }
 
     fn onReadySupplemental(g: *Gateway, d: Value) void {
+        g.emitReadStates(d);
         if (j.get(d, "merged_presences")) |mp| {
             g.ingestPresences(j.array(j.get(mp, "friends")));
             for (j.array(j.get(mp, "guilds"))) |list| g.ingestPresences(j.array(list));
@@ -1311,7 +1332,16 @@ pub const Gateway = struct {
             .group = kind_i == 3,
             .icon = optDupe(j.str(j.get(cv, "icon"))),
             .overwrites = overwritesOf(cv),
+            .last_message = j.id(j.get(cv, "last_message_id")) orelse 0,
         };
+    }
+
+    /// `read_state` e `user_guild_settings` (no READY ou no suplementar).
+    fn emitReadStates(g: *Gateway, d: Value) void {
+        const rs = j.get(d, "read_state") orelse return;
+        const list = read_json.entries(alloc, rs) catch return;
+        const quiet: []Id = if (j.get(d, "user_guild_settings")) |ugs| read_json.muted(alloc, ugs, nowMs()) catch &.{} else &.{};
+        g.emit(.{ .read_states = .{ .entries = list, .muted = quiet } });
     }
 
     /// Exceções de permissão de um canal (o Store fica com a lista).
@@ -1371,6 +1401,7 @@ pub const Gateway = struct {
                 .color = @intCast((gid >> 22) % 8),
                 .icon = guildIcon(d),
                 .owner = ownerOf(d),
+                .joined_id = read_json.joinedId(d),
             },
             .channels = try channels.toOwnedSlice(alloc),
             .voice = try voice.toOwnedSlice(alloc),
@@ -1419,6 +1450,7 @@ pub const Gateway = struct {
             .attachments = atts,
             .embeds = embeds,
             .system = sys.kind,
+            .pinned = if (j.get(m, "pinned")) |p| p == .bool and p.bool else false,
             .mention_everyone = if (j.get(m, "mention_everyone")) |me| me == .bool and me.bool else false,
             .mentions_me = for (j.array(j.get(m, "mentions"))) |u| {
                 if (j.id(j.get(u, "id")) == g.me) break true;
@@ -1723,7 +1755,7 @@ pub const Gateway = struct {
             const gid = j.id(j.get(gv, "id")) orelse continue;
             const props = j.get(gv, "properties");
             const name = j.str(j.get(gv, "name")) orelse (if (props) |p| j.str(j.get(p, "name")) else null) orelse i18n.tr("servidor", "server");
-            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv), .owner = ownerOf(gv) });
+            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv), .owner = ownerOf(gv), .joined_id = read_json.joinedId(gv) });
             g.ingestRoles(gid, j.array(j.get(gv, "roles")));
             try appendChannels(&channels, gid, j.array(j.get(gv, "channels")));
             for (j.array(j.get(gv, "voice_states"))) |vs| {
@@ -1740,7 +1772,12 @@ pub const Gateway = struct {
             const gid = j.id(j.get(gv[gi], "id")) orelse continue;
             for (j.array(members)) |m| {
                 const uid = j.id(j.get(m, "user_id")) orelse (if (j.get(m, "user")) |u| j.id(j.get(u, "id")) else null) orelse continue;
-                if (uid == g.me) g.memberColor(gid, uid, m);
+                if (uid != g.me) continue;
+                g.memberColor(gid, uid, m);
+                // No formato novo, o `joined_at` vem aqui e não no servidor.
+                for (guilds.items) |*gd| if (gd.id == gid and gd.joined_id == 0) {
+                    gd.joined_id = read_json.joinedId(m);
+                };
             }
         }
         // DMs e grupos (os participantes vêm em `users`, pelo ID).
@@ -1784,6 +1821,7 @@ pub const Gateway = struct {
             .username = optDupe(j.str(j.get(me, "username"))),
             .email = optDupe(j.str(j.get(me, "email"))),
         } });
+        g.emitReadStates(d);
         for (j.array(j.get(d, "relationships"))) |rv| {
             const uid = j.id(j.get(rv, "user_id")) orelse j.id(j.get(rv, "id")) orelse continue;
             g.emit(.{ .relationship = .{ .user = uid, .kind = relationshipKind(j.get(rv, "type")), .since_ms = sinceMs(rv) } });
@@ -1875,7 +1913,7 @@ pub const Gateway = struct {
         var pos: u16 = 0;
         const push = struct {
             fn f(o: *std.ArrayList(types.Channel), g: Id, ch: Ch, p: *u16) !void {
-                try o.append(alloc, .{ .id = ch.id, .guild = g, .parent = if (ch.parent == 0) null else ch.parent, .kind = ch.kind, .name = dupe(ch.name), .topic = dupe(ch.topic), .position = p.*, .overwrites = overwritesOf(ch.source) });
+                try o.append(alloc, .{ .id = ch.id, .guild = g, .parent = if (ch.parent == 0) null else ch.parent, .kind = ch.kind, .name = dupe(ch.name), .topic = dupe(ch.topic), .position = p.*, .overwrites = overwritesOf(ch.source), .last_message = j.id(j.get(ch.source, "last_message_id")) orelse 0 });
                 p.* +%= 1;
             }
         }.f;
@@ -1916,6 +1954,7 @@ pub const Gateway = struct {
 
     fn abortCb(ud: ?*anyopaque, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t, _: c.curl_off_t) callconv(.c) c_int {
         const g: *Gateway = @ptrCast(@alignCast(ud.?));
+        if (g.flush_until != 0) return if (nowMs() > g.flush_until) 1 else 0;
         if (g.abort.load(.acquire)) return 1;
         // Transferência longa (upload): o WebSocket é outro handle e continua
         // sendo atendido, senão o Discord derruba a sessão por falta de heartbeat.
@@ -2134,7 +2173,37 @@ pub const Gateway = struct {
                 if (m.files.len > 0) alloc.free(m.files);
             },
             .edit_message => |m| alloc.free(m.content),
+            .ack_bulk => |list| if (list.len > 0) alloc.free(list),
             else => {},
+        }
+    }
+
+    /// POST /channels/{id}/messages/{mid}/ack, como o cliente oficial. Falha
+    /// não incomoda ninguém: a próxima leitura confirma de novo.
+    fn sendAck(g: *Gateway, channel: Id, msg_id: Id, last_viewed: u32) void {
+        var path_buf: [96]u8 = undefined;
+        var body_buf: [64]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}/ack", .{ channel, msg_id }) catch return;
+        const body = std.fmt.bufPrint(&body_buf, "{{\"token\":null,\"last_viewed\":{d}}}", .{last_viewed}) catch return;
+        var resp = g.request("POST", path, body) orelse return;
+        resp.body.deinit(alloc);
+    }
+
+    fn flushAcks(g: *Gateway) void {
+        while (g.acks.take(nowMs())) |a| {
+            g.sendAck(a.channel, a.message, a.last_viewed);
+            if (g.stopping) return;
+        }
+    }
+
+    /// O app está fechando: o que ainda esperava a vez vai agora, sem demorar
+    /// a sair (senão, ao abrir, o que foi lido voltaria como não lido).
+    fn flushAcksOnExit(g: *Gateway) void {
+        g.flush_until = nowMs() + 1500;
+        defer g.flush_until = 0;
+        while (g.acks.takeAny()) |a| {
+            if (nowMs() > g.flush_until) return;
+            g.sendAck(a.channel, a.message, a.last_viewed);
         }
     }
 
@@ -2246,7 +2315,7 @@ pub const Gateway = struct {
                     }
                     return g.emit(.{ .history = .{ .channel = ch, .messages = &.{} } });
                 }
-                g.history(ch, resp.body.items, false) catch g.emit(.{ .history = .{ .channel = ch, .messages = &.{} } });
+                g.history(ch, resp.body.items, .latest) catch g.emit(.{ .history = .{ .channel = ch, .messages = &.{} } });
             },
             .fetch_older => |o| {
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages?before={d}&limit=50", .{ o.channel, o.before }) catch return;
@@ -2255,7 +2324,92 @@ pub const Gateway = struct {
                 var resp = g.request("GET", path, null) orelse return g.emit(none);
                 defer resp.body.deinit(alloc);
                 if (resp.status != 200) return g.emit(none);
-                g.history(o.channel, resp.body.items, true) catch g.emit(none);
+                g.history(o.channel, resp.body.items, .older) catch g.emit(none);
+            },
+            .fetch_around => |o| {
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages?around={d}&limit=50", .{ o.channel, o.id }) catch return;
+                const none: ev.Event = .{ .history = .{ .channel = o.channel, .messages = &.{}, .around = true } };
+                var resp = g.request("GET", path, null) orelse return g.emit(none);
+                defer resp.body.deinit(alloc);
+                if (resp.status != 200) return g.emit(none);
+                g.history(o.channel, resp.body.items, .around) catch g.emit(none);
+            },
+            .fetch_newer => |o| {
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages?after={d}&limit=50", .{ o.channel, o.after }) catch return;
+                const none: ev.Event = .{ .history = .{ .channel = o.channel, .messages = &.{}, .newer = true } };
+                var resp = g.request("GET", path, null) orelse return g.emit(none);
+                defer resp.body.deinit(alloc);
+                if (resp.status != 200) return g.emit(none);
+                g.history(o.channel, resp.body.items, .newer) catch g.emit(none);
+            },
+            .ack => |a| {
+                if (!a.manual) return g.acks.push(alloc, .{ .channel = a.channel, .message = a.message, .last_viewed = a.last_viewed });
+                // "Marcar como não lida" sai na hora, e o que esperava a vez não
+                // pode passar por cima dele.
+                g.acks.cancel(alloc, a.channel, nowMs());
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}/ack", .{ a.channel, a.message }) catch return;
+                var b: [64]u8 = undefined;
+                const body = std.fmt.bufPrint(&b, "{{\"manual\":true,\"mention_count\":{d}}}", .{a.mentions}) catch return;
+                var resp = g.request("POST", path, body) orelse return;
+                defer resp.body.deinit(alloc);
+                if (resp.status >= 300) g.noticeHttp(i18n.tr("não deu para marcar como não lida", "couldn't mark as unread"), &resp);
+            },
+            .ack_bulk => |list| {
+                for (list) |e| g.acks.cancel(alloc, e[0], nowMs());
+                // O cliente oficial manda de 100 em 100.
+                var i: usize = 0;
+                while (i < list.len) : (i += 100) {
+                    var b: std.ArrayList(u8) = .empty;
+                    defer b.deinit(alloc);
+                    b.appendSlice(alloc, "{\"read_states\":[") catch return;
+                    for (list[i..@min(i + 100, list.len)], 0..) |e, k| {
+                        if (k > 0) b.append(alloc, ',') catch return;
+                        b.print(alloc, "{{\"channel_id\":\"{d}\",\"message_id\":\"{d}\",\"read_state_type\":0}}", .{ e[0], e[1] }) catch return;
+                    }
+                    b.appendSlice(alloc, "]}") catch return;
+                    var resp = g.request("POST", "/read-states/ack-bulk", b.items) orelse return;
+                    defer resp.body.deinit(alloc);
+                    if (resp.status >= 300) g.noticeHttp(i18n.tr("não deu para marcar como lido", "couldn't mark as read"), &resp);
+                    if (g.stopping) return;
+                }
+            },
+            .fetch_pins => |ch| {
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/pins", .{ch}) catch return;
+                const none: ev.Event = .{ .pins = .{ .channel = ch, .messages = &.{}, .ok = false } };
+                var resp = g.request("GET", path, null) orelse return g.emit(none);
+                defer resp.body.deinit(alloc);
+                if (resp.status != 200) return g.emit(none);
+                g.pinList(ch, resp.body.items) catch g.emit(none);
+            },
+            .pin => |p| {
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/pins/{d}", .{ p.channel, p.id }) catch return;
+                var resp = g.request(if (p.add) "PUT" else "DELETE", path, null) orelse return g.pinFailed(p.channel, p.id, p.add);
+                defer resp.body.deinit(alloc);
+                if (resp.status < 300) return;
+                g.noticeHttp(if (p.add) i18n.tr("não deu para fixar", "couldn't pin") else i18n.tr("não deu para desafixar", "couldn't unpin"), &resp);
+                g.pinFailed(p.channel, p.id, p.add);
+            },
+            .fetch_invite => |code| {
+                const failed: ev.Event = .{ .invite = .{ .code = code, .invite = .{ .state = .failed } } };
+                const path = std.fmt.bufPrint(&path_buf, "/invites/{s}?with_counts=true&with_expiration=true", .{code.slice()}) catch return;
+                var resp = g.request("GET", path, null) orelse return g.emit(failed);
+                defer resp.body.deinit(alloc);
+                if (resp.status == 404) return g.emit(.{ .invite = .{ .code = code, .invite = .{ .state = .invalid } } });
+                if (resp.status != 200) return g.emit(failed);
+                var arena = std.heap.ArenaAllocator.init(alloc);
+                defer arena.deinit();
+                const v = std.json.parseFromSliceLeaky(Value, arena.allocator(), resp.body.items, .{}) catch return g.emit(failed);
+                const gv = j.get(v, "guild");
+                // Convite de grupo: não tem servidor, só o nome do canal.
+                const name = (if (gv) |x| j.str(j.get(x, "name")) else null) orelse (if (j.get(v, "channel")) |x| j.str(j.get(x, "name")) else null) orelse "?";
+                g.emit(.{ .invite = .{ .code = code, .invite = .{
+                    .state = .ok,
+                    .guild = if (gv) |x| j.id(j.get(x, "id")) orelse 0 else 0,
+                    .name = dupe(name),
+                    .icon = if (gv) |x| optDupe(j.str(j.get(x, "icon"))) else null,
+                    .members = @intCast(std.math.clamp(j.int(j.get(v, "approximate_member_count")) orelse 0, 0, std.math.maxInt(u32))),
+                    .online = @intCast(std.math.clamp(j.int(j.get(v, "approximate_presence_count")) orelse 0, 0, std.math.maxInt(u32))),
+                } } });
             },
             .send_message => |m| {
                 var b: std.ArrayList(u8) = .empty;
@@ -2479,7 +2633,35 @@ pub const Gateway = struct {
         g.emit(.{ .recent_mentions = try list.toOwnedSlice(alloc) });
     }
 
-    fn history(g: *Gateway, ch: Id, body: []const u8, older: bool) !void {
+    /// Fixar falhou: desfaz o que já apareceu e a lista é buscada de novo.
+    fn pinFailed(g: *Gateway, channel: Id, id: Id, add: bool) void {
+        g.emit(.{ .message_update = .{ .channel = channel, .id = id, .content = null, .pinned = !add } });
+        g.emit(.{ .pins_changed = channel });
+    }
+
+    /// GET pins: uma lista de mensagens, ou `{items:[{message}]}` no formato novo.
+    fn pinList(g: *Gateway, ch: Id, body: []const u8) !void {
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const root = try std.json.parseFromSliceLeaky(Value, arena.allocator(), body, .{});
+        var list: std.ArrayList(types.Message) = .empty;
+        const items = if (root == .array) j.array(root) else j.array(j.get(root, "items"));
+        for (items) |it| {
+            const m = j.get(it, "message") orelse it;
+            g.upsertUsers(m);
+            if (try g.message(m)) |msg| {
+                var one = msg;
+                one.channel = ch;
+                one.pinned = true;
+                try list.append(alloc, one);
+            }
+        }
+        g.emit(.{ .pins = .{ .channel = ch, .messages = try list.toOwnedSlice(alloc) } });
+    }
+
+    const HistoryKind = enum { latest, older, around, newer };
+
+    fn history(g: *Gateway, ch: Id, body: []const u8, kind: HistoryKind) !void {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
         const root = try std.json.parseFromSliceLeaky(Value, arena.allocator(), body, .{});
@@ -2492,9 +2674,15 @@ pub const Gateway = struct {
             g.upsertUsers(items[i]);
             if (try g.message(items[i])) |m| try list.append(alloc, m);
         }
+        // A ordem de `after` e `around` não é garantida; a lista conta com ela.
+        if (kind == .around or kind == .newer) std.mem.sort(types.Message, list.items, {}, struct {
+            fn lt(_: void, a: types.Message, b: types.Message) bool {
+                return a.id < b.id;
+            }
+        }.lt);
         const msgs = try list.toOwnedSlice(alloc);
-        // Veio a página cheia: pode ter mais antigas.
-        g.emit(.{ .history = .{ .channel = ch, .messages = msgs, .older = older, .more = items.len >= 50 } });
+        // Veio a página cheia: pode ter mais.
+        g.emit(.{ .history = .{ .channel = ch, .messages = msgs, .older = kind == .older, .around = kind == .around, .newer = kind == .newer, .more = items.len >= 50 } });
         // Reações já existentes.
         for (items) |m| {
             const mid = j.id(j.get(m, "id")) orelse continue;

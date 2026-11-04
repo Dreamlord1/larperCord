@@ -5,6 +5,7 @@
 //! Strings dentro de `Event` são alocadas com `std.heap.c_allocator` e
 //! passam a pertencer ao Store.
 const types = @import("types.zig");
+const InviteCode = @import("links.zig").InviteCode;
 const Id = types.Id;
 
 pub const Ready = struct {
@@ -23,15 +24,18 @@ pub const Event = union(enum) {
     ready: Ready,
     message_create: types.Message,
     /// `older`: página antes da mais antiga que já temos (rolou para cima).
-    /// `more`: o Discord ainda tem mais antigas.
-    history: struct { channel: Id, messages: []types.Message, older: bool = false, more: bool = true },
+    /// `more`: o Discord ainda tem mais antigas (ou, em `newer`, mais novas).
+    /// `around`: página em volta de uma mensagem; substitui a lista, que pode
+    /// ficar fora do presente. `newer`: página depois da mais nova que temos.
+    history: struct { channel: Id, messages: []types.Message, older: bool = false, more: bool = true, around: bool = false, newer: bool = false },
     typing_start: struct { channel: Id, user: Id },
     /// `content` null = não mudou. `embeds`/`attachments` não nulos trocam os
     /// anteriores (a prévia de um link chega assim, segundos depois).
     /// `local`: edição nossa, aplicada na hora (não vai para o registro).
     /// `raw`: o texto como o Discord guarda, quando difere de `content`
     /// (emoji personalizado); passa a pertencer ao Store.
-    message_update: struct { channel: Id, id: Id, content: ?[]const u8, raw: ?[]const u8 = null, embeds: ?[]types.Embed = null, attachments: ?[]types.Attachment = null, local: bool = false },
+    /// `pinned`: mudou o estado de fixada (null = não mudou).
+    message_update: struct { channel: Id, id: Id, content: ?[]const u8, raw: ?[]const u8 = null, embeds: ?[]types.Embed = null, attachments: ?[]types.Attachment = null, local: bool = false, pinned: ?bool = null },
     /// O Discord não aceitou (ou não recebeu) uma mensagem nossa.
     send_failed: struct { channel: Id, nonce: u64 },
     /// `local`: apagada por nós (some de vez, mesmo com o registro ligado).
@@ -47,8 +51,20 @@ pub const Event = union(enum) {
     /// CHANNEL_CREATE / CHANNEL_UPDATE.
     channel_upsert: types.Channel,
     channel_delete: Id,
-    /// MESSAGE_ACK: outro dispositivo leu o canal.
-    read: Id,
+    /// MESSAGE_ACK: um dispositivo (este ou outro) leu o canal até `message`
+    /// (0 = até o fim). `manual`: "marcar como não lida". `mentions`: menções
+    /// não lidas, quando o Discord manda.
+    read: struct { channel: Id, message: Id = 0, mentions: ?u16 = null, manual: bool = false },
+    /// `read_state` do READY: a interface refaz os não lidos e as menções.
+    /// `muted`: servidores, categorias e canais silenciados no Discord (alocado;
+    /// quem trata é o app). As entradas passam para o Store.
+    read_states: struct { entries: []types.ReadEntry, muted: []Id = &.{} },
+    /// GET /channels/{id}/pins (`ok` = false: não deu para buscar).
+    pins: struct { channel: Id, messages: []types.Message, ok: bool = true },
+    /// CHANNEL_PINS_UPDATE: a lista guardada ficou velha.
+    pins_changed: Id,
+    /// Resposta de GET /invites/{code}.
+    invite: struct { code: InviteCode, invite: types.Invite },
     /// Reações removidas de uma vez (emoji = null limpa todas).
     reaction_clear: struct { channel: Id, id: Id, emoji: ?types.Reaction },
     /// Estado da conexão, para a barra de status.
@@ -136,6 +152,20 @@ pub const Command = union(enum) {
     move_member: struct { guild: Id, user: Id, channel: ?Id },
     /// As 25 menções mais recentes (só leitura), chegam como `recent_mentions`.
     fetch_mentions,
+    /// Canal lido até `message`. Sem `manual`, a thread de rede segura no máximo
+    /// um por canal a cada ~3 s, juntando. `manual`: "marcar como não lida",
+    /// sai na hora com o `mention_count`.
+    ack: struct { channel: Id, message: Id, last_viewed: u32 = 0, manual: bool = false, mentions: u16 = 0 },
+    /// Vários canais de uma vez, (canal, mensagem): POST /read-states/ack-bulk.
+    /// Alocado com o c_allocator.
+    ack_bulk: []const [2]Id,
+    /// 50 mensagens em volta de `id` (chega como `history` com `around`).
+    fetch_around: struct { channel: Id, id: Id },
+    /// Mais 50 depois de `after`, voltando para o presente.
+    fetch_newer: struct { channel: Id, after: Id },
+    fetch_pins: Id,
+    pin: struct { channel: Id, id: Id, add: bool },
+    fetch_invite: InviteCode,
     shutdown,
 };
 
@@ -172,7 +202,28 @@ pub const Action = union(enum) {
     send_dm: struct { user: Id, text: []const u8 },
     copy: []const u8,
     jump_to: Id,
+    /// Abre o canal e vai até a mensagem (buscando em volta dela se preciso).
+    /// `id` 0 só abre o canal.
+    open_message: struct { channel: Id, id: Id },
     mark_read: Id,
+    /// A conversa está no fim e a janela em foco: lida de verdade.
+    channel_seen: Id,
+    /// "Marcar como não lida" a partir desta mensagem.
+    mark_unread: Id,
+    /// Busca em volta da mensagem (a conversa carregada não chega nela).
+    fetch_around: struct { channel: Id, id: Id },
+    /// Fora do presente, chegando no fim do que está carregado.
+    load_newer: Id,
+    /// "Voltar ao presente": a última página no lugar do que está na tela.
+    jump_present: Id,
+    /// "ir para a primeira" não lida.
+    jump_first_unread: Id,
+    /// Painel de mensagens fixadas do canal.
+    open_pins: Id,
+    want_pins: Id,
+    pin_message: struct { channel: Id, id: Id, add: bool },
+    /// Link de convite na tela: busca o cartão (uma vez por código).
+    want_invite: InviteCode,
     /// Liga/desliga uma opção do tema atual (índice em `Theme.options`).
     set_theme_option: struct { index: usize, value: bool },
     /// Cor personalizada do tema atual/modo atual; rgba null limpa.

@@ -85,7 +85,12 @@ const commands = [_]Command{
     }.f },
     .{ .pt = "Ir para o fim da conversa", .en = "Jump to present", .run = struct {
         fn f(ctx: *d.Ctx) void {
-            if (ctx.st.activeChannel()) |id| ctx.st.scrollOf(id).stick_bottom = true;
+            if (ctx.st.activeChannel()) |id| ctx.act(.{ .jump_present = id });
+        }
+    }.f },
+    .{ .pt = "Mensagens fixadas", .en = "Pinned messages", .run = struct {
+        fn f(ctx: *d.Ctx) void {
+            if (ctx.st.activeChannel()) |id| ctx.act(.{ .open_pins = id });
         }
     }.f },
     .{ .pt = "Anexar arquivo", .en = "Attach file", .run = simple(.pick_files) },
@@ -110,6 +115,7 @@ const toggle_names = [_]struct { field: []const u8, pt: []const u8, en: []const 
     .{ .field = "show_embeds", .pt = "Mostrar imagens de links", .en = "Show images from links" },
     .{ .field = "show_spoilers", .pt = "Sempre mostrar spoilers", .en = "Always show spoilers" },
     .{ .field = "md_preview", .pt = "Prévia do markdown", .en = "Markdown preview" },
+    .{ .field = "open_at_unread", .pt = "Abrir na primeira não lida", .en = "Open at the first unread" },
     .{ .field = "send_typing", .pt = "Enviar indicador de digitação", .en = "Send typing indicator" },
     .{ .field = "message_log", .pt = "Registro de mensagens", .en = "Message log" },
     .{ .field = "gif_hosts", .pt = "Animar GIFs do Tenor e do Giphy", .en = "Animate Tenor and Giphy GIFs" },

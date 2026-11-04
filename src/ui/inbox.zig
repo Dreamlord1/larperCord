@@ -25,7 +25,7 @@ pub var rebuilds: u32 = 0;
 fn refresh(ctx: *d.Ctx) void {
     const sig = core.signature(ctx.store, ctx.st.muted_channels.count());
     if (model.built and sig == model.sig) return;
-    core.build(ctx.store, &ctx.st.muted_channels, &model);
+    core.build(ctx.store, &ctx.st.muted_channels, &ctx.st.filtros, &model);
     model.sig = sig;
     rebuilds += 1;
 }
@@ -125,15 +125,14 @@ pub fn channelLabel(buf: []u8, ctx: *const d.Ctx, channel: Id) []const u8 {
     return std.fmt.bufPrint(buf, "#{s}  ·  {s}", .{ cs.info.name, if (g) |x| x.name else "" }) catch cs.info.name;
 }
 
-/// Abre o canal e pede para rolar até a mensagem (a lista avisa se ela
-/// for antiga demais para estar carregada).
+/// Abre o canal e vai até a mensagem (se ela não estiver carregada, a lista
+/// busca em volta dela).
 pub fn openMessage(ctx: *d.Ctx, channel: Id, id: Id) void {
     popup.close(ctx);
     const cs = ctx.store.channel(channel) orelse
         return ctx.st.showToast(ctx.now_ms, true, "esse canal não está disponível nesta conta", "that channel isn't available on this account", .{});
     if (cs.info.kind != .text) return;
-    ctx.act(.{ .select_channel = channel });
-    if (id != 0) ctx.act(.{ .jump_to = id });
+    ctx.act(.{ .open_message = .{ .channel = channel, .id = id } });
 }
 
 fn empty(ctx: *d.Ctx, dl: *c.ImDrawList, body: d.Rect, y: f32, title: []const u8, sub: []const u8) f32 {

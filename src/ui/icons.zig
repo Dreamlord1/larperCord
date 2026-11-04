@@ -41,6 +41,15 @@ pub fn gear(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
     c.ImDrawList_AddCircleEx(dl, v(cx, cy), 5.2, col, 0, 2.6, 0);
 }
 
+/// Alfinete inclinado: cabeça, corpo e ponta.
+pub fn pin(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
+    line(dl, cx + 1.5, cy - 8, cx + 8, cy - 1.5, col, 2.2);
+    line(dl, cx + 3.5, cy - 5, cx - 1, cy - 2.5, col, 3.4);
+    line(dl, cx + 5, cy - 3.5, cx + 2.5, cy + 1, col, 3.4);
+    line(dl, cx - 4.5, cy - 2.5, cx + 4, cy + 5, col, 2.2);
+    line(dl, cx - 0.5, cy + 1, cx - 7, cy + 7.5, col, 1.8);
+}
+
 pub fn search(dl: *c.ImDrawList, cx: f32, cy: f32, col: u32) void {
     c.ImDrawList_AddCircleEx(dl, v(cx - 1.5, cy - 1.5), 5, col, 0, 1.7, 0);
     line(dl, cx + 2, cy + 2, cx + 6, cy + 6, col, 1.9);

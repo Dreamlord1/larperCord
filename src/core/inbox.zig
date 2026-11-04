@@ -8,6 +8,7 @@ const store_mod = @import("store.zig");
 const Store = store_mod.Store;
 const StoredMessage = store_mod.StoredMessage;
 const ChannelState = store_mod.ChannelState;
+const Filtros = @import("filtros.zig").Filtros;
 const Id = types.Id;
 
 pub const max_groups = 48;
@@ -114,8 +115,9 @@ fn lastFromOthers(store: *const Store, cs: *const ChannelState, g: *Group) void 
     }
 }
 
-/// Monta a aba "Não lidas". Canais silenciados ficam de fora.
-pub fn build(store: *const Store, muted: *const std.AutoHashMapUnmanaged(Id, void), out: *Model) void {
+/// Monta a aba "Não lidas". Canais silenciados ficam de fora. Quantas menções
+/// cada canal tem vem de `counts`: as do Discord podem nem estar carregadas.
+pub fn build(store: *const Store, muted: *const std.AutoHashMapUnmanaged(Id, void), counts: ?*const Filtros, out: *Model) void {
     out.n = 0;
     out.built = true;
     var it = store.channels.valueIterator();
@@ -127,7 +129,9 @@ pub fn build(store: *const Store, muted: *const std.AutoHashMapUnmanaged(Id, voi
         const dm = cs.info.guild == 0;
         collect(store, cs, !dm, &g);
         if (dm and g.n == 0) lastFromOthers(store, cs, &g);
+        if (counts) |f| g.total = @max(g.total, f.count(cs.info.id));
         if (!dm and g.total == 0) continue;
+        if (g.latest == 0) g.latest = cs.info.last_message;
         out.groups[out.n] = g;
         out.n += 1;
     }
@@ -156,9 +160,10 @@ pub fn signature(store: *const Store, muted_count: u32) u64 {
 }
 
 /// Canais da caixa de entrada que ainda não têm histórico (para a prévia):
-/// DMs não lidas e os canais não lidos de servidores que o Discord diz
-/// terem menções. Já ficam como "carregando"; quem chama pede o histórico.
-pub fn prefetch(store: *Store, muted: *const std.AutoHashMapUnmanaged(Id, void), out: []Id) []Id {
+/// DMs não lidas e os canais não lidos com menções (ou de servidores que o
+/// Discord diz terem menções). Já ficam como "carregando"; quem chama pede o
+/// histórico.
+pub fn prefetch(store: *Store, muted: *const std.AutoHashMapUnmanaged(Id, void), counts: ?*const Filtros, out: []Id) []Id {
     var n: usize = 0;
     var it = store.channels.valueIterator();
     while (it.next()) |p| {
@@ -167,7 +172,8 @@ pub fn prefetch(store: *Store, muted: *const std.AutoHashMapUnmanaged(Id, void),
         if (cs.info.kind != .text or !cs.info.unread or cs.history != .none or muted.contains(cs.info.id)) continue;
         if (cs.info.guild != 0) {
             const g = store.guild(cs.info.guild) orelse continue;
-            if (g.mentions == 0) continue;
+            const here: u16 = if (counts) |f| f.count(cs.info.id) else 0;
+            if (here == 0 and (counts != null or g.mentions == 0)) continue;
         }
         cs.history = .loading;
         out[n] = cs.info.id;
@@ -341,7 +347,7 @@ test "caixa de entrada: DMs não lidas, menções e marcador de leitura" {
 
     var none: std.AutoHashMapUnmanaged(Id, void) = .empty;
     var m: Model = .{};
-    build(&s, &none, &m);
+    build(&s, &none, null, &m);
     // #memes não tem menção: fica de fora.
     try std.testing.expectEqual(@as(usize, 2), m.n);
     // A DM tem a mais recente: vem primeiro, só com o que veio depois da nossa.
@@ -358,14 +364,14 @@ test "caixa de entrada: DMs não lidas, menções e marcador de leitura" {
     s.markRead(20);
     try std.testing.expect(signature(&s, 0) != sig);
     try msg(&s, 106, 20, 2, "e aí?");
-    build(&s, &none, &m);
+    build(&s, &none, null, &m);
     try std.testing.expectEqual(@as(Id, 20), m.groups[0].channel);
     try std.testing.expectEqualSlices(Id, &.{106}, m.groups[0].ids());
 
     // Silenciado: fica de fora.
     try none.put(std.testing.allocator, 10, {});
     defer none.deinit(std.testing.allocator);
-    build(&s, &none, &m);
+    build(&s, &none, null, &m);
     try std.testing.expectEqual(@as(usize, 1), m.n);
 }
 

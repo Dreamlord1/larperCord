@@ -78,6 +78,28 @@ pub const ChannelState = struct {
     read_id: Id = 0,
     /// Mostrando o cache do disco enquanto o histórico de verdade não chega.
     cached: bool = false,
+    /// Linha "NOVAS MENSAGENS": começa depois desta mensagem (0 = sem linha).
+    /// Fica até sair do canal, mesmo depois de lido.
+    divider_after: Id = 0,
+    /// A linha já apareceu na tela: o botão do topo não precisa mais.
+    divider_seen: bool = false,
+    /// Ao mostrar, posiciona na primeira não lida.
+    pos_unread: bool = false,
+    /// Marcada como não lida à mão: não confirma leitura sozinho até sair e voltar.
+    hold_unread: bool = false,
+    /// A lista não chega no presente: é uma página do passado (mensagens ao
+    /// vivo não entram, o fim da lista busca as mais novas).
+    detached: bool = false,
+    newer: enum { idle, loading } = .idle,
+    newer_retry_ms: i64 = 0,
+    /// Busca em volta de uma mensagem (GET messages?around=).
+    around: enum { idle, loading, done, failed } = .idle,
+};
+
+/// Mensagens fixadas de um canal, como vieram da última vez.
+pub const PinList = struct {
+    state: History = .none,
+    items: std.ArrayList(StoredMessage) = .empty,
 };
 
 /// Lista de membros de um servidor, no formato do Discord: posições fixas
@@ -143,6 +165,14 @@ pub const Store = struct {
     recent_mentions: std.ArrayList(StoredMessage) = .empty,
     mentions_state: History = .none,
     mentions_ms: i64 = 0,
+    /// `read_state` do último READY, por canal (o servidor que chega depois
+    /// usa também).
+    read_index: std.AutoHashMapUnmanaged(Id, types.ReadEntry) = .empty,
+    pins: std.AutoHashMapUnmanaged(Id, PinList) = .empty,
+    /// Cartões de convite já pedidos, por código (chave alocada).
+    invites: std.StringHashMapUnmanaged(types.Invite) = .empty,
+    /// Canais silenciados aqui: não acendem o servidor na barra.
+    muted: ?*const std.AutoHashMapUnmanaged(Id, void) = null,
     /// Chamado antes de uma conversa sair da memória (o cache em disco
     /// guarda o que ela tinha).
     on_evict: ?*const fn (*Store, *ChannelState) void = null,
@@ -168,6 +198,12 @@ pub const Store = struct {
             s.gpa.destroy(cs.*);
         }
         s.channels.deinit(s.gpa);
+        s.read_index.deinit(s.gpa);
+        var pli = s.pins.valueIterator();
+        while (pli.next()) |pl| s.freePins(pl);
+        s.pins.deinit(s.gpa);
+        s.clearInvites();
+        s.invites.deinit(s.gpa);
         var ri = s.roles.valueIterator();
         while (ri.next()) |r| ev_alloc.free(r.name);
         s.roles.deinit(s.gpa);
@@ -209,6 +245,41 @@ pub const Store = struct {
         s.users.deinit(s.gpa);
         if (s.me_username) |x| ev_alloc.free(x);
         if (s.me_email) |x| ev_alloc.free(x);
+    }
+
+    fn freePins(s: *Store, pl: *PinList) void {
+        for (pl.items.items) |*m| s.freeMessage(m);
+        pl.items.deinit(s.gpa);
+    }
+
+    fn clearInvites(s: *Store) void {
+        var it = s.invites.iterator();
+        while (it.next()) |e| {
+            ev_alloc.free(e.key_ptr.*);
+            freeInvite(e.value_ptr.*);
+        }
+        s.invites.clearRetainingCapacity();
+    }
+
+    fn freeInvite(i: types.Invite) void {
+        if (i.name.len > 0) ev_alloc.free(i.name);
+        if (i.icon) |x| ev_alloc.free(x);
+    }
+
+    /// Guarda o cartão de um convite (com um teto: passando, esquece todos e
+    /// eles são pedidos de novo se voltarem à tela).
+    pub fn putInvite(s: *Store, code: []const u8, inv: types.Invite) void {
+        if (s.invites.getPtr(code)) |old| {
+            freeInvite(old.*);
+            old.* = inv;
+            return;
+        }
+        if (s.invites.count() >= 128) s.clearInvites();
+        const key = ev_alloc.dupe(u8, code) catch return freeInvite(inv);
+        s.invites.put(s.gpa, key, inv) catch {
+            ev_alloc.free(key);
+            freeInvite(inv);
+        };
     }
 
     fn freeUser(u: types.User) void {
@@ -387,6 +458,7 @@ pub const Store = struct {
             old.color = g.color;
             old.icon = g.icon;
             if (g.owner != 0) old.owner = g.owner;
+            if (g.joined_id != 0) old.joined_id = g.joined_id;
             return;
         }
         try s.guilds.append(s.gpa, g);
@@ -395,9 +467,11 @@ pub const Store = struct {
     fn mergeChannel(s: *Store, ch: types.Channel) !void {
         if (s.channels.get(ch.id)) |cs| {
             const unread = cs.info.unread or ch.unread;
+            const last = @max(cs.info.last_message, ch.last_message);
             freeChannelInfo(&cs.info);
             cs.info = ch;
             cs.info.unread = unread;
+            cs.info.last_message = last;
         } else {
             const cs = try s.gpa.create(ChannelState);
             cs.* = .{ .info = ch };
@@ -413,6 +487,10 @@ pub const Store = struct {
     fn removeChannel(s: *Store, id: Id) void {
         const kv = s.channels.fetchRemove(id) orelse return;
         const cs = kv.value;
+        if (s.pins.fetchRemove(id)) |pk| {
+            var pl = pk.value;
+            s.freePins(&pl);
+        }
         for (cs.messages.items) |*m| s.freeMessage(m);
         cs.messages.deinit(s.gpa);
         cs.typing.deinit(s.gpa);
@@ -489,7 +567,7 @@ pub const Store = struct {
     pub fn apply(s: *Store, ev: Event, now_ms: i64) !void {
         // O que chega o tempo todo e não aparece na caixa de entrada não conta.
         switch (ev) {
-            .typing_start, .presence_update, .voice_state, .voice_speaking, .voice_status, .latency, .status, .notice, .member_list, .profile, .relationship, .note, .app_icon => {},
+            .typing_start, .presence_update, .voice_state, .voice_speaking, .voice_status, .latency, .status, .notice, .member_list, .profile, .relationship, .note, .app_icon, .pins, .pins_changed, .invite, .read => {},
             else => s.rev +%= 1,
         }
         switch (ev) {
@@ -539,15 +617,26 @@ pub const Store = struct {
                 // verdade sem nada diz `more = false`. Nada do que está na tela
                 // (nem o cache do disco) se perde por causa disso.
                 if (h.messages.len == 0 and h.more) {
-                    if (h.older) {
+                    if (h.around) {
+                        cs.around = .failed;
+                    } else if (h.newer) {
+                        cs.newer = .idle;
+                        cs.newer_retry_ms = now_ms + 5000;
+                    } else if (h.older) {
                         cs.older = .idle;
                         cs.older_retry_ms = now_ms + 5000;
+                    } else if (cs.detached) {
+                        // Pediu para voltar ao presente e não veio: fica onde está.
+                        cs.newer = .idle;
+                        cs.newer_retry_ms = now_ms + 5000;
                     } else if (!cs.cached and cs.history != .loaded) {
                         cs.history = .failed;
                         cs.version +%= 1;
                     }
                     return;
                 }
+                if (h.around) return s.applyAround(cs, h.messages, now_ms);
+                if (h.newer) return s.applyNewer(cs, h.messages, h.more, now_ms);
                 // Página nova por cima do cache do disco: troca o cache pelo
                 // que veio, mas fica com as do cache mais antigas que a página
                 // quando as duas se encostam (a conversa não pula).
@@ -563,6 +652,12 @@ pub const Store = struct {
                     if (h.messages.len > 0 and newest_cached >= h.messages[0].id) keep_before = h.messages[0].id;
                 }
                 const newest_page: Id = if (h.messages.len > 0) h.messages[h.messages.len - 1].id else 0;
+                cs.info.last_message = @max(cs.info.last_message, newest_page);
+                // Última página: voltou ao presente.
+                if (!h.older) {
+                    cs.detached = false;
+                    cs.newer = .idle;
+                }
                 // O histórico vem antes do que já temos.
                 var fresh: std.ArrayList(StoredMessage) = .empty;
                 try fresh.ensureTotalCapacity(s.gpa, h.messages.len + cs.messages.items.len);
@@ -697,7 +792,40 @@ pub const Store = struct {
             .guild_delete => |id| s.removeGuild(id),
             .channel_upsert => |ch| try s.mergeChannel(ch),
             .channel_delete => |id| s.removeChannel(id),
-            .read => |id| s.markRead(id),
+            .read => |r| s.applyAck(r.channel, r.message, r.manual),
+            .read_states => |rs| {
+                defer ev_alloc.free(rs.entries);
+                s.read_index.clearRetainingCapacity();
+                for (rs.entries) |e| try s.read_index.put(s.gpa, e.channel, e);
+            },
+            .pins => |p| {
+                defer ev_alloc.free(p.messages);
+                if (s.channel(p.channel) == null) {
+                    for (p.messages) |m| freeRaw(m);
+                    return;
+                }
+                const gop = try s.pins.getOrPut(s.gpa, p.channel);
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                const pl = gop.value_ptr;
+                if (!p.ok) {
+                    pl.state = .failed;
+                    return;
+                }
+                for (pl.items.items) |*m| s.freeMessage(m);
+                pl.items.clearRetainingCapacity();
+                for (p.messages, 0..) |m, i| {
+                    const sm = s.stored(m) catch |err| {
+                        for (p.messages[i..]) |rest| freeRaw(rest);
+                        return err;
+                    };
+                    try pl.items.append(s.gpa, sm);
+                }
+                pl.state = .loaded;
+            },
+            .pins_changed => |id| if (s.pins.getPtr(id)) |pl| {
+                if (pl.state != .loading) pl.state = .none;
+            },
+            .invite => |inv| s.putInvite(inv.code.slice(), inv.invite),
             .reaction_clear => |rc| {
                 const cs = s.channel(rc.channel) orelse return;
                 const m = s.find(cs, rc.id) orelse return;
@@ -717,12 +845,16 @@ pub const Store = struct {
             .message_update => |up| {
                 const found = if (s.channel(up.channel)) |cs| if (s.find(cs, up.id)) |m| .{ cs, m } else null else null;
                 const cs, const m = found orelse {
+                    if (up.pinned != null) if (s.pins.getPtr(up.channel)) |pl| {
+                        if (pl.state == .loaded) pl.state = .none;
+                    };
                     if (up.content) |t| ev_alloc.free(t);
                     if (up.raw) |t| ev_alloc.free(t);
                     if (up.embeds) |e| types.freeEmbeds(ev_alloc, e);
                     if (up.attachments) |a| types.freeAttachments(ev_alloc, a);
                     return;
                 };
+                if (up.pinned) |p| m.msg.pinned = p;
                 if (up.content) |t| {
                     const spans = markdown.parse(s.gpa, t) catch {
                         ev_alloc.free(t);
@@ -738,7 +870,8 @@ pub const Store = struct {
                     m.msg.content = t;
                     ev_alloc.free(m.msg.raw);
                     m.msg.raw = up.raw orelse "";
-                    m.msg.edited = true;
+                    // Fixar também manda o texto, igual: isso não é edição.
+                    if (!same) m.msg.edited = true;
                     m.spans = spans;
                 }
                 if (up.embeds) |e| {
@@ -1221,6 +1354,16 @@ pub const Store = struct {
             break;
         };
         _ = now_ms;
+        const prev_last = cs.info.last_message;
+        cs.info.last_message = @max(prev_last, m.id);
+        // Falar é ter lido: o Discord marca sozinho quando mandamos.
+        if (m.author == s.me and m.id != 0) {
+            cs.read_id = @max(cs.read_id, m.id);
+            cs.info.unread = false;
+            cs.hold_unread = false;
+            cs.divider_after = 0;
+            s.refreshGuildUnread(cs.info.guild);
+        }
         // Confirmação de uma mensagem nossa: troca a cópia pendente.
         if (m.nonce != 0) {
             for (cs.messages.items, 0..) |*sm, at| if (sm.pending and sm.msg.nonce == m.nonce) {
@@ -1244,9 +1387,79 @@ pub const Store = struct {
                 return;
             };
         }
+        if (m.author != s.me and m.channel != 0) {
+            // Estava tudo lido: o marcador é a última de antes desta.
+            if (!cs.info.unread and prev_last > cs.read_id) cs.read_id = prev_last;
+            if (!cs.info.unread) {
+                cs.info.unread = true;
+                s.refreshGuildUnread(cs.info.guild);
+            }
+        }
+        // A conversa na tela é do passado: a nova fica só na contagem (o
+        // caminho de volta traz ela).
+        if (cs.detached) {
+            freeRaw(m);
+            cs.version +%= 1;
+            return;
+        }
         try cs.messages.append(s.gpa, try s.stored(m));
-        if (m.author != s.me and m.channel != 0) cs.info.unread = true;
         s.trim(cs);
+        cs.version +%= 1;
+    }
+
+    /// Página em volta de uma mensagem: substitui a lista (as pendentes ficam).
+    /// Se não chega na última mensagem do canal, a conversa fica fora do presente.
+    fn applyAround(s: *Store, cs: *ChannelState, msgs: []const types.Message, now_ms: i64) !void {
+        cs.around = .done;
+        if (msgs.len == 0) return;
+        var fresh: std.ArrayList(StoredMessage) = .empty;
+        errdefer fresh.deinit(s.gpa);
+        try fresh.ensureTotalCapacity(s.gpa, msgs.len + cs.messages.items.len);
+        for (msgs) |m| fresh.appendAssumeCapacity(try s.stored(m));
+        for (cs.messages.items) |*m| {
+            if (m.pending) {
+                fresh.appendAssumeCapacity(m.*);
+            } else s.freeMessage(m);
+        }
+        cs.messages.deinit(s.gpa);
+        cs.messages = fresh;
+        const newest = msgs[msgs.len - 1].id;
+        cs.info.last_message = @max(cs.info.last_message, newest);
+        cs.detached = newest < cs.info.last_message;
+        cs.history = .loaded;
+        cs.cached = false;
+        cs.older = .idle;
+        cs.older_retry_ms = 0;
+        cs.newer = .idle;
+        cs.newer_retry_ms = 0;
+        cs.seen_ms = now_ms;
+        cs.version +%= 1;
+        s.enforceBudget(now_ms);
+    }
+
+    /// Página depois da mais nova que temos. Acabou (e não chegou nada depois
+    /// do que ela traz): de volta ao presente.
+    fn applyNewer(s: *Store, cs: *ChannelState, msgs: []const types.Message, more: bool, now_ms: i64) !void {
+        cs.newer = .idle;
+        // Depois das que têm ID, antes das pendentes.
+        var at: usize = cs.messages.items.len;
+        while (at > 0 and cs.messages.items[at - 1].msg.id == 0) at -= 1;
+        var newest: Id = if (at > 0) cs.messages.items[at - 1].msg.id else 0;
+        for (msgs) |m| {
+            if (m.id <= newest) {
+                freeRaw(m);
+                continue;
+            }
+            try cs.messages.insert(s.gpa, at, try s.stored(m));
+            at += 1;
+            newest = m.id;
+        }
+        cs.info.last_message = @max(cs.info.last_message, newest);
+        // Sem nada novo, a última mensagem que o Discord disse foi apagada.
+        if (msgs.len == 0) {
+            cs.detached = false;
+        } else cs.detached = more or newest < cs.info.last_message;
+        cs.seen_ms = now_ms;
         cs.version +%= 1;
     }
 
@@ -1339,6 +1552,9 @@ pub const Store = struct {
         cs.history = .none;
         cs.older = .idle;
         cs.cached = false;
+        cs.detached = false;
+        cs.newer = .idle;
+        cs.around = .idle;
         cs.version +%= 1;
         s.rev +%= 1;
     }
@@ -1374,6 +1590,12 @@ pub const Store = struct {
         const cs = s.channel(channel_id) orelse return;
         if (cs.info.unread) s.rev +%= 1;
         cs.info.unread = false;
+        cs.hold_unread = false;
+        s.refreshGuildUnread(cs.info.guild);
+        if (cs.info.last_message > cs.read_id) {
+            cs.read_id = cs.info.last_message;
+            s.rev +%= 1;
+        }
         // Marcador: a última que já veio do servidor (a pendente não tem ID).
         var i = cs.messages.items.len;
         while (i > 0) {
@@ -1385,6 +1607,38 @@ pub const Store = struct {
                 }
                 return;
             }
+        }
+    }
+
+    /// MESSAGE_ACK: lido até `message` (0 = até o fim). O eco atrasado de um
+    /// ack nosso não volta o marcador; só o manual volta.
+    pub fn applyAck(s: *Store, channel_id: Id, message: Id, manual: bool) void {
+        if (message == 0) {
+            s.rev +%= 1;
+            return s.markRead(channel_id);
+        }
+        const cs = s.channel(channel_id) orelse return;
+        const new_read = if (manual) message else @max(cs.read_id, message);
+        const unread = cs.info.last_message > new_read;
+        cs.hold_unread = manual and unread;
+        if (new_read == cs.read_id and unread == cs.info.unread) return;
+        cs.read_id = new_read;
+        cs.info.unread = unread;
+        s.refreshGuildUnread(cs.info.guild);
+        s.rev +%= 1;
+    }
+
+    /// O ponto do servidor na barra: algum canal não lido e não silenciado.
+    pub fn refreshGuildUnread(s: *Store, guild_id: Id) void {
+        if (guild_id == 0) return;
+        const g = s.guild(guild_id) orelse return;
+        g.unread = false;
+        for (s.channelsOf(guild_id)) |id| {
+            const cs = s.channel(id) orelse continue;
+            if (cs.info.kind != .text or !cs.info.unread) continue;
+            if (s.muted) |set| if (set.contains(id)) continue;
+            g.unread = true;
+            return;
         }
     }
 };

@@ -294,6 +294,7 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
     if (sp.mention != .none) {
         d.rect(dl, r, if (o.on_accent) d.Rgba.white.alpha(0.22) else th.c(.mention).alpha(0.22), 4);
         d.text(dl, font, size, x + pad, ty, if (o.on_accent) o.color else th.c(.mention).mix(th.c(.text), 0.45), s);
+        if (o.ctx) |ctx| mentionClick(ctx, sp, r, mouse);
         return;
     }
     if (sp.flags.link) {
@@ -306,13 +307,46 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
         if (over) {
             c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_Hand);
             const drag = c.ImGui_GetMouseDragDelta(0, -1);
-            if (c.ImGui_IsMouseReleased(0) and @abs(drag.x) + @abs(drag.y) < 4) @import("attachments.zig").openUrl(sp.text);
+            if (c.ImGui_IsMouseReleased(0) and @abs(drag.x) + @abs(drag.y) < 4) {
+                // Link do Discord abre aqui dentro; o resto, no navegador.
+                if (o.ctx) |ctx| @import("links.zig").open(ctx, sp.text) else @import("attachments.zig").openUrl(sp.text);
+            }
         }
         return;
     }
     const color = if (sp.flags.bold) o.color.mix(th.c(.text), if (o.on_accent) 0 else 0.4) else o.color;
     d.text(dl, font, size, x, ty, color, s);
     if (sp.flags.strike) d.line(dl, x, ty + size * 0.62, x + w, ty + size * 0.62, color, 1.2);
+}
+
+/// `@alguém` abre o cartão de perfil; `#canal` abre o canal. O botão direito
+/// abre o menu de quem (ou do que) foi mencionado.
+fn mentionClick(ctx: *d.Ctx, sp: *const md.Span, r: d.Rect, mouse: c.ImVec2) void {
+    switch (sp.mention) {
+        .user => |id| qa.mark(r, "mention:{d}", .{id}),
+        .channel => |id| qa.mark(r, "mention-channel:{d}", .{id}),
+        else => return,
+    }
+    if (!r.contains(mouse.x, mouse.y) or !c.ImGui_IsWindowHovered(c.ImGuiHoveredFlags_RootAndChildWindows) or ctx.st.popup != .none) return;
+    // A lista de mensagens não começa uma seleção neste clique.
+    ctx.hot = true;
+    c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_Hand);
+    const left = c.ImGui_IsMouseClicked(0);
+    const right = c.ImGui_IsMouseClicked(1);
+    if (!left and !right) return;
+    switch (sp.mention) {
+        .user => |id| if (ctx.store.user(id) != null) {
+            ctx.popup(if (left) .{ .profile = .{ .user = id, .x = r.right() + 4, .y = r.y } } else .{ .menu = .{ .kind = .user, .id = id, .x = mouse.x, .y = mouse.y } });
+        } else if (left) ctx.st.showToast(ctx.now_ms, false, "não conheço essa pessoa ainda", "that user isn't known yet", .{}),
+        .channel => |id| {
+            if (ctx.store.channel(id) == null) {
+                if (left) ctx.st.showToast(ctx.now_ms, false, "esse canal não está nesta conta", "that channel isn't on this account", .{});
+            } else if (left) {
+                ctx.act(.{ .select_channel = id });
+            } else ctx.popup(.{ .menu = .{ .kind = .channel, .id = id, .x = mouse.x, .y = mouse.y } });
+        },
+        else => {},
+    }
 }
 
 /// Cores do realce, tiradas do tema (funcionam no claro e no escuro).

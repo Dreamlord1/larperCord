@@ -133,8 +133,6 @@ pub fn draw(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         if (!focused) qa.setScope("pane{d}/", .{i});
         defer qa.setScope("", .{});
         msgs.history(ctx, n, .{ .x = pr.x, .y = pr.y + bar_h, .w = pr.w, .h = pr.h - bar_h }, id, regions[i]);
-        // Está na tela: conta como lido (como a conversa aberta).
-        if (!focused) if (ctx.store.channel(id)) |cs| if (cs.info.unread) ctx.act(.{ .mark_read = id });
     }
     if (close_i) |i| close(ctx, i);
 }

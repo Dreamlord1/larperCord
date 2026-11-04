@@ -8,6 +8,7 @@ const types = @import("../core/types.zig");
 const ev = @import("../core/event.zig");
 const Queue = @import("queue.zig").Queue;
 const i18n = @import("../ui/i18n.zig");
+const leitura = @import("../core/leitura.zig");
 const Id = types.Id;
 
 const alloc = std.heap.c_allocator;
@@ -15,6 +16,24 @@ const alloc = std.heap.c_allocator;
 pub const Sink = struct {
     ctx: *anyopaque,
     push: *const fn (ctx: *anyopaque, event: ev.Event) void,
+};
+
+/// O que a demonstração "mandou para o Discord" (o QA confere; não há servidor
+/// para perguntar). Lido da thread da interface.
+pub const sent = struct {
+    const A = std.atomic.Value(u64);
+    pub var acks: A = .init(0);
+    pub var ack_channel: A = .init(0);
+    pub var ack_message: A = .init(0);
+    pub var ack_viewed: A = .init(0);
+    pub var manual_acks: A = .init(0);
+    pub var manual_message: A = .init(0);
+    pub var bulks: A = .init(0);
+    pub var bulk_len: A = .init(0);
+    pub var arounds: A = .init(0);
+    pub var pin_ops: A = .init(0);
+    pub var pin_fetches: A = .init(0);
+    pub var invite_fetches: A = .init(0);
 };
 
 pub const Gateway = struct {
@@ -39,6 +58,13 @@ pub const Gateway = struct {
     /// Começo da sessão: o histórico de um canal é sempre o mesmo dentro
     /// dela (mesmos IDs, como no Discord), mesmo pedido de novo.
     epoch_ms: i64 = 0,
+    /// A mesma fila do gateway de verdade (um ack por canal a cada ~3 s).
+    acks: leitura.AckQueue = .{},
+    /// Fixadas da demonstração, por canal (preenche ao primeiro uso).
+    pins: std.ArrayList(struct { channel: Id, id: Id }) = .empty,
+    pins_seeded: std.AutoHashMapUnmanaged(Id, void) = .empty,
+    /// As menções recentes que foram mostradas: a busca em volta traz as mesmas.
+    mention_log: []types.Message = &.{},
 
     pub fn start(g: *Gateway) !void {
         g.thread = c.SDL_CreateThread(threadMain, "gateway", g) orelse return error.SdlThread;
@@ -62,6 +88,7 @@ pub const Gateway = struct {
     fn run(g: *Gateway) !void {
         g.epoch_ms = nowMs();
         g.emit(.{ .ready = try buildReady() });
+        g.emit(.{ .read_states = .{ .entries = try demoReadStates(g.epoch_ms) } });
         // O @everyone do segundo servidor (que não é nosso): com ele, o #bugs
         // e o AFK de lá aparecem trancados (demoOverwrites).
         {
@@ -170,7 +197,61 @@ pub const Gateway = struct {
                     g.emit(.{ .voice_status = .{ .status = if (v.channel != null) .connected else .disconnected, .channel = v.channel orelse 0 } });
                 },
                 .voice_flags, .voice_volume => {},
-                .fetch_mentions => g.emit(.{ .recent_mentions = try demoMentions(nowMs()) }),
+                .fetch_mentions => {
+                    const t = nowMs();
+                    if (g.mention_log.len > 0) freeMessages(g.mention_log);
+                    g.mention_log = try demoMentions(t);
+                    g.emit(.{ .recent_mentions = try demoMentions(t) });
+                },
+                .ack => |a| {
+                    if (!a.manual) {
+                        g.acks.push(alloc, .{ .channel = a.channel, .message = a.message, .last_viewed = a.last_viewed });
+                        continue;
+                    }
+                    g.acks.cancel(alloc, a.channel, nowMs());
+                    _ = sent.manual_acks.fetchAdd(1, .monotonic);
+                    sent.manual_message.store(a.message, .monotonic);
+                    g.emit(.{ .read = .{ .channel = a.channel, .message = a.message, .mentions = a.mentions, .manual = true } });
+                },
+                .ack_bulk => |list| {
+                    _ = sent.bulks.fetchAdd(1, .monotonic);
+                    sent.bulk_len.store(list.len, .monotonic);
+                    for (list) |e| {
+                        g.acks.cancel(alloc, e[0], nowMs());
+                        g.emit(.{ .read = .{ .channel = e[0], .message = e[1] } });
+                    }
+                    if (list.len > 0) alloc.free(list);
+                },
+                .fetch_around => |o| {
+                    _ = sent.arounds.fetchAdd(1, .monotonic);
+                    const page = try buildAround(o.channel, o.id, g.epoch_ms);
+                    g.placeMention(page, o.id);
+                    g.emit(.{ .history = .{ .channel = o.channel, .messages = page, .around = true, .more = true } });
+                },
+                .fetch_newer => |o| {
+                    const page = try buildNewer(o.channel, o.after, g.epoch_ms);
+                    g.emit(.{ .history = .{ .channel = o.channel, .messages = page.msgs, .newer = true, .more = page.more } });
+                },
+                .fetch_pins => |channel| {
+                    _ = sent.pin_fetches.fetchAdd(1, .monotonic);
+                    try g.seedPins(channel);
+                    g.emit(.{ .pins = .{ .channel = channel, .messages = try g.buildPins(channel) } });
+                },
+                .pin => |p| {
+                    _ = sent.pin_ops.fetchAdd(1, .monotonic);
+                    try g.seedPins(p.channel);
+                    for (g.pins.items, 0..) |x, i| if (x.channel == p.channel and x.id == p.id) {
+                        _ = g.pins.orderedRemove(i);
+                        break;
+                    };
+                    if (p.add) try g.pins.append(alloc, .{ .channel = p.channel, .id = p.id });
+                    g.emit(.{ .message_update = .{ .channel = p.channel, .id = p.id, .content = null, .pinned = p.add } });
+                    g.emit(.{ .pins_changed = p.channel });
+                },
+                .fetch_invite => |code| {
+                    _ = sent.invite_fetches.fetchAdd(1, .monotonic);
+                    g.emit(.{ .invite = .{ .code = code, .invite = try demoInvite(code.slice()) } });
+                },
             };
             cmds.clearRetainingCapacity();
             try g.tick(nowMs());
@@ -267,10 +348,73 @@ pub const Gateway = struct {
         if (g.pending_typing) |t| d = @min(d, t.at_ms);
         for (g.nonce_replies.items) |r| d = @min(d, r.at_ms);
         for (g.history_replies.items) |r| d = @min(d, r.at_ms);
-        return d;
+        return @min(d, g.acks.nextDue());
+    }
+
+    /// Os acks que já podem sair, com o eco que o Discord manda de volta.
+    fn flushAcks(g: *Gateway, now: i64) void {
+        while (g.acks.take(now)) |a| {
+            _ = sent.acks.fetchAdd(1, .monotonic);
+            sent.ack_channel.store(a.channel, .monotonic);
+            sent.ack_message.store(a.message, .monotonic);
+            sent.ack_viewed.store(a.last_viewed, .monotonic);
+            g.emit(.{ .read = .{ .channel = a.channel, .message = a.message } });
+        }
+    }
+
+    /// A menção recente (que não existe no histórico inventado) aparece na
+    /// página com o texto que a caixa de entrada mostrou.
+    fn placeMention(g: *Gateway, page: []types.Message, id: Id) void {
+        for (g.mention_log) |ml| {
+            if (ml.id != id) continue;
+            var at: usize = 0;
+            for (page, 0..) |m, i| if (m.id <= id) {
+                at = i;
+            };
+            if (page.len == 0) return;
+            const text = alloc.dupe(u8, ml.content) catch return;
+            freeOne(page[at]);
+            page[at] = .{ .id = id, .channel = ml.channel, .author = ml.author, .timestamp = ml.timestamp, .content = text };
+            return;
+        }
+    }
+
+    /// Duas recentes e uma antiga (fora do que carrega ao abrir).
+    fn seedPins(g: *Gateway, channel: Id) !void {
+        const gop = try g.pins_seeded.getOrPut(alloc, channel);
+        if (gop.found_existing) return;
+        const latest = try buildHistory(channel, g.epoch_ms);
+        defer freeMessages(latest);
+        try g.pins.append(alloc, .{ .channel = channel, .id = oldPinId(channel, g.epoch_ms) });
+        for (pinned_backs) |back| try g.pins.append(alloc, .{ .channel = channel, .id = latest[latest.len - back].id });
+    }
+
+    /// As fixadas do canal, da última fixada para a primeira, como a API manda.
+    fn buildPins(g: *Gateway, channel: Id) ![]types.Message {
+        const latest = try buildHistory(channel, g.epoch_ms);
+        defer freeMessages(latest);
+        var out: std.ArrayList(types.Message) = .empty;
+        var i = g.pins.items.len;
+        while (i > 0) {
+            i -= 1;
+            const p = g.pins.items[i];
+            if (p.channel != channel) continue;
+            const from = for (latest) |m| {
+                if (m.id == p.id) break m;
+            } else null;
+            if (from) |m| {
+                try out.append(alloc, .{ .id = m.id, .channel = channel, .author = m.author, .timestamp = m.timestamp, .content = try alloc.dupe(u8, m.content), .pinned = true });
+            } else {
+                var m = try syntheticAt(channel, p.id, g.epoch_ms);
+                m.pinned = true;
+                try out.append(alloc, m);
+            }
+        }
+        return out.toOwnedSlice(alloc);
     }
 
     fn tick(g: *Gateway, now: i64) !void {
+        g.flushAcks(now);
         var i: usize = 0;
         while (i < g.nonce_replies.items.len) {
             const r = g.nonce_replies.items[i];
@@ -383,7 +527,7 @@ const users = [_]UserSeed{
     .{ .id = 1011, .name = "joão vitor", .role = 1, .status = .offline },
 };
 
-const GuildSeed = struct { name: []const u8, acronym: []const u8, color: u8, unread: bool = false, mentions: u16 = 0, name_en: ?[]const u8 = null, acronym_en: ?[]const u8 = null, icon: bool = false };
+const GuildSeed = struct { name: []const u8, acronym: []const u8, color: u8, name_en: ?[]const u8 = null, acronym_en: ?[]const u8 = null, icon: bool = false };
 
 /// Cargos de cada servidor da demonstração (cor 0 = sem cor).
 const demo_roles = [_]struct { name: []const u8, name_en: []const u8, color: u32 }{
@@ -412,31 +556,31 @@ const group_members = [_]Id{ 1001, 1003, 1005 };
 const group_id: Id = 900_006;
 
 const guilds = [_]GuildSeed{
-    .{ .name = "larperCord dev", .acronym = "LC", .color = 0, .unread = true, .mentions = 3 },
-    .{ .name = "Rice do Hyprland", .acronym = "RH", .color = 4, .unread = true, .name_en = "Hyprland Rice", .acronym_en = "HR", .icon = true },
+    .{ .name = "larperCord dev", .acronym = "LC", .color = 0 },
+    .{ .name = "Rice do Hyprland", .acronym = "RH", .color = 4, .name_en = "Hyprland Rice", .acronym_en = "HR", .icon = true },
     .{ .name = "Zig Brasil", .acronym = "Z", .color = 1, .name_en = "Zig Brazil", .icon = true },
-    .{ .name = "os larpers", .acronym = "ol", .color = 3, .unread = true, .mentions = 12, .name_en = "the larpers", .acronym_en = "tl" },
+    .{ .name = "os larpers", .acronym = "ol", .color = 3, .name_en = "the larpers", .acronym_en = "tl" },
     .{ .name = "CTF da madrugada", .acronym = "CTF", .color = 6, .name_en = "Late-night CTF", .icon = true },
-    .{ .name = "Faculdade 2026", .acronym = "F26", .color = 2, .unread = true, .name_en = "College 2026", .acronym_en = "C26" },
+    .{ .name = "Faculdade 2026", .acronym = "F26", .color = 2, .name_en = "College 2026", .acronym_en = "C26" },
     .{ .name = "Minecraft SMP", .acronym = "MC", .color = 7, .icon = true },
     .{ .name = "Lo-fi & café", .acronym = "☕", .color = 5, .name_en = "Lo-fi & coffee" },
     .{ .name = "Arch Linux BR", .acronym = "A", .color = 4 },
-    .{ .name = "Memes", .acronym = "😂", .color = 1, .unread = true },
+    .{ .name = "Memes", .acronym = "😂", .color = 1 },
 };
 
-const ChannelSeed = struct { name: []const u8, kind: types.ChannelKind = .text, unread: bool = false, topic: []const u8 = "", name_en: ?[]const u8 = null, topic_en: ?[]const u8 = null };
+const ChannelSeed = struct { name: []const u8, kind: types.ChannelKind = .text, topic: []const u8 = "", name_en: ?[]const u8 = null, topic_en: ?[]const u8 = null };
 
 const channel_tree = [_]ChannelSeed{
     .{ .name = "informações", .kind = .category, .name_en = "info" },
     .{ .name = "regras", .topic = "leia antes de postar", .name_en = "rules", .topic_en = "read before posting" },
-    .{ .name = "anúncios", .unread = true, .topic = "novidades do servidor", .name_en = "announcements", .topic_en = "server news" },
+    .{ .name = "anúncios", .topic = "novidades do servidor", .name_en = "announcements", .topic_en = "server news" },
     .{ .name = "geral", .kind = .category, .name_en = "general" },
-    .{ .name = "geral", .unread = true, .topic = "papo livre, sem spam 🙏", .name_en = "general", .topic_en = "free talk, no spam 🙏" },
-    .{ .name = "memes", .unread = true, .topic = "só o suprassumo", .topic_en = "only the finest" },
+    .{ .name = "geral", .topic = "papo livre, sem spam 🙏", .name_en = "general", .topic_en = "free talk, no spam 🙏" },
+    .{ .name = "memes", .topic = "só o suprassumo", .topic_en = "only the finest" },
     .{ .name = "setups", .topic = "mostra o rice", .topic_en = "show off your rice" },
     .{ .name = "música", .topic = "o que vocês estão ouvindo?", .name_en = "music", .topic_en = "what are you all listening to?" },
     .{ .name = "projetos", .kind = .category, .name_en = "projects" },
-    .{ .name = "zig", .unread = true, .topic = "allocators, comptime e sofrimento", .topic_en = "allocators, comptime and suffering" },
+    .{ .name = "zig", .topic = "allocators, comptime e sofrimento", .topic_en = "allocators, comptime and suffering" },
     .{ .name = "interface", .topic = "design do larperCord", .topic_en = "larperCord's design" },
     .{ .name = "bugs", .topic = "reporte com print", .topic_en = "report with a screenshot" },
     .{ .name = "voz", .kind = .category, .name_en = "voice" },
@@ -514,8 +658,6 @@ fn buildReady() !ev.Ready {
         .name = try alloc.dupe(u8, pick(g.name, g.name_en)),
         .acronym = try alloc.dupe(u8, pick(g.acronym, g.acronym_en)),
         .color = g.color,
-        .unread = g.unread,
-        .mentions = g.mentions,
         .icon = if (g.icon) try std.fmt.allocPrint(alloc, "demo:icon:{d}", .{i}) else null,
         // O primeiro servidor é nosso (dá para mexer em cargos e mensagens).
         .owner = if (i == 0) me_id else 1001,
@@ -535,7 +677,6 @@ fn buildReady() !ev.Ready {
                 .name = try alloc.dupe(u8, pick(ch.name, ch.name_en)),
                 .topic = try alloc.dupe(u8, pick(ch.topic, ch.topic_en)),
                 .position = @intCast(ci),
-                .unread = ch.unread and gi % 2 == 0,
                 .overwrites = try demoOverwrites(gi, ci),
             };
             n += 1;
@@ -548,7 +689,6 @@ fn buildReady() !ev.Ready {
             .name = try alloc.dupe(u8, users[i + 1].name),
             .topic = try alloc.dupe(u8, ""),
             .position = @intCast(i),
-            .unread = i == 1 or i == 3,
             .recipient = users[i + 1].id,
         };
         n += 1;
@@ -563,7 +703,6 @@ fn buildReady() !ev.Ready {
                 .recipient = group_members[0],
                 .recipients = try alloc.dupe(Id, &group_members),
                 .group = true,
-                .unread = true,
             };
             n += 1;
         }
@@ -580,6 +719,151 @@ fn buildReady() !ev.Ready {
         vn += 1;
     }
     return .{ .me = me_id, .users = us, .guilds = gs, .channels = chs, .voice = voice, .username = try alloc.dupe(u8, "rsha") };
+}
+
+/// Quantas não lidas cada canal tem ao abrir a demonstração (0 = nenhuma).
+fn demoUnread(channel: Id) usize {
+    return switch (channel) {
+        channelId(0, 2) => 2,
+        channelId(0, 4) => 3,
+        channelId(0, 5) => 4,
+        channelId(0, 9) => 2,
+        // Mais do que cabe na tela: abre na primeira não lida.
+        channelId(0, 10) => 60,
+        channelId(1, 4) => 5,
+        channelId(3, 4) => 6,
+        channelId(5, 4) => 40,
+        channelId(9, 4) => 2,
+        dmId(1) => 2,
+        dmId(3) => 1,
+        group_id => 3,
+        else => 0,
+    };
+}
+
+/// `read_state` da demonstração: o mesmo formato do READY de verdade. O
+/// histórico é sempre o mesmo dentro da sessão, então dá para apontar para uma
+/// mensagem dele e contar as menções de verdade.
+fn demoReadStates(epoch_ms: i64) ![]types.ReadEntry {
+    const list = [_]Id{ channelId(0, 2), channelId(0, 4), channelId(0, 5), channelId(0, 9), channelId(0, 10), channelId(1, 4), channelId(3, 4), channelId(5, 4), channelId(9, 4), dmId(1), dmId(3), group_id };
+    const out = try alloc.alloc(types.ReadEntry, list.len);
+    for (list, 0..) |ch, i| {
+        const msgs = try buildHistory(ch, epoch_ms);
+        defer freeMessages(msgs);
+        const k = demoUnread(ch);
+        var mentions: u16 = 0;
+        for (msgs[msgs.len - k..]) |m| {
+            const dm = ch >= 900_000;
+            if (dm or std.mem.indexOf(u8, m.content, "<@1000>") != null or std.mem.indexOf(u8, m.content, "@everyone") != null) mentions += 1;
+        }
+        out[i] = .{ .channel = ch, .last_read = msgs[msgs.len - k - 1].id, .mentions = mentions, .last_message = msgs[msgs.len - 1].id };
+    }
+    return out;
+}
+
+/// Cartão de convite da demonstração (sem conta, sem entrar em nada).
+fn demoInvite(code: []const u8) !types.Invite {
+    if (std.mem.eql(u8, code, "larper")) return .{ .state = .ok, .guild = guildId(0), .name = try alloc.dupe(u8, pick(guilds[0].name, guilds[0].name_en)), .members = 12, .online = 7 };
+    if (std.mem.eql(u8, code, "zigbr")) return .{ .state = .ok, .guild = 777_000, .name = try alloc.dupe(u8, "Zig Brasil (oficial)"), .icon = try alloc.dupe(u8, "demo:icon:2"), .members = 4312, .online = 389 };
+    return .{ .state = .invalid };
+}
+
+fn freeMessages(msgs: []types.Message) void {
+    for (msgs) |m| freeOne(m);
+    alloc.free(msgs);
+}
+
+fn freeOne(m: types.Message) void {
+    alloc.free(m.content);
+    types.freeAttachments(alloc, m.attachments);
+    types.freeEmbeds(alloc, m.embeds);
+}
+
+/// Copia a fatia `lo..hi` e libera o resto.
+fn keepRange(msgs: []types.Message, lo: usize, hi: usize) ![]types.Message {
+    const out = try alloc.alloc(types.Message, hi - lo);
+    @memcpy(out, msgs[lo..hi]);
+    for (msgs[0..lo]) |m| freeOne(m);
+    for (msgs[hi..]) |m| freeOne(m);
+    alloc.free(msgs);
+    return out;
+}
+
+/// As mensagens fixadas que ficam dentro do histórico (contando do fim).
+const pinned_backs = [_]usize{ 120, 40 };
+
+/// A fixada antiga: 40 dias antes do começo da sessão, longe do que carrega.
+pub fn oldPinId(channel: Id, epoch_ms: i64) Id {
+    return types.makeSnowflake(epoch_ms - 40 * 86_400_000, demoSeq(channel, 1000));
+}
+
+/// Uma mensagem fora do histórico, sempre a mesma para o mesmo ID.
+fn syntheticAt(channel: Id, id: Id, epoch_ms: i64) !types.Message {
+    var prng = std.Random.DefaultPrng.init(channel ^ id);
+    const r = prng.random();
+    const text = if (id == oldPinId(channel, epoch_ms)) pick("regra de ouro: sem spam e sem pedir cargo 🙏", "golden rule: no spam and no asking for roles 🙏") else phrase(r.uintLessThan(usize, phrases.len));
+    return .{
+        .id = id,
+        .channel = channel,
+        .author = if (dmRecipient(channel)) |u| u else users[1 + r.uintLessThan(usize, 7)].id,
+        .timestamp = @divTrunc(types.snowflakeTime(id), 1000),
+        .content = try alloc.dupe(u8, text),
+    };
+}
+
+/// GET messages?around=: 25 de cada lado da mensagem. Dentro do histórico,
+/// o próprio; antes dele, uma conversa inventada (sempre a mesma).
+fn buildAround(channel: Id, id: Id, epoch_ms: i64) ![]types.Message {
+    const latest = try buildHistory(channel, epoch_ms);
+    if (id >= latest[0].id) {
+        var at: usize = 0;
+        for (latest, 0..) |m, i| if (m.id <= id) {
+            at = i;
+        };
+        return keepRange(latest, at -| 25, @min(at + 25, latest.len));
+    }
+    defer freeMessages(latest);
+    const oldest_s = @divTrunc(types.snowflakeTime(latest[0].id), 1000);
+    const t0 = @divTrunc(types.snowflakeTime(id), 1000);
+    var out: std.ArrayList(types.Message) = .empty;
+    for (0..50) |i| {
+        const off = (@as(i64, @intCast(i)) - 25) * 90;
+        if (t0 + off >= oldest_s) break;
+        const mid = if (i == 25) id else types.makeSnowflake((t0 + off) * 1000, demoSeq(channel, i));
+        try out.append(alloc, try syntheticAt(channel, mid, epoch_ms));
+    }
+    return out.toOwnedSlice(alloc);
+}
+
+/// GET messages?after=: voltando para o presente, até encostar no histórico.
+fn buildNewer(channel: Id, after: Id, epoch_ms: i64) !struct { msgs: []types.Message, more: bool } {
+    const latest = try buildHistory(channel, epoch_ms);
+    if (after >= latest[0].id) {
+        var from = latest.len;
+        for (latest, 0..) |m, i| if (m.id > after) {
+            from = i;
+            break;
+        };
+        const end = @min(from + 50, latest.len);
+        const more = end < latest.len;
+        return .{ .msgs = try keepRange(latest, from, end), .more = more };
+    }
+    const oldest_s = @divTrunc(types.snowflakeTime(latest[0].id), 1000);
+    const t0 = @divTrunc(types.snowflakeTime(after), 1000);
+    var out: std.ArrayList(types.Message) = .empty;
+    // Uma mensagem por hora: de um mês para cá, em algumas páginas.
+    for (1..51) |i| {
+        const t = t0 + @as(i64, @intCast(i)) * 3600;
+        if (t >= oldest_s) break;
+        try out.append(alloc, try syntheticAt(channel, types.makeSnowflake(t * 1000, demoSeq(channel, i)), epoch_ms));
+    }
+    // Encostou: daqui em diante é o histórico.
+    if (out.items.len == 0) {
+        out.deinit(alloc);
+        return .{ .msgs = try keepRange(latest, 0, 50), .more = true };
+    }
+    freeMessages(latest);
+    return .{ .msgs = try out.toOwnedSlice(alloc), .more = true };
 }
 
 /// Menções recentes da demonstração (o que o GET /users/@me/mentions
@@ -673,6 +957,13 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         msgs[n - 2].reply_to = 0;
         msgs[n - 1].author = 1002;
     }
+    // Quem ainda não foi lido não é nosso (falar é ter lido).
+    const unread_k = demoUnread(channel);
+    for (msgs[n - unread_k..]) |*m| if (m.author == me_id) {
+        m.author = dmRecipient(channel) orelse if (channel == group_id) group_members[0] else 1001;
+    };
+    // Duas fixadas dentro do histórico (a antiga fica fora: seedPins).
+    for (pinned_backs) |back| msgs[n - back].pinned = true;
     // Imagens (geradas na hora pelo carregador: "demo:N") e um arquivo.
     const pics = [_]struct { back: usize, text: []const u8, url: []const u8, name: []const u8, w: u16, h: u16, text_en: ?[]const u8 = null, name_en: ?[]const u8 = null }{
         .{ .back = 5, .text = "olha o pôr do sol daqui de casa 🌅", .url = "demo:1", .name = "por-do-sol.png", .w = 900, .h = 560, .text_en = "check out the sunset from my place 🌅", .name_en = "sunset.png" },
@@ -770,6 +1061,20 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
             .has_color = true,
         };
         m.embeds = e;
+    }
+    // #interface: links do Discord, convites e menções clicáveis.
+    if (channel == channelId(0, 10)) {
+        const set = struct {
+            fn f(m: *types.Message, text: []const u8) !void {
+                alloc.free(m.content);
+                m.content = text;
+                m.reply_to = 0;
+            }
+        }.f;
+        try set(&msgs[n - 1], try i18n.allocPrint(alloc, "entra lá: https://discord.gg/larper", "join us: https://discord.gg/larper", .{}));
+        try set(&msgs[n - 2], try i18n.allocPrint(alloc, "o pessoal do zig também: https://discord.gg/zigbr", "the zig folks too: https://discord.gg/zigbr", .{}));
+        try set(&msgs[n - 4], try i18n.allocPrint(alloc, "a regra fixada é esta: https://discord.com/channels/{d}/{d}/{d}", "the pinned rule is this one: https://discord.com/channels/{d}/{d}/{d}", .{ guildId(0), channel, oldPinId(channel, now_ms) }));
+        try set(&msgs[n - 6], try i18n.allocPrint(alloc, "vejam <#{d}> e falem com <@1001>; o outro canal: https://ptb.discord.com/channels/{d}/{d}", "check <#{d}> and talk to <@1001>; the other channel: https://ptb.discord.com/channels/{d}/{d}", .{ channelId(0, 4), guildId(0), channelId(0, 5) }));
     }
     return msgs;
 }

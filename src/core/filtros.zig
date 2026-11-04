@@ -184,6 +184,17 @@ pub const Filtros = struct {
         };
     }
 
+    /// Quantas menções o canal tem, como o Discord disse (o servidor acompanha).
+    pub fn setCount(f: *Filtros, gpa: std.mem.Allocator, store: *store_mod.Store, ch: Id, n: u16) void {
+        const old = f.count(ch);
+        if (n == 0) {
+            _ = f.mentions.remove(ch);
+        } else f.mentions.put(gpa, ch, n) catch return;
+        if (store.channel(ch)) |cs| if (cs.info.guild != 0) if (store.guild(cs.info.guild)) |g| {
+            g.mentions = (g.mentions -| old) +| n;
+        };
+    }
+
     /// Canal lido: zera o contador (e tira a parte dele do servidor).
     pub fn clear(f: *Filtros, store: *store_mod.Store, ch: Id) void {
         _ = f.focus_quiet.remove(ch);
@@ -210,6 +221,7 @@ pub const Filtros = struct {
         var it = f.focus_quiet.keyIterator();
         while (it.next()) |ch| if (store.channel(ch.*)) |cs| {
             cs.info.unread = true;
+            store.refreshGuildUnread(cs.info.guild);
         };
         store.rev +%= 1;
         f.focus_quiet.clearRetainingCapacity();
@@ -228,6 +240,7 @@ pub const Filtros = struct {
     pub fn quiet(f: *Filtros, gpa: std.mem.Allocator, store: *store_mod.Store, ch: Id) void {
         const cs = store.channel(ch) orelse return;
         cs.info.unread = false;
+        store.refreshGuildUnread(cs.info.guild);
         store.rev +%= 1;
         f.focus_quiet.put(gpa, ch, {}) catch {};
     }

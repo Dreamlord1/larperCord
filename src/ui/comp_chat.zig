@@ -30,9 +30,18 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         var buf: [160]u8 = undefined;
         const t = std.fmt.bufPrint(&buf, "─ {s}{s} ─ {s} ", .{ sigil(ch), ch.name, ch.topic }) catch ch.name;
         const fs = ctx.th.font_size - 1;
-        const tw = d.textClipped(dl, fam.get(.bold), fs, r.x + 6, d.centerY(r, fs), ctx.col(.accent), t, r.w - 12);
+        // O alfinete à direita, em texto como o resto da linha.
+        const pl = "[pin]";
+        const pw = d.width(fam.get(.bold), fs, pl);
+        const pr: d.Rect = .{ .x = r.right() - pw - 8, .y = r.y, .w = pw + 4, .h = r.h };
+        const ph = d.hit(ctx, 6, pr);
+        qa.mark(pr, "header-pins", .{});
+        if (ph.clicked) ctx.act(.{ .open_pins = ch_id });
+        d.text(dl, fam.get(.bold), fs, pr.x + 2, d.centerY(r, fs), if (ph.hovered) ctx.col(.text) else ctx.col(.muted), pl);
+        d.tip(ctx, pr, i18n.tr("Mensagens fixadas", "Pinned messages"), ph.hovered);
+        const tw = d.textClipped(dl, fam.get(.bold), fs, r.x + 6, d.centerY(r, fs), ctx.col(.accent), t, r.w - 22 - pw);
         const ly = r.y + r.h / 2;
-        d.line(dl, r.x + 6 + tw + 4, ly, r.right() - 6, ly, ctx.col(.border), 1);
+        d.line(dl, r.x + 6 + tw + 4, ly, pr.x - 4, ly, ctx.col(.border), 1);
         return;
     }
     if (std.mem.eql(u8, variant, "minimal")) {
@@ -41,8 +50,9 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const t = std.fmt.bufPrint(&buf, "{s}", .{ch.name}) catch "";
         d.text(dl, fam.get(.bold), 22, r.x + 4, r.y + r.h / 2 - 22, ctx.col(.text), t);
         const sub = if (ch.guild == 0) i18n.tr("mensagem direta", "direct message") else d.printClip(&buf, "{s}  ·  {s}", .{ if (g) |x| x.name else "", ch.topic });
-        _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - 84);
+        _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - 120);
         inboxButtons(ctx, dl, r.right() - 32, r.y + r.h / 2 - 14);
+        pinsButton(ctx, dl, ch_id, r.right() - 104, r.y + r.h / 2 - 14);
         return;
     }
 
@@ -52,12 +62,13 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const search_w: f32 = 180;
     const sx = r.right() - 16 - search_w;
     const tx = r.x + 42 + name_w + 14;
-    // Da direita para a esquerda: busca, membros, buscar mensagens, salvas, caixa de entrada.
-    if (ch.topic.len > 0 and sx - tx > 186) {
+    // Da direita para a esquerda: busca, membros, buscar mensagens, salvas, caixa de entrada, fixadas.
+    if (ch.topic.len > 0 and sx - tx > 222) {
         d.rect(dl, .{ .x = tx, .y = r.y + r.h / 2 - 10, .w = 1, .h = 20 }, ctx.col(.border).mix(ctx.col(.text), 0.05), 0);
-        _ = d.textClipped(dl, fam.get(.regular), 14, tx + 14, d.centerY(r, 14), ctx.col(.muted), ch.topic, sx - tx - 178);
+        _ = d.textClipped(dl, fam.get(.regular), 14, tx + 14, d.centerY(r, 14), ctx.col(.muted), ch.topic, sx - tx - 214);
     }
     inboxButtons(ctx, dl, sx - 112, r.y + r.h / 2 - 14);
+    pinsButton(ctx, dl, ch_id, sx - 184, r.y + r.h / 2 - 14);
     const sr: d.Rect = .{ .x = sx, .y = r.y + r.h / 2 - 13, .w = search_w, .h = 26 };
     const sh = d.hit(ctx, 1, sr);
     qa.mark(sr, "header-search", .{});
@@ -81,6 +92,17 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     icons.members(dl, mr.x + 14, mr.y + 14, (if (ctx.st.settings.show_member_list or mh.hovered) ctx.col(.text) else ctx.col(.muted)).u());
     d.tip(ctx, mr, if (ctx.st.settings.show_member_list) i18n.tr("Esconder membros", "Hide Member List") else i18n.tr("Mostrar membros", "Show Member List"), mh.hovered);
     if (d.pflag(n, "divider", true)) d.line(dl, r.x, r.bottom() - 0.5, r.right(), r.bottom() - 0.5, ctx.col(.border), 1);
+}
+
+/// Alfinete: abre o painel de mensagens fixadas do canal.
+fn pinsButton(ctx: *d.Ctx, dl: *c.ImDrawList, ch_id: Id, x: f32, y: f32) void {
+    const pr: d.Rect = .{ .x = x, .y = y, .w = 28, .h = 28 };
+    const ph = d.hit(ctx, 6, pr);
+    qa.mark(pr, "header-pins", .{});
+    if (ph.clicked) ctx.act(.{ .open_pins = ch_id });
+    const open = ctx.st.popup == .pins;
+    icons.pin(dl, pr.x + 14, pr.y + 14, (if (open or ph.hovered) ctx.col(.text) else ctx.col(.muted)).u());
+    d.tip(ctx, pr, i18n.tr("Mensagens fixadas", "Pinned messages"), ph.hovered);
 }
 
 /// Caixa de entrada (com o número de não lidas) e mensagens salvas, da

@@ -12,6 +12,9 @@ const types = @import("../core/types.zig");
 const StoredMessage = @import("../core/store.zig").StoredMessage;
 const md = @import("../core/markdown.zig");
 const video = @import("video.zig");
+const w_ui = @import("widgets.zig");
+const links = @import("../core/links.zig");
+const links_ui = @import("links.zig");
 
 const max_w: f32 = 520;
 const gap: f32 = 6;
@@ -21,7 +24,8 @@ const thumb_s: f32 = 80;
 /// Altura de todos os embeds da mensagem (com o espaço acima), desenhando
 /// se `dl` não for null.
 pub fn block(ctx: *d.Ctx, dl: ?*c.ImDrawList, m: *const StoredMessage, x: f32, y_in: f32, avail: f32, alpha: f32) f32 {
-    if (m.msg.embeds.len == 0) return 0;
+    const invites = hasInvite(m);
+    if (m.msg.embeds.len == 0 and !invites) return 0;
     var y = y_in;
     var k: usize = 0;
     for (m.msg.embeds, 0..) |*e, i| {
@@ -36,7 +40,114 @@ pub fn block(ctx: *d.Ctx, dl: ?*c.ImDrawList, m: *const StoredMessage, x: f32, y
         }
         y += h;
     }
+    if (invites) {
+        var shown: usize = 0;
+        for (m.spans) |*sp| {
+            if (!isInviteSpan(sp)) continue;
+            if (shown == max_invites) break;
+            shown += 1;
+            y += gap;
+            if (dl) |l| inviteCard(ctx, l, sp.text, x, y, @min(avail, invite_w), alpha, m.msg.id ^ shown);
+            y += invite_h;
+        }
+    }
     return y - y_in;
+}
+
+// --- Cartão de convite ----------------------------------------------------------
+// Mostra o servidor e abre no navegador. Não entra pelo app: POST de convite
+// por conta de usuário dispara captcha e arrisca a conta.
+
+pub const invite_w: f32 = 432;
+const invite_h: f32 = 84;
+const max_invites = 3;
+
+fn isInviteSpan(sp: *const md.Span) bool {
+    return sp.flags.link and !sp.flags.spoiler and links.parseInvite(sp.text) != null;
+}
+
+pub fn hasInvite(m: *const StoredMessage) bool {
+    for (m.spans) |*sp| if (sp.flags.link and isInviteSpan(sp)) return true;
+    return false;
+}
+
+fn inviteCard(ctx: *d.Ctx, dl: *c.ImDrawList, url: []const u8, x: f32, y: f32, wd: f32, alpha: f32, hit_id: u64) void {
+    const fam = ctx.ui;
+    const code = links.parseInvite(url) orelse return;
+    const inv = ctx.store.invites.get(code);
+    if (inv == null) ctx.act(.{ .want_invite = links.InviteCode.init(code) });
+    const r: d.Rect = .{ .x = x, .y = y, .w = wd, .h = invite_h };
+    qa.mark(r, "invite:{s}", .{code});
+    d.rect(dl, r, ctx.col(.elevated).mix(ctx.col(.rail), 0.35).alpha(alpha), 6);
+    d.border(dl, r, ctx.col(.border).alpha(alpha), 6, 1);
+    d.text(dl, fam.get(.bold), 10.5, x + 12, y + 8, ctx.col(.muted).alpha(alpha), i18n.tr("CONVITE PARA UM SERVIDOR", "SERVER INVITE"));
+
+    // Ícone: a imagem, ou a primeira letra.
+    const ir: d.Rect = .{ .x = x + 12, .y = y + 28, .w = 44, .h = 44 };
+    const state = if (inv) |i| i.state else .loading;
+    const ok = state == .ok;
+    var icon_drawn = false;
+    if (ok) if (inv.?.icon) |hash| {
+        var ub: [160]u8 = undefined;
+        icon_drawn = w_ui.picture(ctx, dl, w_ui.cdnUrl(&ub, .guild, inv.?.guild, hash), ir, 12, alpha);
+    };
+    if (!icon_drawn) {
+        d.rect(dl, ir, ctx.col(.accent).alpha(0.75 * alpha), 12);
+        const g = if (ok and inv.?.name.len > 0) d.firstGlyph(inv.?.name) else "?";
+        const gw = d.width(fam.get(.bold), 18, g);
+        d.text(dl, fam.get(.bold), 18, ir.x + (ir.w - gw) / 2, d.centerY(ir, 18), d.Rgba.white.alpha(alpha), g);
+    }
+
+    // Botões à direita: abrir no navegador e, se já estamos nele, ir para lá.
+    const browser = i18n.tr("Abrir no navegador", "Open in browser");
+    const bf = fam.get(.semibold);
+    const bh: f32 = 28;
+    const narrow = wd < 360;
+    const bw = d.width(bf, 13, browser) + 20;
+    const member = ok and inv.?.guild != 0 and ctx.store.guild(inv.?.guild) != null;
+    const go = i18n.tr("Ir para o servidor", "Go to server");
+    var rx = r.right() - 10;
+    const br: d.Rect = .{ .x = rx - bw, .y = if (narrow or member) y + 8 else y + 42, .w = bw, .h = bh };
+    rx = br.x;
+    const hb = d.hit(ctx, @truncate(hit_id *% 31 +% 1), br);
+    qa.mark(br, "invite-open:{s}", .{code});
+    d.rect(dl, br, (if (hb.hovered) ctx.col(.accent) else ctx.col(.hover)).alpha(alpha), bh / 2);
+    d.text(dl, bf, 13, br.x + 10, d.centerY(br, 13), (if (hb.hovered) ctx.col(.accent_text) else ctx.col(.text)).alpha(alpha), browser);
+    if (hb.clicked) att.openUrl(url);
+    if (member) {
+        const gr: d.Rect = .{ .x = r.right() - 10 - bw, .y = y + 44, .w = bw, .h = bh };
+        const gh = d.hit(ctx, @truncate(hit_id *% 31 +% 2), gr);
+        qa.mark(gr, "invite-go:{s}", .{code});
+        d.rect(dl, gr, ctx.col(.accent).alpha(alpha), bh / 2);
+        const gt = d.width(bf, 13, go);
+        d.text(dl, bf, 13, gr.x + (bw - gt) / 2, d.centerY(gr, 13), ctx.col(.accent_text).alpha(alpha), go);
+        if (gh.clicked) ctx.act(.{ .select_guild = inv.?.guild });
+    }
+
+    // Nome e membros.
+    const tx = ir.right() + 12;
+    const room = rx - tx - 8;
+    switch (state) {
+        .loading => d.text(dl, fam.get(.regular), 13, tx, y + 40, ctx.col(.muted).alpha(alpha), i18n.tr("carregando…", "loading…")),
+        .invalid => d.text(dl, fam.get(.semibold), 13.5, tx, y + 40, ctx.col(.danger).alpha(alpha), i18n.tr("Convite inválido ou expirado", "Invalid or expired invite")),
+        .failed => d.text(dl, fam.get(.regular), 13, tx, y + 40, ctx.col(.muted).alpha(alpha), i18n.tr("não consegui carregar o convite", "couldn't load the invite")),
+        .ok => {
+            _ = d.textClipped(dl, fam.get(.bold), 15, tx, y + 30, ctx.col(.text).alpha(alpha), inv.?.name, room);
+            var cb: [64]u8 = undefined;
+            var cx = tx;
+            if (inv.?.online > 0) {
+                d.circle(dl, cx + 4, y + 60, 4, ctx.col(.online).alpha(alpha));
+                const t = i18n.fmt(&cb, "{d} online", "{d} online", .{inv.?.online});
+                d.text(dl, fam.get(.regular), 12.5, cx + 12, y + 52, ctx.col(.muted).alpha(alpha), t);
+                cx += 12 + d.width(fam.get(.regular), 12.5, t) + 10;
+            }
+            if (inv.?.members > 0) {
+                d.circle(dl, cx + 4, y + 60, 4, ctx.col(.faint).alpha(alpha));
+                const t = i18n.fmt(&cb, "{d} membros", "{d} members", .{inv.?.members});
+                _ = d.textClipped(dl, fam.get(.regular), 12.5, cx + 12, y + 52, ctx.col(.muted).alpha(alpha), t, @max(0, rx - cx - 20));
+            }
+        },
+    }
 }
 
 /// Altura medida por embed: desenhar não precisa fazer o layout duas vezes
@@ -58,8 +169,9 @@ fn cardHeight(ctx: *d.Ctx, e: *const types.Embed, spans: []const []const md.Span
     return slot.h;
 }
 
-fn opts(ctx: *const d.Ctx, size: f32) rich.Opts {
+fn opts(ctx: *d.Ctx, size: f32) rich.Opts {
     return .{
+        .ctx = ctx,
         .family = ctx.ui,
         .size = size,
         .line_h = size * 1.42,
@@ -101,7 +213,8 @@ fn card(ctx: *d.Ctx, dl: ?*c.ImDrawList, e: *const types.Embed, spans: []const [
             if (linked) {
                 const hb = d.hit(ctx, @truncate(@intFromPtr(e)), tr);
                 if (hb.hovered) d.line(l, tr.x, tr.bottom() - 1, tr.right(), tr.bottom() - 1, col.alpha(0.6), 1);
-                if (hb.clicked) att.openUrl(e.url);
+                // Link do Discord no título de um bot abre aqui.
+                if (hb.clicked) links_ui.open(ctx, e.url);
             }
         }
         y += 24;

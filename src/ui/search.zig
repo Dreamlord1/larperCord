@@ -469,8 +469,7 @@ fn snippet(ctx: *d.Ctx, a: std.mem.Allocator, r: *Result, content: []const u8, f
 // --- Desenho ------------------------------------------------------------------------
 
 fn choose(ctx: *d.Ctx, r: Result) void {
-    ctx.act(.{ .select_channel = r.channel });
-    ctx.act(.{ .jump_to = r.id });
+    ctx.act(.{ .open_message = .{ .channel = r.channel, .id = r.id } });
     close();
 }
 

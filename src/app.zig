@@ -30,6 +30,7 @@ const guild_color = @import("ui/guild_color.zig");
 const theme_mod = @import("theme/theme.zig");
 const plugin_host = @import("plugins/host.zig");
 const inbox_core = @import("core/inbox.zig");
+const leitura = @import("core/leitura.zig");
 const saved_ui = @import("ui/saved.zig");
 const msg_cache = @import("net/msg_cache.zig");
 const jsonx = @import("net/jsonx.zig");
@@ -108,6 +109,10 @@ pub const App = struct {
     plugins: plugin_host.Engine = undefined,
     /// Última gravação do cache de mensagens (no máximo uma por minuto pelo relógio).
     cache_flush_ms: i64 = 0,
+    /// Canal aberto por último: ao sair dele, a linha "NOVAS MENSAGENS" acaba.
+    viewing: types.Id = 0,
+    /// QA: faz de conta que a janela perdeu o foco.
+    qa_blur: bool = false,
 
     pub fn create(gpa: std.mem.Allocator, opts: Options) !*App {
         const started = c.SDL_GetTicksNS();
@@ -139,6 +144,7 @@ pub const App = struct {
         };
 
         app.store.on_evict = msg_cache.onEvict;
+        app.store.muted = &app.st.muted_channels;
         // Cache de mensagens e contas: o QA e os prints nunca usam os de verdade.
         msg_cache.init(opts.qa);
         msg_cache.off = opts.shot != null;
@@ -378,7 +384,12 @@ pub const App = struct {
         app.store.deinit();
         app.store = Store.init(app.gpa);
         app.store.on_evict = msg_cache.onEvict;
+        app.store.muted = &app.st.muted_channels;
+        app.viewing = 0;
         const st = &app.st;
+        st.muted_channels.clearRetainingCapacity();
+        st.jump = 0;
+        st.jump_asked = 0;
         st.tabs.clearRetainingCapacity();
         st.tab = 0;
         st.guild = 0;
@@ -699,8 +710,20 @@ pub const App = struct {
     }
 
     fn afterOpen(app: *App, cs: anytype) void {
-        app.store.markRead(cs.info.id);
-        app.st.filtros.clear(&app.store, cs.info.id);
+        // Saiu do outro canal: a linha de lá acaba e o "não lida" à mão vale
+        // só até aqui. Lido de verdade é quando a conversa aparece no fim
+        // (ver `channel_seen`).
+        if (app.viewing != cs.info.id) {
+            if (app.store.channel(app.viewing)) |old| {
+                old.divider_after = 0;
+                old.divider_seen = false;
+                old.pos_unread = false;
+                old.hold_unread = false;
+            }
+            app.viewing = cs.info.id;
+            cs.hold_unread = false;
+        }
+        app.prepareUnread(cs);
         app.st.focus_input = true;
         // Trocou de conversa: a que ficou para trás vai para o disco.
         msg_cache.leaving(&app.store, cs.info.id);
@@ -710,6 +733,87 @@ pub const App = struct {
             msg_cache.restore(&app.store, cs);
             app.cmd(.{ .fetch_history = cs.info.id });
         }
+    }
+
+    /// Canal aberto com não lidas: marca onde começa a linha e, se a opção
+    /// pede, abre nela.
+    fn prepareUnread(app: *App, cs: anytype) void {
+        if (!cs.info.unread or cs.divider_after != 0) return;
+        cs.divider_after = @max(cs.read_id, 1);
+        cs.divider_seen = false;
+        cs.pos_unread = app.st.settings.open_at_unread;
+    }
+
+    /// Confirmar leitura: a janela precisa estar em foco e não pode ser invisível.
+    fn ackAllowed(app: *const App) bool {
+        return app.st.window_focused and app.st.settings.my_status != 3;
+    }
+
+    /// Canal lido: limpa aqui e, se pode, avisa o Discord (a thread de rede
+    /// junta os que chegam em sequência).
+    fn readChannel(app: *App, id: types.Id) void {
+        const cs = app.store.channel(id) orelse return;
+        const target = cs.info.last_message;
+        app.store.markRead(id);
+        app.st.filtros.clear(&app.store, id);
+        if (target != 0 and app.ackAllowed()) app.cmd(.{ .ack = .{ .channel = id, .message = target, .last_viewed = leitura.lastViewed(now()) } });
+    }
+
+    /// "Marcar como lido" (canal ou servidor), pedido pela pessoa.
+    fn markReadAction(app: *App, id: types.Id) void {
+        const st = &app.st;
+        if (st.settings.my_status == 3) st.showToast(now(), false, "invisível: marcado como lido só aqui", "invisible: marked as read only here", .{});
+        if (app.store.channel(id)) |cs| {
+            cs.divider_after = 0;
+            app.readChannel(id);
+            return;
+        }
+        const g = app.store.guild(id) orelse return;
+        const list = app.store.channelsOf(id);
+        const ca = std.heap.c_allocator;
+        var bulk: std.ArrayList([2]types.Id) = .empty;
+        for (list) |ch| {
+            const cs = app.store.channel(ch) orelse continue;
+            if (cs.info.kind == .text and cs.info.last_message != 0 and (cs.info.unread or st.filtros.count(ch) > 0)) bulk.append(ca, .{ ch, cs.info.last_message }) catch {};
+            cs.divider_after = 0;
+            app.store.markRead(ch);
+            st.filtros.clear(&app.store, ch);
+        }
+        g.unread = false;
+        g.mentions = 0;
+        if (bulk.items.len == 0 or !app.ackAllowed()) return bulk.deinit(ca);
+        const owned = bulk.toOwnedSlice(ca) catch return bulk.deinit(ca);
+        app.cmd(.{ .ack_bulk = owned });
+    }
+
+    /// "Marcar como não lida": o canal volta a estar não lido desde esta
+    /// mensagem e não confirma leitura sozinho até sair e voltar.
+    fn markUnreadAction(app: *App, id: types.Id) void {
+        const st = &app.st;
+        // Pendente (sem ID): ainda não existe para o Discord.
+        if (id == 0) return;
+        const f = app.store.findAny(id) orelse return;
+        const cs = f.cs;
+        const items = cs.messages.items;
+        var i = (@intFromPtr(f.m) - @intFromPtr(items.ptr)) / @sizeOf(@TypeOf(items[0]));
+        const prev: types.Id = while (i > 0) {
+            i -= 1;
+            if (items[i].msg.id != 0) break items[i].msg.id;
+        } else leitura.beforeId(id);
+        cs.read_id = prev;
+        cs.info.unread = true;
+        cs.hold_unread = true;
+        cs.divider_after = prev;
+        cs.divider_seen = false;
+        cs.pos_unread = false;
+        const n = leitura.countFrom(&app.store, cs, prev);
+        const mentions: u16 = if (cs.info.guild == 0) n.messages else n.mentions;
+        st.filtros.setCount(app.gpa, &app.store, cs.info.id, mentions);
+        app.store.refreshGuildUnread(cs.info.guild);
+        app.store.rev +%= 1;
+        if (app.ackAllowed()) {
+            app.cmd(.{ .ack = .{ .channel = cs.info.id, .message = prev, .manual = true, .mentions = mentions } });
+        } else if (st.settings.my_status == 3) st.showToast(now(), false, "invisível: marcada como não lida só aqui", "invisible: marked as unread only here", .{});
     }
 
     /// Envia uma mensagem: aparece na hora como "pendente" e vai pra rede.
@@ -762,6 +866,8 @@ pub const App = struct {
             // Os caminhos passam para o comando; a bandeja esvazia.
             app.st.uploads.clearRetainingCapacity();
         }
+        // Mandar de uma conversa antiga leva ao presente, como no Discord.
+        if (app.store.channel(ch)) |cs| if (cs.detached) app.handle(.{ .jump_present = ch });
         app.store.addPending(ch, out.items, app.st.nonce, reply_to, now(), atts) catch return;
         app.st.scrollOf(ch).stick_bottom = true;
         const copy = ca.dupe(u8, out.items) catch return;
@@ -858,6 +964,80 @@ pub const App = struct {
                 } else return;
                 cs.older = .loading;
                 app.cmd(.{ .fetch_older = .{ .channel = id, .before = before } });
+            },
+            .load_newer => |id| {
+                const cs = app.store.channel(id) orelse return;
+                if (!cs.detached or cs.newer != .idle or now() < cs.newer_retry_ms) return;
+                var i = cs.messages.items.len;
+                const after = while (i > 0) {
+                    i -= 1;
+                    if (cs.messages.items[i].msg.id != 0) break cs.messages.items[i].msg.id;
+                } else return;
+                cs.newer = .loading;
+                app.cmd(.{ .fetch_newer = .{ .channel = id, .after = after } });
+            },
+            .jump_present => |id| {
+                const cs = app.store.channel(id) orelse return;
+                const sc = st.scrollOf(id);
+                sc.stick_bottom = true;
+                st.jump = 0;
+                st.jump_asked = 0;
+                if (!cs.detached) return;
+                // Enquanto a última página não chega, nada de buscar as mais novas.
+                cs.newer = .loading;
+                cs.around = .idle;
+                app.cmd(.{ .fetch_history = id });
+            },
+            .fetch_around => |o| {
+                const cs = app.store.channel(o.channel) orelse return;
+                cs.around = .loading;
+                app.cmd(.{ .fetch_around = .{ .channel = o.channel, .id = o.id } });
+            },
+            .jump_first_unread => |id| {
+                const cs = app.store.channel(id) orelse return;
+                cs.pos_unread = true;
+                const first_loaded = for (cs.messages.items) |m| {
+                    if (m.msg.id != 0) break m.msg.id;
+                } else 0;
+                // A linha já está na lista?
+                if (first_loaded != 0 and (first_loaded <= cs.divider_after or cs.older == .done)) return;
+                // Não está: busca em volta do que foi lido por último.
+                if (cs.divider_after > 1) {
+                    cs.around = .loading;
+                    app.cmd(.{ .fetch_around = .{ .channel = id, .id = cs.divider_after } });
+                } else {
+                    // Canal nunca aberto: não há ponto de partida, vai para o topo.
+                    cs.pos_unread = false;
+                    const sc = st.scrollOf(id);
+                    sc.stick_bottom = false;
+                    sc.target = 0;
+                }
+            },
+            .open_pins => |id| {
+                st.popup = .{ .pins = .{ .channel = id } };
+                app.handle(.{ .want_pins = id });
+            },
+            .want_pins => |id| {
+                const gop = app.store.pins.getOrPut(app.store.gpa, id) catch return;
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                if (gop.value_ptr.state == .loading or gop.value_ptr.state == .loaded) return;
+                gop.value_ptr.state = .loading;
+                app.cmd(.{ .fetch_pins = id });
+            },
+            .pin_message => |p| {
+                if (app.store.channel(p.channel)) |cs| if (app.store.find(cs, p.id)) |m| {
+                    m.msg.pinned = p.add;
+                    cs.version +%= 1;
+                };
+                app.cmd(.{ .pin = .{ .channel = p.channel, .id = p.id, .add = p.add } });
+                // O pedido da lista vai depois deste, na mesma fila.
+                if (app.store.pins.getPtr(p.channel)) |pl| pl.state = .none;
+                st.showToast(now(), false, "{s}", "{s}", .{if (p.add) i18n.tr("mensagem fixada", "message pinned") else i18n.tr("mensagem desafixada", "message unpinned")});
+            },
+            .want_invite => |code| {
+                if (app.store.invites.contains(code.slice())) return;
+                app.store.putInvite(code.slice(), .{});
+                app.cmd(.{ .fetch_invite = code });
             },
             .retry_history => |id| {
                 const cs = app.store.channel(id) orelse return;
@@ -1011,20 +1191,23 @@ pub const App = struct {
                 _ = c.SDL_SetClipboardText(z.ptr);
                 st.showToast(now(), false, "copiado ✓", "copied ✓", .{});
             },
-            .jump_to => |id| st.jump = id,
-            .mark_read => |id| {
-                if (app.store.channel(id) != null) {
-                    app.store.markRead(id);
-                    st.filtros.clear(&app.store, id);
-                } else if (app.store.guild(id)) |g| {
-                    g.unread = false;
-                    for (app.store.channelsOf(id)) |ch| {
-                        app.store.markRead(ch);
-                        st.filtros.clear(&app.store, ch);
-                    }
-                    g.mentions = 0;
-                }
+            .jump_to => |id| {
+                st.jump = id;
+                st.jump_asked = 0;
             },
+            .open_message => |om| {
+                const cs = app.store.channel(om.channel) orelse
+                    return st.showToast(now(), true, "esse canal não está disponível nesta conta", "that channel isn't available on this account", .{});
+                if (!app.store.canAccess(&cs.info)) return app.handle(.{ .select_channel = om.channel });
+                app.handle(.{ .select_channel = om.channel });
+                if (om.id == 0) return;
+                cs.pos_unread = false;
+                st.jump = om.id;
+                st.jump_asked = 0;
+            },
+            .mark_read => |id| app.markReadAction(id),
+            .channel_seen => |id| app.readChannel(id),
+            .mark_unread => |id| app.markUnreadAction(id),
             .typing => |id| {
                 if (!st.settings.send_typing or app.store.demo) return;
                 const now_ms = now();
@@ -1138,7 +1321,7 @@ pub const App = struct {
                 st.popup = .{ .inbox = .{} };
                 // Prévia das DMs não lidas que ainda não foram abertas.
                 var want: [6]types.Id = undefined;
-                for (inbox_core.prefetch(&app.store, &st.muted_channels, &want)) |id| app.cmd(.{ .fetch_history = id });
+                for (inbox_core.prefetch(&app.store, &st.muted_channels, &st.filtros, &want)) |id| app.cmd(.{ .fetch_history = id });
             },
             .toggle_saved => {
                 st.palette.open = false;
@@ -1230,6 +1413,7 @@ pub const App = struct {
             };
             app.store.apply(e, now()) catch {};
             if (quiet) |ch| app.st.filtros.quiet(app.gpa, &app.store, ch);
+            app.afterEvent(e);
         }
         if (!was_ready and app.store.ready) {
             // O Discord aceitou: agora sim guarda a conta (e o token, se pediram).
@@ -1254,8 +1438,9 @@ pub const App = struct {
                     const unsent = for (cs.messages.items) |m| {
                         if (m.pending) break true;
                     } else false;
+                    // Lendo o passado: aquela página continua valendo.
                     if (open or unsent) {
-                        app.cmd(.{ .fetch_history = cs.info.id });
+                        if (!cs.detached) app.cmd(.{ .fetch_history = cs.info.id });
                     } else app.store.unload(cs);
                 }
             }
@@ -1296,10 +1481,38 @@ pub const App = struct {
                 break;
             };
         }
-        // Marca como lido o que chega no canal aberto.
-        if (app.st.activeChannel()) |ch| {
-            app.store.markRead(ch);
-            app.st.filtros.clear(&app.store, ch);
+    }
+
+    /// O que o estado de leitura faz com um evento já aplicado no Store. (O que
+    /// chega no canal aberto é lido pela conversa: ver `channel_seen`.)
+    fn afterEvent(app: *App, e: ev.Event) void {
+        const st = &app.st;
+        switch (e) {
+            .read_states => |rs| {
+                leitura.applyMuted(&app.store, &st.muted_channels, app.gpa, rs.muted);
+                if (rs.muted.len > 0) std.heap.c_allocator.free(rs.muted);
+                leitura.applyReady(&app.store, &st.filtros, app.gpa, now());
+                // A conversa já abriu antes de o registro chegar.
+                if (st.activeChannel()) |ch| if (app.store.channel(ch)) |cs| {
+                    cs.divider_after = 0;
+                    app.prepareUnread(cs);
+                };
+            },
+            .guild_create => |gc| leitura.applyGuild(&app.store, &st.filtros, app.gpa, gc.guild.id, now()),
+            .read => |r| {
+                const cs = app.store.channel(r.channel) orelse return;
+                if (!cs.info.unread) {
+                    st.filtros.clear(&app.store, r.channel);
+                } else if (r.mentions) |n| st.filtros.setCount(app.gpa, &app.store, r.channel, n);
+                // "Não lida" marcada em outro aparelho, com o canal aberto aqui.
+                if (r.manual and cs.info.unread and st.activeChannel() == r.channel) {
+                    cs.divider_after = @max(cs.read_id, 1);
+                    cs.divider_seen = false;
+                }
+            },
+            // Falar é ter lido: o contador zera junto.
+            .message_create => |m| if (m.author == app.store.me) st.filtros.clear(&app.store, m.channel),
+            else => {},
         }
     }
 
@@ -1690,6 +1903,9 @@ pub const App = struct {
 
             c.cImGui_ImplSDLRenderer3_NewFrame();
             c.cImGui_ImplSDL3_NewFrame();
+            // Janela em foco? (Confirmar leitura depende disso; o QA e os prints
+            // rodam fora da tela, sem foco de verdade.)
+            app.st.window_focused = if (app.opts.qa or app.opts.shot != null) !app.qa_blur else c.SDL_GetWindowFlags(app.win.window) & c.SDL_WINDOW_INPUT_FOCUS != 0;
             // Configurações que valem para o quadro inteiro.
             const set = &app.st.settings;
             // Claro/escuro (inclusive quando o sistema troca, no modo "seguir").

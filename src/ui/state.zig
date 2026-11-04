@@ -21,6 +21,8 @@ pub const Popup = union(enum) {
     /// Caixa de entrada (aba 0 = não lidas, 1 = menções) e mensagens salvas.
     inbox: struct { tab: u8 = 0 },
     saved,
+    /// Mensagens fixadas de um canal.
+    pins: struct { channel: Id },
 };
 
 /// Seleção de texto entre mensagens: âncora e cabeça (mensagem + byte).
@@ -153,7 +155,11 @@ pub const State = struct {
     edit_last: bool = false,
     selection: Selection = .{},
     jump: Id = 0,
+    /// A busca em volta de `jump` já foi pedida (a lista espera a resposta).
+    jump_asked: Id = 0,
     jump_until_ms: i64 = 0,
+    /// A janela está em foco neste quadro.
+    window_focused: bool = true,
     muted_channels: std.AutoHashMapUnmanaged(Id, void) = .empty,
     /// Palavras de alerta, filtro, ignorados e modo foco (core/filtros.zig).
     filtros: @import("../core/filtros.zig").Filtros = .{},

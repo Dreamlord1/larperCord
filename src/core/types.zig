@@ -154,6 +154,8 @@ pub const Guild = struct {
     icon: ?[]const u8 = null,
     /// Dono do servidor (tem todas as permissões).
     owner: Id = 0,
+    /// Snowflake de quando entramos (o que veio antes não conta como não lido).
+    joined_id: Id = 0,
 };
 
 pub const Channel = struct {
@@ -176,6 +178,28 @@ pub const Channel = struct {
     group: bool = false,
     /// Exceções de permissão do canal (alocadas com o c_allocator).
     overwrites: []const Overwrite = &.{},
+    /// A última mensagem que o Discord diz existir no canal (READY e o que chega).
+    last_message: Id = 0,
+};
+
+/// Registro de leitura de um canal (`read_state` do READY).
+pub const ReadEntry = struct {
+    channel: Id,
+    last_read: Id = 0,
+    mentions: u16 = 0,
+    /// Só a demonstração usa: a última do canal, que o READY dela não traz.
+    last_message: Id = 0,
+};
+
+/// Convite (GET /invites/{code}). `name` e `icon` alocados com o c_allocator.
+pub const Invite = struct {
+    state: enum { loading, ok, invalid, failed } = .loading,
+    /// Servidor do convite (0 = convite de grupo).
+    guild: Id = 0,
+    name: []const u8 = "",
+    icon: ?[]const u8 = null,
+    members: u32 = 0,
+    online: u32 = 0,
 };
 
 /// Exceção de permissão de um canal para um cargo (o @everyone tem o ID do
@@ -295,6 +319,8 @@ pub const Message = struct {
     /// menção a nós fora de bloco de código.
     mention_everyone: bool = false,
     mentions_me: bool = false,
+    /// Fixada no canal.
+    pinned: bool = false,
 
     /// O texto que vai para a caixa ao editar (e volta ao Discord).
     pub fn editable(m: *const Message) []const u8 {

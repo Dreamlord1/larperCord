@@ -67,6 +67,8 @@ pub const Settings = struct {
     data_saver: bool = false,
     /// Prévia do markdown acima da caixa de texto, quando tem formatação.
     md_preview: bool = true,
+    /// Canal com não lidas abre na primeira delas, como no Discord (senão, no fim).
+    open_at_unread: bool = true,
 
     // Privacidade
     send_typing: bool = true,
@@ -166,6 +168,7 @@ pub fn setByte(s: *Settings, index: usize, value: u8) bool {
 /// Índice do campo em `fields()` (para tabelas montadas em tempo de compilação).
 pub fn fieldIndex(comptime name: []const u8) usize {
     if (!@hasField(Settings, name)) @compileError("configuração inexistente: " ++ name);
+    @setEvalBranchQuota(20_000);
     for (fields(), 0..) |f, i| if (std.mem.eql(u8, f.name, name)) return i;
     unreachable;
 }

@@ -195,6 +195,7 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     m.height = h;
     m.natural_w = @max(@max(t.w, if (m.msg.edited) t.last_x + editedW(g) else 0), att.blockWidth(m.msg.attachments, g.wrap));
     if (m.msg.embeds.len > 0) m.natural_w = @max(m.natural_w, @min(g.wrap, 520));
+    if (emb.hasInvite(m)) m.natural_w = @max(m.natural_w, @min(g.wrap, emb.invite_w));
     if (reply and g.variant == .bubbles) m.natural_w = @max(m.natural_w, 180);
     if (m.failed) m.natural_w = @max(m.natural_w, failedW(g));
     return h;
@@ -253,6 +254,11 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     // Topo: "carregando mensagens antigas…" ou "começo do canal".
     const top_h: f32 = 52;
     var total: f32 = 8 + top_h;
+    // Linha "NOVAS MENSAGENS": fica entre a última lida e a primeira não lida.
+    // Sem a última lida carregada, a linha ainda não tem lugar na lista.
+    const divider_after = cs.divider_after;
+    var first_new: ?usize = null;
+    var n_new: u32 = 0;
     const filt = &st.filtros;
     // Sem ignorados nem filtro (o comum), nada fica recolhido: nem pergunta.
     const any_hide = filt.ignored.count() > 0 or filt.filter.items.len > 0;
@@ -273,6 +279,14 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         if (m.msg.system != .none) flags &= ~(flag_group | flag_reply);
         // Depois de uma recolhida (ignorado/filtro), começa um grupo novo.
         if (prev_hidden) flags |= flag_group;
+        if (divider_after != 0 and m.msg.id > divider_after and m.msg.author != ctx.store.me) {
+            n_new += 1;
+            if (n_new == 1 and (i > 0 or cs.older == .done)) {
+                first_new = i;
+                flags |= flag_group;
+                total += new_line_h;
+            }
+        }
         const hide = any_hide and filt.hides(m, ctx.store.me);
         prev_hidden = hide;
         if (hide) flags |= flag_hidden;
@@ -301,7 +315,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     const sc = st.scrollOf(ch_id);
     const max_scroll = @max(0, total - r.h);
     // A pessoa está lendo lá em cima: nada dali é cortado (ver Store.trim).
-    cs.reading = !sc.stick_bottom;
+    cs.reading = !sc.stick_bottom or cs.detached;
     // Mudou algo acima do que está na tela: mantém no lugar o que estava.
     if (sc.anchor_id != 0 and !sc.stick_bottom and sc.pos >= 0) {
         if (ctx.store.find(cs, sc.anchor_id)) |am| {
@@ -315,19 +329,63 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     }
     // Perto do topo: pede as anteriores (depois de uma falha, com calma).
     if (cs.older == .idle and ctx.now_ms >= cs.older_retry_ms and msgs.len > 0 and sc.pos >= 0 and sc.pos < r.h * 0.6 + 200) ctx.act(.{ .load_older = ch_id });
+    // Lendo o passado, perto do fim do que está carregado: pede as seguintes.
+    if (cs.detached and cs.newer == .idle and ctx.now_ms >= cs.newer_retry_ms and msgs.len > 0 and sc.pos >= max_scroll - r.h * 0.6 - 200) ctx.act(.{ .load_newer = ch_id });
     // Pulo para uma mensagem (clique numa resposta): só no painel focado.
     if (st.jump != 0 and st.activeChannel() == ch_id) {
         const found = for (msgs, 0..) |m, i| {
             if (m.msg.id != st.jump) continue;
             sc.target = std.math.clamp(st.offsets.items[i] - r.h / 3, 0, max_scroll);
             sc.stick_bottom = false;
+            // Longe: vai direto, sem passar (e baixar) tudo o que tem no caminho.
+            if (sc.pos >= 0 and @abs(sc.pos - sc.target) > r.h * 3) sc.pos = sc.target;
             flash_id = st.jump;
             flash_until = ctx.now_ms + 1600;
             break true;
         } else false;
-        // Veio da caixa de entrada ou das salvas e é mais antiga que o carregado.
-        if (!found) st.showToast(ctx.now_ms, false, "essa mensagem é antiga e não está carregada; role para cima para ver", "that message is old and isn't loaded; scroll up to see it", .{});
-        st.jump = 0;
+        if (found) {
+            st.jump = 0;
+            st.jump_asked = 0;
+            cs.pos_unread = false;
+        } else if (cs.cached) {
+            // Ainda no cache do disco: o histórico de verdade pode trazer ela.
+        } else if (st.jump_asked != st.jump) {
+            // Não está carregada: busca em volta dela.
+            st.jump_asked = st.jump;
+            ctx.act(.{ .fetch_around = .{ .channel = ch_id, .id = st.jump } });
+        } else if (cs.around == .done or cs.around == .failed) {
+            if (cs.around == .done)
+                st.showToast(ctx.now_ms, false, "essa mensagem não existe mais", "that message no longer exists", .{})
+            else
+                st.showToast(ctx.now_ms, true, "não consegui carregar essa mensagem", "couldn't load that message", .{});
+            st.jump = 0;
+            st.jump_asked = 0;
+        }
+    }
+    // Abrir na primeira não lida: a linha no alto da tela. Se ela já cabe na
+    // última tela, fica no fim mesmo.
+    if (cs.pos_unread and !cs.cached and cs.around != .loading) {
+        cs.pos_unread = false;
+        if (first_new) |k| {
+            const fy = st.offsets.items[k] - new_line_h;
+            if (fy < max_scroll) {
+                sc.target = @max(0, fy - unread_bar_h - 12);
+                sc.pos = sc.target;
+                sc.stick_bottom = false;
+                sc.anchor_id = 0;
+            }
+        }
+    }
+    // No fim da conversa (no presente) com a janela em foco: lida de verdade.
+    // Fora disso, o que chegou fica não lido e a linha marca onde começa.
+    if (cs.info.unread) {
+        const at_present = sc.stick_bottom and !cs.detached and !cs.cached and !cs.pos_unread and cs.around != .loading and (st.jump == 0 or st.activeChannel() != ch_id);
+        if (at_present and st.window_focused and !cs.hold_unread) {
+            ctx.act(.{ .channel_seen = ch_id });
+        } else if (cs.divider_after == 0) {
+            cs.divider_after = @max(cs.read_id, 1);
+            cs.divider_seen = false;
+        }
     }
     // Com as configurações (ou um popup) por cima, a roda rola elas, não a conversa.
     const hovered = ctx.hovering(r) and ctx.st.popup == .none and !st.settings.open;
@@ -340,7 +398,8 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         sc.stick_bottom = false;
     }
     sc.target = std.math.clamp(sc.target, 0, max_scroll);
-    if (sc.target >= max_scroll - 1) sc.stick_bottom = true;
+    // (Fora do presente, o fim da lista não é o fim da conversa.)
+    if (sc.target >= max_scroll - 1 and !cs.detached) sc.stick_bottom = true;
     // Longe do fim e indo para lá (a conversa trocou, "Ir para o fim"): vai
     // direto. Passar por centenas de mensagens baixaria cada imagem do caminho.
     if (sc.stick_bottom and max_scroll - sc.pos > r.h * 3) sc.pos = max_scroll;
@@ -355,7 +414,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     if (@abs(s - sc.pos) > 1 and c.ImGui_IsMouseDown(0) and ctx.mouse.x >= r.right() - 14 and c.ImGui_IsWindowHovered(0) and !st.settings.open) {
         sc.pos = s;
         sc.target = s;
-        sc.stick_bottom = s >= max_scroll - 1;
+        sc.stick_bottom = s >= max_scroll - 1 and !cs.detached;
     }
     c.ImGui_Dummy(d.v(r.w - 12, total));
     // Primeiro quadro da conversa: o ImGui ainda não sabe a altura e prende a
@@ -388,6 +447,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     }
 
     topOfChannel(ctx, dl, g, cs, r, base + 8, top_h);
+    if (first_new) |k| newLine(ctx, dl, g, r, base + st.offsets.items[k] - new_line_h);
 
     const sel = selectionRange(ctx, cs);
     var probe: rich.Probe = .{ .x = ctx.mouse.x, .y = ctx.mouse.y };
@@ -426,6 +486,17 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         w.typingDots(dl, br.x + 24, br.y + 19, ctx.col(.muted), ctx.now_ms);
     }
 
+    // Botão fixo do topo enquanto a primeira não lida não apareceu na tela.
+    if (divider_after != 0 and !cs.divider_seen and !cs.cached and !cs.pos_unread and n_new > 0) {
+        const on_screen = if (first_new) |k| blk: {
+            const fy = st.offsets.items[k] - new_line_h;
+            break :blk @abs(sc.pos - sc.target) < 2 and fy >= sc.pos and fy < sc.pos + r.h;
+        } else false;
+        if (on_screen) cs.divider_seen = true else unreadBar(ctx, dl, g, r, ch_id, n_new, first_new == null);
+    }
+    if (cs.around == .loading) loadingPill(ctx, dl, g, r);
+    if (cs.detached) presentBar(ctx, dl, g, r, ch_id);
+
     // Seleção de texto e botão direito.
     if (probe_idx) |pi| {
         const m = &msgs[pi];
@@ -459,11 +530,97 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         icons.chevron(dl, br.x + 18, br.y + 19, (if (hb.hovered) ctx.col(.accent_text) else ctx.col(.text)).u(), 1);
         d.tip(ctx, br, i18n.tr("Ir para o fim", "Jump to present"), hb.hovered);
         if (hb.clicked) {
-            sc.stick_bottom = true;
-            sc.target = max_scroll;
+            if (cs.detached) {
+                ctx.act(.{ .jump_present = ch_id });
+            } else {
+                sc.stick_bottom = true;
+                sc.target = max_scroll;
+            }
         }
     }
     c.ImGui_EndChild();
+}
+
+const new_line_h: f32 = 24;
+const unread_bar_h: f32 = 30;
+
+/// A linha vermelha "NOVAS MENSAGENS" entre a última lida e a primeira não lida.
+fn newLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, r: d.Rect, y: f32) void {
+    const col = ctx.col(.danger);
+    const label = i18n.tr("NOVAS MENSAGENS", "NEW MESSAGES");
+    const font = g.fam.get(.bold);
+    const fs: f32 = 11;
+    const tw = d.width(font, fs, label);
+    const cy = y + new_line_h / 2;
+    const right = r.right() - 20;
+    const pill: d.Rect = .{ .x = right - tw - 12, .y = cy - 8, .w = tw + 12, .h = 16 };
+    d.line(dl, r.x + 16, cy, pill.x, cy, col, 1);
+    d.rect(dl, pill, col, @min(4, ctx.th.radius + 1));
+    d.text(dl, font, fs, pill.x + 6, d.centerY(pill, fs), d.Rgba.white, label);
+    qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = new_line_h }, "new-line", .{});
+}
+
+/// "N novas mensagens · ir para a primeira" e "marcar como lida", fixo no topo.
+fn unreadBar(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, r: d.Rect, ch: Id, n: u32, more: bool) void {
+    const bar: d.Rect = .{ .x = r.x + 12, .y = r.y + 6, .w = r.w - 36, .h = unread_bar_h };
+    const font = g.fam.get(.semibold);
+    const fs: f32 = 13;
+    const read_lbl = i18n.tr("marcar como lida", "mark as read");
+    const read_w = d.width(font, fs, read_lbl) + 24;
+    const first: d.Rect = .{ .x = bar.x, .y = bar.y, .w = bar.w - read_w, .h = bar.h };
+    const read: d.Rect = .{ .x = first.right(), .y = bar.y, .w = read_w, .h = bar.h };
+    const fh = d.hitRaw(ctx, first);
+    const rh = d.hitRaw(ctx, read);
+    qa.mark(first, "unread-bar-first", .{});
+    qa.mark(read, "unread-bar-read", .{});
+    const radius = @min(8, ctx.th.radius + 2);
+    d.shadow(dl, bar, radius, 8, ctx.col(.shadow).alpha(0.5));
+    d.rect(dl, bar, ctx.col(.accent), radius);
+    const ink = ctx.col(.accent_text);
+    if (fh.hovered) d.rectFlags(dl, first, ink.alpha(0.12), radius, c.ImDrawFlags_RoundCornersLeft);
+    if (rh.hovered) d.rectFlags(dl, read, ink.alpha(0.12), radius, c.ImDrawFlags_RoundCornersRight);
+    var buf: [96]u8 = undefined;
+    const plus: []const u8 = if (more) "+" else "";
+    const t = if (n == 1 and !more)
+        i18n.tr("1 nova mensagem · ir para a primeira", "1 new message · jump to the first")
+    else
+        i18n.fmt(&buf, "{d}{s} novas mensagens · ir para a primeira", "{d}{s} new messages · jump to the first", .{ n, plus });
+    _ = d.textClipped(dl, font, fs, first.x + 12, d.centerY(bar, fs), ink, t, first.w - 18);
+    d.line(dl, read.x, bar.y + 7, read.x, bar.bottom() - 7, ink.alpha(0.35), 1);
+    d.text(dl, font, fs, read.x + 12, d.centerY(bar, fs), ink, read_lbl);
+    if (fh.clicked) ctx.act(.{ .jump_first_unread = ch });
+    if (rh.clicked) ctx.act(.{ .mark_read = ch });
+}
+
+/// Buscando em volta de uma mensagem: o aviso fica por cima do que está na tela.
+fn loadingPill(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, r: d.Rect) void {
+    const label = i18n.tr("Carregando…", "Loading…");
+    const font = g.fam.get(.semibold);
+    const tw = d.width(font, 13, label);
+    const p: d.Rect = .{ .x = r.x + (r.w - tw - 28) / 2, .y = r.y + 44, .w = tw + 28, .h = 28 };
+    d.rect(dl, p, ctx.col(.elevated), 14);
+    d.border(dl, p, ctx.col(.border), 14, 1);
+    d.text(dl, font, 13, p.x + 14, d.centerY(p, 13), ctx.col(.text), label);
+    qa.mark(p, "around-loading", .{});
+}
+
+/// Fora do presente: as mensagens de agora não estão aqui.
+fn presentBar(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, r: d.Rect, ch: Id) void {
+    const font = g.fam.get(.semibold);
+    const fs: f32 = 13;
+    const bar: d.Rect = .{ .x = r.x + 12, .y = r.bottom() - 42, .w = @max(120, r.w - 80), .h = 30 };
+    const hb = d.hitRaw(ctx, bar);
+    qa.mark(bar, "present-bar", .{});
+    const radius = @min(8, ctx.th.radius + 2);
+    d.shadow(dl, bar, radius, 8, ctx.col(.shadow).alpha(0.5));
+    d.rect(dl, bar, if (hb.hovered) ctx.col(.accent) else ctx.col(.elevated), radius);
+    d.border(dl, bar, ctx.col(.border), radius, 1);
+    const lbl = i18n.tr("Voltar ao presente", "Jump to present");
+    const lw = d.width(font, fs, lbl);
+    const ink = if (hb.hovered) ctx.col(.accent_text) else ctx.col(.text);
+    _ = d.textClipped(dl, g.fam.get(.regular), fs, bar.x + 12, d.centerY(bar, fs), if (hb.hovered) ink else ctx.col(.muted), i18n.tr("Você está vendo mensagens antigas", "You're viewing older messages"), bar.w - lw - 36);
+    d.text(dl, font, fs, bar.right() - lw - 12, d.centerY(bar, fs), ink, lbl);
+    if (hb.clicked) ctx.act(.{ .jump_present = ch });
 }
 
 /// Trocou de canal (em cada painel): a conversa nova entra com um fade curto
@@ -632,7 +789,8 @@ fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x:
     const rr: d.Rect = .{ .x = x, .y = y, .w = max_w, .h = reply_h };
     const hb = d.hitUnder(ctx, @truncate(m.msg.id ^ 0x5151), rr);
     qa.mark(rr, "reply-line:{d}", .{m.msg.id});
-    if (hb.clicked) if (found != null) ctx.act(.{ .jump_to = m.msg.reply_to });
+    // Não carregada: a lista busca em volta dela.
+    if (hb.clicked) ctx.act(.{ .jump_to = m.msg.reply_to });
     // Botão direito em qualquer parte da mensagem abre o menu dela.
     if (hb.right) ctx.popup(.{ .menu = .{ .kind = .message, .id = m.msg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
     if (spine_x) |sx| {
@@ -864,6 +1022,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 if (ctx.hovering(nr)) d.line(dl, tx, nr.bottom() - 2, tx + nw, nr.bottom() - 2, role_col, 1);
                 const stp = w.stamp(&buf, m.msg.timestamp, @divTrunc(ctx.now_ms, 1000));
                 d.text(dl, fam.get(.medium), 12, tx + nw + 8, y + (g.line_h - 12 * 1.2) / 2 + 1, ctx.col(.faint), stp);
+                stampTip(ctx, under, m, .{ .x = tx + nw + 8, .y = y, .w = d.width(fam.get(.medium), 12, stp), .h = g.line_h });
                 y += g.line_h;
             } else {
                 y += 1;
@@ -873,6 +1032,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                     const ck = w.clock(&buf, m.msg.timestamp);
                     const sw = d.width(fam.get(.medium), 11, ck);
                     d.text(dl, fam.get(.medium), 11, r.x + 16 + g.avatar / 2 - sw / 2, y + 5, ctx.col(.faint), ck);
+                    stampTip(ctx, under, m, .{ .x = r.x + 16 + g.avatar / 2 - sw / 2, .y = y + 3, .w = sw, .h = 16 });
                 }
             }
             const t = rich.layout(dl, ctx.store, ctx.th, m.spans, tx, y, g.wrap, o, ctx.mouse);
@@ -919,6 +1079,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             var x = r.x + 10;
             const ts = std.fmt.bufPrint(&buf, "[{s}] ", .{w.clock(buf[64..], m.msg.timestamp)}) catch "";
             d.text(dl, fam.get(.regular), g.size, x, ty, ctx.col(.faint), ts);
+            stampTip(ctx, under, m, .{ .x = x, .y = y, .w = d.width(fam.get(.regular), g.size, ts), .h = g.line_h });
             x += d.width(fam.get(.regular), g.size, ts);
             const col_w = g.prefix_w - d.width(fam.get(.regular), g.size, "[00:00] ") - d.width(fam.get(.regular), g.size, " │ ");
             const nw = @min(d.width(fam.get(.bold), g.size, name), col_w);
@@ -988,6 +1149,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 const sw = d.width(fam.get(.medium), 11, ck);
                 const sx = if (self) br.x - sw - 8 else br.right() + 8;
                 d.text(dl, fam.get(.medium), 11, sx, br.y + br.h / 2 - 7, ctx.col(.faint), ck);
+                stampTip(ctx, under, m, .{ .x = sx, .y = br.y + br.h / 2 - 9, .w = sw, .h = 18 });
             }
             // "Entregue ✓✓" embaixo da nossa última mensagem.
             if (show_ticks and self and (m.msg.id == last_self_id or (m.pending and last_self_id == std.math.maxInt(Id)))) {
@@ -999,6 +1161,15 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             if (show_bar) toolbar(ctx, dl, m, if (self) br.x - 50 else @min(br.right() + 180, r.right() - 12), br.y - 12);
         },
     }
+}
+
+/// Mouse em cima do horário: a data completa. Só na mensagem sob o mouse.
+fn stampTip(ctx: *d.Ctx, under: bool, m: *const StoredMessage, r: d.Rect) void {
+    if (!under) return;
+    qa.mark(r, "stamp:{d}", .{m.msg.id});
+    if (!ctx.hovering(r)) return;
+    var buf: [96]u8 = undefined;
+    d.tip(ctx, r, w.fullDate(&buf, m.msg.timestamp), true);
 }
 
 fn editedMark(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x: f32, y: f32, t: rich.Measure) void {

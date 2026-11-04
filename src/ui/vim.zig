@@ -77,9 +77,11 @@ fn scroll(ctx: *d.Ctx, dy: f32) void {
 fn edge(ctx: *d.Ctx, top: bool) void {
     const st = ctx.st;
     if (st.friends) return;
-    const sc = st.scrollOf(st.activeChannel() orelse return);
-    sc.stick_bottom = !top;
-    if (top) sc.target = 0;
+    const id = st.activeChannel() orelse return;
+    const sc = st.scrollOf(id);
+    if (!top) return ctx.act(.{ .jump_present = id });
+    sc.stick_bottom = false;
+    sc.target = 0;
 }
 
 /// Próximo canal de texto do servidor aberto (dá a volta no fim da lista).

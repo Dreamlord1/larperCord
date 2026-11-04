@@ -186,6 +186,21 @@ pub fn stamp(buf: []u8, ts: i64, now_s: i64) []const u8 {
     };
 }
 
+/// Data completa, para a dica do horário: "terça-feira, 4 de novembro de 2026
+/// às 14:32" / "Tuesday, November 4, 2026 at 14:32".
+pub fn fullDate(buf: []u8, ts: i64) []const u8 {
+    const t = localTime(ts);
+    const days = [_][]const u8{ "domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado" };
+    const days_en = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    // 1º de janeiro de 1970 foi uma quinta.
+    const wd: usize = @intCast(@mod(t.day_index + 4, 7));
+    var cb: [16]u8 = undefined;
+    var db: [64]u8 = undefined;
+    const hm = clock(&cb, ts);
+    const date = dateLong(&db, t.day, t.month, t.year);
+    return i18n.fmt(buf, "{s}, {s} às {s}", "{s}, {s} at {s}", .{ if (i18n.en()) days_en[wd] else days[wd], date, hm });
+}
+
 pub var hour12 = false;
 
 pub fn clock(buf: []u8, ts: i64) []const u8 {
