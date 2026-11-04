@@ -5,26 +5,28 @@
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | 1,279 MB | 12–47% ¹ | 287 MB |
-| **larperCord** ² | **45–50 MB** | **0–0.5%** | **~5 MB** |
+| **larperCord** ² | **46–56 MB** | **0–0.4%** | **~7 MB** |
 
 ¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, a 1280×800 window, `ReleaseFast` build.
 
-² Demo data, all 10 themes, real GPU with a hidden window (`LARPER_HIDDEN=1`), which can measure slightly less than a visible window.
+² Demo data, all 11 themes, real GPU, a real window on a hidden Hyprland workspace, and GIF autoplay off. A window you're looking at can measure differently.
 
 Read these with the right caveats:
 
 - **A real account uses more** than demo data. More servers, more members, more images.
-- **A good part of PSS isn't the app.** It's the NVIDIA driver and system libraries such as libcurl and OpenSSL. In one measurement across the themes, private anonymous memory was about 22 MB.
+- **`terminal` and `subsolo` vary.** They usually land in the same range, but some runs read 60–74 MB, and the cause hasn't been found yet.
+- **Idle means nothing is moving.** An animated GIF on screen costs about 2.5% CPU. The demo's first channel has one, so the measurement turns autoplay off.
+- **A good part of PSS isn't the app.** It's the NVIDIA driver and system libraries such as libcurl and OpenSSL. In one measurement across the themes, anonymous memory was about 25 MB.
 - **The binary doesn't include shared libraries**, such as SDL3 and libcurl.
 - The Vesktop figures come from a single earlier run on the same machine.
 
 ## Measure it yourself
 
 ```bash
-tools/membench.sh 50
+tools/membench.sh 60
 ```
 
-For each theme, it opens the app in demo mode, waits, measures idle CPU over 5 seconds, reads PSS from `/proc/<pid>/smaps_rollup`, and fails if any theme goes over the budget in MB.
+For each theme, it opens the app in demo mode with clean settings and GIF autoplay off, waits, measures idle CPU over 5 seconds, reads PSS from `/proc/<pid>/smaps_rollup`, and fails if any theme goes over the budget in MB. Because of that variation, `terminal` sometimes fails at 60.
 
 The Performance page in settings shows live numbers, and `--stats` shows the time to first frame.
 

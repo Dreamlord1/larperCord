@@ -11,13 +11,14 @@ Open settings with `Ctrl+,`. Changes apply right away and are saved in `~/.confi
 | **Alerts & Filters** | Alert words, word filter, ignored people and focus mode |
 | **Appearance** | Mode (dark, light, follow the system), theme with thumbnails and its options, font scale, compact mode, avatars, 24-hour clock, status ring, accent color, corners, custom theme colors, member list and status bar |
 | **Accessibility** | Reduce motion, role colors, underline links |
-| **Chat** | Autoplay GIFs, images from links, data saver, always show spoilers, markdown preview |
+| **Chat** | Autoplay GIFs, images from links, data saver, always show spoilers, markdown preview, open at the first unread |
+| **Voice** | Microphone and output, volumes, voice activity or push-to-talk, microphone test, filters and call sounds. See [Voice calls](page:voice) |
 | **Notifications** | Desktop notifications and taskbar flashing |
 | **Keybinds** | The shortcut list and vim navigation |
 | **Language** | Follow the system, Português (Brasil) or English (US) |
 | **Advanced** | Developer mode (message IDs, "Copy ID") and reload themes on save |
 | **Performance** | RAM, CPU per frame, idle CPU and messages per channel |
-| **Plugins** | The list of plugins, on/off, errors and Reload |
+| **Plugins** | The list of plugins, on/off, errors, Reload and Install examples |
 | **About** | Version and what it's built with |
 
 ## Privacy choices worth knowing

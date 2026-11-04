@@ -13,6 +13,10 @@
 
 It's only sent to Discord.
 
+## Read confirmations
+
+Like the official client, the app tells Discord what you've read, at most once per channel every 3 seconds. It sends nothing while the window is unfocused or your status is invisible.
+
 ## What stays on your computer
 
 | What | Where | Control |

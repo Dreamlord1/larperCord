@@ -11,13 +11,14 @@ Abra as configurações com `Ctrl+,`. As mudanças valem na hora e são salvas e
 | **Alertas e filtros** | Palavras de alerta, filtro de palavras, pessoas ignoradas e modo foco |
 | **Aparência** | Modo (escuro, claro, seguir o sistema), tema com miniaturas e as opções dele, escala da fonte, modo compacto, avatares, relógio de 24 horas, status em anel, cor de destaque, cantos, cores personalizadas do tema, lista de membros e barra de status |
 | **Acessibilidade** | Reduzir movimento, cores dos cargos, sublinhar links |
-| **Chat** | Reproduzir GIFs automaticamente, imagens de links, modo economia, sempre mostrar spoilers, prévia do markdown |
+| **Chat** | Reproduzir GIFs automaticamente, imagens de links, modo economia, sempre mostrar spoilers, prévia do markdown, abrir na primeira não lida |
+| **Voz** | Microfone e saída, volumes, detecção de voz ou aperte para falar, teste do microfone, filtros e sons da call. Veja [Chamadas de voz](page:voice) |
 | **Notificações** | Notificações na área de trabalho e piscar na barra de tarefas |
 | **Atalhos de teclado** | A lista de atalhos e a navegação estilo vim |
 | **Idioma** | Seguir o sistema, Português (Brasil) ou English (US) |
 | **Avançado** | Modo desenvolvedor (IDs das mensagens, "Copiar ID") e recarregar temas ao salvar |
 | **Desempenho** | RAM, CPU por quadro, CPU parado e mensagens por canal |
-| **Plugins** | A lista de plugins, ligar e desligar, erros e Recarregar |
+| **Plugins** | A lista de plugins, ligar e desligar, erros, Recarregar e Instalar exemplos |
 | **Sobre** | Versão e com o que foi feito |
 
 ## Escolhas de privacidade que valem conhecer

@@ -1,6 +1,6 @@
 # Voice calls
 
-larperCord joins real Discord voice channels, with end-to-end encryption. Everything voice-related runs on its own thread, created only when you join a call. Outside a call, the module uses no CPU and the app doesn't even initialize audio.
+larperCord joins real Discord voice channels, with end-to-end encryption. Everything voice-related runs on its own thread, created only when you join a call. Outside a call, the module uses no CPU and the app doesn't initialize audio, unless you open Settings → Voice, which reads the microphone for its level meter while it's open.
 
 ## Using it
 
@@ -10,7 +10,20 @@ The **mixer** gives each person their own volume.
 
 ![The call mixer](shot:f-voz)
 
+The panel also shows your ping, the connection quality by color and when you're transmitting, and it warns you if the microphone doesn't open or if the server muted or deafened you. Other people's mute and deafen show in the call list.
+
 Channels where you lack the permission to connect are shown with a padlock, and the app doesn't try.
+
+## Settings → Voice
+
+- **Microphone and output**: remembered by name, back to the default if they disappear, and you can switch in the middle of a call.
+- **Volumes, a live microphone level** and **Test microphone**, which plays back what you say, with the filters on. Use headphones.
+- **Voice activity**: an adjustable threshold on the meter, or **Automatic sensitivity**, which learns your background noise.
+- **Push to talk**: a key or mouse button. It only works while the window is focused, and sending continues for a moment after you release, so the last word isn't cut.
+- **Filters**: a high-pass that removes rumble below 90 Hz and a noise gate. Each one can be turned off.
+- **Call sounds**: short beeps when you join, leave, mute and unmute, which can be turned off.
+
+![The voice settings page](shot:f-vozcfg)
 
 ## How it works
 
@@ -32,10 +45,10 @@ A few details that took work to get right:
 
 ## Limits today
 
-- It uses your system's default audio device. There's no device picker yet.
-- No push-to-talk and no noise suppression.
+- Push-to-talk only works while the window is focused, because SDL has no portable global shortcut.
+- The filters are a high-pass and a noise gate. There's no machine-learning noise suppression.
 - No screen sharing, camera or streaming.
-- No automated test for a real call. QA covers the UI only.
+- No automated test for a real call. QA covers the UI and the settings, with a fake audio device.
 
 ## Debugging
 

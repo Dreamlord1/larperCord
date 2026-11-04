@@ -1,6 +1,6 @@
 # Chamadas de voz
 
-O larperCord entra em canais de voz de verdade do Discord, com criptografia de ponta a ponta. Tudo que é de voz roda numa thread própria, criada só quando você entra numa call. Fora de uma call, o módulo não usa CPU e o app nem inicializa o áudio.
+O larperCord entra em canais de voz de verdade do Discord, com criptografia de ponta a ponta. Tudo que é de voz roda numa thread própria, criada só quando você entra numa call. Fora de uma call, o módulo não usa CPU e o app não inicializa o áudio, a não ser que você abra Configurações → Voz, que lê o microfone para o medidor enquanto estiver aberta.
 
 ## Usando
 
@@ -10,7 +10,20 @@ O **mixer** dá a cada pessoa o próprio volume.
 
 ![O mixer da call](shot:f-voz)
 
+O painel também mostra o ping, a qualidade da conexão por cor e quando você está transmitindo, e avisa se o microfone não abrir ou se o servidor te mutou ou ensurdeceu. Mudo e surdo dos outros aparecem na lista da call.
+
 Os canais em que você não tem permissão para conectar aparecem com cadeado, e o app nem tenta.
+
+## Configurações → Voz
+
+- **Microfone e saída**: lembrados pelo nome, voltam ao padrão se sumirem, e dá para trocar no meio de uma call.
+- **Volumes, nível do microfone ao vivo** e **Testar microfone**, que toca de volta o que você fala, com os filtros. Use fones.
+- **Detecção de voz**: limiar ajustável sobre o medidor, ou **Sensibilidade automática**, que aprende o ruído de fundo.
+- **Aperte para falar**: uma tecla ou um botão do mouse. Só funciona com a janela em foco, e o envio segue por um instante depois de soltar, para não cortar a última palavra.
+- **Filtros**: um passa-altas que tira o ronco abaixo de 90 Hz e uma porta de ruído. Cada um pode ser desligado.
+- **Sons da call**: bipes curtos ao entrar, sair, mutar e desmutar, que podem ser desligados.
+
+![A página de configurações de voz](shot:f-vozcfg)
 
 ## Como funciona
 
@@ -32,10 +45,10 @@ Alguns detalhes que deram trabalho para acertar:
 
 ## Limites hoje
 
-- Usa o dispositivo de áudio padrão do sistema. Ainda não há seletor de dispositivo.
-- Sem push-to-talk e sem supressão de ruído.
+- O aperte para falar só funciona com a janela em foco, porque o SDL não tem atalho global portável.
+- Os filtros são um passa-altas e uma porta de ruído. Não há supressão de ruído por aprendizado de máquina.
 - Sem compartilhamento de tela, câmera nem transmissão.
-- Sem teste automático para uma call de verdade. O QA cobre só a interface.
+- Sem teste automático para uma call de verdade. O QA cobre a interface e as configurações, com um dispositivo de áudio falso.
 
 ## Depuração
 

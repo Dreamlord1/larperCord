@@ -34,6 +34,7 @@
     <a href="../../pt/guide/getting-started.html" aria-current="page">Guia</a>
     <a href="https://github.com/RshaCuDeVidro/larperCord" rel="noopener">GitHub</a>
   </nav>
+  <a class="kofi-mini" href="https://ko-fi.com/M7E72A1EGZ" target="_blank" rel="noopener"><img src="../../assets/kofi6.png" alt="Me pague um café no ko-fi.com" width="580" height="146"></a>
   <a class="lang" href="../../guide/plugins.html" hreflang="en" lang="en">English</a>
 </header>
 <div class="guide">
@@ -55,8 +56,8 @@
 <span class="t-k">end</span>)</code></pre></div>
 <p>Digite <code>/shrug sei lá</code> na caixa de mensagem e o canal recebe <code>sei lá ¯\_(ツ)_/¯</code>. O <code>/shrug</code> em si nunca vai para o Discord.</p>
 <p>Os exemplos completos estão em <a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/"><code>docs/plugins/</code></a>:</p>
-<ul><li><a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/shrug.lua"><code>shrug.lua</code></a>: o comando acima;</li><li><a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/alerta.lua"><code>alerta.lua</code></a>: avisa quando alguém escreve uma palavra da sua lista.</li></ul>
-<p>Para instalar: <code>mkdir -p ~/.config/larpercord/plugins &amp;&amp; cp docs/plugins/*.lua ~/.config/larpercord/plugins/</code> e clique em <strong>Recarregar</strong> (ou abra o app de novo).</p>
+<div class="table-wrap"><table><thead><tr><th>Plugin</th><th>O que faz</th></tr></thead><tbody><tr><td><a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/shrug.lua"><code>shrug.lua</code></a></td><td><code>/shrug</code>: o comando acima</td></tr><tr><td><a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/alerta.lua"><code>alerta.lua</code></a></td><td>avisa quando alguém escreve uma palavra da sua lista</td></tr><tr><td><a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/dado.lua"><code>dado.lua</code></a></td><td><code>/dado 2d20+3</code>, <code>/moeda</code> e <code>/escolhe pizza, sushi</code>, com o resultado no canal</td></tr><tr><td><a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/zoeira.lua"><code>zoeira.lua</code></a></td><td><code>/mock</code>, <code>/vapor</code>, <code>/palmas</code>, <code>/contrario</code> e <code>/spoiler</code> reescrevem o texto</td></tr><tr><td><a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/calc.lua"><code>calc.lua</code></a></td><td><code>/calc 2+3*4</code> responde só para você; <code>/conta</code> manda no canal. Um analisador feito à mão, bom modelo para sintaxe própria</td></tr><tr><td><a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/relogio.lua"><code>relogio.lua</code></a></td><td><code>/hora tokyo</code>, <code>/horario lisboa</code> e um <code>/cronometro</code> (também em <code>Ctrl+Alt+T</code>)</td></tr><tr><td><a href="https://github.com/RshaCuDeVidro/larperCord/tree/main/docs/plugins/resumo.lua"><code>resumo.lua</code></a></td><td><code>/resumo</code> (ou <code>Ctrl+Alt+R</code>): quantas mensagens, quem mais falou e onde, desde que o app abriu</td></tr></tbody></table></div>
+<p>Para instalar: <strong>Configurações → Plugins → Instalar exemplos</strong> copia os que faltam para a sua pasta (sem sobrescrever o que você já editou). Ou, à mão: <code>mkdir -p ~/.config/larpercord/plugins &amp;&amp; cp docs/plugins/*.lua ~/.config/larpercord/plugins/</code> e <strong>Recarregar</strong>.</p>
 <h2 id="api"><a class="anchor" href="#api" aria-hidden="true">#</a>API</h2>
 <p>Tudo fica na tabela global <code>larper</code>. IDs do Discord são strings (<code>"1234567890"</code>).</p>
 <h3 id="larper-on-evento-funcao"><a class="anchor" href="#larper-on-evento-funcao" aria-hidden="true">#</a><code>larper.on(evento, função)</code></h3>
@@ -108,6 +109,7 @@ tecla ou quadro.</li></ul>
   <span class="sb-spacer"></span>
   <button type="button" class="sb-btn sb-keys" data-open-palette><kbd>Ctrl</kbd><kbd>K</kbd> paleta</button>
   <span class="sb-keys sb-hint"><kbd>F2</kbd> próximo tema</span>
+  <a class="sb-btn sb-kofi" href="https://ko-fi.com/M7E72A1EGZ" target="_blank" rel="noopener">&#9829; ko-fi</a>
   <span class="sb-pos" data-scroll-pos></span>
   <time class="sb-clock" data-clock></time>
 </footer>

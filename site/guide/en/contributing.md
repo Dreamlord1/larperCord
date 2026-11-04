@@ -56,4 +56,4 @@ Built with Zig, SDL3, [Dear ImGui](https://github.com/ocornut/imgui), dear_bindi
 
 ## License
 
-[MIT](https://github.com/RshaCuDeVidro/larperCord/blob/main/LICENSE). Third-party code in `third_party/` keeps its own license, listed in [`THIRD_PARTY_NOTICES.md`](https://github.com/RshaCuDeVidro/larperCord/blob/main/THIRD_PARTY_NOTICES.md).
+Not decided yet. Third-party code in `third_party/` keeps its own license, in each folder's license file.

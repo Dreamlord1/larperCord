@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Performance · larperCord</title>
-<meta name="description" content="# The numbers RAM (PSS) Idle CPU Binary Vesktop (Electron) 1,279 MB 12–47% ¹ 287 MB larperCord ² 45–50 MB 0–0.5% ~5 MB ¹ Average since launch, measured wit">
+<meta name="description" content="# The numbers RAM (PSS) Idle CPU Binary Vesktop (Electron) 1,279 MB 12–47% ¹ 287 MB larperCord ² 46–56 MB 0–0.4% ~7 MB ¹ Average since launch, measured wit">
 <meta name="color-scheme" content="dark light">
 <link rel="canonical" href="https://rshacudevidro.github.io/larperCord/guide/performance.html">
 <link rel="alternate" hreflang="en" href="https://rshacudevidro.github.io/larperCord/guide/performance.html">
 <link rel="alternate" hreflang="pt-BR" href="https://rshacudevidro.github.io/larperCord/pt/guide/performance.html">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Performance · larperCord">
-<meta property="og:description" content="# The numbers RAM (PSS) Idle CPU Binary Vesktop (Electron) 1,279 MB 12–47% ¹ 287 MB larperCord ² 45–50 MB 0–0.5% ~5 MB ¹ Average since launch, measured wit">
+<meta property="og:description" content="# The numbers RAM (PSS) Idle CPU Binary Vesktop (Electron) 1,279 MB 12–47% ¹ 287 MB larperCord ² 46–56 MB 0–0.4% ~7 MB ¹ Average since launch, measured wit">
 <meta property="og:image" content="https://rshacudevidro.github.io/larperCord/assets/og.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/svg+xml" href="../assets/icon-live.svg">
@@ -34,6 +34,7 @@
     <a href="../guide/getting-started.html" aria-current="page">Guide</a>
     <a href="https://github.com/RshaCuDeVidro/larperCord" rel="noopener">GitHub</a>
   </nav>
+  <a class="kofi-mini" href="https://ko-fi.com/M7E72A1EGZ" target="_blank" rel="noopener"><img src="../assets/kofi6.png" alt="Buy Me a Coffee at ko-fi.com" width="580" height="146"></a>
   <a class="lang" href="../pt/guide/performance.html" hreflang="pt-BR" lang="pt-BR">Português</a>
 </header>
 <div class="guide">
@@ -44,14 +45,14 @@
 <main id="main" class="prose">
 <h1>Performance</h1>
 <h2 id="the-numbers"><a class="anchor" href="#the-numbers" aria-hidden="true">#</a>The numbers</h2>
-<div class="table-wrap"><table><thead><tr><th></th><th>RAM (PSS)</th><th>Idle CPU</th><th>Binary</th></tr></thead><tbody><tr><td>Vesktop (Electron)</td><td>1,279 MB</td><td>12–47% ¹</td><td>287 MB</td></tr><tr><td><strong>larperCord</strong> ²</td><td><strong>45–50 MB</strong></td><td><strong>0–0.5%</strong></td><td><strong>~5 MB</strong></td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th></th><th>RAM (PSS)</th><th>Idle CPU</th><th>Binary</th></tr></thead><tbody><tr><td>Vesktop (Electron)</td><td>1,279 MB</td><td>12–47% ¹</td><td>287 MB</td></tr><tr><td><strong>larperCord</strong> ²</td><td><strong>46–56 MB</strong></td><td><strong>0–0.4%</strong></td><td><strong>~7 MB</strong></td></tr></tbody></table></div>
 <p>¹ Average since launch, measured with <code>ps</code>. Arch Linux, Hyprland, GTX 1050 Ti, a 1280×800 window, <code>ReleaseFast</code> build.</p>
-<p>² Demo data, all 10 themes, real GPU with a hidden window (<code>LARPER_HIDDEN=1</code>), which can measure slightly less than a visible window.</p>
+<p>² Demo data, all 11 themes, real GPU, a real window on a hidden Hyprland workspace, and GIF autoplay off. A window you're looking at can measure differently.</p>
 <p>Read these with the right caveats:</p>
-<ul><li><strong>A real account uses more</strong> than demo data. More servers, more members, more images.</li><li><strong>A good part of PSS isn't the app.</strong> It's the NVIDIA driver and system libraries such as libcurl and OpenSSL. In one measurement across the themes, private anonymous memory was about 22 MB.</li><li><strong>The binary doesn't include shared libraries</strong>, such as SDL3 and libcurl.</li><li>The Vesktop figures come from a single earlier run on the same machine.</li></ul>
+<ul><li><strong>A real account uses more</strong> than demo data. More servers, more members, more images.</li><li><strong><code>terminal</code> and <code>subsolo</code> vary.</strong> They usually land in the same range, but some runs read 60–74 MB, and the cause hasn't been found yet.</li><li><strong>Idle means nothing is moving.</strong> An animated GIF on screen costs about 2.5% CPU. The demo's first channel has one, so the measurement turns autoplay off.</li><li><strong>A good part of PSS isn't the app.</strong> It's the NVIDIA driver and system libraries such as libcurl and OpenSSL. In one measurement across the themes, anonymous memory was about 25 MB.</li><li><strong>The binary doesn't include shared libraries</strong>, such as SDL3 and libcurl.</li><li>The Vesktop figures come from a single earlier run on the same machine.</li></ul>
 <h2 id="measure-it-yourself"><a class="anchor" href="#measure-it-yourself" aria-hidden="true">#</a>Measure it yourself</h2>
-<div class="code" data-lang="bash"><span class="code-lang">bash</span><button class="copy" type="button" data-copy>copy</button><pre><code><span class="t-k">tools/membench.sh</span> 50</code></pre></div>
-<p>For each theme, it opens the app in demo mode, waits, measures idle CPU over 5 seconds, reads PSS from <code>/proc/&lt;pid&gt;/smaps_rollup</code>, and fails if any theme goes over the budget in MB.</p>
+<div class="code" data-lang="bash"><span class="code-lang">bash</span><button class="copy" type="button" data-copy>copy</button><pre><code><span class="t-k">tools/membench.sh</span> 60</code></pre></div>
+<p>For each theme, it opens the app in demo mode with clean settings and GIF autoplay off, waits, measures idle CPU over 5 seconds, reads PSS from <code>/proc/&lt;pid&gt;/smaps_rollup</code>, and fails if any theme goes over the budget in MB. Because of that variation, <code>terminal</code> sometimes fails at 60.</p>
 <p>The Performance page in settings shows live numbers, and <code>--stats</code> shows the time to first frame.</p>
 <h2 id="ten-decisions"><a class="anchor" href="#ten-decisions" aria-hidden="true">#</a>Ten decisions</h2>
 <ol><li><strong>It sleeps when nothing happens.</strong> The loop waits in <code>SDL_WaitEvent</code>. Network, inotify and the clock wake the app through events. No animation, no redraw.</li><li><strong>No browser.</strong> Everything is drawn with Dear ImGui's <code>ImDrawList</code> on SDL_Renderer.</li><li><strong>Fonts are mapped, not copied.</strong> Each font file is one <code>mmap</code> used by every weight and family, so only the pages read stay in RAM. Loading 4 weights of Inter plus emoji the naive way cost about 90 MB.</li><li><strong>Only the video driver it needs.</strong> On NVIDIA-only machines, glvnd also loaded Mesa and LLVM (about 23 MB) for nothing. The app detects that and avoids it.</li><li><strong>Markdown is parsed once</strong>, when the message arrives. The UI only lays out spans, with a height cache per width.</li><li><strong>A virtualized list.</strong> Binary search for the first visible item, then draw only the screen.</li><li><strong>Memory has ceilings.</strong> 1,500 messages per channel and 3,000 in total, after which the least recently seen conversation is unloaded. Images have a fixed 64 MB budget, and any single download stops at 32 MB.</li><li><strong>fontconfig gets freed</strong> after fonts are resolved (<code>FcFini</code> and <code>malloc_trim</code>).</li><li><strong>No blinking cursor.</strong> It would keep the CPU awake for nothing.</li><li><strong>Things start when you ask.</strong> The voice thread on the first call and FFmpeg on the first video. Off-screen video is released after 30 seconds, and without plugins there's no extra work per message, key or frame.</li></ol>
@@ -71,6 +72,7 @@
   <span class="sb-spacer"></span>
   <button type="button" class="sb-btn sb-keys" data-open-palette><kbd>Ctrl</kbd><kbd>K</kbd> palette</button>
   <span class="sb-keys sb-hint"><kbd>F2</kbd> next theme</span>
+  <a class="sb-btn sb-kofi" href="https://ko-fi.com/M7E72A1EGZ" target="_blank" rel="noopener">&#9829; ko-fi</a>
   <span class="sb-pos" data-scroll-pos></span>
   <time class="sb-clock" data-clock></time>
 </footer>

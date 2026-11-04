@@ -1,20 +1,22 @@
-# Escrevendo temas
+# Writing themes
 
-Um tema do larperCord é um arquivo [KDL](https://kdl.dev) que descreve **a interface inteira**:
-cores, fontes, estilos e a árvore de layout. Dá pra mudar a posição de tudo sem escrever
-uma linha de código.
+**English** · [Português](README.pt-BR.md)
 
-Coloque o arquivo em `~/.config/larpercord/themes/meu-tema.kdl` (ou em `themes/`, ao rodar
-de dentro do repositório). **Ao salvar, o app recarrega na hora.** Se houver um erro, aparece
-um aviso com `arquivo:linha:coluna` e o tema anterior continua valendo.
+A larperCord theme is a [KDL](https://kdl.dev) file that describes **the whole interface**:
+colors, fonts, styles and the layout tree. You can change the position of everything without writing
+a line of code.
 
-Troque de tema com `F2`, pela paleta (`Ctrl+K` → "tema: …") ou em Configurações → Aparência.
+Put the file in `~/.config/larpercord/themes/meu-tema.kdl` (or in `themes/`, when running
+from inside the repository). **When you save, the app reloads right away.** If there's an error, a
+notice shows `file:line:column` and the previous theme stays in effect.
 
-## Exemplo mínimo
+Switch themes with `F2`, from the palette (`Ctrl+K` → "theme: …") or in Settings → Appearance.
+
+## Minimal example
 
 ```kdl
 theme "meu-tema" description="Servidores embaixo, chat em cima." preview=classic
-palette "wal"                      // usa as cores do pywal (opcional)
+palette "wal"                      // uses pywal colors (optional)
 
 colors {
     accent "wal:4"
@@ -35,30 +37,30 @@ layout {
 }
 ```
 
-## Nós de topo
+## Top-level nodes
 
-| Nó | O que faz |
+| Node | What it does |
 |---|---|
-| `theme "nome" description=… author=… preview=…` | metadados. `preview` escolhe a miniatura nas configurações: `classic`, `glass`, `terminal`, `bubbles`, `zen`, `mirror`, `office`, `desktop` |
-| `palette "wal"` ou `palette "#hex" …` | as 16 cores base (`wal:0` … `wal:15`). Sem isso, usa uma paleta padrão |
-| `colors { token "expressão" … }` | sobrescreve tokens de cor (lista abaixo) |
-| `roles "cor" …` | até 8 cores de cargo (nomes de usuário, ícones de servidor) |
-| `fonts ui="Inter" mono="JetBrains Mono" size=16` | famílias (resolvidas pelo fontconfig) e tamanho base |
-| `metrics radius=6` | arredondamento padrão de linhas e botões |
-| `window transparent=#true` | fundo da janela transparente: o compositor aplica blur |
-| `styles { style "nome" … }` | estilos nomeados para usar com `style=nome` |
-| `layout { … }` | a árvore da interface (um único filho na raiz) |
+| `theme "name" description=… author=… preview=…` | metadata. `preview` picks the thumbnail in settings: `classic`, `glass`, `terminal`, `bubbles`, `zen`, `mirror`, `office`, `desktop` |
+| `palette "wal"` or `palette "#hex" …` | the 16 base colors (`wal:0` … `wal:15`). Without it, a default palette is used |
+| `colors { token "expression" … }` | overrides color tokens (list below) |
+| `roles "color" …` | up to 8 role colors (usernames, server icons) |
+| `fonts ui="Inter" mono="JetBrains Mono" size=16` | families (resolved by fontconfig) and base size |
+| `metrics radius=6` | default rounding of rows and buttons |
+| `window transparent=#true` | transparent window background: the compositor applies blur |
+| `styles { style "name" … }` | named styles to use with `style=name` |
+| `layout { … }` | the interface tree (a single child at the root) |
 
-## Cores
+## Colors
 
-Expressões aceitas em qualquer lugar que pede cor:
+Expressions accepted anywhere a color is asked for:
 
 ```
 "#df68ad"   "#df68ad80"   "#fff"   "#fff8"
-"wal:4"                    cor da paleta
-"@surface"                 outro token (já definido)
-"mix(a, b, 0.3)"           mistura
-"alpha(a, 0.5)"            transparência
+"wal:4"                    palette color
+"@surface"                 another token (already defined)
+"mix(a, b, 0.3)"           blend
+"alpha(a, 0.5)"            transparency
 "lighten(a, 0.1)"  "darken(a, 0.2)"
 white  black  transparent
 ```
@@ -67,7 +69,7 @@ Tokens: `bg` `rail` `sidebar` `surface` `elevated` `overlay` `text` `muted` `fai
 `accent-text` `border` `hover` `selected` `online` `idle` `dnd` `danger` `mention` `link`
 `code-bg` `bubble-self` `bubble-self-text` `bubble-other` `shadow`.
 
-## Estilos
+## Styles
 
 ```kdl
 styles {
@@ -75,34 +77,34 @@ styles {
 }
 ```
 
-`glow` é a cor da borda quando o mouse está em cima. `shadow` é o tamanho da sombra.
-Para um fundo simples, sem estilo nomeado, use direto no nó: `bg=sidebar radius=12`
-(`bg` no nó também aceita expressão: `bg="alpha(@accent, 0.4)"`).
+`glow` is the border color when the mouse is over it. `shadow` is the shadow size.
+For a plain background with no named style, use it directly on the node: `bg=sidebar radius=12`
+(`bg` on the node also accepts an expression: `bg="alpha(@accent, 0.4)"`).
 
-Além disso, estilos **e nós do layout** podem ter as primitivas da seção
-[Além do retângulo chapado](#além-do-retângulo-chapado): gradiente, padrão, grão, vinheta, sombra
-interna, borda por lado.
+In addition, styles **and layout nodes** can have the primitives from the section
+[Beyond the flat rectangle](#beyond-the-flat-rectangle): gradient, pattern, grain, vignette, inner
+shadow, per-side border.
 
 ## Layout
 
-Contêineres: `row` (horizontal), `column` (vertical), `stack` (um sobre o outro).
+Containers: `row` (horizontal), `column` (vertical), `stack` (one on top of another).
 
-| Propriedade | Efeito |
+| Property | Effect |
 |---|---|
-| `width=` / `height=` | tamanho fixo no eixo do pai |
-| `flex=` | peso no espaço que sobra (padrão 1) |
-| `gap=` `padding=` `padding-x=` `padding-y=` | espaçamentos (contêineres) |
-| `inset-x=` `inset-y=` | margem interna de um componente |
-| `max-width=` | limita a largura e centraliza |
-| `hide-below=` | esconde quando a janela é mais estreita que isso |
-| `show=#false` | esconde |
-| `style=` / `bg=` `radius=` | fundo do nó |
-| `font=mono` / `font=ui` / `font="Liberation Serif"` | fonte do componente: a mono, a da interface ou **qualquer família instalada** |
-| `c-<token>=cor` | sobrescreve um token de cor **neste nó e nos filhos** (ex.: `c-text="#fff"` numa barra lateral escura) |
+| `width=` / `height=` | fixed size along the parent's axis |
+| `flex=` | weight in the leftover space (default 1) |
+| `gap=` `padding=` `padding-x=` `padding-y=` | spacing (containers) |
+| `inset-x=` `inset-y=` | inner margin of a component |
+| `max-width=` | limits the width and centers |
+| `hide-below=` | hides when the window is narrower than this |
+| `show=#false` | hides |
+| `style=` / `bg=` `radius=` | the node's background |
+| `font=mono` / `font=ui` / `font="Liberation Serif"` | the component's font: the mono one, the interface one or **any installed family** |
+| `c-<token>=color` | overrides a color token **on this node and its children** (e.g. `c-text="#fff"` on a dark sidebar) |
 
-## Componentes
+## Components
 
-| Componente | Propriedades |
+| Component | Properties |
 |---|---|
 | `guild-bar` | `variant=bar\|dock\|list` `icon-style=fill\|soft\|outline` `orientation=vertical\|horizontal` `shape=circle\|squircle\|square\|text` `size=48` `labels=#true` `home=#false` `indicators=#false` |
 | `channel-list` | `variant=discord\|tree\|pills` `header=#false` |
@@ -113,23 +115,23 @@ Contêineres: `row` (horizontal), `column` (vertical), `stack` (um sobre o outro
 | `composer` | `variant=box\|pill\|prompt` `typing=#false` |
 | `member-list` | `variant=discord\|tty` |
 | `status-bar` | `variant=pills\|tty\|plain` `items="conn ping ram frame voice spacer theme keys clock"` |
-| `label` | `text=` `size=` `weight=regular\|medium\|semibold\|bold` `color=token` `align=left\|center\|right`, mais [tipografia de display](#tipografia-de-display-no-label) |
-| `shape` | círculo, anel, arco, retângulo arredondado, linha ([detalhes](#shape-e-rule)) |
-| `rule` | régua lisa, tracejada, dupla, de jornal, com ornamento ([detalhes](#shape-e-rule)) |
-| `starfield` `orbit` `aurora` `dunes` `topography` `radar` | [fundos procedurais](#fundos-procedurais) (primeiro filho de um `stack`) |
-| `window-controls` | os três botões da janela, que funcionam de verdade: fechar, minimizar, maximizar. `size=12` `gap=8` `color=` `color2=` `color3=` `align=` |
+| `label` | `text=` `size=` `weight=regular\|medium\|semibold\|bold` `color=token` `align=left\|center\|right`, plus [display typography](#display-typography-in-label) |
+| `shape` | circle, ring, arc, rounded rectangle, line ([details](#shape-and-rule)) |
+| `rule` | plain, dashed, double, newspaper or ornamented rule ([details](#shape-and-rule)) |
+| `starfield` `orbit` `aurora` `dunes` `topography` `radar` | [procedural backgrounds](#procedural-backgrounds) (first child of a `stack`) |
+| `window-controls` | the three window buttons, which really work: close, minimize, maximize. `size=12` `gap=8` `color=` `color2=` `color3=` `align=` |
 | `logo` | `variant=ascii\|wordmark` `size=` |
-| `topbar` | barra superior (abas, busca, ajuda) |
+| `topbar` | top bar (tabs, search, help) |
 | `crt` | `spacing=3` `strength=0.08` |
-| `spacer` | espaço vazio |
+| `spacer` | empty space |
 
-Um nome que não existe aparece com uma borda vermelha e a linha do arquivo, pra facilitar.
+A name that doesn't exist shows up with a red border and the file line, to make it easy to spot.
 
-## Além do retângulo chapado
+## Beyond the flat rectangle
 
-Tudo aqui é opcional, vale num `style "…"` ou direto num nó do layout, e as cores são expressões
-(`"alpha(@accent, 0.4)"`, ou só o nome do token). Elas são avaliadas com os tokens do momento, então
-acompanham o modo claro/escuro, a cor de destaque escolhida e os `c-…` do pedaço do layout.
+Everything here is optional, works in a `style "…"` or directly on a layout node, and the colors are expressions
+(`"alpha(@accent, 0.4)"`, or just the token name). They are evaluated with the current tokens, so they
+follow light/dark mode, the chosen accent color and the `c-…` of that part of the layout.
 
 ```kdl
 styles {
@@ -145,68 +147,68 @@ styles {
 layout { column gradient="@bg @rail" grain="alpha(@text, 0.05)" { … } }
 ```
 
-| Propriedade | O que faz |
+| Property | What it does |
 |---|---|
-| `gradient="a b"` ou `"a b c"` | gradiente de 2 ou 3 cores (separadas por espaço) |
-| `gradient-angle=90` | graus: `0` da esquerda para a direita, `90` de cima para baixo (padrão) |
-| `pattern=dots\|lines\|grid\|diagonal` | padrão repetido; pede `pattern-color` |
-| `pattern-size=16` `pattern-width=1` | distância entre repetições e espessura do traço (ou raio do ponto) |
-| `grain=cor` | grão: ruído fino, tingido por essa cor |
-| `vignette=cor` `vignette-size=0.55` | escurece (ou tinge) as bordas; `size` é onde começa, de 0 (centro) a 1 (cantos) |
-| `inner-shadow=cor` `inner-shadow-size=14` | sombra para dentro |
-| `border-gradient="a b c"` `border-gradient-angle=` `border-width=` | borda em gradiente |
-| `border-top=cor` `border-right=` `border-bottom=` `border-left=` | borda só naquele lado |
-| `border-top-width=2` (idem para os outros lados) | espessura daquele lado (padrão: `border-width`, ou 1) |
-| `hover-bg=cor` | fundo por cima quando o mouse está em cima, com transição |
-| `drop-shadow=cor` `drop-shadow-size=32` `drop-shadow-y=10` | sombra macia e **oca**: não escurece o que está embaixo de um painel translúcido (o `shadow=` antigo escurece) |
-| `corners=left\|right\|top\|bottom` | quais cantos o preenchimento arredonda: uma janela de dois painéis lado a lado |
-| `border=cor` | borda inteira, para usar direto num nó (nos estilos, ela já existe) |
+| `gradient="a b"` or `"a b c"` | gradient of 2 or 3 colors (separated by spaces) |
+| `gradient-angle=90` | degrees: `0` from left to right, `90` from top to bottom (default) |
+| `pattern=dots\|lines\|grid\|diagonal` | repeating pattern; requires `pattern-color` |
+| `pattern-size=16` `pattern-width=1` | distance between repeats and stroke thickness (or dot radius) |
+| `grain=color` | grain: fine noise, tinted by this color |
+| `vignette=color` `vignette-size=0.55` | darkens (or tints) the edges; `size` is where it starts, from 0 (center) to 1 (corners) |
+| `inner-shadow=color` `inner-shadow-size=14` | inward shadow |
+| `border-gradient="a b c"` `border-gradient-angle=` `border-width=` | gradient border |
+| `border-top=color` `border-right=` `border-bottom=` `border-left=` | border on that side only |
+| `border-top-width=2` (same for the other sides) | thickness of that side (default: `border-width`, or 1) |
+| `hover-bg=color` | background drawn on top when the mouse is over it, with a transition |
+| `drop-shadow=color` `drop-shadow-size=32` `drop-shadow-y=10` | soft, **hollow** shadow: it doesn't darken what's under a translucent panel (the old `shadow=` does) |
+| `corners=left\|right\|top\|bottom` | which corners the fill rounds: a window of two side-by-side panels |
+| `border=color` | full border, to use directly on a node (in styles, it already exists) |
 
-Custo: gradiente de 2 cores são só vértices. Grão, padrão, vinheta e gradiente de 3 cores são texturas
-minúsculas geradas **uma vez** e repetidas: um quad por quadro, nada de ruído recalculado. Tema que não
-usa nada disso não passa por esse código.
+Cost: a 2-color gradient is just vertices. Grain, pattern, vignette and 3-color gradients are tiny textures
+generated **once** and repeated: one quad per frame, no noise recalculated. A theme that doesn't
+use any of this doesn't go through this code.
 
-Grão muito forte no escuro atrapalha mais do que no claro. Quando o valor precisa mudar com o modo,
-use estilos separados: `styles mode=light { style "pagina" grain="alpha(@text, 0.07)" }` e
-`styles mode=dark { style "pagina" grain="alpha(@text, 0.025)" }`. Um nó também pode aparecer só num
-modo: `when=modo-claro`, `when=modo-escuro`.
+Very strong grain gets in the way more in dark mode than in light mode. When the value needs to change with the mode,
+use separate styles: `styles mode=light { style "pagina" grain="alpha(@text, 0.07)" }` and
+`styles mode=dark { style "pagina" grain="alpha(@text, 0.025)" }`. A node can also appear in only one
+mode: `when=modo-claro`, `when=modo-escuro`.
 
-## Tipografia de display no `label`
+## Display typography in `label`
 
 ```kdl
-// Tracking de verdade: nada de "O R B I T A L" com espaços.
+// Real tracking: no "O R B I T A L" with spaces.
 label text="ORBITAL" tracking=8 size=15 weight=bold font=mono
 
-// Runs: cor, peso, tamanho e fonte diferentes na mesma linha, na mesma linha de base.
+// Runs: different color, weight, size and font on the same line, on the same baseline.
 label height=38 size=9 color=muted font=mono span-gap=9 {
     span "01" size=18 color=accent
     span "CANAIS" en="CHANNELS" tracking=3
 }
 
-// Efeitos.
+// Effects.
 label text="larperCord" size=40 shadow="alpha(black, 0.5)" shadow-x=2 shadow-y=2
-label text="larperCord" size=40 shadow="alpha(@accent, 0.4)" shadow-blur=3   // brilho
+label text="larperCord" size=40 shadow="alpha(@accent, 0.4)" shadow-blur=3   // glow
 label text="larperCord" size=40 color=bg outline=accent outline-width=2
 label text="larperCord" size=40 text-gradient="@text @accent" text-gradient-angle=0
 ```
 
-| Propriedade | O que faz |
+| Property | What it does |
 |---|---|
-| `tracking=` | espaço extra entre as letras, em pixels (pode ser negativo) |
-| `color=` | também aceita expressão: `color="alpha(@text, 0.7)"` |
-| `text-en=` (`en=` no `span`) | versão em inglês do texto |
-| `span "texto"` | um pedaço da linha; `size` `weight` `color` `font` `tracking` herdam do `label` |
-| `span-gap=` | espaço entre os spans |
-| `shadow=cor` `shadow-x=` `shadow-y=` `shadow-blur=` | sombra; com `blur` vira um halo macio |
-| `outline=cor` `outline-width=` | contorno |
-| `text-gradient="a b"` `text-gradient-angle=` | gradiente no texto (padrão: horizontal) |
+| `tracking=` | extra space between letters, in pixels (can be negative) |
+| `color=` | also accepts an expression: `color="alpha(@text, 0.7)"` |
+| `text-en=` (`en=` on `span`) | English version of the text |
+| `span "text"` | a piece of the line; `size` `weight` `color` `font` `tracking` inherit from `label` |
+| `span-gap=` | space between spans |
+| `shadow=color` `shadow-x=` `shadow-y=` `shadow-blur=` | shadow; with `blur` it becomes a soft halo |
+| `outline=color` `outline-width=` | outline |
+| `text-gradient="a b"` `text-gradient-angle=` | gradient on the text (default: horizontal) |
 
-O `label` sem nada disso continua igual e no mesmo caminho de sempre. Efeitos desenham o texto mais
-vezes: guarde para títulos e wordmarks.
+A `label` with none of this stays the same, on the same path as always. Effects draw the text more
+times: save them for titles and wordmarks.
 
-## `shape` e `rule`
+## `shape` and `rule`
 
-Formas e réguas desenhadas de verdade, em vez de caracteres Unicode. Empilhe num `stack` para compor.
+Shapes and rules that are actually drawn, instead of Unicode characters. Pile them up in a `stack` to compose.
 
 ```kdl
 stack width=28 {
@@ -219,75 +221,75 @@ shape kind=line angle=30 thickness=2 color=border
 
 rule height=1 color=border
 rule height=1 kind=dashed dash=3 gap=3 color="alpha(@accent, 0.45)"
-rule height=7 kind=oxford color=text                                 // fio grosso sobre fio fino
+rule height=7 kind=oxford color=text                                 // thick line over thin line
 rule height=11 kind=double color=text ornament=star ornament-color=accent ornament-size=11
 rule height=20 ornament-text="§" ornament-size=16 font="Liberation Serif"
 rule width=1 vertical=#true color=border
-rule height=1 fade=#true color=accent                                // some nas pontas
+rule height=1 fade=#true color=accent                                // fades out at the ends
 ```
 
 | `shape` | |
 |---|---|
 | `kind=` | `circle` `ring` `arc` `rounded` `line` |
-| `color=` `thickness=` | cor e espessura do traço |
-| `size=` | diâmetro (padrão: o menor lado do nó); em `line`, o comprimento |
-| `fill=` | preenchimento de `ring` e `rounded` |
-| `start=` `sweep=` | início e abertura do `arc`, em graus |
-| `dot=cor` `dot-size=` | um ponto na ponta do `arc` |
-| `radius=` | cantos do `rounded` |
-| `angle=` | inclinação da `line`, em graus |
-| `align=left\|center\|right` `offset-x=` `offset-y=` | posição dentro do nó |
+| `color=` `thickness=` | stroke color and thickness |
+| `size=` | diameter (default: the node's shorter side); on `line`, the length |
+| `fill=` | fill of `ring` and `rounded` |
+| `start=` `sweep=` | start and opening of the `arc`, in degrees |
+| `dot=color` `dot-size=` | a dot at the tip of the `arc` |
+| `radius=` | corners of `rounded` |
+| `angle=` | tilt of the `line`, in degrees |
+| `align=left\|center\|right` `offset-x=` `offset-y=` | position inside the node |
 
 | `rule` | |
 |---|---|
 | `kind=` | `solid` `dashed` `dotted` `double` `oxford` |
-| `color=` `thickness=` | cor e espessura |
-| `dash=` `gap=` | tamanho do traço e do vão em `dashed` |
-| `vertical=#true` | de cima para baixo (dê um `width=` ao nó) |
-| `fade=#true` | some nas duas pontas |
-| `ornament=` | `diamond` `dot` `ring` `star`, no meio da régua |
-| `ornament-text=` | um caractere no meio, em vez da forma (usa o `font=` do nó) |
-| `ornament-color=` `ornament-size=` `ornament-gap=` | cor, tamanho e o vão da régua em volta |
+| `color=` `thickness=` | color and thickness |
+| `dash=` `gap=` | size of the dash and of the gap on `dashed` |
+| `vertical=#true` | from top to bottom (give the node a `width=`) |
+| `fade=#true` | fades out at both ends |
+| `ornament=` | `diamond` `dot` `ring` `star`, in the middle of the rule |
+| `ornament-text=` | a character in the middle, instead of the shape (uses the node's `font=`) |
+| `ornament-color=` `ornament-size=` `ornament-gap=` | color, size and the gap in the rule around it |
 
-## Fundos procedurais
+## Procedural backgrounds
 
-Vão como primeiro filho de um `stack`, atrás de todo o resto. São **parados por padrão**: gerados uma
-vez, ficam numa textura, e um tema parado não acorda o app.
+They go as the first child of a `stack`, behind everything else. They are **static by default**: generated
+once, they stay in a texture, and a static theme doesn't wake the app.
 
 ```kdl
 layout {
     stack {
         starfield color="alpha(@muted, 0.75)" color2="alpha(@accent, 0.8)" density=1.1
         orbit center-x=0.73 center-y=0.4 rings=7 color="alpha(@accent, 0.4)" color2=accent
-        column { … painéis … }
+        column { … panels … }
     }
 }
 ```
 
-| Componente | Cores | Propriedades |
+| Component | Colors | Properties |
 |---|---|---|
-| `starfield` | `color` estrelas de longe, `color2` as de perto | `density=1` |
-| `orbit` | `color` as órbitas, `color2` as luas | `center-x=0.7` `center-y=0.35` `rings=6` |
-| `aurora` | `color` e `color2`, uma para cada cortina | |
-| `dunes` | `color`, `color2`, `color3`: colinas de trás para a frente (o céu é o `gradient` do nó em volta) | |
-| `topography` | `color` | `levels=14` (quantas curvas de nível) |
-| `radar` | `color` anéis, `color2` a varredura | `center-x=0.5` `center-y=0.5` `rings=5` |
+| `starfield` | `color` distant stars, `color2` the near ones | `density=1` |
+| `orbit` | `color` the orbits, `color2` the moons | `center-x=0.7` `center-y=0.35` `rings=6` |
+| `aurora` | `color` and `color2`, one for each curtain | |
+| `dunes` | `color`, `color2`, `color3`: hills from back to front (the sky is the `gradient` of the surrounding node) | |
+| `topography` | `color` | `levels=14` (how many contour lines) |
+| `radar` | `color` rings, `color2` the sweep | `center-x=0.5` `center-y=0.5` `rings=5` |
 
-Todos aceitam `seed=` (outro desenho), e todos menos `topography` aceitam movimento:
-`motion=#true`, ou melhor `motion="$opcao"`, para o usuário escolher, e `motion-fps=10` (no máximo 15).
-O movimento só desloca a textura ou redesenha uma peça pequena, e para sozinho com "Reduzir movimento" e
-com a janela minimizada ou fora de foco.
+All of them accept `seed=` (a different drawing), and all except `topography` accept motion:
+`motion=#true`, or better `motion="$opcao"`, so the user can choose, and `motion-fps=10` (15 at most).
+Motion only shifts the texture or redraws a small piece, and it stops on its own with "Reduce motion" and
+with the window minimized or out of focus.
 
-A máscara é só forma: a cor vem na hora de desenhar. Trocar de modo ou de cor de destaque não gera nada
-de novo. Só `orbit` e `radar` dependem do tamanho, e são refeitos uma vez quando a janela para de mudar.
+The mask is only shape: the color comes at draw time. Switching mode or accent color generates nothing
+new. Only `orbit` and `radar` depend on size, and they are rebuilt once when the window stops changing.
 
-**Contraste primeiro.** Texto nunca fica direto sobre um fundo forte: ponha um painel translúcido no
-meio (`gradient="alpha(@surface, 0.9) alpha(@surface, 0.76)"`) e confira nos dois modos. Use cores
-derivadas de tokens: `@muted` no escuro são estrelas claras, e no claro viram tinta sobre papel.
+**Contrast first.** Text never sits directly on a strong background: put a translucent panel in
+between (`gradient="alpha(@surface, 0.9) alpha(@surface, 0.76)"`) and check both modes. Use colors
+derived from tokens: `@muted` in dark mode is light stars, and in light mode it becomes ink on paper.
 
-## Claro e escuro
+## Light and dark
 
-Todo tema tem as duas versões. Blocos com `mode=` só valem num dos modos:
+Every theme has both versions. Blocks with `mode=` only apply in one of the modes:
 
 ```kdl
 colors mode=dark  { bg "#0b0906"; text "#ffcf73" }
@@ -295,14 +297,14 @@ colors mode=light { bg "#f4efe2"; text "#2e2412" }
 roles mode=light "#7a4a00" "#9c3f10"
 ```
 
-Sem `mode=`, o bloco vale nos dois. Se o tema não definir o claro, ele é derivado da paleta
-(papel quase branco, tinta escura e destaque escurecido). No layout, `cl-<token>` e `cd-<token>`
-sobrescrevem uma cor só no claro ou só no escuro. O usuário escolhe em Configurações → Aparência
-(Escuro / Claro / Seguir o sistema), ou pela linha de comando: `--mode claro`.
+Without `mode=`, the block applies in both. If the theme doesn't define the light one, it's derived
+from the palette (near-white paper, dark ink and a darkened accent). In the layout, `cl-<token>` and `cd-<token>`
+override a color in light only or in dark only. The user chooses in Settings → Appearance
+(Dark / Light / Follow system), or on the command line: `--mode claro`.
 
-## Opções do tema
+## Theme options
 
-Um tema pode oferecer chaves de liga/desliga, que aparecem em Configurações → Aparência:
+A theme can offer on/off switches, which show up in Settings → Appearance:
 
 ```kdl
 options {
@@ -311,37 +313,37 @@ options {
 }
 ```
 
-Formas de usar as opções:
+Ways to use the options:
 
-| Onde | Como |
+| Where | How |
 |---|---|
-| esconder/mostrar um nó | `crt when=crt`, `tabs unless=compacto` |
-| propriedade booleana | `banner="$banner"`, `typing="$!digitando"` (o `!` inverte) |
-| bloco de cores, cargos, estilos | `colors mode=dark when=verde { … }` |
-| estilo | `style "card" sheen="$brilho"` |
+| hide/show a node | `crt when=crt`, `tabs unless=compacto` |
+| boolean property | `banner="$banner"`, `typing="$!digitando"` (the `!` inverts) |
+| block of colors, roles, styles | `colors mode=dark when=verde { … }` |
+| style | `style "card" sheen="$brilho"` |
 
-As escolhas ficam salvas por tema em `~/.config/larpercord/settings.kdl`.
+The choices are saved per theme in `~/.config/larpercord/settings.kdl`.
 
-## Cores personalizadas (sem editar o `.kdl`)
+## Custom colors (without editing the `.kdl`)
 
-Em **Configurações → Aparência → Cores do tema** você pode trocar qualquer token de cor
-(`bg`, `sidebar`, `text`, `accent`, `link`, `bubble-self`…) e as oito cores de cargo por um
-hex livre. Vale só para o **tema atual e o modo atual** (escuro ou claro), e tem prioridade
-sobre a “Cor de destaque” global.
+In **Settings → Appearance → Theme colors** you can replace any color token
+(`bg`, `sidebar`, `text`, `accent`, `link`, `bubble-self`…) and the eight role colors with a
+free-form hex. It applies only to the **current theme and the current mode** (dark or light), and it takes priority
+over the global “Accent color”.
 
-- `#RRGGBB` para cor opaca; `#RRGGBBAA` para cor com transparência.
-- Clique num item da grade, cole o hex e aperte Enter.
-- “Limpar esta cor” volta aquele item ao tema; “Restaurar tema” apaga as escolhas do tema.
-- As escolhas ficam em `settings.kdl` como `theme-colors "nome" mode=dark accent="#…"`,
-  então não alteram o arquivo do tema.
-- Trechos que usam `c-…` fixo no layout (alguns temas usam para manter contraste) continuam
-  com a cor do arquivo; para mudar esses, edite o `.kdl`.
+- `#RRGGBB` for an opaque color; `#RRGGBBAA` for a color with transparency.
+- Click an item in the grid, paste the hex and press Enter.
+- “Clear this color” returns that item to the theme; “Reset theme” erases the theme's choices.
+- The choices are kept in `settings.kdl` as `theme-colors "name" mode=dark accent="#…"`,
+  so they don't change the theme file.
+- Parts that use a fixed `c-…` in the layout (some themes do this to keep contrast) keep
+  the file's color; to change those, edit the `.kdl`.
 
-### Em inglês
+### In English
 
-A interface tem português e inglês. Para o seu tema aparecer bem nos dois, ponha a versão em
-inglês ao lado: `label-en=` e `description-en=` nas opções, e `description-en=` no nó `theme`.
-Sem elas, aparece o texto em português.
+The interface comes in Portuguese and English. For your theme to look right in both, put the English
+version alongside: `label-en=` and `description-en=` on options, and `description-en=` on the `theme` node.
+Without them, the Portuguese text shows up.
 
 ```kdl
 theme "meu-tema" description="Servidores embaixo." description-en="Servers at the bottom."
@@ -350,56 +352,56 @@ options {
 }
 ```
 
-## Recursos exclusivos
+## Exclusive features
 
-| Componente / propriedade | O que faz | Usado em |
+| Component / property | What it does | Used in |
 |---|---|---|
-| `channel-list banner=#true` | banner colorido com o nome do servidor | classico |
-| `style … sheen=#true` | reflexo de vidro no topo do cartão | vidro |
-| `crt` | linhas de varredura + vinheta, por cima de tudo (use num `stack`) | terminal, subsolo |
-| `logo variant=ascii\|wordmark` | logo do app em ASCII ou em texto | terminal, subsolo, escritorio |
-| `messages ruled=#true margin-line=#true` | folha pautada e margem vermelha | papel |
-| `messages ticks=#true typing-bubble=#true` | "Entregue ✓✓" e balão de digitando | bolhas |
-| `autohide=#true` (qualquer nó) | o componente some até o mouse chegar perto | zen |
-| `guild-bar variant=bar orientation=horizontal` | faixa horizontal de servidores no rodapé, sem zoom nos ícones | orbital |
-| `topbar` | voltar/avançar entre abas, busca e ajuda | escritorio, editorial (opcional no orbital) |
-| `starfield` `orbit`, wordmark com `tracking`, painéis translúcidos | console no meio das estrelas; no claro, carta celeste | orbital |
-| `grain`, `rule kind=oxford`, `label` com `span` | papel com grão, masthead, fios de jornal | editorial |
-| `aurora`, `border-gradient`, `grain` | luz por trás do vidro fosco | vidro |
-| `pattern=grid`, `radar`, `topography` | retícula de osciloscópio; radar e mapa opcionais | terminal |
-| `dunes`, `window-controls`, `corners`, `drop-shadow`, `guild-bar variant=dock` | mesa de trabalho com janela flutuante, barra lateral translúcida e Dock | cupertino |
-| `topography`, `pattern=diagonal`, `shadow-x` | mapa de túneis, fita de perigo, letreiro com aberração cromática | subsolo |
-| `shape kind=arc`, `topography`, `grain` | enso e areia rastelada | zen |
-| `shape kind=ring`, `pattern=dots`, `rule kind=oxford`, `ornament-text` | furos de fichário, página pontilhada, índice | papel |
-| `aurora`, `pattern=dots`, `drop-shadow` | cartões flutuando sobre um fundo colorido | bolhas |
+| `channel-list banner=#true` | colored banner with the server name | classico |
+| `style … sheen=#true` | glass reflection at the top of the card | vidro |
+| `crt` | scanlines + vignette, on top of everything (use it in a `stack`) | terminal, subsolo |
+| `logo variant=ascii\|wordmark` | the app logo in ASCII or as text | terminal, subsolo, escritorio |
+| `messages ruled=#true margin-line=#true` | ruled paper and red margin | papel |
+| `messages ticks=#true typing-bubble=#true` | "Delivered ✓✓" and a typing bubble | bolhas |
+| `autohide=#true` (any node) | the component disappears until the mouse gets close | zen |
+| `guild-bar variant=bar orientation=horizontal` | horizontal strip of servers at the bottom, no icon zoom | orbital |
+| `topbar` | back/forward between tabs, search and help | escritorio, editorial (optional in orbital) |
+| `starfield` `orbit`, wordmark with `tracking`, translucent panels | console in the middle of the stars; in light mode, a star chart | orbital |
+| `grain`, `rule kind=oxford`, `label` with `span` | grainy paper, masthead, newspaper rules | editorial |
+| `aurora`, `border-gradient`, `grain` | light behind frosted glass | vidro |
+| `pattern=grid`, `radar`, `topography` | oscilloscope graticule; optional radar and map | terminal |
+| `dunes`, `window-controls`, `corners`, `drop-shadow`, `guild-bar variant=dock` | desktop with a floating window, translucent sidebar and Dock | cupertino |
+| `topography`, `pattern=diagonal`, `shadow-x` | tunnel map, hazard tape, sign with chromatic aberration | subsolo |
+| `shape kind=arc`, `topography`, `grain` | enso and raked sand | zen |
+| `shape kind=ring`, `pattern=dots`, `rule kind=oxford`, `ornament-text` | binder holes, dotted page, index | papel |
+| `aurora`, `pattern=dots`, `drop-shadow` | cards floating over a colored background | bolhas |
 
-## Os temas que vêm junto
+## The bundled themes
 
-- [`classico.kdl`](classico.kdl): o layout familiar
-- [`vidro.kdl`](vidro.kdl): cartões translúcidos com blur do compositor
-- [`terminal.kdl`](terminal.kdl): tmux + IRC em fósforo âmbar
-- [`subsolo.kdl`](subsolo.kdl): terminal de hacking underground, verde ácido, ultravioleta e scanlines
-- [`orbital.kdl`](orbital.kdl): console de bordo entre as estrelas, com sistemas numerados, prompt de comando e faixa de servidores no rodapé
-- [`editorial.kdl`](editorial.kdl): revista impressa em papel com grão, masthead em serifa entre réguas e índice à direita
-- [`bolhas.kdl`](bolhas.kdl): claro, com balões de conversa
-- [`zen.kdl`](zen.kdl): uma coluna central e mais nada
-- [`papel.kdl`](papel.kdl): serifado e espelhado
-- [`escritorio.kdl`](escritorio.kdl): estilo Slack, mostra o `c-…` e o `variant=list`
-- [`cupertino.kdl`](cupertino.kdl): mesa de trabalho estilo Mac, com papel de parede, janela flutuante, semáforo e Dock
+- [`classico.kdl`](classico.kdl): the familiar layout
+- [`vidro.kdl`](vidro.kdl): translucent cards with compositor blur
+- [`terminal.kdl`](terminal.kdl): tmux + IRC in amber phosphor
+- [`subsolo.kdl`](subsolo.kdl): underground hacking terminal, acid green, ultraviolet and scanlines
+- [`orbital.kdl`](orbital.kdl): ship console among the stars, with numbered systems, a command prompt and a server strip at the bottom
+- [`editorial.kdl`](editorial.kdl): printed magazine on grainy paper, serif masthead between rules and an index on the right
+- [`bolhas.kdl`](bolhas.kdl): light, with chat bubbles
+- [`zen.kdl`](zen.kdl): one central column and nothing else
+- [`papel.kdl`](papel.kdl): serif and mirrored
+- [`escritorio.kdl`](escritorio.kdl): Slack-style, shows off `c-…` and `variant=list`
+- [`cupertino.kdl`](cupertino.kdl): Mac-style desktop, with wallpaper, floating window, traffic lights and Dock
 
-Os testes (`zig build test`) carregam todos os temas embutidos e montam o layout de cada um.
-Se você mandar um tema novo num pull request, ele é verificado automaticamente.
+The tests (`zig build test`) load every built-in theme and build the layout of each one.
+If you send a new theme in a pull request, it's checked automatically.
 
-## Dicas de design
+## Design tips
 
-O que separa um tema bonito de um tema estranho quase nunca é a cor de destaque. Normalmente é:
+What separates a good-looking theme from a strange one is almost never the accent color. It's usually:
 
-- **Um conceito só.** "Caderno", "terminal", "portátil de 1989"… e tudo segue ele: cores,
-  fonte, cantos e bordas.
-- **Superfícies que se separam.** Fundo, painéis e elementos elevados precisam de degraus de
-  luminosidade claros. Roxo sobre roxo sobre roxo vira uma massa só.
-- **Poucas cores acesas.** Uma de destaque e, no máximo, uma secundária. Use `roles` com cores da
-  mesma família para os nomes não virarem um arco-íris.
-- **Uma fonte de texto**, e no máximo uma de títulos (`header … font="Liberation Serif"`).
-- **Contraste suficiente** para `text`, `muted` e `faint` sobre o fundo de cada painel. Use `c-…`
-  quando um pedaço do layout tem fundo bem diferente (barra lateral escura num tema claro).
+- **A single concept.** "Notebook", "terminal", "1989 laptop"… and everything follows it: colors,
+  font, corners and borders.
+- **Surfaces that separate.** Background, panels and elevated elements need clear steps of
+  lightness. Purple on purple on purple turns into one blob.
+- **Few bright colors.** One accent and, at most, one secondary. Use `roles` with colors from the
+  same family so the names don't become a rainbow.
+- **One text font**, and at most one for headings (`header … font="Liberation Serif"`).
+- **Enough contrast** for `text`, `muted` and `faint` against each panel's background. Use `c-…`
+  when part of the layout has a very different background (a dark sidebar in a light theme).

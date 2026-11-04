@@ -22,6 +22,8 @@
 | Cancel a reply or edit | `Esc` |
 | Copy the selected text | `Ctrl+C` |
 | New line in the composer | `Shift+Enter` |
+| Autocomplete in the composer | `@`, `#`, `:ab` or `/`, then the arrows and `Tab` or `Enter` |
+| Push to talk | The key or mouse button you pick in Settings → Voice |
 
 Right-click works on messages, users, channels and servers.
 
@@ -67,7 +69,7 @@ larpercord [options]
 |---|---|
 | `LARPER_TOKEN` | the account token (see [Connect your account](page:account)) |
 | `LARPER_RENDERER` | picks the SDL render backend: `opengl`, `vulkan`, `gpu` or `software` |
-| `LARPER_HIDDEN` | opens with a hidden window, to measure performance on the real GPU |
+| `LARPER_HIDDEN` | opens with a hidden window. The app draws nothing while hidden, so memory reads much lower than with a real window |
 | `LARPER_BENCH` | redraws nonstop, to measure the cost of a frame |
 | `LARPER_VOICE_DEBUG` | prints what happens in a call (opcodes, close codes, DAVE). It never prints tokens or keys |
 | `LARPER_DEBUG_MEDIA` | logs why an image failed to load |

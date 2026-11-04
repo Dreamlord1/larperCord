@@ -8,13 +8,19 @@ cd "$(dirname "$0")/.."
 budget="${1:-60}"
 zig build -Doptimize=ReleaseFast
 bin="$PWD/zig-out/bin/larpercord"
+# Configurações limpas e sem GIF andando: o primeiro canal da demonstração tem um.
+cfg="$(mktemp -d)"
+trap 'rm -rf "$cfg"' EXIT
+mkdir -p "$cfg/larpercord"
+echo 'settings autoplay_gifs=#false' >"$cfg/larpercord/settings.kdl"
+run=(env XDG_CONFIG_HOME="$cfg" XDG_CACHE_HOME="$cfg/cache" "$bin" --demo)
 fail=0
 printf "%-10s %10s %12s\n" tema "RAM (PSS)" "CPU parado"
-for t in classico vidro terminal subsolo orbital editorial bolhas zen papel escritorio; do
+for t in classico vidro terminal subsolo orbital editorial bolhas zen papel escritorio cupertino; do
     if command -v hyprctl >/dev/null && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
-        hyprctl dispatch exec "[workspace special:larper silent] $bin --theme $t --no-live" >/dev/null
+        hyprctl dispatch exec "[workspace special:larper silent] ${run[*]} --theme $t --no-live" >/dev/null
     else
-        "$bin" --theme "$t" --no-live >/dev/null 2>&1 &
+        "${run[@]}" --theme "$t" --no-live >/dev/null 2>&1 &
     fi
     sleep 4
     pid=$(pgrep -nx larpercord)

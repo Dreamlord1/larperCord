@@ -14,6 +14,39 @@ Everything here works in demo mode, except where it needs the real network. For 
 - **System messages**: joins, calls, pins, boosts.
 - **Message log** (optional): deleted messages stay on screen, marked, and edits keep the original. Local only.
 
+## Threads and forums
+
+- **Threads** sit under their parent channel, collapsible and with unread counts. They open like any conversation, with tabs, split view, drafts, cache and search.
+- The message that started a thread shows a card with the message count and the last activity. Creating, joining and leaving threads, and the archived ones, are in the menu.
+- **Forums and media channels** show their list of posts instead of a conversation, with local search, sorting by activity, more pages on demand and **New Post** with title, tags and text.
+- Permissions come from the parent channel, and the member list shows who's in the thread.
+
+![A thread open as a conversation](shot:f-threads)
+
+![A forum's list of posts](shot:f-forum)
+
+## Emoji and autocomplete
+
+- **Custom emoji** show as images, animated ones too, large when a message is only emoji, and in reactions. PNG, APNG and GIF **stickers** show as images.
+- **The picker** has the full Unicode list, search in Portuguese and English, recents and your servers' emoji, and it warns when an emoji needs Nitro.
+- **Autocomplete**: in the text box, `@`, `#`, `:ab` and `/` open a list. Use the arrows, then `Tab` or `Enter`, `Esc` or a click. Names with spaces become real mentions when you send.
+- **Data saver** shows custom emoji as `:name:` and downloads nothing.
+
+![The emoji picker](shot:f-emoji)
+
+![Autocomplete in the text box](shot:f-autocompletar)
+
+## Reading and pins
+
+- **Read state synced with Discord**: unreads and mentions are right when you open the app, and reading on another device clears them here. Read confirmations work like the official client's, at most one per channel every 3 seconds, and none while the window is unfocused or you're invisible.
+- **Mark as read** per channel and per server, and **mark as unread** from any message.
+- **The new messages line** comes with a button that jumps to the first one. Channels open at the first unread, which you can turn off in Settings → Chat.
+- **Pinned messages**: the pin icon in the header, and pin or unpin from the menu. Jumping to any old message loads the history around it, with **Jump to present** to come back.
+- **Discord links open in the app**, including `ptb.` and `canary.` ones. Invites become a card with the server and its members, and open in the browser, since the app doesn't join servers.
+- Clicking `@someone` opens their profile, clicking `#channel` opens the channel, and hovering a timestamp shows the full date.
+
+![The pinned messages panel](shot:f-fixadas)
+
 ## Markdown
 
 **Bold**, *italic*, ~~strikethrough~~, `code`, spoilers, `<@id>` and `<#id>` mentions, links and color emoji. Code blocks get highlighting in the theme's colors from the block's label (zig, c/cpp, js/ts, py, rust, go, sh, json, lua, java/kotlin, c#, diff) and a **Copy** button. Optionally, a live preview sits above the composer while you type.
@@ -73,7 +106,7 @@ The app computes permission overwrites per channel the way Discord does (`@every
 
 ## Calls
 
-Real voice with end-to-end encryption and a per-person mixer. See [Voice calls](page:voice).
+Real voice with end-to-end encryption, a per-person mixer, device picker, push-to-talk and filters. See [Voice calls](page:voice).
 
 ## Network and languages
 

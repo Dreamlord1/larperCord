@@ -11,16 +11,17 @@ larperCord is a young project: version 0.4.0, with its first commit on November 
 | Video in chat | **works** | Attachments and direct links. Needs the system's FFmpeg |
 | Inbox, saved messages, offline search | **works** | All local, can be turned off and erased |
 | Multiple accounts, proxy, Lua plugins | **works** | |
-| Themes | **works** | 10 built-in, each light and dark, reload on save |
-| Voice | partial | E2EE (DAVE), mixer and mute work. Default device only, no push-to-talk, no noise suppression, and no automated call test |
-| Permissions | partial | Channels without access get a padlock and voice without permission is blocked. Those channels still appear, and the composer, reactions and member list don't check permissions |
+| Threads and forums | **works** | Nested threads, forum post lists, creating threads and posts, archived ones |
+| Custom emoji, stickers, autocomplete | **works** | Animated too. The picker warns when an emoji needs Nitro |
+| Read state, pins, Discord links | **works** | Synced with your other devices |
+| Themes | **works** | 11 built-in, each light and dark, reload on save |
+| Voice | partial | E2EE (DAVE), mixer, mute, device picker, push-to-talk, high-pass filter and noise gate work. Push-to-talk needs the window focused, there's no machine-learning noise suppression, and no automated test covers a real call |
+| Permissions | partial | Channels without access get a padlock, voice without permission is blocked, and threads and forums check whether you can post. Those channels still appear, and the composer in regular channels, reactions and the member list don't check permissions |
 | Notifications | partial | Through `notify-send`. Clicking doesn't open the channel, and there's no system tray |
 | Accessibility | partial | Font scale, reduced motion, palette and vim navigation. No visible focus and no high contrast |
 | First run | partial | Sign-in screen and demo mode, no introduction to the app |
 | Platforms | partial | Linux only (uses inotify and `/proc`). Tested on Arch with Hyprland |
-| Custom emoji | missing | `<:name:id>` shows up as text |
-| Joining a server by invite | missing | |
-| Threads and forums | missing | The "started a thread" notice appears, but you can't open it |
+| Joining a server by invite | missing | Invites show as a card and open in the browser |
 | Screen sharing and camera | missing | |
 
 ## Roadmap
@@ -30,22 +31,25 @@ larperCord is a young project: version 0.4.0, with its first commit on November 
 - [x] Real gateway (WebSocket, heartbeat, reconnects) and REST respecting rate limits
 - [x] Session RESUME and zlib-stream
 - [x] Presences, members and server and channel events
-- [x] Images: avatars and attachments with a fixed-size cache
+- [x] Images: avatars, attachments and custom emoji with a fixed-size cache
 - [x] Voice: voice gateway, UDP, Opus and DAVE/MLS
+- [x] Voice settings: device picker, push-to-talk, filters and call sounds
+- [x] Threads and forums
+- [x] Stickers, the full emoji picker and autocomplete
+- [x] Read state synced with Discord, pinned messages, Discord links in the app
+- [x] Theme engine: gradients, patterns, grain, vignette, display typography, shapes and rules, procedural backgrounds
 
 **To make the app complete**
 
 - [ ] Real permissions: hide what you can't see, disable composer and reactions, filter members
 - [ ] Join a server by invite
-- [ ] Custom emoji in messages
 - [ ] Native D-Bus notifications with "open conversation", and a system tray
-- [ ] Threads and forums
-- [ ] Voice: device picker, push-to-talk, noise suppression and an automated call test
+- [ ] Voice: machine-learning noise suppression, a global push-to-talk and an automated call test
 - [ ] Accessibility and first run: visible focus, high contrast, a welcome screen
 
 **Themes**
 
-- [ ] Engine with assets: gradients, grain, tracking, shapes and rules, effects, overlay and z-order, per-theme fonts and images
+- [ ] Engine: overlay and z-order, fonts and images bundled with a theme
 - [ ] Gallery and editor: real thumbnails, import and export `.kdl`, a component inspector
 - [ ] Theme components written in Lua (sandboxed)
 

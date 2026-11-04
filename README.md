@@ -2,177 +2,172 @@
 
 # larperCord
 
-**Um cliente de Discord nativo de ~40 MB, cuja interface inteira é um arquivo de tema.**
+**A native Discord client of about 50 MB, whose entire interface is a theme file.**
 
 Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 
-![Dez temas do larperCord](docs/themes.png)
+**English** · [Português](README.pt-BR.md)
 
-*O mesmo binário e os mesmos dados, só trocando o arquivo `.kdl`. São 10 temas, cada um em claro e escuro.*
+![larperCord themes](docs/themes.png)
+
+*The same binary and the same data, only the `.kdl` file changes. There are 11 themes, each in light and dark. The last tile is `cupertino` in light.*
 
 </div>
 
-> **English TL;DR**: a native Discord client prototype written in Zig. It idles at ~0% CPU,
-> uses ~40 MB of RAM (the official client uses 1.2+ GB on the same machine) and its whole
-> UI (layout, components, colors, fonts) is described by hot-reloadable [KDL](https://kdl.dev) theme
-> files. It speaks the real Discord gateway + REST API, including voice calls with Discord's
-> DAVE end-to-end encryption, and falls back to a demo mode with fake data when no token is configured.
-
 > [!WARNING]
-> **Clientes de terceiros violam os Termos de Uso do Discord**, e a sua conta pode ser
-> bloqueada. Use por sua conta e risco, de preferência com uma conta secundária. Este
-> projeto não tem relação com a Discord Inc. Sem token configurado, o app roda num **modo
-> demonstração** com dados falsos.
+> **Third-party clients break Discord's Terms of Service**, and your account can be banned.
+> Use it at your own risk, ideally with a secondary account. This project has no affiliation
+> with Discord Inc. With no token configured, the app runs in a **demo mode** with fake data.
 
-## Por quê
+## Why
 
-O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
+The official client is a whole browser dressed up as an app. On the same PC:
 
-| | RAM (PSS) | CPU parado | Binário |
+| | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord** | **40–48 MB** | **0–0,2%** | **2,1 MB** |
+| **larperCord** | **46–56 MB**² | **0–0.4%** | **~7 MB** |
 
-<sub>¹ média desde a abertura, medida pelo `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`. Medido com
-`tools/membench.sh`. Do total, só ~15 MB são do app; o resto é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL).</sub>
+<sub>¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, 1280×800 window, `ReleaseFast` build.
+² Demo data, a real window, GIF autoplay off, measured with `tools/membench.sh`. `terminal` and `subsolo` sometimes read 60–74 MB, and an animated GIF on screen costs about 2.5% CPU. About half of the total is the NVIDIA driver and system libraries (libcurl, OpenSSL). A real account uses more.</sub>
 
-## O que tem
+## What's in it
 
-- **Temas que reorganizam tudo.** Layout em árvore (`row`/`column`/`flex`/`gap`), 11 componentes
-  com variantes, cores sobrescritas por pedaço do layout (`c-text="#fff"`), estilos, tokens de cor com expressões (`mix(wal:0, black, 0.4)`).
-  [Guia de temas →](themes/README.md)
-- **Recarrega ao salvar.** Edite o `.kdl` e a janela muda na hora (inotify, sem polling).
-  Erros aparecem com `arquivo:linha:coluna`.
-- **Segue o seu wallpaper.** Temas com `palette "wal"` usam as cores do pywal e acompanham a troca.
-- **Blur de verdade.** O tema `vidro` tem fundo transparente e o compositor (Hyprland, KDE…)
-  aplica o blur, sem custo pro app.
-- **Conecta no Discord de verdade**: gateway por WebSocket com heartbeat, **RESUME de sessão**,
-  **zlib-stream** e reconexão; IDENTIFY e cabeçalhos no formato do cliente web (a mesma
-  uma requisição por vez e respeitando o rate limit.
-- **Chamadas de voz** de verdade: gateway v9, UDP/RTP, Opus 48 kHz estéreo, **DAVE (E2EE)** via
-  libdave/MLS, mic e saída pelo SDL3, mudo/ensurdecer, anel de "falando" e **mixer com volume
-  individual** de cada pessoa. A thread de voz só nasce quando você entra numa call.
-- **Interações do Discord**: menu do botão direito em mensagens, usuários, canais e servidores;
-  barra de ações ao passar o mouse; **responder** (com a "curvinha" e clique para pular até a
-  original); **editar** (`↑` na caixa vazia edita a última); **excluir**; **reações**;
-  **seleção de texto** com o mouse entre várias mensagens + `Ctrl+C`; **cartão de perfil** com
-  "Mensagem @fulano"; seletor de emoji; **mensagens diretas**; menções a você em destaque.
-- **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K` / `Ctrl+Shift+P`: canais, DMs,
-  servidores, temas, status, marcar como lido e as opções liga/desliga), atalhos de teclado e
-  navegação estilo vim opcional (`j`/`k`, `gg`/`G`, `J`/`K` troca de canal, `/` busca).
-- **Plugins em Lua**: arquivos `.lua` em `~/.config/larpercord/plugins/` que reagem a mensagens e
-  criam comandos locais (`/shrug`) e atalhos, num sandbox com limite de instruções; liga/desliga e
-  erros em Configurações → Plugins. [Guia e API →](docs/plugins.md)
-- **Voz:** em Configurações → Voz você escolhe microfone e saída (lembrados pelo nome, voltam ao padrão se sumirem, trocam em plena call), ajusta os volumes, vê o nível do microfone ao vivo e usa "Testar microfone" para ouvir a si mesmo. A detecção de voz tem limiar ajustável sobre a barra ou modo automático que aprende o ruído de fundo. O modo "aperte para falar" aceita tecla ou botão do mouse e funciona com a janela em foco (atalho global não é portável pelo SDL). Há passa-altas contra ronco, porta de ruído e bipes de entrar, sair, mutar e desmutar, tudo desligável. O painel de voz mostra ping, qualidade por cor, quando você está transmitindo e avisa se o microfone não abrir ou se o servidor te mutou ou ensurdeceu; mudo e surdo dos outros aparecem na lista da call.
-- **Threads e fóruns.** Threads ativas aninhadas abaixo do canal pai (recolhíveis, com não lidas), abrindo como conversa normal, com abas, tela dividida, rascunho, cache e busca; cartão "N mensagens · última há X" na mensagem que abriu; criar thread, entrar, sair e ver as arquivadas pelo menu. Fóruns e canais de mídia mostram a lista de posts no lugar da conversa, com busca local, ordem por atividade, páginas sob demanda e "Novo post" com título, tags e texto. Permissões herdadas do canal pai; a lista de membros mostra quem está na thread.
-- **Emoji e autocompletar.** Emoji personalizado aparece como imagem (animado inclusive), grande quando a mensagem é só emoji, e nas reações. Figurinhas PNG, APNG e GIF viram imagem. O seletor tem a lista Unicode inteira, busca em português e inglês, recentes e os emojis dos seus servidores, e avisa quando um emoji precisa de Nitro. Na caixa de texto, `@`, `#`, `:ab` e `/` abrem uma lista (setas, Tab/Enter, Esc ou clique); nomes com espaço viram menção de verdade ao enviar. No modo economia, emoji personalizado vira `:nome:`, sem baixar nada. Para regenerar a tabela: `tools/gen_emoji.py`.
-- **Leitura sincronizada com o Discord**: não lidos e menções corretos ao abrir, `MESSAGE_ACK` de outro aparelho limpa aqui, confirmação como o cliente oficial (no máximo uma por canal a cada 3 s; nada com a janela sem foco ou no modo invisível), "marcar como lido" por canal e por servidor, "marcar como não lida" a partir de uma mensagem.
-- **Linha NOVAS MENSAGENS** com botão "N novas mensagens · ir para a primeira" e "marcar como lida"; o canal abre na primeira não lida (dá para desligar em Configurações → Chat).
-- **Mensagens fixadas**: alfinete no cabeçalho, fixar e desafixar pelo menu; ir para qualquer mensagem antiga busca em volta dela, com "Voltar ao presente".
-- **Links do Discord abrem no app** (também ptb. e canary.); convites viram cartão com servidor e membros e abrem no navegador (o app não entra em servidores).
-- Clicar em `@alguém` abre o perfil, em `#canal` abre o canal; o horário mostra a data completa ao passar o mouse.
-- **Caixa de entrada** (`Ctrl+I`): DMs e menções não lidas de todos os servidores, por canal, com
-  prévia, ir até a mensagem e "marcar tudo como lido"; aba com as menções recentes do Discord.
-- **Mensagens salvas com anotação** (`Ctrl+Shift+S`, botão direito → Salvar mensagem): só no seu
-  computador, em `~/.config/larpercord/saved-<conta>.json`; nada vai para o Discord.
-- **Cache local e busca offline.** As últimas 200 mensagens vistas de cada canal ficam em
-  `~/.cache/larpercord/messages` (pastas 700, arquivos 600, teto de 50 MB): a conversa aparece
-  na hora ao abrir e o histórico de verdade chega por cima, sem pular a rolagem. `Ctrl+F` busca
-  na memória e no cache, a cada tecla e sem internet, com `from:nome`, `in:canal`, `has:link`,
-  `has:imagem` e `has:arquivo`; clicar no resultado pula até a mensagem. Dá para desligar e
-  apagar em Configurações → Privacidade.
-- **Várias contas.** O menu do próprio nome lista as contas guardadas (nome e foto) e troca na
-  hora; "Adicionar conta" volta ao login sem esquecer as outras.
-- **Configurações no estilo Discord** (`Ctrl+,`): 13 páginas, troca de tema com miniaturas,
-  cor de destaque/cantos, **cores personalizadas por tema e modo em hex**, escala de fonte,
-  modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
+- **Themes that rearrange everything.** A layout tree (`row`/`column`/`flex`/`gap`), 11 components
+  with variants, colors overridden per layout piece (`c-text="#fff"`), styles, and color tokens with expressions (`mix(wal:0, black, 0.4)`).
+  [Theme guide →](themes/README.md)
+- **Reloads on save.** Edit the `.kdl` and the window changes right away (inotify, no polling).
+  Errors show up as `file:line:column`.
+- **Follows your wallpaper.** Themes with `palette "wal"` use pywal's colors and follow the change.
+- **Real blur.** The `vidro` theme has a transparent background and your compositor (Hyprland, KDE…)
+  applies the blur, at no cost to the app.
+- **Connects to the real Discord**: WebSocket gateway with heartbeat, **session RESUME**,
+  **zlib-stream** and reconnects; IDENTIFY and headers in the web client's format (the same
+  one request at a time and respecting the rate limit.
+- **Real voice calls**: voice gateway v8, UDP/RTP, Opus at 48 kHz stereo, **DAVE (E2EE)** through
+  libdave/MLS, mic and output through SDL3, mute/deafen, a "speaking" ring and a **mixer with a
+  volume per person**. The voice thread only starts when you join a call.
+- **Discord interactions**: right-click menus on messages, users, channels and servers;
+  a hover action bar; **replies** (with the little curve and a click that jumps to the
+  original); **edit** (`↑` in the empty box edits your last one); **delete**; **reactions**;
+  mouse **text selection** across several messages + `Ctrl+C`; a **profile card** with
+  "Message @someone"; **direct messages**; mentions of you highlighted.
+- **Channel tabs**, a command palette with fuzzy search (`Ctrl+K` / `Ctrl+Shift+P`: channels, DMs,
+  servers, themes, status, mark as read and the toggles), keyboard shortcuts and optional
+  vim-style navigation (`j`/`k`, `gg`/`G`, `J`/`K` switches channel, `/` searches).
+- **Lua plugins**: `.lua` files in `~/.config/larpercord/plugins/` that react to messages and
+  create local commands (`/shrug`) and shortcuts, in a sandbox with an instruction limit; on/off,
+  errors and example plugins in Settings → Plugins. [Guide and API →](docs/plugins.md)
+- **Voice settings.** In Settings → Voice you pick the microphone and output (remembered by name, back to the default if they disappear, switchable mid-call), adjust volumes, see the mic level live and use "Test microphone" to hear yourself. Voice activity has an adjustable threshold on the meter or an automatic mode that learns your background noise. "Push to talk" takes a key or mouse button and works while the window is focused (SDL has no portable global shortcut). There's a high-pass against rumble, a noise gate and beeps for joining, leaving, muting and unmuting, all of which can be turned off. The voice panel shows ping, quality by color and when you're transmitting, and warns you if the mic doesn't open or if the server muted or deafened you. Other people's mute and deafen show in the call list.
+- **Threads and forums.** Active threads nested under the parent channel (collapsible, with unreads), opening as a normal conversation, with tabs, split view, drafts, cache and search; a card with the message count and last activity on the message that started it; create, join, leave and see archived threads from the menu. Forums and media channels show the list of posts instead of a conversation, with local search, sorting by activity, pages on demand and "New Post" with title, tags and text. Permissions come from the parent channel, and the member list shows who's in the thread.
+- **Emoji and autocomplete.** Custom emoji show as images (animated too), large when the message is only emoji, and in reactions. PNG, APNG and GIF stickers show as images. The picker has the full Unicode list, search in Portuguese and English, recents and your servers' emoji, and warns when an emoji needs Nitro. In the text box, `@`, `#`, `:ab` and `/` open a list (arrows, Tab/Enter, Esc or click); names with spaces become real mentions when sent. In data saver mode, custom emoji become `:name:`, with nothing downloaded. To regenerate the table: `tools/gen_emoji.py`.
+- **Read state synced with Discord**: unreads and mentions correct on open, `MESSAGE_ACK` from another device clears them here, confirmations like the official client's (at most one per channel every 3 s; none with the window unfocused or in invisible mode), "mark as read" per channel and per server, "mark as unread" from a message.
+- **NEW MESSAGES line** with a button that jumps to the first one and "mark as read"; the channel opens at the first unread (you can turn it off in Settings → Chat).
+- **Pinned messages**: a pin in the header, pin and unpin from the menu; jumping to any old message loads around it, with "Jump to present".
+- **Discord links open in the app** (`ptb.` and `canary.` too); invites become a card with the server and members and open in the browser (the app doesn't join servers).
+- Clicking `@someone` opens the profile, `#channel` opens the channel; the timestamp shows the full date on hover.
+- **Inbox** (`Ctrl+I`): unread DMs and mentions from every server, by channel, with
+  previews, jump to the message and "mark all as read"; a tab with Discord's recent mentions.
+- **Saved messages with notes** (`Ctrl+Shift+S`, right-click → Save message): only on your
+  computer, in `~/.config/larpercord/saved-<account>.json`; nothing goes to Discord.
+- **Local cache and offline search.** The last 200 messages seen in each channel stay in
+  `~/.cache/larpercord/messages` (folders 700, files 600, 50 MB cap): the conversation appears
+  right away on open and the real history arrives on top, without jumping the scroll. `Ctrl+F` searches
+  memory and the cache on every keystroke, without internet, with `from:name`, `in:channel`, `has:link`,
+  `has:image` and `has:file`; clicking a result jumps to the message. You can turn it off and
+  erase it in Settings → Privacy.
+- **Multiple accounts.** Your own name's menu lists the saved accounts (name and picture) and switches
+  right away; "Add account" goes back to sign-in without forgetting the others.
+- **Discord-style settings** (`Ctrl+,`): 14 pages, theme switching with thumbnails,
+  accent color and corners, **custom colors per theme and mode in hex**, font scale,
+  compact mode, reduced motion, 12/24 h clock, spoilers…, saved in
   `~/.config/larpercord/settings.kdl`.
-- **Markdown do Discord**: **negrito**, *itálico*, ~~riscado~~, `código`, ||spoiler||, menções
-  `<@id>`/`<#id>`, links e emoji colorido; blocos de código com realce pela etiqueta (zig, c/cpp,
-  js/ts, py, rust, go, sh, json, lua…) e botão "Copiar"; prévia acima da caixa enquanto se digita.
-- **Vídeos tocando na conversa** (anexos e links diretos para .mp4/.webm) com o **FFmpeg do
-  sistema, se tiver** (carregado só no primeiro play, sem dependência de build): play/pausa,
-  barra de progresso, som; até 480p e ~30 qps. Sem FFmpeg, o vídeo abre no navegador. Também
-  anima os GIFs antigos do Tenor que só existem em MP4.
-- **Proxy** (http, https, socks5, socks5h; Tor em `socks5h://127.0.0.1:9050`) para a mídia de
-  fora do Discord ou para tudo (Configurações → Privacidade → Rede).
-- Mensagens agrupadas, separadores de dia, envio "pendente" confirmado pelo servidor,
-  indicador de digitação, rolagem suave com lista virtualizada.
+- **Discord markdown**: **bold**, *italic*, ~~strikethrough~~, `code`, ||spoiler||, `<@id>`/`<#id>`
+  mentions, links and color emoji; code blocks highlighted by their label (zig, c/cpp,
+  js/ts, py, rust, go, sh, json, lua…) with a "Copy" button; a preview above the box while you type.
+- **Videos playing in the conversation** (attachments and direct .mp4/.webm links) with the **system's
+  FFmpeg, if present** (loaded only on the first play, no build dependency): play/pause,
+  progress bar, sound; up to 480p and about 30 fps. Without FFmpeg, the video opens in the browser. It also
+  animates old Tenor GIFs that only exist as MP4.
+- **Proxy** (http, https, socks5, socks5h; Tor at `socks5h://127.0.0.1:9050`) for media from
+  outside Discord or for everything (Settings → Privacy → Network).
+- Grouped messages, day separators, "pending" sends confirmed by the server,
+  a typing indicator, smooth scrolling with a virtualized list.
 
 <div align="center">
 
-![Menu do botão direito, perfil, seleção de texto e barra de ações](docs/interactions.png)
+![Right-click menu, profile, text selection and action bar](docs/interactions.png)
 
-![Configurações](docs/settings.png)
+![Settings](docs/settings.png)
 
 </div>
 
-## Temas embutidos
+## Built-in themes
 
-Todos têm **modo claro e escuro** e **opções próprias** em Configurações → Aparência.
+All of them have **light and dark modes** and **their own options** in Settings → Appearance.
 
-| Tema | Ideia | Exclusivo |
+| Theme | Idea | Exclusive |
 |---|---|---|
-| `classico` | o layout que todo mundo conhece, nas cores do pywal | banner do servidor |
-| `vidro` | cartões translúcidos com o blur do compositor | reflexo de luz nos cartões |
-| `terminal` | tmux + IRC; no claro, papel de impressora matricial | efeito CRT, logo em ASCII, fósforo verde |
-| `subsolo` | terminal de hacking underground, verde ácido e scanlines | rack horizontal, ultravioleta, logo em ASCII |
-| `orbital` | console de bordo entre as estrelas, com sistemas numerados | campo de estrelas e órbitas ao fundo, composer de comando, faixa de servidores no rodapé |
-| `editorial` | revista impressa em papel com grão, masthead entre réguas e índice à direita | layout invertido, conversa em serifa, colofão |
-| `bolhas` | mensageiro com balões de conversa | "Entregue ✓✓" e balão de digitando |
-| `zen` | uma coluna central, letras maiores | a navegação se esconde sozinha |
-| `papel` | caderno com índice na margem e títulos em serifa | folha pautada com margem vermelha |
-| `escritorio` | ferramenta de trabalho, barra lateral escura | barra superior com busca e ajuda |
-| `cupertino` | mesa de trabalho estilo Mac: papel de parede e janela flutuante | semáforo que funciona, barra lateral translúcida, Dock com lupa, balões |
+| `classico` | the layout everyone knows, in pywal's colors | server banner |
+| `vidro` | translucent cards with the compositor's blur | light reflection on the cards |
+| `terminal` | tmux + IRC; in light, dot-matrix printer paper | CRT effect, ASCII logo, green phosphor |
+| `subsolo` | underground hacking terminal, acid green and scanlines | horizontal rack, ultraviolet, ASCII logo |
+| `orbital` | a flight console among the stars, with numbered systems | star field and orbits in the background, command composer, server strip in the footer |
+| `editorial` | a printed magazine on grainy paper, masthead between rules and an index on the right | inverted layout, serif conversation, colophon |
+| `bolhas` | a messenger with chat bubbles | "Delivered ✓✓" and a typing bubble |
+| `zen` | one central column, larger letters | navigation hides itself |
+| `papel` | a notebook with an index in the margin and serif titles | ruled sheet with a red margin |
+| `escritorio` | a work tool, dark sidebar | top bar with search and help |
+| `cupertino` | a Mac-style desktop: wallpaper and a floating window | working traffic lights, translucent sidebar, Dock with magnifier, bubbles |
 
-## Conectando sua conta
+## Connecting your account
 
-O token **nunca** fica no código, em log ou em mensagem de erro, e é apagado da memória ao
-sair. O app procura nesta ordem:
+The token is **never** in the code, in a log or in an error message, and it's wiped from memory on
+exit. The app looks in this order:
 
-1. **Chaveiro do sistema** (recomendado):
+1. **System keyring** (recommended):
    ```bash
-   secret-tool store --label='larperCord' service larpercord   # cole o token quando pedir
+   secret-tool store --label='larperCord' service larpercord   # paste the token when asked
    ```
-2. A variável `LARPER_TOKEN`
-3. O arquivo `~/.config/larpercord/token`, que precisa ter `chmod 600`
+2. The `LARPER_TOKEN` variable
+3. The file `~/.config/larpercord/token`, which must be `chmod 600`
 
-Com "Lembrar" no login, cada conta fica numa entrada própria do chaveiro
-(`service larpercord-account account <ID>`; sem chaveiro, `~/.config/larpercord/tokens/<ID>` com
-`chmod 600`) e aparece no menu do usuário para trocar. A lista (só ID, nome e avatar) fica em
-`~/.config/larpercord/accounts`. A entrada de cima continua valendo para a conta que já estava nela.
+With "Remember" at sign-in, each account gets its own keyring entry
+(`service larpercord-account account <ID>`; without a keyring, `~/.config/larpercord/tokens/<ID>` with
+`chmod 600`) and appears in the user menu for switching. The list (only ID, name and avatar) is in
+`~/.config/larpercord/accounts`. The entry above still applies to the account that was already there.
 
-`--demo` força o modo demonstração mesmo com token. Ainda não tem: vídeo/streaming, imagens
-(avatares, anexos e emojis personalizados aparecem como texto), threads/fóruns, permissões por
-canal (canais sem acesso só mostram um aviso) e notificações. A voz usa o backend de áudio do
-sistema via SDL3 e só sobe a thread quando você entra numa call.
+`--demo` forces demo mode even with a token. Still missing: screen sharing and camera, and joining
+servers by invite. Channels without access only show a notice, and notifications go through
+`notify-send`. Voice uses the system's audio backend through SDL3 and only starts its thread when
+you join a call.
 
-## Como ele fica leve
+## How it stays light
 
-Nada de mágica, só muitas decisões pequenas:
+No magic, just many small decisions:
 
-1. **Dorme quando nada acontece.** O laço fica em `SDL_WaitEvent`. Rede, inotify e o relógio
-   acordam o app por eventos. Sem animação, sem redesenho.
-2. **Nada de navegador.** Tudo é desenhado com o `ImDrawList` do Dear ImGui sobre o SDL_Renderer.
-3. **Fontes mapeadas, não copiadas.** Cada arquivo de fonte vira um `mmap` compartilhado por
-   todos os pesos e famílias. Só as páginas lidas ficam na RAM. (Carregar 4 pesos do Inter + emoji
-   do jeito ingênuo custava ~90 MB.)
-4. **Só o driver de vídeo necessário.** Em máquinas só com GPU NVIDIA, o glvnd também carregava o
-   Mesa + LLVM (~23 MB) à toa. O app detecta e evita.
-5. **Markdown interpretado uma vez**, quando a mensagem chega. A interface só faz layout dos
-   trechos, com **cache de altura por largura**.
-6. **Lista virtualizada**: busca binária pelo primeiro item visível, desenha só a tela.
-7. **Memória com teto**: no máximo 400 mensagens por canal, e as antigas são liberadas.
-8. **fontconfig liberado** depois de resolver as fontes (`FcFini` + `malloc_trim`).
-9. **Sem cursor piscando**: o cursor piscando sozinho manteria a CPU acordada.
-10. **Binário enxuto**: build release sem símbolos de debug, 1,8 MB.
+1. **It sleeps when nothing happens.** The loop waits in `SDL_WaitEvent`. Network, inotify and the clock
+   wake the app with events. No animation, no redraw.
+2. **No browser.** Everything is drawn with Dear ImGui's `ImDrawList` on top of SDL_Renderer.
+3. **Fonts are mapped, not copied.** Each font file is one `mmap` shared by
+   every weight and family. Only the pages read stay in RAM. (Loading 4 weights of Inter + emoji
+   the naive way cost about 90 MB.)
+4. **Only the video driver it needs.** On NVIDIA-only machines, glvnd also loaded
+   Mesa + LLVM (about 23 MB) for nothing. The app detects that and avoids it.
+5. **Markdown is parsed once**, when the message arrives. The UI only lays out the
+   spans, with a **height cache per width**.
+6. **A virtualized list**: binary search for the first visible item, then draw only the screen.
+7. **Memory has ceilings**: 1,500 messages per channel and 3,000 in total, with old ones freed.
+8. **fontconfig gets freed** after fonts are resolved (`FcFini` + `malloc_trim`).
+9. **No blinking cursor**: a cursor blinking on its own would keep the CPU awake.
+10. **A lean binary**: a release build without debug symbols, about 7 MB.
 
-## Compilando
+## Building
 
-Precisa de **Zig 0.17**, **SDL3**, **FreeType**, **fontconfig** e **libcurl** (com WebSocket, 7.86+). Fontes recomendadas: Inter,
-JetBrains Mono e Noto Color Emoji (o fontconfig escolhe substitutas se faltar alguma).
-Opcional: **FFmpeg 7, 8 ou 9** (libavformat 61–63) para tocar vídeo dentro do app; outra versão
-é ignorada e o vídeo abre no navegador.
+You need **Zig 0.17**, **SDL3**, **FreeType**, **fontconfig** and **libcurl** (with WebSocket, 7.86+). Recommended fonts: Inter,
+JetBrains Mono and Noto Color Emoji (fontconfig picks substitutes if one is missing).
+Optional: **FFmpeg 7, 8 or 9** (libavformat 61–63) to play video inside the app; any other version
+is ignored and the video opens in the browser.
 
 ```bash
 # Arch
@@ -182,54 +177,54 @@ zig build -Doptimize=ReleaseFast
 ./zig-out/bin/larpercord --theme vidro
 ```
 
-| Comando | |
+| Command | |
 |---|---|
-| `zig build test` | testes (KDL, cores, layout, markdown, Store, temas embutidos, configurações) |
-| `tools/snapshots.sh` | gera os prints de `docs/` sem abrir janela |
-| `tools/membench.sh 50` | mede RAM e CPU de cada tema e falha se passar de 50 MB |
+| `zig build test` | tests (KDL, colors, layout, markdown, Store, built-in themes, settings) |
+| `tools/snapshots.sh` | generates the screenshots in `docs/` without opening a window |
+| `tools/membench.sh 60` | measures RAM and CPU for each theme and fails over 60 MB (`terminal` sometimes does) |
 
 ```
-larpercord [--theme NOME] [--demo] [--settings] [--list-themes] [--no-live] [--shot ARQ.png] [--stats]
+larpercord [--theme NAME] [--demo] [--settings] [--list-themes] [--no-live] [--shot FILE.png] [--stats]
 ```
 
-Atalhos: `Ctrl+K` paleta · `Ctrl+,` configurações · `Ctrl+I` caixa de entrada · `Ctrl+Shift+S` salvas · `F2` próximo tema · `Ctrl+Tab` abas ·
-`Alt+1…9` · `Ctrl+W` fecha aba · `Ctrl+Clique` abre canal em nova aba · `↑` edita a última
-mensagem · `Esc` cancela resposta/edição · `Ctrl+C` copia a seleção · botão direito em tudo.
+Shortcuts: `Ctrl+K` palette · `Ctrl+,` settings · `Ctrl+I` inbox · `Ctrl+Shift+S` saved · `F2` next theme · `Ctrl+Tab` tabs ·
+`Alt+1…9` · `Ctrl+W` closes a tab · `Ctrl+Click` opens a channel in a new tab · `↑` edits your last
+message · `Esc` cancels a reply or edit · `Ctrl+C` copies the selection · right-click on everything.
 
-## Arquitetura
+## Architecture
 
 ```
 src/
-  core/       dados puros, sem janela: tipos (snowflakes), Store, markdown, eventos
-  net/        gateway real (Discord) e de demonstração, cada um na sua thread, mais as filas
-  theme/      parser KDL, cores, carregador de tema, motor de layout, gerenciador + inotify
-  ui/         componentes, texto rico, paleta, configurações, animações
-  platform/   janela, renderizador, "acordar" o laço; o único lugar que conhece o SDL
-themes/       os temas embutidos (também compilados dentro do binário)
-third_party/  Dear ImGui 1.93 + dear_bindings (C), com um patch pequeno para emoji em bitmap
+  core/       plain data, no window: types (snowflakes), Store, markdown, events
+  net/        real (Discord) and demo gateways, each on its own thread, plus the queues
+  theme/      KDL parser, colors, theme loader, layout engine, manager + inotify
+  ui/         components, rich text, palette, settings, animations
+  platform/   window, renderer, "wake the loop"; the only place that knows SDL
+themes/       the built-in themes (also compiled into the binary)
+third_party/  Dear ImGui 1.93 + dear_bindings (C), with a small patch for bitmap emoji
 ```
 
-O fluxo é **interface → `Action` → app → `Command` → gateway → `Event` → Store → interface**.
-A interface nunca muda dados direto: ela só lê o Store e pede ações. Com isso, trocar o
-gateway falso pelo real não toca na interface.
+The flow is **UI → `Action` → app → `Command` → gateway → `Event` → Store → UI**.
+The UI never changes data directly: it only reads the Store and asks for actions. That's why
+swapping the fake gateway for the real one doesn't touch the UI.
 
 ## Roadmap
 
-- [x] Gateway real (WebSocket, heartbeat, reconexão) e REST respeitando o rate limit
-- [x] RESUME de sessão e zlib-stream
-- [x] Presenças, membros e eventos de servidor/canal (GUILD_CREATE, CHANNEL_*)
-- [x] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
-- [x] Permissões por canal (cadeado no que não dá pra ler), threads e fóruns
-- [ ] Notificações nativas via D-Bus
-- [x] Voz (DAVE/MLS + Opus)
-- [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB
-- [ ] Componentes de tema escritos em Lua (sandbox)
+- [x] Real gateway (WebSocket, heartbeat, reconnects) and REST respecting the rate limit
+- [x] Session RESUME and zlib-stream
+- [x] Presences, members and server/channel events (GUILD_CREATE, CHANNEL_*)
+- [x] Images: avatars, attachments and custom emoji with a fixed-size cache
+- [x] Per-channel permissions (a padlock on what you can't read), threads and forums
+- [ ] Native notifications through D-Bus
+- [x] Voice (DAVE/MLS + Opus)
+- [ ] A software backend (`wl_shm`, no GPU) to get to about 15–20 MB
+- [ ] Theme components written in Lua (sandboxed)
 
-## Créditos
+## Credits
 
-A camada de conexão foi reescrita em Zig a partir do comportamento do
+The connection layer was rewritten in Zig from the behavior of
 
-## Licença
+## License
 
-A definir. Dear ImGui e dear_bindings são MIT. O arquivo
-`third_party/imgui/misc/freetype/imgui_freetype.cpp` tem alterações marcadas com `[larperCord]`.
+Not decided yet. Dear ImGui and dear_bindings are MIT. The file
+`third_party/imgui/misc/freetype/imgui_freetype.cpp` has changes marked with `[larperCord]`.

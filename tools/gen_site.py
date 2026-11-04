@@ -19,7 +19,7 @@ OUT = ROOT / "docs"
 SITE = ROOT / "site"
 REPO = "https://github.com/RshaCuDeVidro/larperCord"
 BASE_URL = "https://rshacudevidro.github.io/larperCord/"
-THEMES = ["classico", "vidro", "terminal", "subsolo", "orbital", "editorial", "bolhas", "zen", "papel", "escritorio"]
+THEMES = ["classico", "vidro", "terminal", "subsolo", "orbital", "editorial", "bolhas", "zen", "papel", "escritorio", "cupertino"]
 LANGS = ["en", "pt"]
 
 
@@ -240,6 +240,7 @@ FLAVOR = {
     "zen": {"display": "thin", "fx": ""},
     "papel": {"display": "serif", "fx": "ruled"},
     "escritorio": {"display": "plain", "fx": ""},
+    "cupertino": {"display": "plain", "fx": ""},
 }
 
 
@@ -723,6 +724,7 @@ def shell(lang, path, alt_path, title, desc, body, kind):
     <a href="{guide}"{' aria-current="page"' if kind == 'guide' else ''}>{t(lang, 'Guide', 'Guia')}</a>
     <a href="{REPO}" rel="noopener">GitHub</a>
   </nav>
+  <a class="kofi-mini" href="https://ko-fi.com/M7E72A1EGZ" target="_blank" rel="noopener"><img src="{root}assets/kofi6.png" alt="{t(lang, 'Buy Me a Coffee at ko-fi.com', 'Me pague um café no ko-fi.com')}" width="580" height="146"></a>
   <a class="lang" href="{rel(path, alt_path.removesuffix('index.html')) or './'}" hreflang="{'pt-BR' if other == 'pt' else 'en'}" lang="{'pt-BR' if other == 'pt' else 'en'}">{other_label}</a>
 </header>
 {body}
@@ -735,6 +737,7 @@ def shell(lang, path, alt_path, title, desc, body, kind):
   <span class="sb-spacer"></span>
   <button type="button" class="sb-btn sb-keys" data-open-palette><kbd>Ctrl</kbd><kbd>K</kbd> {t(lang, 'palette', 'paleta')}</button>
   <span class="sb-keys sb-hint"><kbd>F2</kbd> {t(lang, 'next theme', 'próximo tema')}</span>
+  <a class="sb-btn sb-kofi" href="https://ko-fi.com/M7E72A1EGZ" target="_blank" rel="noopener">&#9829; ko-fi</a>
   <span class="sb-pos" data-scroll-pos></span>
   <time class="sb-clock" data-clock></time>
 </footer>
@@ -750,12 +753,7 @@ def external_sources(slug, lang):
     if slug == "plugins":
         return ROOT / "docs" / ("plugins.md" if lang == "en" else "plugins.pt-BR.md")
     if slug == "themes":
-        # Enquanto themes/README.md não vira inglês, o inglês fica em README.en.md.
-        en = ROOT / "themes" / "README.en.md"
-        pt = ROOT / "themes" / "README.pt-BR.md"
-        if lang == "en":
-            return en if en.exists() else ROOT / "themes" / "README.md"
-        return pt if pt.exists() else ROOT / "themes" / "README.md"
+        return ROOT / "themes" / ("README.md" if lang == "en" else "README.pt-BR.md")
     return None
 
 
@@ -815,6 +813,9 @@ def build_guide(lang, themes):
         base_rw = rewriter(lang, slug, path)
 
         def rw(url, base_rw=base_rw, path=path):
+            if url.startswith("#"):
+                # Os .md de fora têm âncoras no estilo do GitHub, com acento.
+                return "#" + slugify(url[1:])
             if url.startswith("shot:"):
                 return rel(path, f"assets/shots/{lang}/{url[5:]}.webp")
             if url.startswith("home:"):
@@ -911,8 +912,8 @@ def build_landing(lang, themes):
     presets = "".join(f'<option value="{n}"{" selected" if n == "subsolo" else ""}>{n}.kdl</option>' for n in THEMES)
     src = src.replace("%PRESET_OPTIONS%", presets)
     title = t(lang, "larperCord: a native Discord client whose whole UI is one file", "larperCord: um cliente nativo de Discord cuja interface inteira é um arquivo")
-    desc = t(lang, "Unofficial native Discord client in Zig. Under 50 MB of RAM, 0% CPU at idle, and a whole interface described by hot-reloading KDL theme files. Voice calls, Lua plugins, offline search.",
-             "Cliente nativo e não oficial de Discord em Zig. Menos de 50 MB de RAM, 0% de CPU parado e a interface inteira descrita em temas KDL que recarregam ao salvar. Voz, plugins em Lua, busca offline.")
+    desc = t(lang, "Unofficial native Discord client in Zig. About 50 MB of RAM, 0% CPU at idle, and a whole interface described by hot-reloading KDL theme files. Voice calls, Lua plugins, offline search.",
+             "Cliente nativo e não oficial de Discord em Zig. Cerca de 50 MB de RAM, 0% de CPU parado e a interface inteira descrita em temas KDL que recarregam ao salvar. Voz, plugins em Lua, busca offline.")
     src = src.replace('loading="lazy"', 'loading="lazy" decoding="async"')
     write(path, shell(lang, path, alt, title, desc, src, "landing"))
     return [

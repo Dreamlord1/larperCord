@@ -22,6 +22,8 @@
 | Cancelar uma resposta ou edição | `Esc` |
 | Copiar o texto selecionado | `Ctrl+C` |
 | Nova linha na caixa de texto | `Shift+Enter` |
+| Autocompletar na caixa de texto | `@`, `#`, `:ab` ou `/`, depois as setas e `Tab` ou `Enter` |
+| Aperte para falar | A tecla ou o botão do mouse que você escolher em Configurações → Voz |
 
 O botão direito funciona em mensagens, usuários, canais e servidores.
 
@@ -67,7 +69,7 @@ larpercord [options]
 |---|---|
 | `LARPER_TOKEN` | o token da conta (veja [Conectar a sua conta](page:account)) |
 | `LARPER_RENDERER` | escolhe o backend de renderização do SDL: `opengl`, `vulkan`, `gpu` ou `software` |
-| `LARPER_HIDDEN` | abre com a janela oculta, para medir o desempenho na GPU de verdade |
+| `LARPER_HIDDEN` | abre com a janela oculta. O app não desenha nada enquanto ela está oculta, então a memória mede bem menos do que com uma janela de verdade |
 | `LARPER_BENCH` | redesenha sem parar, para medir o custo de um quadro |
 | `LARPER_VOICE_DEBUG` | imprime o que acontece numa call (opcodes, códigos de fechamento, DAVE). Nunca imprime tokens nem chaves |
 | `LARPER_DEBUG_MEDIA` | registra por que uma imagem não carregou |

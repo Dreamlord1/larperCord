@@ -14,6 +14,39 @@ Tudo aqui funciona no modo demonstração, exceto onde precisa da rede de verdad
 - **Mensagens de sistema**: entradas, calls, fixadas, boosts.
 - **Registro de mensagens** (opcional): as mensagens apagadas continuam na tela, marcadas, e as edições guardam o original. Só local.
 
+## Threads e fóruns
+
+- **Threads** ficam abaixo do canal pai, recolhíveis e com contagem de não lidas. Abrem como qualquer conversa, com abas, tela dividida, rascunho, cache e busca.
+- A mensagem que abriu a thread mostra um cartão com o número de mensagens e a última atividade. Criar, entrar, sair e ver as arquivadas ficam no menu.
+- **Fóruns e canais de mídia** mostram a lista de posts no lugar da conversa, com busca local, ordem por atividade, mais páginas sob demanda e **Novo post** com título, tags e texto.
+- As permissões vêm do canal pai, e a lista de membros mostra quem está na thread.
+
+![Uma thread aberta como conversa](shot:f-threads)
+
+![A lista de posts de um fórum](shot:f-forum)
+
+## Emoji e autocompletar
+
+- **Emoji personalizado** aparece como imagem, animado inclusive, grande quando a mensagem é só emoji, e nas reações. **Figurinhas** PNG, APNG e GIF viram imagem.
+- **O seletor** tem a lista Unicode inteira, busca em português e inglês, recentes e os emojis dos seus servidores, e avisa quando um emoji precisa de Nitro.
+- **Autocompletar**: na caixa de texto, `@`, `#`, `:ab` e `/` abrem uma lista. Use as setas e depois `Tab` ou `Enter`, `Esc` ou um clique. Nomes com espaço viram menção de verdade ao enviar.
+- **O modo economia** mostra o emoji personalizado como `:nome:` e não baixa nada.
+
+![O seletor de emoji](shot:f-emoji)
+
+![O autocompletar na caixa de texto](shot:f-autocompletar)
+
+## Leitura e fixadas
+
+- **Leitura sincronizada com o Discord**: não lidos e menções certos ao abrir o app, e ler em outro aparelho limpa aqui. As confirmações de leitura funcionam como as do cliente oficial, no máximo uma por canal a cada 3 segundos, e nenhuma com a janela sem foco ou no modo invisível.
+- **Marcar como lido** por canal e por servidor, e **marcar como não lida** a partir de qualquer mensagem.
+- **A linha de novas mensagens** vem com um botão que pula para a primeira. O canal abre na primeira não lida, o que dá para desligar em Configurações → Chat.
+- **Mensagens fixadas**: o alfinete no cabeçalho, e fixar ou desafixar pelo menu. Ir para qualquer mensagem antiga carrega o histórico em volta dela, com **Voltar ao presente** para retornar.
+- **Links do Discord abrem no app**, inclusive os de `ptb.` e `canary.`. Convites viram um cartão com o servidor e os membros, e abrem no navegador, já que o app não entra em servidores.
+- Clicar em `@alguém` abre o perfil, clicar em `#canal` abre o canal, e o horário mostra a data completa ao passar o mouse.
+
+![O painel de mensagens fixadas](shot:f-fixadas)
+
 ## Markdown
 
 **Negrito**, *itálico*, ~~riscado~~, `código`, spoilers, menções `<@id>` e `<#id>`, links e emoji colorido. Os blocos de código ganham realce nas cores do tema a partir da etiqueta do bloco (zig, c/cpp, js/ts, py, rust, go, sh, json, lua, java/kotlin, c#, diff) e um botão **Copiar**. Opcionalmente, uma prévia ao vivo fica acima da caixa de texto enquanto você digita.
@@ -73,7 +106,7 @@ O app calcula as exceções de permissão de cada canal do jeito que o Discord f
 
 ## Calls
 
-Voz de verdade com criptografia de ponta a ponta e um mixer por pessoa. Veja [Chamadas de voz](page:voice).
+Voz de verdade com criptografia de ponta a ponta, mixer por pessoa, seletor de dispositivo, aperte para falar e filtros. Veja [Chamadas de voz](page:voice).
 
 ## Rede e idiomas
 

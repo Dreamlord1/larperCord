@@ -11,16 +11,17 @@ O larperCord é um projeto jovem: versão 0.4.0, com o primeiro commit em 2 de n
 | Vídeo na conversa | **funciona** | Anexos e links diretos. Precisa do FFmpeg do sistema |
 | Caixa de entrada, mensagens salvas, busca offline | **funciona** | Tudo local, dá para desligar e apagar |
 | Várias contas, proxy, plugins em Lua | **funciona** | |
-| Temas | **funciona** | 10 embutidos, cada um em claro e escuro, recarregam ao salvar |
-| Voz | parcial | E2EE (DAVE), mixer e mudo funcionam. Só o dispositivo padrão, sem push-to-talk, sem supressão de ruído e sem teste automático de call |
-| Permissões | parcial | Canais sem acesso ganham cadeado e voz sem permissão é bloqueada. Esses canais ainda aparecem, e a caixa de texto, as reações e a lista de membros não consultam a permissão |
+| Threads e fóruns | **funciona** | Threads aninhadas, lista de posts dos fóruns, criar threads e posts, arquivadas |
+| Emoji personalizado, figurinhas, autocompletar | **funciona** | Animados inclusive. O seletor avisa quando um emoji precisa de Nitro |
+| Leitura, fixadas, links do Discord | **funciona** | Sincronizada com os seus outros aparelhos |
+| Temas | **funciona** | 11 embutidos, cada um em claro e escuro, recarregam ao salvar |
+| Voz | parcial | E2EE (DAVE), mixer, mudo, seletor de dispositivo, aperte para falar, filtro passa-altas e porta de ruído funcionam. O aperte para falar precisa da janela em foco, não há supressão de ruído por aprendizado de máquina, e nenhum teste automático cobre uma call de verdade |
+| Permissões | parcial | Canais sem acesso ganham cadeado, voz sem permissão é bloqueada, e threads e fóruns conferem se você pode postar. Esses canais ainda aparecem, e a caixa de texto nos canais comuns, as reações e a lista de membros não consultam a permissão |
 | Notificações | parcial | Pelo `notify-send`. Clicar não abre o canal, e não há bandeja do sistema |
 | Acessibilidade | parcial | Escala da fonte, reduzir movimento, paleta e navegação estilo vim. Sem foco visível e sem alto contraste |
 | Primeiro uso | parcial | Tela de login e modo demonstração, sem apresentação do app |
 | Plataformas | parcial | Só Linux (usa inotify e `/proc`). Testado no Arch com Hyprland |
-| Emojis personalizados | falta | `<:nome:id>` aparece como texto |
-| Entrar em servidor por convite | falta | |
-| Threads e fóruns | falta | O aviso "criou um tópico" aparece, mas não dá para abrir |
+| Entrar em servidor por convite | falta | Convites viram um cartão e abrem no navegador |
 | Compartilhar tela e câmera | falta | |
 
 ## Roadmap
@@ -30,22 +31,25 @@ O larperCord é um projeto jovem: versão 0.4.0, com o primeiro commit em 2 de n
 - [x] Gateway real (WebSocket, heartbeat, reconexão) e REST respeitando o rate limit
 - [x] RESUME de sessão e zlib-stream
 - [x] Presenças, membros e eventos de servidor e canal
-- [x] Imagens: avatares e anexos com cache de tamanho fixo
+- [x] Imagens: avatares, anexos e emoji personalizado com cache de tamanho fixo
 - [x] Voz: gateway de voz, UDP, Opus e DAVE/MLS
+- [x] Configurações de voz: seletor de dispositivo, aperte para falar, filtros e sons da call
+- [x] Threads e fóruns
+- [x] Figurinhas, seletor de emoji completo e autocompletar
+- [x] Leitura sincronizada com o Discord, mensagens fixadas, links do Discord no app
+- [x] Motor de temas: gradientes, padrões, grão, vinheta, tipografia de display, formas e linhas, fundos procedurais
 
 **Para o app ficar completo**
 
 - [ ] Permissões de verdade: esconder o que você não pode ver, desabilitar a caixa de texto e as reações, filtrar os membros
 - [ ] Entrar em servidor por convite
-- [ ] Emojis personalizados nas mensagens
 - [ ] Notificações nativas via D-Bus com "abrir conversa", e bandeja do sistema
-- [ ] Threads e fóruns
-- [ ] Voz: seletor de dispositivo, push-to-talk, supressão de ruído e teste automático de call
+- [ ] Voz: supressão de ruído por aprendizado de máquina, aperte para falar global e teste automático de call
 - [ ] Acessibilidade e primeiro uso: foco visível, alto contraste, uma tela de boas-vindas
 
 **Temas**
 
-- [ ] Motor com assets: gradientes, grão, tracking, formas e linhas, efeitos, sobreposição e ordem z, fontes e imagens por tema
+- [ ] Motor: sobreposição e ordem z, fontes e imagens que venham com o tema
 - [ ] Galeria e editor: miniaturas reais, importar e exportar `.kdl`, um inspetor de componentes
 - [ ] Componentes de tema escritos em Lua (sandbox)
 

@@ -3,15 +3,16 @@
 # cada tema em claro e escuro e recortes de recursos, em inglês e em português.
 # Roda em pastas temporárias: não toca no qa-out/ nem nas suas configurações.
 # Precisa de magick e ffmpeg. LARPER_BIN escolhe outro executável.
-# O --qa força português (src/app.zig): para os recortes em inglês, use em LARPER_BIN
-# um build que respeite QA_LANG=en naquela linha; sem isso eles saem em português.
+# O --qa força português e procura os elementos pelos rótulos em português. Para os recortes
+# em inglês, use em LARPER_BIN um build com tools/site_shots-en.patch aplicado (git apply, num
+# worktree à parte); sem isso eles saem em português.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bin="${LARPER_BIN:-$PWD/zig-out/bin/larpercord}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-themes=(classico vidro terminal subsolo orbital editorial bolhas zen papel escritorio)
+themes=(classico vidro terminal subsolo orbital editorial bolhas zen papel escritorio cupertino)
 
 webp() { magick "$1" -strip -quality "${3:-80}" -define webp:method=6 "$2"; }
 
@@ -50,9 +51,14 @@ for lang in en pt; do
     # tamanho real e deixam de fora os avisos de teste.
     printf '%s\n' '#0A050F' '#EF4444' '#22C55E' '#F59E0B' '#D946EF' '#9333EA' '#06B6D4' '#E5E7EB' \
         '#6B7280' '#F87171' '#4ADE80' '#FBBF24' '#E879F9' '#A855F7' '#22D3EE' '#E5E7EB' >"$w/rosa/.cache/wal/colors"
-    (cd "$w/run" && env QA_LANG="$lang" XDG_CONFIG_HOME="$w/cfg" XDG_CACHE_HOME="$w/cache" HOME="$w/rosa" SDL_VIDEO_DRIVER=offscreen \
-        timeout 300 "$bin" --qa --lang "$lang" --theme classico >"$w/qa.log" 2>&1) || true
-    crop() { magick "$w/run/qa-out/$1" -crop "$2" +repage -strip -quality 84 -define webp:method=6 "$out/$3"; }
+    # O QA instala os plugins de exemplo a partir de docs/plugins, relativo à pasta atual.
+    ln -s "$PWD/docs" "$w/run/docs"
+    qa_env=(env QA_LANG="$lang" XDG_CONFIG_HOME="$w/cfg" XDG_CACHE_HOME="$w/cache" HOME="$w/rosa" SDL_VIDEO_DRIVER=offscreen)
+    # Em inglês alguns testes falham (comparam textos em português), mas a bateria vai até o fim.
+    # Um recorte que faltar fica com a versão anterior.
+    (cd "$w/run" && "${qa_env[@]}" timeout 420 "$bin" --qa --lang "$lang" --theme classico >"$w/qa.log" 2>&1) || true
+    (cd "$w/run" && "${qa_env[@]}" QA_SUITE=voz timeout 120 "$bin" --qa --lang "$lang" --theme classico >"$w/qa-voz.log" 2>&1) || true
+    crop() { [ -f "$w/run/qa-out/$1" ] || { echo "$lang: sem $1, $3 fica como estava"; return 0; }; magick "$w/run/qa-out/$1" -crop "$2" +repage -strip -quality 84 -define webp:method=6 "$out/$3"; }
     crop 01-inicio.png 1280x800+0+0 larper.webp
     crop 35-tela-dividida.png 1280x740+0+60 f-mosaico.webp
     crop 40-caixa-de-entrada.png 540x760+742+20 f-caixa.webp
@@ -65,6 +71,12 @@ for lang in en pt; do
     crop 05-menu.png 760x560+310+230 f-menu.webp
     crop 43-alertas-pagina.png 800x725+400+55 f-alertas.webp
     crop 35-plugins.png 800x800+400+0 f-plugins.webp
+    crop 62-thread-aberta.png 920x790+0+10 f-threads.webp
+    crop 70-forum.png 1000x730+160+60 f-forum.webp
+    crop 63-emoji-seletor.png 760x560+420+230 f-emoji.webp
+    crop 67-autocompletar-pessoas.png 880x330+310+460 f-autocompletar.webp
+    crop 54-fixadas.png 900x440+370+60 f-fixadas.webp
+    crop voz-pagina.png 800x800+400+0 f-vozcfg.webp
 
     # A tela de login animada (o app grava os quadros sozinho).
     "${base[@]}" LARPER_RECORD="$w/rec" LARPER_RECORD_FRAMES=150 timeout 60 "$bin" --lang "$lang" --login --mode escuro >/dev/null 2>&1 || true

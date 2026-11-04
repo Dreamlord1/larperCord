@@ -56,4 +56,4 @@ Feito com Zig, SDL3, [Dear ImGui](https://github.com/ocornut/imgui), dear_bindin
 
 ## Licença
 
-[MIT](https://github.com/RshaCuDeVidro/larperCord/blob/main/LICENSE). O código de terceiros em `third_party/` mantém a própria licença, listada em [`THIRD_PARTY_NOTICES.md`](https://github.com/RshaCuDeVidro/larperCord/blob/main/THIRD_PARTY_NOTICES.md).
+Ainda a definir. O código de terceiros em `third_party/` mantém a própria licença, no arquivo de licença de cada pasta.
