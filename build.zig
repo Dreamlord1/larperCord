@@ -28,6 +28,11 @@ pub fn build(b: *std.Build) void {
     // O QA usa -Doptimize=debug, com as checagens de segurança.
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "debug, safe, fast ou small (padrão: fast)") orelse .fast;
     const strip = b.option(bool, "strip", "Remove símbolos de debug do executável") orelse (optimize != .debug);
+    const release = optimize != .debug;
+    // O robô de QA (--qa) e suas marcações só entram onde são usados.
+    const qa = b.option(bool, "qa", "Inclui o robô de QA (--qa); padrão: só no debug") orelse !release;
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "qa", qa);
 
     const imgui_dir = b.path("third_party/imgui");
     const dcimgui_dir = b.path("third_party/dcimgui");
@@ -62,7 +67,10 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .link_libcpp = true,
         .strip = strip,
+        // Só o C++ da voz usa exceções, e ele gera as tabelas que precisa.
+        .unwind_tables = if (release) .none else null,
     });
+    mod.addOptions("build_options", build_options);
     mod.addImport("c", translate.createModule());
     mod.addImport("builtin_themes", builtin_themes);
     mod.addImport("plugin_examples", plugin_examples);
@@ -81,6 +89,9 @@ pub fn build(b: *std.Build) void {
     mod.addIncludePath(b.path("third_party/libdave/src"));
     mod.addCMacro("IMGUI_ENABLE_FREETYPE", "1");
     mod.addCMacro("IMGUI_USE_WCHAR32", "1"); // emojis fora do plano básico (😂, 🌸...)
+    // Janela de métricas e log de depuração: ninguém abre (dcimgui ainda cita
+    // duas funções deles, então só onde o ligador joga fora o que não é usado).
+    if (release) mod.addCMacro("IMGUI_DISABLE_DEBUG_TOOLS", "1");
     mod.addCMacro("WITH_OPENSSL3", "1");
     mod.addCMacro("DISABLE_GREASE", "1");
     mod.addCSourceFiles(.{
@@ -161,7 +172,8 @@ pub fn build(b: *std.Build) void {
             "mlspp/lib/hpke/src/userinfo_vc.cpp",
             "mlspp/lib/tls_syntax/src/tls_syntax.cpp",
         },
-        .flags = &.{ "-std=c++17", "-fno-strict-aliasing" },
+        // Frio: a cifra de cada quadro é da OpenSSL; aqui passa pouco e raramente.
+        .flags = if (release) &.{ "-std=c++17", "-fno-strict-aliasing", "-Os" } else &.{ "-std=c++17", "-fno-strict-aliasing" },
     });
     addLua(b, mod);
     mod.linkSystemLibrary("sdl3", .{});
@@ -175,6 +187,10 @@ pub fn build(b: *std.Build) void {
     mod.linkSystemLibrary("crypto", .{});
 
     const exe = b.addExecutable(.{ .name = "larpercord", .root_module = mod });
+    // Com uma seção por função, o ligador joga fora o que ninguém chama.
+    exe.link_function_sections = release;
+    exe.link_data_sections = release;
+    exe.link_gc_sections = release;
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);

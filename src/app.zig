@@ -137,8 +137,8 @@ pub const App = struct {
             .win = app.win,
             .store = Store.init(gpa),
             .st = .{ .gpa = gpa },
-            .themes = try themes.Manager.init(gpa),
-            .fonts = fonts_mod.Fonts.init(gpa, io.*.Fonts),
+            .themes = theme_list,
+            .fonts = base_fonts,
             .events = try Queue(ev.Event).init(gpa),
             .net = undefined,
             .opts = opts,
@@ -245,6 +245,7 @@ pub const App = struct {
             .fake => |*g| g.commands.push(command),
             .real => |*g| g.commands.push(command),
         }
+        // (Por último, lá dentro: as threads de mídia e de vídeo usam o libcurl.)
     }
 
     /// Conecta na conta de verdade. O gateway passa a ser dono do token.
@@ -1872,12 +1873,18 @@ pub const App = struct {
     var prof_vtx: u64 = 0;
 
     pub fn run(app: *App) bool {
-        var runner: @import("qa_runner.zig").Runner = .{};
+        const Runner = if (qa_mod.compiled) @import("qa_runner.zig").Runner else struct {
+            fail: u32 = 0,
+            fn tick(_: *@This(), _: *App) bool {
+                return false;
+            }
+        };
+        var runner: Runner = .{};
         @import("ui/root.zig").profile = app.opts.stats;
         widgets.no_pics = c.SDL_getenv("LARPER_NO_PICS") != null;
         widgets.square_pics = c.SDL_getenv("LARPER_SQUARE") != null;
         if (app.opts.qa) {
-            @import("ui/qa.zig").enabled = true;
+            qa_mod.enable();
             _ = c.SDL_CreateDirectory("qa-out");
         }
         var pending: u32 = 3;

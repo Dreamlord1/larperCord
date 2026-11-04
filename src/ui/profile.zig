@@ -383,7 +383,7 @@ fn roles(col: *Col, uid: Id, gid: Id) void {
             return cx.store.roles.get(a).?.position > cx.store.roles.get(b).?.position;
         }
     }.f;
-    std.mem.sort(Id, rbuf[0..nroles], ctx, byPos);
+    @import("../core/sort.zig").stable(Id, rbuf[0..nroles], ctx, byPos);
     var cands: [24]Id = undefined;
     var ncand: usize = 0;
     if (manage) {
@@ -394,7 +394,7 @@ fn roles(col: *Col, uid: Id, gid: Id) void {
             cands[ncand] = rl.id;
             ncand += 1;
         }
-        std.mem.sort(Id, cands[0..ncand], ctx, byPos);
+        @import("../core/sort.zig").stable(Id, cands[0..ncand], ctx, byPos);
     }
     if (nroles == 0 and !(manage and ncand > 0)) return;
     col.label(i18n.tr("CARGOS", "ROLES"));

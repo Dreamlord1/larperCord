@@ -98,7 +98,7 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, m: *const StoredMessage, x: f32, y_i
 /// A marca do QA cobre só o pedaço à vista: rolado para trás do cabeçalho, o
 /// centro do anexo inteiro cairia num botão de outra coisa.
 fn markVisible(r: d.Rect, msg_id: types.Id, index: usize) void {
-    if (!qa.enabled) return;
+    if (!qa.on()) return;
     const p = c.ImGui_GetWindowPos();
     const s = c.ImGui_GetWindowSize();
     const x0 = @max(r.x, p.x);
@@ -228,7 +228,7 @@ pub var last_opened_len: usize = 0;
 pub fn openUrl(url: []const u8) void {
     if (!std.mem.startsWith(u8, url, "https://") and !std.mem.startsWith(u8, url, "http://")) return;
     // No QA não abre o navegador: só anota (o teste confere).
-    if (qa.enabled) {
+    if (qa.on()) {
         const n = @min(url.len, last_opened.len);
         @memcpy(last_opened[0..n], url[0..n]);
         last_opened_len = n;

@@ -790,7 +790,7 @@ pub const Store = struct {
                 return c.key(a) > c.key(b);
             }
         };
-        std.mem.sort(Id, ti.all.items, Sort{ .s = s }, Sort.lt);
+        @import("sort.zig").stable(Id, ti.all.items, Sort{ .s = s }, Sort.lt);
         // Num fórum, cada post seria uma linha: só as nossas e as não lidas.
         const forum = if (s.channel(parent)) |p| p.info.kind == .forum else false;
         ti.n_shown = 0;
@@ -1289,7 +1289,7 @@ pub const Store = struct {
                     };
                     try s.recent_mentions.append(s.gpa, sm);
                 }
-                std.mem.sort(StoredMessage, s.recent_mentions.items, {}, struct {
+                @import("sort.zig").stable(StoredMessage, s.recent_mentions.items, {}, struct {
                     fn lt(_: void, a: StoredMessage, b: StoredMessage) bool {
                         return a.msg.id > b.msg.id;
                     }

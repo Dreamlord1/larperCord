@@ -93,7 +93,7 @@ fn rebuild(ctx: *d.Ctx, v: *View) void {
         const k: i128 = if (v.by_creation) id else if (v.archived and t.archive_ts != 0) t.archive_ts else store_mod.Store.threadActivity(&cs.info);
         tmp.append(alloc, .{ .key = k, .id = id }) catch return;
     }
-    std.mem.sort(Row, tmp.items, {}, struct {
+    @import("../core/sort.zig").stable(Row, tmp.items, {}, struct {
         fn lt(_: void, a: Row, b: Row) bool {
             return a.key > b.key;
         }

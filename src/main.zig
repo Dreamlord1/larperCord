@@ -1,8 +1,16 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @import("c");
 
 // Os avisos do app (--stats, conexão) usam info: valem também no build otimizado.
-pub const std_options: std.Options = .{ .log_level = .info };
+pub const std_options: std.Options = .{
+    .log_level = .info,
+    // A pilha de sinal só serve para imprimir o rastro de um travamento, e é
+    // TLS: custava 256 KB em cada thread, inclusive as do SDL e do driver.
+    .signal_stack_size = if (builtin.mode == .debug) 1 << 18 else null,
+};
+// Sem símbolos o rastro não diz nada: no build otimizado, só a mensagem.
+pub const panic = if (builtin.mode == .debug) std.debug.FullPanic(std.debug.defaultPanic) else std.debug.simple_panic;
 const builtin_themes = @import("builtin_themes");
 const App = @import("app.zig").App;
 const Options = @import("app.zig").Options;
@@ -24,7 +32,7 @@ const usage =
     \\  --login           mostra a tela de login (ignora o token salvo)
     \\  --lang IDIOMA     pt ou en (ignora as configurações)
     \\  --no-live         desliga as mensagens automáticas do modo demonstração
-    \\  --stats           mostra tempo até o primeiro quadro
+    \\  --stats           mostra a linha do tempo da abertura e o custo de cada quadro
     \\  --voice-test G C  entra no canal de voz C do servidor G por 25 s
     \\
     \\atalhos: Ctrl+K paleta · Ctrl+, configurações · F2 próximo tema
@@ -51,6 +59,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             opts.mode = if (std.mem.eql(u8, m, "claro") or std.mem.eql(u8, m, "light")) .light else .dark;
         } else if (std.mem.eql(u8, arg, "--qa")) {
             opts.qa = true;
+            if (!@import("ui/qa.zig").compiled) return fail("este build não tem o QA: compile com -Doptimize=debug ou -Dqa=true");
             opts.live = false;
             if (@import("c").SDL_getenv("SDL_VIDEO_DRIVER") == null) _ = @import("c").SDL_setenv_unsafe("SDL_VIDEO_DRIVER", "offscreen", 1);
         } else if (std.mem.eql(u8, arg, "--lang")) {

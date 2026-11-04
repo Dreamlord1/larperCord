@@ -747,7 +747,7 @@ pub const Gateway = struct {
             tmp[n] = .{ .id = rid, .pos = info.pos, .color = info.color };
             n += 1;
         }
-        std.mem.sort(R, tmp[0..n], {}, struct {
+        @import("../core/sort.zig").stable(R, tmp[0..n], {}, struct {
             fn f(_: void, a: R, b: R) bool {
                 return a.pos > b.pos;
             }
@@ -2070,7 +2070,7 @@ pub const Gateway = struct {
                 return (self.last.get(a.id) orelse 0) > (self.last.get(b.id) orelse 0);
             }
         };
-        std.mem.sort(types.Channel, chs[first_dm..], Ctx{ .last = &last }, Ctx.lt);
+        @import("../core/sort.zig").stable(types.Channel, chs[first_dm..], Ctx{ .last = &last }, Ctx.lt);
     }
 
     /// Canais de um servidor na ordem do Discord: soltos primeiro, depois
@@ -2105,7 +2105,7 @@ pub const Gateway = struct {
                 return if (a.pos != b.pos) a.pos < b.pos else a.id < b.id;
             }
         }.f;
-        std.mem.sort(Ch, tmp.items, {}, lt);
+        @import("../core/sort.zig").stable(Ch, tmp.items, {}, lt);
         var pos: u16 = 0;
         const push = struct {
             fn f(o: *std.ArrayList(types.Channel), g: Id, ch: Ch, p: *u16) !void {
@@ -2991,7 +2991,7 @@ pub const Gateway = struct {
             if (try g.message(items[i])) |m| try list.append(alloc, m);
         }
         // A ordem de `after` e `around` não é garantida; a lista conta com ela.
-        if (kind == .around or kind == .newer) std.mem.sort(types.Message, list.items, {}, struct {
+        if (kind == .around or kind == .newer) @import("../core/sort.zig").stable(types.Message, list.items, {}, struct {
             fn lt(_: void, a: types.Message, b: types.Message) bool {
                 return a.id < b.id;
             }

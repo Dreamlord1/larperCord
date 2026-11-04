@@ -45,7 +45,7 @@ pub fn memberList(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
                 return a < b;
             }
         };
-        std.mem.sort(types.Id, ids[0..nids], Sort{ .ctx = ctx }, Sort.lt);
+        @import("../core/sort.zig").stable(types.Id, ids[0..nids], Sort{ .ctx = ctx }, Sort.lt);
         var buf: [48]u8 = undefined;
         rows.heading(i18n.fmt(&buf, "MEMBROS — {d}", "MEMBERS — {d}", .{nids}));
         for (ids[0..nids]) |uid| rows.member(uid, false);

@@ -7,6 +7,8 @@
 # um build que respeite QA_LANG=en naquela linha; sem isso eles saem em português.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# A bateria do QA só existe em builds com -Dqa=true.
+[ -n "${LARPER_BIN:-}" ] || zig build -Dqa=true
 bin="${LARPER_BIN:-$PWD/zig-out/bin/larpercord}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

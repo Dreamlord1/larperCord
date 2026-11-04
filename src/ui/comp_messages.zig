@@ -884,7 +884,7 @@ fn reactions(ctx: *d.Ctx, dl: *c.ImDrawList, m: *StoredMessage, x: f32, y: f32, 
         const cr: d.Rect = .{ .x = xx, .y = y + 3, .w = widths[i], .h = 24 };
         const hb = d.hit(ctx, @truncate((m.msg.id *% 31) +% i), cr);
         // Só o que dá para clicar: atrás do cabeçalho ou da caixa, o clique seria deles.
-        if (qa.enabled) {
+        if (qa.on()) {
             const lo = c.ImDrawList_GetClipRectMin(dl);
             const hi = c.ImDrawList_GetClipRectMax(dl);
             if (cr.y + cr.h / 2 > lo.y and cr.y + cr.h / 2 < hi.y) qa.mark(cr, "chip:{d}:{d}", .{ m.msg.id, i });

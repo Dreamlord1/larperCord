@@ -25,7 +25,7 @@ const quick = [_][]const u8{ "👍", "😂", "😭", "🔥" };
 
 
 pub fn close(ctx: *d.Ctx) void {
-    if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[popup] fechou\n", .{});
+    if (@import("qa.zig").on() and c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[popup] fechou\n", .{});
     ctx.st.popup = .none;
     ctx.st.focus_input = true;
     ctx.st.role_picker = false;
@@ -138,7 +138,7 @@ pub fn draw(ctx: *d.Ctx) void {
     // O perfil grande escurece o resto da tela (entrando junto com ele).
     if (ctx.st.popup == .profile_full) d.rect(c.ImGui_GetWindowDrawList(), ctx.win, d.Rgba.black.alpha(0.5 * openK(ctx, 220)), 0);
     c.ImGui_End();
-    if (@import("qa.zig").enabled and c.SDL_getenv("QA_DEBUG") != null and (outside or appearing)) std.debug.print("[popup] appearing={} outside={} mouse={d:.0},{d:.0}\n", .{ appearing, outside, ctx.mouse.x, ctx.mouse.y });
+    if (@import("qa.zig").on() and c.SDL_getenv("QA_DEBUG") != null and (outside or appearing)) std.debug.print("[popup] appearing={} outside={} mouse={d:.0},{d:.0}\n", .{ appearing, outside, ctx.mouse.x, ctx.mouse.y });
     // Esc com uma anotação aberta só cancela a edição (ui/saved.zig).
     const editing_note = ctx.st.popup == .saved and saved_ui.isEditing();
     if (outside or (c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and !editing_note)) return close(ctx);

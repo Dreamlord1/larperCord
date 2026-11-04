@@ -5,19 +5,31 @@
 const std = @import("std");
 const layout = @import("../theme/layout.zig");
 
-pub var enabled = false;
+/// Só os builds com o robô (debug, ou -Dqa=true) têm isto; nos outros, cada
+/// marcação some na compilação (código, textos e os 300 KB de tabelas abaixo).
+pub const compiled = @import("build_options").qa;
+
+var enabled_now = false;
+
+pub inline fn on() bool {
+    return compiled and enabled_now;
+}
+
+pub fn enable() void {
+    enabled_now = compiled;
+}
 
 const Mark = struct { key: [56]u8, len: u8, rect: layout.Rect };
 
 // Com a tela dividida, até três conversas marcam ao mesmo tempo.
-var marks: [2048]Mark = undefined;
+var marks: [if (compiled) 2048 else 0]Mark = undefined;
 var count: usize = 0;
 /// Marcações do quadro anterior (o robô lê estas, já completas).
-var prev: [2048]Mark = undefined;
+var prev: [if (compiled) 2048 else 0]Mark = undefined;
 var prev_count: usize = 0;
 
 pub fn beginFrame() void {
-    if (!enabled) return;
+    if (!on()) return;
     @memcpy(prev[0..count], marks[0..count]);
     prev_count = count;
     count = 0;
@@ -29,12 +41,12 @@ var scope_buf: [12]u8 = undefined;
 var scope_len: usize = 0;
 
 pub fn setScope(comptime fmt: []const u8, args: anytype) void {
-    if (!enabled) return;
+    if (!on()) return;
     scope_len = if (std.fmt.bufPrint(&scope_buf, fmt, args)) |t| t.len else |_| 0;
 }
 
 pub fn mark(r: layout.Rect, comptime fmt: []const u8, args: anytype) void {
-    if (!enabled or count >= marks.len) return;
+    if (!on() or count >= marks.len) return;
     var m: Mark = .{ .key = undefined, .len = 0, .rect = r };
     @memcpy(m.key[0..scope_len], scope_buf[0..scope_len]);
     const s = std.fmt.bufPrint(m.key[scope_len..], fmt, args) catch return;

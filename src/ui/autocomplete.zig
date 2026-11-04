@@ -218,7 +218,7 @@ fn add(it: Item) void {
 }
 
 fn resort() void {
-    std.mem.sort(Item, items[0..n_items], {}, struct {
+    @import("../core/sort.zig").stable(Item, items[0..n_items], {}, struct {
         fn lt(_: void, a: Item, b: Item) bool {
             return a.score > b.score;
         }
