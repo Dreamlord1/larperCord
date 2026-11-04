@@ -870,12 +870,12 @@ pub const App = struct {
         cs.divider_seen = false;
         cs.pos_unread = false;
         const n = leitura.countFrom(&app.store, cs, prev);
-        const mentions: u16 = if (cs.info.guild == 0) n.messages else n.mentions;
-        st.filtros.setCount(app.gpa, &app.store, cs.info.id, mentions);
+        const pings: u16 = if (cs.info.guild == 0) n.messages else n.mentions;
+        st.filtros.setCount(app.gpa, &app.store, cs.info.id, pings);
         app.store.refreshGuildUnread(cs.info.guild);
         app.store.rev +%= 1;
         if (app.ackAllowed()) {
-            app.cmd(.{ .ack = .{ .channel = cs.info.id, .message = prev, .manual = true, .mentions = mentions } });
+            app.cmd(.{ .ack = .{ .channel = cs.info.id, .message = prev, .manual = true, .mentions = pings } });
         } else if (st.settings.my_status == 3) st.showToast(now(), false, "invisível: marcada como não lida só aqui", "invisible: marked as unread only here", .{});
     }
 

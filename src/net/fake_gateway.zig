@@ -1108,11 +1108,6 @@ fn demoInvite(code: []const u8) !types.Invite {
     return .{ .state = .invalid };
 }
 
-fn freeMessages(msgs: []types.Message) void {
-    for (msgs) |m| freeOne(m);
-    alloc.free(msgs);
-}
-
 fn freeOne(m: types.Message) void {
     alloc.free(m.content);
     types.freeAttachments(alloc, m.attachments);

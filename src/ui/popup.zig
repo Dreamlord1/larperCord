@@ -229,7 +229,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             add(&items, &n, .{ .label = "Marcar como não lida", .en = "Mark Unread", .id = 7 });
             // Fixar pede "gerenciar mensagens" no canal (numa DM, qualquer um).
             if (found.m.msg.id != 0 and found.m.msg.system == .none and ctx.store.channelPermissions(&found.cs.info) & types.perm.manage_messages != 0)
-                add(&items, &n, if (found.m.msg.pinned) .{ .label = "Desafixar mensagem", .en = "Unpin Message", .id = 11 } else .{ .label = "Fixar mensagem", .en = "Pin Message", .id = 11 });
+                add(&items, &n, if (found.m.msg.pinned) .{ .label = "Desafixar mensagem", .en = "Unpin Message", .id = 13 } else .{ .label = "Fixar mensagem", .en = "Pin Message", .id = 13 });
             if (dev) add(&items, &n, .{ .label = "Copiar ID da mensagem", .en = "Copy Message ID", .id = 8 });
             // Dos outros também, para quem pode gerenciar mensagens no servidor.
             const mod = found.m.msg.id != 0 and ctx.store.can(found.cs.info.guild, types.perm.manage_messages);
@@ -431,7 +431,7 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
             copyFmt(ctx, "https://discord.com/channels/{s}/{d}/{d}", .{ guildPart(&gb, f.cs.info.guild), f.cs.info.id, id });
         },
         7 => ctx.act(.{ .mark_unread = id }),
-        11 => if (ctx.store.findAny(id)) |f| ctx.act(.{ .pin_message = .{ .channel = f.cs.info.id, .id = id, .add = !f.m.msg.pinned } }),
+        13 => if (ctx.store.findAny(id)) |f| ctx.act(.{ .pin_message = .{ .channel = f.cs.info.id, .id = id, .add = !f.m.msg.pinned } }),
         8, 25, 44, 63 => copyFmt(ctx, "{d}", .{id}),
         10 => ctx.act(if (st.saved.find(id) != null) .{ .unsave_message = id } else .{ .save_message = id }),
         11 => forum.openNewThread(ctx, id),

@@ -57,10 +57,11 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     }
 
     d.text(dl, fam.get(.medium), 22, r.x + 17, d.centerY(r, 22), ctx.col(.faint), sigil(ch));
-    d.text(dl, fam.get(.semibold), 16, r.x + 42, d.centerY(r, 16), ctx.col(.text), ch.name);
-    const name_w = d.width(fam.get(.semibold), 16, ch.name);
     const search_w: f32 = 180;
     const sx = r.right() - 16 - search_w;
+    // Título longo (post de fórum) corta com "…": os botões e o canal pai ficam.
+    const name_room = @max(80, sx - (r.x + 42) - 14 - 214 - 110);
+    const name_w = d.textClipped(dl, fam.get(.semibold), 16, r.x + 42, d.centerY(r, 16), ctx.col(.text), ch.name, name_room);
     const tx = r.x + 42 + name_w + 14;
     // Da direita para a esquerda: busca, membros, buscar mensagens, salvas, caixa de entrada, fixadas.
     // Numa thread, no lugar do tópico: o canal pai, e clicar volta para ele.

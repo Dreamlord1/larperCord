@@ -2038,7 +2038,8 @@ const ops = [_]Op{
     click("channel:500005"),
     .{ .run = jumpToZigLink },
     .{ .wait = 400 },
-    click("link:https://ziglang.org"),
+    // O primeiro da conversa: outra mensagem com o mesmo link fica mais abaixo.
+    click("first:link:https://ziglang.org"),
     expect("clicar num link abre o navegador", linkOpened),
     expect("ver mensagens antigas mostra o botão de ir ao fim", jumpBottomShown),
     click("jump-bottom"),
@@ -2944,6 +2945,7 @@ pub const Runner = struct {
         }.f;
         if (num(name, "tab:")) |t| return t == st.tab;
         if (num(name, "channel:")) |cid| return !st.friends and st.activeChannel() == cid;
+        if (num(name, "mention-channel:")) |cid| return !st.friends and st.activeChannel() == cid;
         if (num(name, "guild:")) |g| return st.guild == g and !st.friends;
         if (std.mem.startsWith(u8, name, "friends-tab:")) return std.mem.eql(u8, name["friends-tab:".len..], @tagName(@as(enum { online, all, pending, blocked }, @enumFromInt(st.friends_tab))));
         if (std.mem.eql(u8, name, "friends")) return st.friends;
@@ -2976,7 +2978,8 @@ pub const Runner = struct {
                 sw.phase = 1;
                 sw.frames = 0;
             },
-            1 => if (sw.frames >= 4) {
+            // Espera a tela assentar (largura ou rolagem ainda mudando).
+            1 => if (sw.frames >= 4 and (!@import("ui/anim.zig").active or sw.frames >= 60)) {
                 const rect = qa.find(kname) orelse {
                     // Some depois de restaurar (estava em outra tela): pula.
                     sw.i += 1;
