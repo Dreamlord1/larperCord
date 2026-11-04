@@ -63,6 +63,14 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 - **Plugins em Lua**: arquivos `.lua` em `~/.config/larpercord/plugins/` que reagem a mensagens e
   criam comandos locais (`/shrug`) e atalhos, num sandbox com limite de instruções; liga/desliga e
   erros em Configurações → Plugins. [Guia e API →](docs/plugins.md)
+- **Voz:** em Configurações → Voz você escolhe microfone e saída (lembrados pelo nome, voltam ao padrão se sumirem, trocam em plena call), ajusta os volumes, vê o nível do microfone ao vivo e usa "Testar microfone" para ouvir a si mesmo. A detecção de voz tem limiar ajustável sobre a barra ou modo automático que aprende o ruído de fundo. O modo "aperte para falar" aceita tecla ou botão do mouse e funciona com a janela em foco (atalho global não é portável pelo SDL). Há passa-altas contra ronco, porta de ruído e bipes de entrar, sair, mutar e desmutar, tudo desligável. O painel de voz mostra ping, qualidade por cor, quando você está transmitindo e avisa se o microfone não abrir ou se o servidor te mutou ou ensurdeceu; mudo e surdo dos outros aparecem na lista da call.
+- **Threads e fóruns.** Threads ativas aninhadas abaixo do canal pai (recolhíveis, com não lidas), abrindo como conversa normal, com abas, tela dividida, rascunho, cache e busca; cartão "N mensagens · última há X" na mensagem que abriu; criar thread, entrar, sair e ver as arquivadas pelo menu. Fóruns e canais de mídia mostram a lista de posts no lugar da conversa, com busca local, ordem por atividade, páginas sob demanda e "Novo post" com título, tags e texto. Permissões herdadas do canal pai; a lista de membros mostra quem está na thread.
+- **Emoji e autocompletar.** Emoji personalizado aparece como imagem (animado inclusive), grande quando a mensagem é só emoji, e nas reações. Figurinhas PNG, APNG e GIF viram imagem. O seletor tem a lista Unicode inteira, busca em português e inglês, recentes e os emojis dos seus servidores, e avisa quando um emoji precisa de Nitro. Na caixa de texto, `@`, `#`, `:ab` e `/` abrem uma lista (setas, Tab/Enter, Esc ou clique); nomes com espaço viram menção de verdade ao enviar. No modo economia, emoji personalizado vira `:nome:`, sem baixar nada. Para regenerar a tabela: `tools/gen_emoji.py`.
+- **Leitura sincronizada com o Discord**: não lidos e menções corretos ao abrir, `MESSAGE_ACK` de outro aparelho limpa aqui, confirmação como o cliente oficial (no máximo uma por canal a cada 3 s; nada com a janela sem foco ou no modo invisível), "marcar como lido" por canal e por servidor, "marcar como não lida" a partir de uma mensagem.
+- **Linha NOVAS MENSAGENS** com botão "N novas mensagens · ir para a primeira" e "marcar como lida"; o canal abre na primeira não lida (dá para desligar em Configurações → Chat).
+- **Mensagens fixadas**: alfinete no cabeçalho, fixar e desafixar pelo menu; ir para qualquer mensagem antiga busca em volta dela, com "Voltar ao presente".
+- **Links do Discord abrem no app** (também ptb. e canary.); convites viram cartão com servidor e membros e abrem no navegador (o app não entra em servidores).
+- Clicar em `@alguém` abre o perfil, em `#canal` abre o canal; o horário mostra a data completa ao passar o mouse.
 - **Caixa de entrada** (`Ctrl+I`): DMs e menções não lidas de todos os servidores, por canal, com
   prévia, ir até a mensagem e "marcar tudo como lido"; aba com as menções recentes do Discord.
 - **Mensagens salvas com anotação** (`Ctrl+Shift+S`, botão direito → Salvar mensagem): só no seu
@@ -211,7 +219,7 @@ gateway falso pelo real não toca na interface.
 - [x] RESUME de sessão e zlib-stream
 - [x] Presenças, membros e eventos de servidor/canal (GUILD_CREATE, CHANNEL_*)
 - [x] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
-- [ ] Permissões por canal (esconder o que não dá pra ler), threads e fóruns
+- [x] Permissões por canal (cadeado no que não dá pra ler), threads e fóruns
 - [ ] Notificações nativas via D-Bus
 - [x] Voz (DAVE/MLS + Opus)
 - [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB
