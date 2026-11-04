@@ -182,7 +182,7 @@ fn ensureAudio() bool {
     if (audio_tried) return audio_ok;
     audio_tried = true;
     // No QA o som vai para o driver mudo (testa o caminho sem fazer barulho).
-    if (qa.enabled) @import("../net/voz_audio.zig").force_dummy = true;
+    if (qa.on()) @import("../net/voz_audio.zig").force_dummy = true;
     // Pelo mesmo caminho da voz: duas threads não podem iniciar o áudio juntas.
     audio_ok = @import("../net/voz_audio.zig").acquire();
     return audio_ok;

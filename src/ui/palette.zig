@@ -200,7 +200,7 @@ fn rebuild(ctx: *d.Ctx) void {
         add(p, gpa, q, .{ .label = label, .hint = if (on) i18n.tr("ligado agora", "on now") else i18n.tr("desligado agora", "off now"), .kind = .setting, .index = i });
     }
 
-    std.mem.sort(state.PaletteItem, p.items.items, {}, struct {
+    @import("../core/sort.zig").stable(state.PaletteItem, p.items.items, {}, struct {
         fn lt(_: void, x: state.PaletteItem, y: state.PaletteItem) bool {
             return x.score > y.score;
         }

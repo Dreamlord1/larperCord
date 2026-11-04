@@ -369,7 +369,7 @@ fn rebuild(ctx: *d.Ctx, keep: bool) void {
     }
     found = hits.items.len;
     // Mais novas primeiro (o ID do Discord cresce com o tempo).
-    std.mem.sort(Hit, hits.items, {}, struct {
+    @import("../core/sort.zig").stable(Hit, hits.items, {}, struct {
         fn lt(_: void, a: Hit, b: Hit) bool {
             return a.id > b.id;
         }

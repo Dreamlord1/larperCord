@@ -168,5 +168,5 @@ pub fn label(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, tx: *const tfx.TextFx) 
         const box: d.Rect = .{ .x = x, .y = base - biggest.ascent, .w = total, .h = biggest.size * d.text_scale };
         fx.Stops.of(ctx, g).shade(dl, start, box);
     }
-    if (qa.enabled) qa.mark(.{ .x = x, .y = base - biggest.ascent, .w = total, .h = biggest.size * d.text_scale }, "display:{s}", .{runs[0].text});
+    if (qa.on()) qa.mark(.{ .x = x, .y = base - biggest.ascent, .w = total, .h = biggest.size * d.text_scale }, "display:{s}", .{runs[0].text});
 }

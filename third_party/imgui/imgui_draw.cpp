@@ -5358,6 +5358,8 @@ void ImFontAtlasBuildSetupFontSpecialGlyphs(ImFontAtlas* atlas, ImFont* font, Im
     }
 }
 
+static inline unsigned int ImFontBaked_Slot(unsigned int c);
+
 void ImFontAtlasBakedDiscardFontGlyph(ImFontAtlas* atlas, ImFont* font, ImFontBaked* baked, ImFontGlyph* glyph)
 {
     if (glyph->PackId != ImFontAtlasRectId_Invalid)
@@ -5369,8 +5371,8 @@ void ImFontAtlasBakedDiscardFontGlyph(ImFontAtlas* atlas, ImFont* font, ImFontBa
     IM_ASSERT(font->FallbackChar != c && font->EllipsisChar != c); // Unsupported for simplicity
     IM_ASSERT(glyph >= baked->Glyphs.Data && glyph < baked->Glyphs.Data + baked->Glyphs.Size);
     IM_UNUSED(font);
-    baked->IndexLookup[c] = IM_FONTGLYPH_INDEX_UNUSED;
-    baked->IndexAdvanceX[c] = baked->FallbackAdvanceX;
+    baked->IndexLookup[ImFontBaked_Slot(c)] = IM_FONTGLYPH_INDEX_UNUSED;
+    baked->IndexAdvanceX[ImFontBaked_Slot(c)] = baked->FallbackAdvanceX;
 }
 
 ImFontBaked* ImFontAtlasBakedAdd(ImFontAtlas* atlas, ImFont* font, float font_size, float font_rasterizer_density, ImGuiID baked_id)
@@ -6021,6 +6023,19 @@ static bool ImFontAtlasBuildAcceptCodepointForSource(ImFontConfig* src, ImWchar 
     return true;
 }
 
+// larperCord: as tabelas por caractere de cada fonte+tamanho são indexadas direto pelo
+// código, então um único emoji (U+1F600) custava 128 mil entradas (1,2 MB, com a folga do
+// ImVector) para cada fonte+tamanho. Os emoji ficam logo depois do começo do BMP; o resto
+// só anda para abrir espaço. Vale para IndexLookup e IndexAdvanceX.
+static inline unsigned int ImFontBaked_Slot(unsigned int c)
+{
+    if (c < 0x3000) IM_LIKELY
+        return c;
+    if (c < 0x1F000)
+        return c + 0x1000;
+    return c < 0x20000 ? 0x3000 + (c - 0x1F000) : c;
+}
+
 static void ImFontBaked_BuildGrowIndex(ImFontBaked* baked, int new_size)
 {
     IM_ASSERT(baked->IndexAdvanceX.Size == baked->IndexLookup.Size);
@@ -6150,9 +6165,9 @@ static ImFontGlyph* ImFontBaked_BuildLoadGlyph(ImFontBaked* baked, ImWchar codep
         ImFontAtlasBuildSetupFontBakedFallback(baked);
 
     // Mark index as not found, so we don't attempt the search twice
-    ImFontBaked_BuildGrowIndex(baked, codepoint + 1);
-    baked->IndexAdvanceX[codepoint] = baked->FallbackAdvanceX;
-    baked->IndexLookup[codepoint] = IM_FONTGLYPH_INDEX_NOT_FOUND;
+    ImFontBaked_BuildGrowIndex(baked, (int)ImFontBaked_Slot(codepoint) + 1);
+    baked->IndexAdvanceX[ImFontBaked_Slot(codepoint)] = baked->FallbackAdvanceX;
+    baked->IndexLookup[ImFontBaked_Slot(codepoint)] = IM_FONTGLYPH_INDEX_NOT_FOUND;
     return NULL;
 }
 
@@ -6815,9 +6830,9 @@ ImFontGlyph* ImFontAtlasBakedAddFontGlyph(ImFontAtlas* atlas, ImFontBaked* baked
 
     // Update lookup tables
     const int codepoint = glyph->Codepoint;
-    ImFontBaked_BuildGrowIndex(baked, codepoint + 1);
-    baked->IndexAdvanceX[codepoint] = glyph->AdvanceX;
-    baked->IndexLookup[codepoint] = (ImU16)glyph_idx;
+    ImFontBaked_BuildGrowIndex(baked, (int)ImFontBaked_Slot(codepoint) + 1);
+    baked->IndexAdvanceX[ImFontBaked_Slot(codepoint)] = glyph->AdvanceX;
+    baked->IndexLookup[ImFontBaked_Slot(codepoint)] = (ImU16)glyph_idx;
     const int page_n = codepoint / 8192;
     baked->OwnerFont->Used8kPagesMap[page_n >> 3] |= 1 << (page_n & 7);
 
@@ -6843,8 +6858,8 @@ void ImFontAtlasBakedAddFontGlyphAdvancedX(ImFontAtlas* atlas, ImFontBaked* bake
         advance_x += src->GlyphExtraAdvanceX;
     }
 
-    ImFontBaked_BuildGrowIndex(baked, codepoint + 1);
-    baked->IndexAdvanceX[codepoint] = advance_x;
+    ImFontBaked_BuildGrowIndex(baked, (int)ImFontBaked_Slot(codepoint) + 1);
+    baked->IndexAdvanceX[ImFontBaked_Slot(codepoint)] = advance_x;
 }
 
 // Copy to texture, post-process and queue update for backend
@@ -6861,9 +6876,10 @@ void ImFontAtlasBakedSetFontGlyphBitmap(ImFontAtlas* atlas, ImFontBaked* baked, 
 // Find glyph, load if necessary, return fallback if missing
 ImFontGlyph* ImFontBaked::FindGlyph(ImWchar c)
 {
-    if (c < (size_t)IndexLookup.Size) IM_LIKELY
+    const unsigned int slot = ImFontBaked_Slot(c);
+    if (slot < (unsigned int)IndexLookup.Size) IM_LIKELY
     {
-        const int i = (int)IndexLookup.Data[c];
+        const int i = (int)IndexLookup.Data[slot];
         if (i == IM_FONTGLYPH_INDEX_NOT_FOUND)
             return &Glyphs.Data[FallbackGlyphIndex];
         if (i != IM_FONTGLYPH_INDEX_UNUSED)
@@ -6876,9 +6892,10 @@ ImFontGlyph* ImFontBaked::FindGlyph(ImWchar c)
 // Attempt to load but when missing, return NULL instead of FallbackGlyph
 ImFontGlyph* ImFontBaked::FindGlyphNoFallback(ImWchar c)
 {
-    if (c < (size_t)IndexLookup.Size) IM_LIKELY
+    const unsigned int slot = ImFontBaked_Slot(c);
+    if (slot < (unsigned int)IndexLookup.Size) IM_LIKELY
     {
-        const int i = (int)IndexLookup.Data[c];
+        const int i = (int)IndexLookup.Data[slot];
         if (i == IM_FONTGLYPH_INDEX_NOT_FOUND)
             return NULL;
         if (i != IM_FONTGLYPH_INDEX_UNUSED)
@@ -6892,9 +6909,10 @@ ImFontGlyph* ImFontBaked::FindGlyphNoFallback(ImWchar c)
 
 bool ImFontBaked::IsGlyphLoaded(ImWchar c)
 {
-    if (c < (size_t)IndexLookup.Size) IM_LIKELY
+    const unsigned int slot = ImFontBaked_Slot(c);
+    if (slot < (unsigned int)IndexLookup.Size) IM_LIKELY
     {
-        const int i = (int)IndexLookup.Data[c];
+        const int i = (int)IndexLookup.Data[slot];
         if (i == IM_FONTGLYPH_INDEX_NOT_FOUND)
             return false;
         if (i != IM_FONTGLYPH_INDEX_UNUSED)
@@ -6929,10 +6947,11 @@ bool ImFont::IsGlyphInFont(ImWchar c)
 IM_MSVC_RUNTIME_CHECKS_OFF
 float ImFontBaked::GetCharAdvance(ImWchar c)
 {
-    if ((int)c < IndexAdvanceX.Size)
+    const unsigned int slot = ImFontBaked_Slot(c);
+    if (slot < (unsigned int)IndexAdvanceX.Size)
     {
         // Missing glyphs fitting inside index will have stored FallbackAdvanceX already.
-        const float x = IndexAdvanceX.Data[c];
+        const float x = IndexAdvanceX.Data[slot];
         if (x >= 0.0f)
             return x;
     }
@@ -7122,7 +7141,8 @@ const char* ImFontCalcWordWrapPositionEx(ImFont* font, float size, const char* t
         }
 
         // Optimized inline version of 'float char_width = GetCharAdvance((ImWchar)c);'
-        float char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
+        const unsigned int slot = ImFontBaked_Slot(c);
+        float char_width = (slot < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[slot] : -1.0f;
         if (char_width < 0.0f)
             char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
 
@@ -7253,7 +7273,8 @@ ImVec2 ImFontCalcTextSizeEx(ImFont* font, float size, float max_width, float wra
             continue;
 
         // Optimized inline version of 'float char_width = GetCharAdvance((ImWchar)c);'
-        float char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
+        const unsigned int slot = ImFontBaked_Slot(c);
+        float char_width = (slot < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[slot] : -1.0f;
         if (char_width < 0.0f)
             char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
         char_width *= scale;

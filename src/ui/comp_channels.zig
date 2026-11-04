@@ -120,7 +120,18 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     var collapsed_cat = false;
     var cat_id: Id = 0;
     const open_parent = threads.openParent(ctx);
+    const y_top = y;
+    const active = ctx.st.activeChannel();
+    // Passou do que aparece e nada mudou desde o último quadro inteiro: a altura
+    // total já é conhecida. Sem isso, cada quadro consulta os canais que nem
+    // estão na tela (são centenas num servidor grande).
+    const height_key: ListKey = .{ .node = n, .guild = g.id, .rev = ctx.store.rev, .threads = ctx.store.threads_rev, .collapsed = ctx.st.collapsed.count(), .active = active orelse 0, .voice = ctx.st.voice orelse 0, .theme = ctx.st.theme_gen };
+    const known_h: ?f32 = if (std.meta.eql(list_key, height_key)) list_h else null;
     for (ids, 0..) |id, idx| {
+        if (known_h) |h| if (y > vis_bottom) {
+            y = y_top + h;
+            break;
+        };
         const cs = ctx.store.channel(id) orelse continue;
         const ch = &cs.info;
         if (ch.kind == .category) {
@@ -134,7 +145,7 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
             y = category(ctx, dl, fam, variant, ch, idx, r, y, collapsed_cat);
             continue;
         }
-        const selected = ctx.st.activeChannel() == id;
+        const selected = active == id;
         const in_voice = ctx.st.voice == id;
         // Thread aberta dentro de uma categoria recolhida: o pai fica à vista.
         if (collapsed_cat and !selected and !in_voice and open_parent != id) continue;
@@ -153,8 +164,17 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
             .pills => .pills,
         }, ch, r, y, vis_top, vis_bottom, collapsed_cat, open_parent);
     }
+    if (known_h == null) {
+        list_key = height_key;
+        list_h = y - y_top;
+    }
     d.endRegion(ctx, y + 12, r.x);
 }
+
+/// O que muda a altura da lista de canais.
+const ListKey = struct { node: ?*const kdl.Node = null, guild: Id = 0, rev: u32 = 0, threads: u32 = 0, collapsed: u32 = 0, active: Id = 0, voice: Id = 0, theme: u32 = 0 };
+var list_key: ListKey = .{};
+var list_h: f32 = 0;
 
 fn category(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, ch: *const types.Channel, idx: usize, r: d.Rect, y_in: f32, collapsed: bool) f32 {
     var y = y_in + (if (variant == .tree) @as(f32, 6) else 14);

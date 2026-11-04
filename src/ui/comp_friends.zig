@@ -45,7 +45,7 @@ fn collect(ctx: *const d.Ctx, t: Tab, out: *std.ArrayList(Id)) []const Id {
         if (!wanted(t, e.value_ptr.*, u.status)) continue;
         sort_rows.append(gpa, .{ .id = u.id, .incoming = e.value_ptr.* == .incoming, .name = u.name }) catch break;
     }
-    std.mem.sort(SortRow, sort_rows.items, {}, struct {
+    @import("../core/sort.zig").stable(SortRow, sort_rows.items, {}, struct {
         fn lt(_: void, a: SortRow, b: SortRow) bool {
             if (a.incoming != b.incoming) return a.incoming;
             return std.ascii.lessThanIgnoreCase(a.name, b.name);

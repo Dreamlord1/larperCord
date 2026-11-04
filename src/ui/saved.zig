@@ -29,7 +29,7 @@ pub fn isEditing() bool {
 
 fn path(buf: []u8, owner: Id) ?[:0]const u8 {
     // O QA nunca mexe na configuração de verdade.
-    if (qa.enabled) return std.fmt.bufPrintSentinel(buf, "qa-out/saved-{d}.json", .{owner}, 0) catch null;
+    if (qa.on()) return std.fmt.bufPrintSentinel(buf, "qa-out/saved-{d}.json", .{owner}, 0) catch null;
     var nbuf: [48]u8 = undefined;
     return fsutil.configPath(buf, std.fmt.bufPrint(&nbuf, "saved-{d}.json", .{owner}) catch return null);
 }

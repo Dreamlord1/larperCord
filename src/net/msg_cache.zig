@@ -412,7 +412,7 @@ fn enforceCap() void {
         l.items.deinit(alloc);
     }
     walk(&l);
-    std.mem.sort(FileInfo, l.items.items, {}, struct {
+    @import("../core/sort.zig").stable(FileInfo, l.items.items, {}, struct {
         fn lt(_: void, a: FileInfo, b: FileInfo) bool {
             return a.mtime < b.mtime;
         }
