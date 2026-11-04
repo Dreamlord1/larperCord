@@ -54,10 +54,6 @@ const registry = std.StaticStringMap(Component).initComptime(.{
     .{ "spacer", spacer },
 });
 
-pub fn componentNames() []const []const u8 {
-    return registry.keys();
-}
-
 fn spacer(_: *d.Ctx, _: *const kdl.Node, _: d.Rect) void {}
 
 /// --stats: tempo gasto em cada componente (µs somados desde a última leitura).

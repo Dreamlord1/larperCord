@@ -3063,25 +3063,6 @@ fn tokenFilePath(buf: []u8) ?[:0]const u8 {
     return std.fmt.bufPrintSentinel(buf, "{s}/.config/larpercord/token", .{std.mem.span(home)}, 0) catch null;
 }
 
-/// Guarda o token para os próximos inícios: no chaveiro do sistema
-/// (`secret-tool`, pela entrada padrão, então ele não aparece no `ps`) ou,
-/// sem chaveiro, em ~/.config/larpercord/token com permissão 600.
-/// Retorna onde guardou.
-pub fn saveToken(token: []const u8) enum { keyring, file, failed } {
-    if (c.popen("secret-tool store --label=larperCord service larpercord 2>/dev/null", "w")) |f| {
-        const wrote = c.fwrite(token.ptr, 1, token.len, f);
-        if (c.pclose(f) == 0 and wrote == token.len) {
-            // Não deixa uma cópia velha no arquivo.
-            var pbuf: [512]u8 = undefined;
-            if (tokenFilePath(&pbuf)) |p| _ = c.unlink(p.ptr);
-            return .keyring;
-        }
-    }
-    var pbuf: [512]u8 = undefined;
-    const path = tokenFilePath(&pbuf) orelse return .failed;
-    return if (@import("../platform/fsutil.zig").writePrivate(path, token)) .file else .failed;
-}
-
 /// "Sair": apaga o token do chaveiro e do arquivo.
 pub fn forgetToken() void {
     if (c.popen("secret-tool clear service larpercord 2>/dev/null", "r")) |f| _ = c.pclose(f);

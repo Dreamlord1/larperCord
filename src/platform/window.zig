@@ -33,10 +33,6 @@ pub const Window = struct {
         c.SDL_Quit();
     }
 
-    pub fn rendererName(win: *const Window) []const u8 {
-        return std.mem.span(c.SDL_GetRendererName(win.renderer));
-    }
-
     /// Pode ser chamado de qualquer thread.
     pub fn wake(wake_type: u32, what: Wake) void {
         var ev = std.mem.zeroes(c.SDL_Event);

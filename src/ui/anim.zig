@@ -61,10 +61,6 @@ pub fn step(value: f32, target: f32, speed: f32) f32 {
     return v;
 }
 
-pub fn lerp(a: f32, b: f32, k: f32) f32 {
-    return a + (b - a) * k;
-}
-
 test "passo menor que a precisão do f32 termina" {
     instant = false;
     dt = 0.001;
