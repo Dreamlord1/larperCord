@@ -1361,7 +1361,8 @@ pub const Store = struct {
             cs.read_id = @max(cs.read_id, m.id);
             cs.info.unread = false;
             cs.hold_unread = false;
-            cs.divider_after = 0;
+            // A linha fica no lugar (a conversa não pula); o botão do topo sai.
+            cs.divider_seen = true;
             s.refreshGuildUnread(cs.info.guild);
         }
         // Confirmação de uma mensagem nossa: troca a cópia pendente.
