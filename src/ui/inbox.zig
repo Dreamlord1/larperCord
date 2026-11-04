@@ -114,6 +114,18 @@ pub fn previewText(ctx: *const d.Ctx, buf: []u8, m: *const StoredMessage) []cons
     if (t.len > 0) return t;
     if (m.msg.attachments.len > 0) return i18n.fmt(buf, "📎 {s}", "📎 {s}", .{m.msg.attachments[0].filename});
     if (m.msg.embeds.len > 0 and m.msg.embeds[0].title.len > 0) return i18n.fmt(buf, "🔗 {s}", "🔗 {s}", .{m.msg.embeds[0].title});
+    // Bot só com componentes: o primeiro texto, sem as marcas.
+    var k: usize = 0;
+    for (m.msg.embeds) |*e| {
+        k += 1 + e.fields.len;
+        for (e.blocks) |*b| {
+            if (b.kind == .text and k < m.embed_spans.len) {
+                const first = core.previewSpans(buf, ctx.store, m.embed_spans[k]);
+                if (first.len > 0) return first;
+            }
+            k += 1;
+        }
+    }
     return i18n.tr("(sem texto)", "(no text)");
 }
 

@@ -289,9 +289,13 @@ pub fn lookup(store: *const Store, channel: Id, id: Id) ?struct { m: *const Stor
 /// escondidos, quebras de linha viram espaço. Vazia se não tem texto
 /// (só anexo ou embed: quem desenha decide o que mostrar).
 pub fn preview(buf: []u8, store: *const Store, m: *const StoredMessage) []const u8 {
+    return previewSpans(buf, store, m.spans);
+}
+
+pub fn previewSpans(buf: []u8, store: *const Store, spans: []const @import("markdown.zig").Span) []const u8 {
     var n: usize = 0;
     var tmp: [96]u8 = undefined;
-    for (m.spans) |sp| {
+    for (spans) |sp| {
         const piece: []const u8 = if (sp.flags.spoiler) "▮▮▮" else switch (sp.mention) {
             .none => sp.text,
             .user => |id| std.fmt.bufPrint(&tmp, "@{s}", .{if (store.user(id)) |u| u.name else "?"}) catch "@?",

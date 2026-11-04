@@ -18,6 +18,7 @@ const rich = @import("rich.zig");
 const icons = @import("icons.zig");
 const att = @import("attachments.zig");
 const emb = @import("embeds.zig");
+const search = @import("search.zig");
 const md_preview = @import("md_preview.zig");
 const vim = @import("vim.zig");
 const popup = @import("popup.zig");
@@ -165,7 +166,7 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     const t = rich.layout(null, ctx.store, ctx.th, m.spans, 0, 0, g.wrap, textOpts(ctx, g, self and g.variant == .bubbles), ctx.mouse);
     var text_h = textH(g, m, t);
     text_h += att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
-    text_h += emb.block(ctx, null, m, 0, 0, g.wrap, 1);
+    text_h += emb.block(ctx, null, m, 0, 0, g.wrap, 1, .{});
     text_h += threads.cardHeight(ctx, m);
     if (m.failed) text_h += g.line_h;
     const group = flags & flag_group != 0;
@@ -494,7 +495,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         var to: u32 = 0;
         if (sel) |sr| if (i >= sr.first and i <= sr.last) {
             from = if (i == sr.first) sr.o0 else 0;
-            to = if (i == sr.last) sr.o1 else @intCast(msgs[i].msg.content.len);
+            to = if (i == sr.last) sr.o1 else emb.textLen(&msgs[i]);
         };
         drawMessage(ctx, dl, g, &msgs[i], st.groups.items[i], r, y, under, from, to, if (under) &probe else null);
         qa.mark(.{ .x = r.x, .y = y, .w = r.w, .h = msgs[i].height }, "msg:{d}", .{msgs[i].msg.id});
@@ -520,7 +521,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     // Seleção de texto e botão direito.
     if (probe_idx) |pi| {
         const m = &msgs[pi];
-        const off = probe.out orelse (if (ctx.mouse.x < r.x + g.content_x) @as(u32, 0) else @as(u32, @intCast(m.msg.content.len)));
+        const off = probe.out orelse (if (ctx.mouse.x < r.x + g.content_x) @as(u32, 0) else emb.textLen(m));
         if (!ctx.hot) {
             if (probe.out != null) c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_TextInput);
             if (c.ImGui_IsMouseClicked(0)) {
@@ -529,7 +530,9 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
             }
             if (c.ImGui_IsMouseClicked(1)) ctx.popup(.{ .menu = .{ .kind = .message, .id = m.msg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         }
-        if (st.selection.dragging and st.selection.channel == ch_id and c.ImGui_IsMouseDown(0) and !c.ImGui_IsMouseDoubleClicked(0)) {
+        // Entre as linhas de um cartão não há texto sob o mouse: fica onde estava.
+        const in_gap = probe.out == null and m.msg.embeds.len > 0 and st.selection.b_id == m.msg.id;
+        if (st.selection.dragging and st.selection.channel == ch_id and c.ImGui_IsMouseDown(0) and !c.ImGui_IsMouseDoubleClicked(0) and !in_gap) {
             st.selection.b_id = m.msg.id;
             st.selection.b_off = off;
         }
@@ -728,13 +731,9 @@ fn drawCollapsed(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flag
 }
 
 fn selectWord(st: anytype, m: *const StoredMessage, off: u32) void {
-    const s = m.msg.content;
-    var a: usize = @min(off, s.len);
-    var b: usize = a;
-    while (a > 0 and s[a - 1] != ' ' and s[a - 1] != '\n') a -= 1;
-    while (b < s.len and s[b] != ' ' and s[b] != '\n') b += 1;
-    st.selection.a_off = @intCast(a);
-    st.selection.b_off = @intCast(b);
+    const word = emb.wordAt(m, off);
+    st.selection.a_off = word[0];
+    st.selection.b_off = word[1];
     st.selection.dragging = false;
 }
 
@@ -1093,7 +1092,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             const th = textH(g, m, t);
             att.draw(ctx, dl, m, tx, y + th, g.wrap, alpha);
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
-            ah += emb.block(ctx, dl, m, tx, y + th + ah, g.wrap, alpha);
+            ah += emb.block(ctx, dl, m, tx, y + th + ah, g.wrap, alpha, .{ .from = sel_from, .to = sel_to, .probe = probe });
             ah += threads.card(ctx, dl, m, tx, y + th + ah, g.wrap);
             if (m.failed) failedRow(ctx, dl, g, m, tx, y + th + ah);
             if (m.n_reactions > 0) reactions(ctx, dl, m, tx, y + th + ah, under, false, 0);
@@ -1147,7 +1146,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             const th = textH(g, m, t);
             att.draw(ctx, dl, m, r.x + g.content_x, y + th, g.wrap, alpha);
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
-            ah += emb.block(ctx, dl, m, r.x + g.content_x, y + th + ah, g.wrap, alpha);
+            ah += emb.block(ctx, dl, m, r.x + g.content_x, y + th + ah, g.wrap, alpha, .{ .from = sel_from, .to = sel_to, .probe = probe });
             ah += threads.card(ctx, dl, m, r.x + g.content_x, y + th + ah, g.wrap);
             if (m.failed) failedRow(ctx, dl, g, m, r.x + g.content_x, y + th + ah);
             if (m.n_reactions > 0) reactions(ctx, dl, m, r.x + g.content_x, y + th + ah - 2, under, false, 0);
@@ -1195,7 +1194,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             if (m.msg.content.len > 0) qa.mark(.{ .x = br.x + 14, .y = ty, .w = @max(t.w, 4), .h = t.h }, "msgtext:{d}", .{m.msg.id});
             att.draw(ctx, dl, m, br.x + 14, ty + textH(g, m, t), g.wrap, alpha);
             const below = textH(g, m, t) + att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
-            var eh = emb.block(ctx, dl, m, br.x + 14, ty + below, g.wrap, alpha);
+            var eh = emb.block(ctx, dl, m, br.x + 14, ty + below, g.wrap, alpha, .{ .from = sel_from, .to = sel_to, .probe = probe });
             eh += threads.card(ctx, dl, m, br.x + 14, ty + below + eh, g.wrap);
             if (m.failed) failedRow(ctx, dl, g, m, br.x + 14, ty + below + eh);
             if (m.n_reactions > 0) reactions(ctx, dl, m, br.x, br.bottom(), under, self, br.right());
@@ -1454,6 +1453,9 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const flags = c.ImGuiInputTextFlags_EnterReturnsTrue | c.ImGuiInputTextFlags_CallbackAlways | c.ImGuiInputTextFlags_CtrlEnterForNewLine | c.ImGuiInputTextFlags_WordWrap;
     // Navegação vim: Esc sai da caixa e o texto fica (o ImGui desfaria).
     const keep = vim.escapeKeepsText(st);
+    // O ImGui solta a caixa no próprio quadro do Esc: depois dele ela já não
+    // está ativa. É preciso lembrar como estava antes.
+    const was_active = vim.composer_active;
     var kept: @TypeOf(st.input) = undefined;
     if (keep) kept = st.input;
     if (c.ImGui_InputTextMultilineEx("##composer", &st.input, st.input.len, d.v(input_w, frame_h), flags, inputCallback, st)) submit(ctx);
@@ -1473,7 +1475,10 @@ pub fn composer(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     // Ctrl+V com imagem copiada (print, imagem do navegador): vira anexo.
     if (active and ctx.io.*.KeyCtrl and c.ImGui_IsKeyPressed(c.ImGuiKey_V) and c.SDL_HasClipboardData("image/png") and !c.SDL_HasClipboardText())
         ctx.act(.paste_image);
-    if (active and c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and (st.reply_to != 0 or st.editing != 0)) ctx.act(.cancel_compose);
+    // Esc cancela a edição (ou a resposta), com ou sem foco na caixa. A lista de
+    // sugestões aberta e os painéis por cima pegam o Esc primeiro.
+    const over_it = autocomplete.open() or st.popup != .none or st.palette.open or st.settings.open or search.open;
+    if (c.ImGui_IsKeyPressed(c.ImGuiKey_Escape) and (st.reply_to != 0 or st.editing != 0) and !over_it and (active or was_active or !ctx.io.*.WantTextInput)) ctx.act(.cancel_compose);
 
     if (st.edit_last) {
         st.edit_last = false;

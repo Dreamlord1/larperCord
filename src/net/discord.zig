@@ -681,6 +681,12 @@ pub const Gateway = struct {
         return 0;
     }
 
+    fn guildBanner(v: Value) ?[]u8 {
+        if (j.str(j.get(v, "banner"))) |b| return optDupe(b);
+        if (j.get(v, "properties")) |p| return optDupe(j.str(j.get(p, "banner")));
+        return null;
+    }
+
     fn guildIcon(v: Value) ?[]u8 {
         if (j.str(j.get(v, "icon"))) |i| return optDupe(i);
         if (j.get(v, "properties")) |p| return optDupe(j.str(j.get(p, "icon")));
@@ -925,7 +931,7 @@ pub const Gateway = struct {
             const text = j.str(j.get(d, "content"));
             const content: ?[]const u8 = if (text) |t2| try j.simplifyContent(alloc, t2) else null;
             const raw: ?[]const u8 = if (text != null and content.?.len != text.?.len) try alloc.dupe(u8, text.?) else null;
-            const has_embeds = j.get(d, "embeds") != null;
+            const has_embeds = j.get(d, "embeds") != null or j.get(d, "components") != null;
             var atts: ?[]types.Attachment = null;
             if (j.get(d, "attachments") != null) {
                 atts = try attachmentsOf(d);
@@ -982,6 +988,7 @@ pub const Gateway = struct {
                     .acronym = try j.acronym(alloc, name),
                     .color = @intCast((gid >> 22) % 8),
                     .icon = guildIcon(d),
+                    .banner = guildBanner(d),
                 },
                 .channels = try alloc.alloc(types.Channel, 0),
                 .voice = try alloc.alloc([2]Id, 0),
@@ -1557,6 +1564,7 @@ pub const Gateway = struct {
                 .acronym = try j.acronym(alloc, name),
                 .color = @intCast((gid >> 22) % 8),
                 .icon = guildIcon(d),
+                .banner = guildBanner(d),
                 .owner = ownerOf(d),
                 .joined_id = read_json.joinedId(d),
             },
@@ -1677,7 +1685,8 @@ pub const Gateway = struct {
     fn attachmentsOf(m: Value) ![]types.Attachment {
         var list: std.ArrayList(types.Attachment) = .empty;
         errdefer types.freeAttachments(alloc, list.toOwnedSlice(alloc) catch &.{});
-        for (j.array(j.get(m, "attachments"))) |a| {
+        // Nos componentes, os arquivos aparecem nos próprios blocos.
+        if (!isComponentsV2(m)) for (j.array(j.get(m, "attachments"))) |a| {
             if (list.items.len >= 10) break;
             const w = j.int(j.get(a, "width")) orelse 0;
             const h = j.int(j.get(a, "height")) orelse 0;
@@ -1701,7 +1710,7 @@ pub const Gateway = struct {
                 .video = video and image,
                 .link = if (video and image) try alloc.dupe(u8, cdn) else "",
             });
-        }
+        };
         for (j.array(j.get(m, "sticker_items"))) |s| {
             if (list.items.len >= 10) break;
             var sb: [128]u8 = undefined;
@@ -1751,10 +1760,189 @@ pub const Gateway = struct {
         }
     }
 
-    /// Cartões (embeds de bots e prévias de links).
-    fn embedsOf(m: Value) ![]types.Embed {
+    fn isComponentsV2(m: Value) bool {
+        return (j.int(j.get(m, "flags")) orelse 0) & (1 << 15) != 0;
+    }
+
+    /// Um item de mídia de um componente. Imagem pelo proxy (que reduz); GIF do
+    /// arquivo original (o proxy pode devolver parado); vídeo: um quadro pelo
+    /// via_proxy, e o arquivo no clique.
+    fn mediaItem(media: Value, label: []const u8, spoiler: bool) !?types.EmbedMedia {
+        const cdn = j.str(j.get(media, "url")) orelse "";
+        const via_proxy = j.str(j.get(media, "proxy_url")) orelse cdn;
+        const ctype = j.str(j.get(media, "content_type")) orelse "";
+        const video = std.mem.startsWith(u8, ctype, "video/");
+        const shown = if (std.mem.eql(u8, ctype, "image/gif") and isHttp(cdn)) cdn else via_proxy;
+        if (!isHttp(shown)) return null;
+        return .{
+            .url = try alloc.dupe(u8, shown),
+            .link = try dupeOpt(if (isHttp(cdn)) cdn else ""),
+            .label = try dupeOpt(label),
+            .w = @intCast(std.math.clamp(j.int(j.get(media, "width")) orelse 0, 0, 65535)),
+            .h = @intCast(std.math.clamp(j.int(j.get(media, "height")) orelse 0, 0, 65535)),
+            .size = @intCast(std.math.clamp(j.int(j.get(media, "size")) orelse 0, 0, std.math.maxInt(u32))),
+            .video = video,
+            .spoiler = spoiler,
+        };
+    }
+
+    fn isTrue(v: ?Value) bool {
+        return if (v) |x| x == .bool and x.bool else false;
+    }
+
+    /// Só os botões de link funcionam aqui; os outros pedem uma interação com
+    /// o bot, que o app não faz.
+    fn linkButton(btn: Value, out: *std.ArrayList(types.EmbedMedia)) !void {
+        const url = j.str(j.get(btn, "url")) orelse return;
+        if (!isHttp(url)) return;
+        try out.append(alloc, .{ .link = try alloc.dupe(u8, url), .label = try dupeOpt(j.str(j.get(btn, "label")) orelse url) });
+    }
+
+    /// Um componente vira um bloco (a seção com botão vira dois).
+    fn appendBlock(out: *std.ArrayList(types.EmbedBlock), cv: Value) !void {
+        var media: std.ArrayList(types.EmbedMedia) = .empty;
+        defer media.deinit(alloc);
+        switch (j.int(j.get(cv, "type")) orelse 0) {
+            // Texto.
+            10 => if (j.str(j.get(cv, "content"))) |t| {
+                try out.append(alloc, .{ .text = try dupeOpt(t) });
+            },
+            // Seção: textos, com miniatura ou botão ao lado.
+            9 => {
+                var text: std.ArrayList(u8) = .empty;
+                defer text.deinit(alloc);
+                for (j.array(j.get(cv, "components"))) |tv| {
+                    const t = j.str(j.get(tv, "content")) orelse continue;
+                    if (text.items.len > 0) try text.append(alloc, '\n');
+                    try text.appendSlice(alloc, t);
+                }
+                var buttons: std.ArrayList(types.EmbedMedia) = .empty;
+                defer buttons.deinit(alloc);
+                if (j.get(cv, "accessory")) |acc| {
+                    if (j.get(acc, "media")) |mv| {
+                        if (try mediaItem(mv, j.str(j.get(acc, "description")) orelse "", isTrue(j.get(acc, "spoiler")))) |it| try media.append(alloc, it);
+                    } else try linkButton(acc, &buttons);
+                }
+                try out.append(alloc, .{ .text = try dupeOpt(text.items), .media = try media.toOwnedSlice(alloc) });
+                if (buttons.items.len > 0) try out.append(alloc, .{ .kind = .buttons, .media = try buttons.toOwnedSlice(alloc) });
+            },
+            // Galeria.
+            12 => {
+                for (j.array(j.get(cv, "items"))) |iv| {
+                    if (media.items.len >= 10) break;
+                    const mv = j.get(iv, "media") orelse continue;
+                    if (try mediaItem(mv, j.str(j.get(iv, "description")) orelse "", isTrue(j.get(iv, "spoiler")))) |it| try media.append(alloc, it);
+                }
+                if (media.items.len > 0) try out.append(alloc, .{ .kind = .gallery, .media = try media.toOwnedSlice(alloc) });
+            },
+            // Arquivo.
+            13 => if (j.get(cv, "file")) |fv| {
+                var it = (try mediaItem(fv, j.str(j.get(cv, "name")) orelse j.str(j.get(fv, "filename")) orelse i18n.tr("arquivo", "file"), isTrue(j.get(cv, "spoiler")))) orelse return;
+                if (it.size == 0) it.size = @intCast(std.math.clamp(j.int(j.get(cv, "size")) orelse 0, 0, std.math.maxInt(u32)));
+                try media.append(alloc, it);
+                try out.append(alloc, .{ .kind = .file, .media = try media.toOwnedSlice(alloc) });
+            },
+            // Separador.
+            14 => try out.append(alloc, .{ .kind = .separator, .divider = if (j.get(cv, "divider")) |dv| dv == .bool and dv.bool else true, .large = (j.int(j.get(cv, "spacing")) orelse 1) == 2 }),
+            // Fileira de botões.
+            1 => {
+                for (j.array(j.get(cv, "components"))) |btn| if ((j.int(j.get(btn, "type")) orelse 0) == 2) try linkButton(btn, &media);
+                if (media.items.len > 0) try out.append(alloc, .{ .kind = .buttons, .media = try media.toOwnedSlice(alloc) });
+            },
+            else => {},
+        }
+    }
+
+    /// Components V2: `content` e `embeds` vêm vazios e a mensagem é uma árvore
+    /// de componentes. Cada contêiner vira um cartão; o que vem solto, um
+    /// cartão sem fundo. Bots do jeito antigo só têm a fileira de botões.
+    fn componentCards(m: Value, list: *std.ArrayList(types.Embed)) !void {
+        var loose: std.ArrayList(types.EmbedBlock) = .empty;
+        errdefer types.freeBlocks(alloc, loose.toOwnedSlice(alloc) catch &.{});
+        for (j.array(j.get(m, "components"))) |cv| {
+            if (list.items.len >= 12) break;
+            if ((j.int(j.get(cv, "type")) orelse 0) != 17) {
+                try appendBlock(&loose, cv);
+                continue;
+            }
+            if (loose.items.len > 0) try list.append(alloc, .{ .bare = true, .blocks = try loose.toOwnedSlice(alloc) });
+            var blocks: std.ArrayList(types.EmbedBlock) = .empty;
+            errdefer types.freeBlocks(alloc, blocks.toOwnedSlice(alloc) catch &.{});
+            for (j.array(j.get(cv, "components"))) |inner| try appendBlock(&blocks, inner);
+            var card: types.Embed = .{ .spoiler = isTrue(j.get(cv, "spoiler")) };
+            if (j.int(j.get(cv, "accent_color"))) |col| {
+                card.color = @intCast(std.math.clamp(col, 0, 0xffffff));
+                card.has_color = true;
+            }
+            card.blocks = try blocks.toOwnedSlice(alloc);
+            try list.append(alloc, card);
+        }
+        if (loose.items.len > 0) try list.append(alloc, .{ .bare = true, .blocks = try loose.toOwnedSlice(alloc) });
+    }
+
+    /// Mensagem encaminhada: a original vem em `message_snapshots`, com o
+    /// `content` da nossa vazio. Vira um cartão marcado.
+    fn forwardCards(m: Value, list: *std.ArrayList(types.Embed)) error{OutOfMemory}!void {
+        const snaps = j.array(j.get(m, "message_snapshots"));
+        if (snaps.len == 0) return;
+        const sm = j.get(snaps[0], "message") orelse return;
+        var images: std.ArrayList(types.EmbedMedia) = .empty;
+        defer images.deinit(alloc);
+        var blocks: std.ArrayList(types.EmbedBlock) = .empty;
+        errdefer types.freeBlocks(alloc, blocks.toOwnedSlice(alloc) catch &.{});
+        for (j.array(j.get(sm, "attachments"))) |a| {
+            const name = j.str(j.get(a, "filename")) orelse i18n.tr("arquivo", "file");
+            const it = (try mediaItem(a, name, false)) orelse continue;
+            if (it.w > 0 and it.h > 0) {
+                if (images.items.len < 10) try images.append(alloc, it);
+                continue;
+            }
+            const one = try alloc.alloc(types.EmbedMedia, 1);
+            one[0] = it;
+            try blocks.append(alloc, .{ .kind = .file, .media = one });
+        }
+        if (images.items.len > 0) try blocks.append(alloc, .{ .kind = .gallery, .media = try images.toOwnedSlice(alloc) });
+        try list.append(alloc, .{
+            .provider = try alloc.dupe(u8, i18n.tr("Encaminhada", "Forwarded")),
+            .description = try dupeOpt(j.str(j.get(sm, "content")) orelse ""),
+            .blocks = try blocks.toOwnedSlice(alloc),
+        });
+        const inner = try embedsOf(sm);
+        defer if (inner.len > 0) alloc.free(inner);
+        for (inner) |e| try list.append(alloc, e);
+    }
+
+    /// Enquete: a pergunta, as opções e os votos (votar é no Discord).
+    fn pollCard(m: Value, list: *std.ArrayList(types.Embed)) !void {
+        const p = j.get(m, "poll") orelse return;
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(alloc);
+        var total: i64 = 0;
+        const counts = if (j.get(p, "results")) |r| j.array(j.get(r, "answer_counts")) else &[_]Value{};
+        for (j.array(j.get(p, "answers"))) |a| {
+            const name = if (j.get(a, "poll_media")) |pm| j.str(j.get(pm, "text")) orelse "?" else "?";
+            var votes: i64 = 0;
+            for (counts) |cv| if (j.int(j.get(cv, "id")) == j.int(j.get(a, "answer_id"))) {
+                votes = j.int(j.get(cv, "count")) orelse 0;
+            };
+            total += votes;
+            try text.print(alloc, "- {s} (**{d}**)\n", .{ name, votes });
+        }
+        var fb: [64]u8 = undefined;
+        try list.append(alloc, .{
+            .provider = try alloc.dupe(u8, i18n.tr("Enquete", "Poll")),
+            .title = try dupeOpt(if (j.get(p, "question")) |q| j.str(j.get(q, "text")) orelse "" else ""),
+            .description = try dupeOpt(std.mem.trimEnd(u8, text.items, "\n")),
+            .footer = try alloc.dupe(u8, i18n.fmt(&fb, "{d} votos", "{d} votes", .{total})),
+        });
+    }
+
+    /// Cartões (embeds de bots, prévias de links, componentes, encaminhadas, enquetes).
+    fn embedsOf(m: Value) error{OutOfMemory}![]types.Embed {
         var list: std.ArrayList(types.Embed) = .empty;
         errdefer types.freeEmbeds(alloc, list.toOwnedSlice(alloc) catch &.{});
+        try forwardCards(m, &list);
+        try pollCard(m, &list);
         for (j.array(j.get(m, "embeds"))) |e| {
             if (list.items.len >= 6) break;
             const kind = j.str(j.get(e, "type")) orelse "rich";
@@ -1804,6 +1992,7 @@ pub const Gateway = struct {
             }
             try list.append(alloc, out);
         }
+        try componentCards(m, &list);
         return list.toOwnedSlice(alloc);
     }
 
@@ -1946,7 +2135,7 @@ pub const Gateway = struct {
             const gid = j.id(j.get(gv, "id")) orelse continue;
             const props = j.get(gv, "properties");
             const name = j.str(j.get(gv, "name")) orelse (if (props) |p| j.str(j.get(p, "name")) else null) orelse i18n.tr("servidor", "server");
-            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv), .owner = ownerOf(gv), .joined_id = read_json.joinedId(gv) });
+            try guilds.append(alloc, .{ .id = gid, .name = dupe(name), .acronym = try j.acronym(alloc, name), .color = @intCast((gid >> 22) % 8), .icon = guildIcon(gv), .banner = guildBanner(gv), .owner = ownerOf(gv), .joined_id = read_json.joinedId(gv) });
             g.ingestRoles(gid, j.array(j.get(gv, "roles")));
             g.ingestEmojis(gid, j.array(j.get(gv, "emojis")));
             try appendChannels(&channels, gid, j.array(j.get(gv, "channels")));
@@ -2637,6 +2826,8 @@ pub const Gateway = struct {
                     .guild = if (gv) |x| j.id(j.get(x, "id")) orelse 0 else 0,
                     .name = dupe(name),
                     .icon = if (gv) |x| optDupe(j.str(j.get(x, "icon"))) else null,
+                    .banner = if (gv) |x| optDupe(j.str(j.get(x, "banner")) orelse j.str(j.get(x, "splash"))) else null,
+                    .splash = if (gv) |x| j.str(j.get(x, "banner")) == null else false,
                     .members = @intCast(std.math.clamp(j.int(j.get(v, "approximate_member_count")) orelse 0, 0, std.math.maxInt(u32))),
                     .online = @intCast(std.math.clamp(j.int(j.get(v, "approximate_presence_count")) orelse 0, 0, std.math.maxInt(u32))),
                 } } });
@@ -2699,6 +2890,13 @@ pub const Gateway = struct {
                 var resp = g.request("PATCH", path, b.items) orelse return;
                 defer resp.body.deinit(alloc);
                 if (resp.status >= 300) g.noticeHttp(i18n.tr("não foi possível editar", "couldn't edit"), &resp);
+            },
+            .delete_thread => |id| {
+                const path = std.fmt.bufPrint(&path_buf, "/channels/{d}", .{id}) catch return;
+                var resp = g.request("DELETE", path, null) orelse return;
+                defer resp.body.deinit(alloc);
+                // Quem some da lista é o THREAD_DELETE que o gateway manda.
+                if (resp.status >= 300) g.noticeHttp(i18n.tr("não foi possível excluir a thread", "couldn't delete the thread"), &resp);
             },
             .delete_message => |m| {
                 const path = std.fmt.bufPrint(&path_buf, "/channels/{d}/messages/{d}", .{ m.channel, m.id }) catch return;

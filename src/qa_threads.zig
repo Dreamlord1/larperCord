@@ -373,9 +373,18 @@ fn pushSync(app: *App) void {
 fn evSynced(app: *App) bool {
     return if (info(app, ev_thread)) |t| !t.archived else false;
 }
-fn pushDelete(app: *App) void {
-    app.events.push(.{ .channel_delete = ev_thread });
-    platform.Window.wake(app.win.wake_type, .gateway);
+fn deleteAsked(app: *App) bool {
+    return app.st.popup == .menu and qa.find("menu:Cancelar") != null and app.store.channel(ev_thread) != null;
+}
+fn evStillThere(app: *App) bool {
+    return app.st.popup == .none and app.store.channel(ev_thread) != null;
+}
+fn tConfirmDelete(app: *App, b: []u8) []const u8 {
+    const cs = app.store.channel(ev_thread) orelse return "";
+    return mk(b, "menu:Excluir «{s}» para sempre", .{cs.info.name});
+}
+fn bannerShown(_: *App) bool {
+    return qa.find("guild-banner") != null;
 }
 var extra: [5]Id = @splat(0);
 fn pushMany(app: *App) void {
@@ -693,8 +702,15 @@ pub const ops = [_]Op{
     .{ .wait = 100 },
     clickD(tRowEv),
     expect("abre a que veio do gateway", evOpen),
-    .{ .run = pushDelete },
-    expect("THREAD_DELETE fecha a aba", evGone),
+    rclickD(tRowEv),
+    click("menu:Excluir thread…"),
+    expect("excluir pede confirmação e ainda não apagou", deleteAsked),
+    click("menu:Cancelar"),
+    expect("cancelar não apaga", evStillThere),
+    rclickD(tRowEv),
+    click("menu:Excluir thread…"),
+    clickD(tConfirmDelete),
+    .{ .expect = .{ .name = "excluir apaga a thread e fecha a aba", .check = evGone, .timeout_ms = 3000 } },
     // A categoria de cima recolhida: abre espaço para as linhas novas.
     click("category:505004"),
     .{ .run = pushMany },
@@ -705,6 +721,11 @@ pub const ops = [_]Op{
     .{ .run = dropMany },
     expect("apagadas, a lista volta", backToThree),
     click("category:505004"),
+
+    s("banner do servidor"),
+    click("guild:501000"),
+    .{ .expect = .{ .name = "servidor com banner mostra a imagem no topo", .check = bannerShown, .timeout_ms = 3000 } },
+    .{ .shot = "68b-banner" },
 
     s("threads: permissões herdadas do pai"),
     click("guild:507000"),

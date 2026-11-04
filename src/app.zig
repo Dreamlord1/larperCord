@@ -1212,7 +1212,9 @@ pub const App = struct {
                 if (st.editing != 0) app.restoreDraft();
                 st.editing = 0;
                 st.reply_to = 0;
+                st.focus_input = true;
             },
+            .delete_thread => |id| app.cmd(.{ .delete_thread = id }),
             .delete_message => |id| {
                 const f = app.store.findAny(id) orelse return;
                 const ch = f.cs.info.id;
@@ -1803,6 +1805,28 @@ pub const App = struct {
             }
             return;
         }
+        // "msg:<servidor>:<canal>:<mensagem>": vai até uma mensagem (conferir como
+        // ela aparece na conta de verdade). Sem foco: abrir não marca como lido.
+        if (std.mem.startsWith(u8, which, "msg:")) {
+            const M = struct {
+                var step: u8 = 0;
+            };
+            app.qa_blur = true;
+            var it = std.mem.splitScalar(u8, which[4..], ':');
+            const gid = std.fmt.parseInt(types.Id, it.next() orelse return, 10) catch return;
+            const cid = std.fmt.parseInt(types.Id, it.next() orelse return, 10) catch return;
+            const mid = std.fmt.parseInt(types.Id, it.next() orelse return, 10) catch return;
+            if (M.step == 0 and app.store.guild(gid) != null) {
+                M.step = 1;
+                app.handle(.{ .select_guild = gid });
+                app.openChannel(cid, false);
+            } else if (M.step == 1) if (app.store.channel(cid)) |cs| if (cs.history == .loaded) {
+                M.step = 2;
+                app.handle(.{ .fetch_around = .{ .channel = cid, .id = mid } });
+                app.handle(.{ .jump_to = mid });
+            };
+            return;
+        }
         // "guild": abre o primeiro servidor (testa histórico e lista de membros).
         if (std.mem.eql(u8, which, "guild")) {
             const G = struct {
@@ -2200,14 +2224,14 @@ pub const App = struct {
                 const max: u32 = if (c.SDL_getenv("LARPER_RECORD_FRAMES")) |n| std.fmt.parseInt(u32, std.mem.span(n), 10) catch 150 else 150;
                 if (record_n >= max) running = false;
             };
-            if (app.opts.shot) |path| if (app.login.visible() and !app.store.ready) {
+            if (app.opts.shot) |path| if (app.login.visible() and !app.store.ready and c.SDL_getenv("LARPER_SHOT_REAL") == null) {
                 // Print da tela de login: espera a animação de entrada.
                 if (app.login.t > 2.6) {
                     if (!app.win.screenshot(path)) std.log.err("não consegui salvar {s}", .{path});
                     running = false;
                 }
             } else {
-                const ready = app.store.ready and !app.images.busy() and if (app.st.activeChannel()) |ch| (app.store.channel(ch).?.history == .loaded) else false;
+                const ready = app.store.ready and !app.images.busy() and if (app.st.activeChannel()) |ch| (app.store.channel(ch).?.history == .loaded and app.store.channel(ch).?.around != .loading) else false;
                 settled_frames = if (ready) settled_frames + 1 else 0;
                 // Conta real: a rede pode demorar mais que a demonstração.
                 const limit: u64 = if (app.store.demo) 6 else 20;

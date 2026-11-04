@@ -170,6 +170,7 @@ pub const Command = union(enum) {
     send_message: struct { channel: Id, content: []const u8, nonce: u64, reply_to: Id = 0, files: []const [:0]const u8 = &.{} },
     edit_message: struct { channel: Id, id: Id, content: []const u8 },
     delete_message: struct { channel: Id, id: Id },
+    delete_thread: Id,
     react: struct { channel: Id, id: Id, emoji: types.Reaction, add: bool },
     fetch_history: Id,
     /// Mais 50 mensagens antes de `before` (rolagem para cima).
@@ -260,6 +261,7 @@ pub const Action = union(enum) {
     save_edit: []const u8,
     cancel_compose,
     delete_message: Id,
+    delete_thread: Id,
     react: struct { id: Id, emoji: types.Reaction },
     open_dm: Id,
     send_dm: struct { user: Id, text: []const u8 },

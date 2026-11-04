@@ -43,7 +43,7 @@ fn sync(st: *const State) void {
     styled = for (spans) |sp| {
         var f = sp.flags;
         f.link = false;
-        if (@as(u8, @bitCast(f)) != 0 or sp.mention != .none) break true;
+        if (@as(u16, @bitCast(f)) != 0 or sp.mention != .none or sp.url.len > 0) break true;
     } else false;
 }
 

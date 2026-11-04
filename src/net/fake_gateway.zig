@@ -185,6 +185,7 @@ pub const Gateway = struct {
                     g.emit(.{ .message_update = .{ .channel = m.channel, .id = m.id, .content = shown, .raw = raw } });
                 },
                 .delete_message => |m| g.emit(.{ .message_delete = .{ .channel = m.channel, .id = m.id } }),
+                .delete_thread => |id| g.emit(.{ .channel_delete = id }),
                 .react => |r| g.emit(.{ .reaction = .{ .channel = r.channel, .id = r.id, .emoji = r.emoji, .user = me_id, .add = r.add } }),
                 .fetch_history => |ch| {
                     g.hot_channel = ch;
@@ -979,6 +980,8 @@ fn buildReady() !ev.Ready {
         .acronym = try alloc.dupe(u8, pick(g.acronym, g.acronym_en)),
         .color = g.color,
         .icon = if (g.icon) try std.fmt.allocPrint(alloc, "demo:icon:{d}", .{i}) else null,
+        // O segundo servidor mostra o banner (o primeiro, o cabeçalho sem imagem).
+        .banner = if (i == 1) try alloc.dupe(u8, "demo:2") else null,
         // O primeiro servidor é nosso (dá para mexer em cargos e mensagens).
         .owner = if (i == 0) me_id else 1001,
     };
@@ -1104,7 +1107,7 @@ fn demoReadStates(epoch_ms: i64) ![]types.ReadEntry {
 /// Cartão de convite da demonstração (sem conta, sem entrar em nada).
 fn demoInvite(code: []const u8) !types.Invite {
     if (std.mem.eql(u8, code, "larper")) return .{ .state = .ok, .guild = guildId(0), .name = try alloc.dupe(u8, pick(guilds[0].name, guilds[0].name_en)), .members = 12, .online = 7 };
-    if (std.mem.eql(u8, code, "zigbr")) return .{ .state = .ok, .guild = 777_000, .name = try alloc.dupe(u8, "Zig Brasil (oficial)"), .icon = try alloc.dupe(u8, "demo:icon:2"), .members = 4312, .online = 389 };
+    if (std.mem.eql(u8, code, "zigbr")) return .{ .state = .ok, .guild = 777_000, .name = try alloc.dupe(u8, "Zig Brasil (oficial)"), .icon = try alloc.dupe(u8, "demo:icon:2"), .banner = try alloc.dupe(u8, "demo:2"), .members = 4312, .online = 389 };
     return .{ .state = .invalid };
 }
 
@@ -1431,6 +1434,29 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
             .color = 0xFF0000,
             .has_color = true,
         };
+        m.embeds = e;
+    }
+    // Mensagens de bot só com componentes (Components V2).
+    {
+        const m = &msgs[n - 22];
+        alloc.free(m.content);
+        m.content = try alloc.dupe(u8, "");
+        m.reply_to = 0;
+        const thumb = try alloc.alloc(types.EmbedMedia, 1);
+        thumb[0] = .{ .url = try alloc.dupe(u8, "demo:icon:2"), .w = 640, .h = 640 };
+        const gallery_items = try alloc.alloc(types.EmbedMedia, 2);
+        gallery_items[0] = .{ .url = try alloc.dupe(u8, "demo:1"), .w = 900, .h = 560 };
+        gallery_items[1] = .{ .url = try alloc.dupe(u8, "demo:3"), .w = 960, .h = 540 };
+        const btn = try alloc.alloc(types.EmbedMedia, 1);
+        btn[0] = .{ .link = try alloc.dupe(u8, "https://ziglang.org"), .label = try alloc.dupe(u8, pick("Abrir", "Open")) };
+        const blocks = try alloc.alloc(types.EmbedBlock, 5);
+        blocks[0] = .{ .text = try alloc.dupe(u8, pick("### Na fila, posição 1\n[Comptime sem medo](https://ziglang.org) por [Zig SHOWTIME](https://ziglang.org) [03:48]", "### Queued at position 1\n[Comptime without fear](https://ziglang.org) by [Zig SHOWTIME](https://ziglang.org) [03:48]")), .media = thumb };
+        blocks[1] = .{ .kind = .separator, .divider = true };
+        blocks[2] = .{ .text = try alloc.dupe(u8, pick("-# Música errada? Use `/buscar`", "-# Wrong track? Use `/search`")) };
+        blocks[3] = .{ .kind = .gallery, .media = gallery_items };
+        blocks[4] = .{ .kind = .buttons, .media = btn };
+        const e = try alloc.alloc(types.Embed, 1);
+        e[0] = .{ .color = 0xFFA500, .has_color = true, .blocks = blocks };
         m.embeds = e;
     }
     // #interface: links do Discord, convites e menções clicáveis.

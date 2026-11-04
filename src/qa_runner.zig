@@ -627,6 +627,42 @@ fn clearToast(app: *App) void {
 fn hasSelection(app: *App) bool {
     return !app.st.selection.empty();
 }
+/// A mensagem de bot só com componentes da demonstração.
+fn v2Msg(app: *App) ?*const @import("core/store.zig").StoredMessage {
+    const cs = active(app) orelse return null;
+    for (cs.messages.items) |*m| if (m.msg.embeds.len > 0 and m.msg.embeds[0].blocks.len > 0) return m;
+    return null;
+}
+fn tV2(app: *App, b: []u8) []const u8 {
+    const m = v2Msg(app) orelse return "";
+    return markFmt(b, "embed:{d}:0", .{m.msg.id});
+}
+fn v2Shown(app: *App) bool {
+    return v2Msg(app) != null;
+}
+fn backToEnd(app: *App) void {
+    if (app.st.activeChannel()) |id| app.st.scrollOf(id).stick_bottom = true;
+}
+fn scrollToV2(app: *App) void {
+    const m = v2Msg(app) orelse return;
+    app.handle(.{ .jump_to = m.msg.id });
+}
+fn v2HasText(app: *App) bool {
+    const m = v2Msg(app) orelse return false;
+    return m.embed_spans.len >= 2 and m.height > 100;
+}
+fn selectionInEmbed(app: *App) bool {
+    const m = v2Msg(app) orelse return false;
+    const sel = &app.st.selection;
+    return !sel.empty() and sel.b_id == m.msg.id and @max(sel.a_off, sel.b_off) > m.msg.content.len;
+}
+fn composerEditing(app: *App) bool {
+    return app.st.editing != 0;
+}
+fn editCancelled(app: *App) bool {
+    return app.st.editing == 0 and std.mem.sliceTo(&app.st.input, 0).len == 0;
+}
+
 fn profileOpen(app: *App) bool {
     return app.st.popup == .profile;
 }
@@ -1707,6 +1743,11 @@ const ops = [_]Op{
     s("editar"),
     click("composer"),
     key(c.ImGuiKey_UpArrow),
+    expect("seta pra cima entra na edição", composerEditing),
+    key(c.ImGuiKey_Escape),
+    expect("Esc cancela a edição", editCancelled),
+    click("composer"),
+    key(c.ImGuiKey_UpArrow),
     expect("seta pra cima edita a última mensagem", editing),
     ctrl(c.ImGuiKey_A),
     .{ .text = "editado pelo QA" },
@@ -1741,6 +1782,20 @@ const ops = [_]Op{
     ctrl(c.ImGuiKey_C),
     expect("Ctrl+C copia a seleção", toastCopied),
     key(c.ImGuiKey_Escape),
+
+    s("componentes de bot"),
+    .{ .run = scrollToV2 },
+    expect("mensagem só com componentes tem altura de texto", v2HasText),
+    .{ .wait = 400 },
+    .{ .shot = "06b-componentes" },
+    .{ .drag = .{ .from = .{ .dyn_at = .{ .f = tV2, .fx = 0.08, .fy = 0.08 } }, .to = .{ .dyn_at = .{ .f = tV2, .fx = 0.5, .fy = 0.08 } } } },
+    expect("arrastar seleciona o texto do cartão", selectionInEmbed),
+    .{ .run = clearToast },
+    ctrl(c.ImGuiKey_C),
+    expect("Ctrl+C copia o texto do cartão", toastCopied),
+    key(c.ImGuiKey_Escape),
+    .{ .run = backToEnd },
+    .{ .wait = 300 },
 
     s("perfil e DM"),
     .{ .click = .{ .dyn = tUserOther } },

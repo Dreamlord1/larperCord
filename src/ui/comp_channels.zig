@@ -22,6 +22,9 @@ const Id = types.Id;
 
 const Variant = enum { discord, tree, pills };
 
+/// Rolagem da lista no quadro anterior: o banner sobe junto com ela.
+var banner_scroll: f32 = 0;
+
 pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const variant = std.meta.stringToEnum(Variant, d.pstr(n, "variant", "discord")) orelse .discord;
     const fam = ctx.familyFor(n);
@@ -29,8 +32,38 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     if (ctx.st.guild == 0) return dmList(ctx, n, fam, variant, r);
     const g = ctx.store.guild(ctx.st.guild) orelse return;
 
-    const banner = variant == .discord and d.pflag(n, "banner", false);
-    if (d.pflag(n, "header", true)) {
+    // Banner de verdade: a imagem fica atrás do nome e rola com a lista, como
+    // no Discord. O nome continua no lugar, com a lista passando por baixo.
+    const header_on = d.pflag(n, "header", true);
+    const banner_img = header_on and variant != .tree and g.banner != null and !@import("widgets.zig").no_pics;
+    const banner_h: f32 = if (banner_img) @min(@round(r.w * 9 / 16), 170) else 0;
+    const banner = !banner_img and variant == .discord and d.pflag(n, "banner", false);
+    // Quanto do banner ainda aparece (1 = todo, 0 = a lista já o cobriu).
+    var banner_k: f32 = 0;
+    if (banner_img) {
+        const room = banner_h - 48;
+        banner_k = std.math.clamp(1 - banner_scroll / room, 0, 1);
+        const by = r.y - banner_scroll;
+        if (by + banner_h > r.y) {
+            const br: d.Rect = .{ .x = r.x, .y = by, .w = r.w, .h = banner_h };
+            c.ImDrawList_PushClipRect(ctx.dl, d.v(r.x, r.y), d.v(r.right(), r.bottom()), true);
+            var ub: [160]u8 = undefined;
+            const scale = ctx.io.*.DisplayFramebufferScale.x;
+            const col = ctx.th.role(g.color).mix(ctx.col(.sidebar), 0.35);
+            switch (ctx.images.getStill(@import("widgets.zig").bannerUrl(&ub, g.id, g.banner.?, false), br.w * scale, br.h * scale)) {
+                .ready => |t| {
+                    @import("embeds.zig").imageCover(ctx.dl, t, br, 1, 0, 0);
+                    qa.mark(br, "guild-banner", .{});
+                },
+                else => d.rect(ctx.dl, br, col, 0),
+            }
+            // Escurece em cima para o nome se ler em qualquer imagem.
+            const ink = d.Rgba.black.col(0.55);
+            c.ImDrawList_AddRectFilledMultiColor(ctx.dl, d.v(br.x, br.y), d.v(br.right(), br.y + 64), ink, ink, 0, 0);
+            c.ImDrawList_PopClipRect(ctx.dl);
+        }
+    }
+    if (header_on) {
         const hh: f32 = if (variant == .tree) 30 else if (banner) 128 else 48;
         const hr: d.Rect = .{ .x = r.x, .y = r.y, .w = r.w, .h = hh };
         const hb = d.hit(ctx, 1, hr);
@@ -63,9 +96,11 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
             },
             else => {
                 d.rect(ctx.dl, hr, ctx.col(.hover).alpha(k), if (variant == .pills) 10 else 0);
-                _ = d.textClipped(ctx.dl, fam.get(.semibold), 16, r.x + 16, d.centerY(hr, 16), ctx.col(.text), g.name, r.w - 56);
-                icons.chevron(ctx.dl, r.right() - 24, hr.y + hh / 2, ctx.col(.text).col(0.9), 1);
-                if (variant == .discord) d.line(ctx.dl, r.x, hr.bottom() - 0.5, r.right(), hr.bottom() - 0.5, ctx.col(.border), 1);
+                // Sobre a imagem o nome é branco; sem ela, a cor do tema.
+                const ink = ctx.col(.text).mix(d.Rgba.white, banner_k);
+                _ = d.textClipped(ctx.dl, fam.get(.semibold), 16, r.x + 16, d.centerY(hr, 16), ink, g.name, r.w - 56);
+                icons.chevron(ctx.dl, r.right() - 24, hr.y + hh / 2, ink.col(0.9), 1);
+                if (variant == .discord) d.line(ctx.dl, r.x, hr.bottom() - 0.5, r.right(), hr.bottom() - 0.5, ctx.col(.border).alpha(1 - banner_k), 1);
             },
         }
         r.y += hh;
@@ -74,8 +109,10 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
 
     if (ctx.st.voice != null) r.h -= voiceBarHeight(variant == .tree);
     const dl = d.beginRegion(ctx, "##channels", r, c.ImGuiWindowFlags_NoScrollbar);
+    banner_scroll = if (banner_img) c.ImGui_GetScrollY() else 0;
     const o = c.ImGui_GetCursorScreenPos();
-    var y = o.y + (if (variant == .tree) @as(f32, 2) else 8);
+    // A lista começa embaixo do banner (o cabeçalho já tirou 48 dele).
+    var y = o.y + (if (variant == .tree) @as(f32, 2) else 8) + (if (banner_img) banner_h - 48 else 0);
     const ids = ctx.store.channelsOf(g.id);
     // Fora da tela só conta a altura (servidor com centenas de canais).
     const vis_top = r.y - 64;

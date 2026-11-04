@@ -206,6 +206,8 @@ pub const Guild = struct {
     owner: Id = 0,
     /// Snowflake de quando entramos (o que veio antes não conta como não lido).
     joined_id: Id = 0,
+    /// Hash do banner no CDN (null = sem banner).
+    banner: ?[]const u8 = null,
 };
 
 pub const Channel = struct {
@@ -256,6 +258,9 @@ pub const Invite = struct {
     icon: ?[]const u8 = null,
     members: u32 = 0,
     online: u32 = 0,
+    /// Imagem do topo do cartão: o banner do servidor ou, sem ele, o splash.
+    banner: ?[]const u8 = null,
+    splash: bool = false,
 };
 
 /// Exceção de permissão de um canal para um cargo (o @everyone tem o ID do
@@ -331,9 +336,50 @@ pub const Embed = struct {
     /// O arquivo do vídeo pelo proxy de mídia do Discord (link direto para
     /// um .mp4…): esse toca aqui dentro. Vazio = só no navegador (YouTube).
     video_url: []const u8 = "",
+    /// Cartão de componentes (o formato novo dos bots): uma lista de blocos.
+    blocks: []const EmbedBlock = &.{},
+    /// Componentes soltos na mensagem: sem fundo nem barra de cor.
+    bare: bool = false,
+    /// Cartão marcado como spoiler: coberto até passar o mouse.
+    spoiler: bool = false,
 };
 
 pub const EmbedField = struct { name: []const u8, value: []const u8 };
+
+/// Imagem, vídeo, arquivo ou botão de link de um bloco.
+pub const EmbedMedia = struct {
+    /// O que se mostra (pelo proxy do Discord).
+    url: []const u8 = "",
+    /// Para onde o clique vai: o vídeo, o arquivo, o endereço do botão.
+    link: []const u8 = "",
+    /// Nome do arquivo ou texto do botão.
+    label: []const u8 = "",
+    w: u16 = 0,
+    h: u16 = 0,
+    size: u32 = 0,
+    video: bool = false,
+    spoiler: bool = false,
+};
+
+pub const EmbedBlock = struct {
+    kind: enum { text, separator, gallery, file, buttons } = .text,
+    /// Markdown (`.text`).
+    text: []const u8 = "",
+    /// `.text`: a miniatura ao lado, se houver. Os outros: os itens.
+    media: []const EmbedMedia = &.{},
+    /// `.separator`: linha visível e espaço maior.
+    divider: bool = false,
+    large: bool = false,
+};
+
+pub fn freeBlocks(gpa: std.mem.Allocator, list: []const EmbedBlock) void {
+    for (list) |b| {
+        if (b.text.len > 0) gpa.free(b.text);
+        for (b.media) |m| for ([_][]const u8{ m.url, m.link, m.label }) |t| if (t.len > 0) gpa.free(t);
+        if (b.media.len > 0) gpa.free(b.media);
+    }
+    if (list.len > 0) gpa.free(list);
+}
 
 pub fn freeEmbeds(gpa: std.mem.Allocator, list: []const Embed) void {
     for (list) |e| freeEmbed(gpa, e);
@@ -348,6 +394,7 @@ pub fn freeEmbed(gpa: std.mem.Allocator, e: Embed) void {
         gpa.free(f.value);
     }
     if (e.fields.len > 0) gpa.free(e.fields);
+    freeBlocks(gpa, e.blocks);
 }
 
 pub const Message = struct {

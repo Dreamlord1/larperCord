@@ -11,6 +11,7 @@ const icons = @import("icons.zig");
 const state = @import("state.zig");
 const types = @import("../core/types.zig");
 const i18n = @import("i18n.zig");
+const emb = @import("embeds.zig");
 const Id = types.Id;
 const rich = @import("rich.zig");
 const att = @import("attachments.zig");
@@ -167,6 +168,10 @@ pub fn draw(ctx: *d.Ctx) void {
 /// `label` (português) também é a marca do QA; `en` é o texto em inglês.
 const Item = struct { label: []const u8, en: []const u8, id: u8, danger: bool = false, sep: bool = false };
 
+/// Texto do botão de confirmar a exclusão (leva o nome da thread).
+var delete_buf: [128]u8 = undefined;
+var delete_label: []const u8 = "";
+
 /// Canal de voz em que a pessoa está, se dá para movê-la de lá (é do
 /// servidor aberto e temos "Mover membros").
 fn movable(ctx: *d.Ctx, uid: Id) ?*const @import("../core/store.zig").ChannelState {
@@ -266,6 +271,9 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
                 else
                     .{ .label = "Entrar na thread", .en = "Join Thread", .id = 47, .sep = true });
                 if (tcs.info.parent != null) add(&items, &n, .{ .label = "Threads arquivadas", .en = "Archived Threads", .id = 48 });
+                // Apagar pede a permissão de gerenciar threads, mesmo para quem criou.
+                if (ctx.store.channelPermissions(&tcs.info) & types.perm.manage_threads != 0)
+                    add(&items, &n, .{ .label = "Excluir thread…", .en = "Delete Thread…", .id = 50, .danger = true });
             } else if (tcs.info.kind == .text and tcs.info.guild != 0) {
                 add(&items, &n, .{ .label = "Ver threads", .en = "View Threads", .id = 49, .sep = true });
                 add(&items, &n, .{ .label = "Threads arquivadas", .en = "Archived Threads", .id = 48 });
@@ -276,6 +284,12 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             if (ctx.store.channel(id)) |vcs| if (vcs.info.kind == .voice and ((ctx.st.voice != null and ctx.st.voice.? == id) or ctx.store.voiceChannelOf(ctx.store.me, vcs.info.guild) == id))
                 add(&items, &n, .{ .label = "Sair da call", .en = "Leave Call", .id = 46, .danger = true, .sep = true });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do canal", .en = "Copy Channel ID", .id = 44 });
+        },
+        .thread_delete => {
+            const name = if (ctx.store.channel(id)) |tcs| tcs.info.name else "?";
+            delete_label = i18n.fmt(&delete_buf, "Excluir «{s}» para sempre", "Delete “{s}” for good", .{name[0..@min(name.len, 40)]});
+            add(&items, &n, .{ .label = delete_label, .en = delete_label, .id = 51, .danger = true });
+            add(&items, &n, .{ .label = "Cancelar", .en = "Cancel", .id = 52 });
         },
         .status => {
             add(&items, &n, .{ .label = "●  Online", .en = "●  Online", .id = 80 });
@@ -425,7 +439,12 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         3 => st.popup = .{ .emoji = .{ .target = id, .x = r.x, .y = r.y } },
         4 => if (!st.selection.empty()) {
             if (selectionText(ctx)) |s| ctx.act(.{ .copy = s });
-        } else if (ctx.store.findAny(id)) |f| copyFmt(ctx, "{s}", .{f.m.msg.content}),
+        } else if (ctx.store.findAny(id)) |f| {
+            // A mensagem inteira, com o texto dos cartões.
+            var out: std.ArrayList(u8) = .empty;
+            emb.appendText(ctx, &out, f.m, 0, emb.textLen(f.m));
+            if (out.toOwnedSlice(ctx.st.gpa)) |s| ctx.act(.{ .copy = s }) else |_| {}
+        },
         5 => if (ctx.store.findAny(id)) |f| {
             var gb: [24]u8 = undefined;
             copyFmt(ctx, "https://discord.com/channels/{s}/{d}/{d}", .{ guildPart(&gb, f.cs.info.guild), f.cs.info.id, id });
@@ -439,6 +458,10 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         47 => if (ctx.store.channel(id)) |cs| if (cs.info.thread) |t| {
             ctx.act(.{ .join_thread = .{ .thread = id, .join = !t.joined } });
         },
+        // Apagar não tem volta: abre a confirmação no mesmo lugar.
+        50 => st.popup = .{ .menu = .{ .kind = .thread_delete, .id = id, .x = r.x, .y = r.y } },
+        51 => ctx.act(.{ .delete_thread = id }),
+        52 => {},
         48, 49 => if (ctx.store.channel(id)) |cs| {
             const parent = if (cs.info.thread != null) cs.info.parent orelse id else id;
             st.popup = .{ .threads = .{ .parent = parent, .archived = item == 48 } };
@@ -549,12 +572,9 @@ pub fn selectionText(ctx: *d.Ctx) ?[]u8 {
         std.mem.swap(u32, &o0, &o1);
     }
     var out: std.ArrayList(u8) = .empty;
-    for (cs.messages.items[first .. last + 1], first..) |m, i| {
-        const s = m.msg.content;
-        const from = if (i == first) @min(o0, s.len) else 0;
-        const to = if (i == last) @min(o1, s.len) else s.len;
+    for (cs.messages.items[first .. last + 1], first..) |*m, i| {
         if (i != first) out.append(ctx.st.gpa, '\n') catch {};
-        if (to > from) out.appendSlice(ctx.st.gpa, s[from..to]) catch {};
+        emb.appendText(ctx, &out, m, if (i == first) o0 else 0, if (i == last) o1 else emb.textLen(m));
     }
     return out.toOwnedSlice(ctx.st.gpa) catch null;
 }

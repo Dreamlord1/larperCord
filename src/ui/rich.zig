@@ -43,7 +43,37 @@ pub const Opts = struct {
     msg_id: u64 = 0,
     /// Lado do quadrado do emoji personalizado (o `layout` calcula).
     emoji_box: f32 = 0,
+    /// Bloco de código com mais de uma linha: número desta linha e a largura
+    /// da coluna dos números (o `layout` calcula).
+    code_line: u32 = 0,
+    code_gutter: f32 = 0,
 };
+
+/// Tamanho de um trecho em relação ao texto normal (títulos e `-#`).
+fn scaleOf(sp: *const md.Span) f32 {
+    if (sp.flags.sub) return 0.84;
+    return switch (sp.flags.head) {
+        1 => 1.6,
+        2 => 1.35,
+        3 => 1.2,
+        else => 1,
+    };
+}
+
+/// Altura da linha que começa neste trecho.
+fn lineHeight(o: Opts, sp: *const md.Span) f32 {
+    if (sp.flags.sub) return o.line_h * 0.92;
+    return if (sp.flags.head != 0) o.line_h * scaleOf(sp) * 1.1 else o.line_h;
+}
+
+/// Recuo da linha: citação (a barra) e itens de lista.
+fn indentOf(o: Opts, sp: *const md.Span) f32 {
+    var n: f32 = 0;
+    if (sp.flags.quote) n += o.size * 1.0;
+    if (sp.flags.list) n += o.size * 1.3;
+    if (sp.flags.nested) n += o.size * 1.3;
+    return n;
+}
 
 /// Pergunta "qual byte do texto está sob este ponto?".
 pub const Probe = struct {
@@ -94,7 +124,8 @@ const Words = struct {
                 it.pos = nl + 1;
                 return it.take(.{ .text = s[start..nl], .span = sp, .space_after = false });
             }
-            if (sp.flags.code or sp.flags.link or sp.mention != .none or sp.emoji != 0) {
+            // Inteiro (o endereço não quebra); link com texto quebra como texto.
+            if (sp.flags.bullet or sp.flags.code or (sp.flags.link and sp.url.len == 0) or sp.mention != .none or sp.emoji != 0) {
                 if (it.pos > 0) {
                     it.si += 1;
                     it.pos = 0;
@@ -126,12 +157,13 @@ fn fontFor(o: Opts, sp: *const md.Span) *c.ImFont {
     const f = sp.flags;
     if (f.code) return o.family.get(.medium);
     if (sp.mention != .none) return o.family.get(.semibold);
-    if (f.bold) return o.family.get(.bold);
+    if (f.bold or f.head != 0) return o.family.get(.bold);
     if (f.italic) return o.family.get(.italic);
     return o.family.get(.regular);
 }
 
-fn label(store: *const Store, sp: *const md.Span, buf: []u8) []const u8 {
+pub fn label(store: *const Store, sp: *const md.Span, buf: []u8) []const u8 {
+    if (sp.flags.bullet) return "•";
     if (sp.emoji != 0) return std.fmt.bufPrint(buf, ":{s}:", .{sp.emojiName()}) catch sp.text;
     return switch (sp.mention) {
         .none => sp.text,
@@ -167,6 +199,12 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
     var it: Words = .{ .spans = spans };
     var buf: [96]u8 = undefined;
     var line_start = true;
+    // Altura e recuo da linha atual (título é mais alto, citação é recuada).
+    var cur_h = o.line_h;
+    var indent: f32 = 0;
+    // Bloco de código: a linha atual e a coluna dos números.
+    var code_line: u32 = 0;
+    var gutter: f32 = 0;
     // Realce: o que ficou aberto na linha anterior do bloco (comentário…).
     var syn: syntax.State = .normal;
     // "Copiar" do bloco: desenhado depois da última linha, para ficar por cima.
@@ -182,24 +220,30 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
             };
             const font = fontFor(o, sp);
             const as_image = sp.emoji != 0 and emoji_images;
-            var s = if (sp.mention != .none or sp.emoji != 0) label(store, sp, &buf) else word.text;
-            const size = if (sp.flags.code) o.size - 1.5 else o.size;
+            var s = if (sp.flags.bullet or sp.mention != .none or sp.emoji != 0) label(store, sp, &buf) else word.text;
+            const scaled = o.size * scaleOf(sp);
+            const size = if (sp.flags.code) scaled - 1.5 else scaled;
             const pad: f32 = if (sp.flags.code) 5 else if (sp.mention != .none) 3 else 0;
             // Linha do bloco de código ocupa a largura toda (cortada se passar).
             var w = if (sp.flags.block) wrap else if (as_image) o.emoji_box + 2 else wordWidth(font, size, s, wrap) + pad * 2;
             if (word.breaks > 0 and !(x == 0 and y == 0 and line_start)) {
                 // Uma linha nova por \n (linhas em branco contam, até 3).
                 x = 0;
-                y += o.line_h * @as(f32, @floatFromInt(@min(word.breaks, 3)));
+                y += cur_h + o.line_h * @as(f32, @floatFromInt(@min(word.breaks, 3) - 1));
                 line_start = true;
-            } else if (x > 0 and x + w > wrap) {
+            } else if (x > indent and x + w > wrap) {
                 x = 0;
-                y += o.line_h;
+                y += cur_h;
                 line_start = true;
             }
+            if (line_start) {
+                cur_h = lineHeight(o, sp);
+                indent = indentOf(o, sp);
+                x = indent;
+            }
             var rest: []const u8 = "";
-            if (w > wrap and !sp.flags.block and sp.mention == .none and sp.emoji == 0 and word.text.len > 1) {
-                var fit = d.fitBytes(font, size, word.text, wrap - pad * 2);
+            if (w > wrap - indent and !sp.flags.block and sp.mention == .none and sp.emoji == 0 and word.text.len > 1) {
+                var fit = d.fitBytes(font, size, word.text, wrap - indent - pad * 2);
                 // Nem um caractere cabe (coluna estreitíssima): anda um assim mesmo.
                 if (fit == 0) fit = @min(std.unicode.utf8ByteSequenceLength(word.text[0]) catch 1, word.text.len);
                 rest = word.text[fit..];
@@ -210,9 +254,26 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
             }
             if (dl) |l| {
                 const block_top = sp.flags.block and word.text.ptr == sp.text.ptr;
-                if (block_top) syn = .normal;
-                if (o.base) |base| select(l, th_col, base, word, sp, font, size, pad, x0 + x, y0 + y, w, space_w, o, line_start);
-                drawWord(l, th_col, sp, font, size, s, x0 + x, y0 + y, w, pad, o, mouse, &syn);
+                if (block_top) {
+                    syn = .normal;
+                    code_line = 0;
+                    // Uma linha só não precisa de número.
+                    const lines = std.mem.count(u8, sp.text, "\n") + 1;
+                    var nb: [12]u8 = undefined;
+                    gutter = if (lines > 1) d.width(font, size, std.fmt.bufPrint(&nb, "{d}", .{lines}) catch "") + 10 else 0;
+                }
+                if (sp.flags.block) code_line += 1;
+                var ol = o;
+                ol.line_h = cur_h;
+                if (sp.flags.block and gutter > 0) {
+                    ol.code_line = code_line;
+                    ol.code_gutter = gutter;
+                }
+                if (line_start and sp.flags.quote) d.rect(l, .{ .x = x0, .y = y0 + y, .w = 3, .h = cur_h }, th_col.c(.faint).alpha(o.color.a), 1.5);
+                drawWord(l, th_col, sp, font, size, s, x0 + x, y0 + y, w, pad, ol, mouse, &syn);
+                // A seleção vem por cima: o fundo do código não pode cobri-la.
+                const sel_pad = if (sp.flags.block) pad + 4 + ol.code_gutter else pad;
+                if (o.base) |base| select(l, th_col, base, word, sp, font, size, sel_pad, x0 + x, y0 + y, w, space_w, ol, line_start);
                 if (block_top and o.ctx != null) copy = .{ .sp = sp, .x = x0 + x, .y = y0 + y, .at_top = y == 0 };
             }
             line_start = false;
@@ -220,7 +281,7 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
             max_w = @max(max_w, x);
             if (rest.len > 0) {
                 x = 0;
-                y += o.line_h;
+                y += cur_h;
                 line_start = true;
                 word = word_in;
                 word.text = rest;
@@ -232,7 +293,7 @@ pub fn layout(dl: ?*c.ImDrawList, store: *const Store, th_col: anytype, spans: [
         }
     }
     if (copy) |cp| copyButton(o.ctx.?, dl.?, cp.sp, cp.x, cp.y, wrap, cp.at_top, o, mouse);
-    return .{ .h = y + o.line_h, .w = max_w, .last_x = x };
+    return .{ .h = y + cur_h, .w = max_w, .last_x = x };
 }
 
 /// Só emoji, mas personalizado sem imagem vira texto: aí não fica grande.
@@ -243,7 +304,7 @@ fn jumboShown(spans: []const md.Span) bool {
 }
 
 /// Byte do texto dentro da palavra que fica na coordenada `px`.
-fn offsetAt(font: *c.ImFont, size: f32, t: []const u8, px: f32) u32 {
+pub fn offsetAt(font: *c.ImFont, size: f32, t: []const u8, px: f32) u32 {
     var i: usize = 0;
     while (i < t.len) {
         const n = std.unicode.utf8ByteSequenceLength(t[i]) catch 1;
@@ -258,7 +319,7 @@ fn offsetAt(font: *c.ImFont, size: f32, t: []const u8, px: f32) u32 {
 fn select(dl: *c.ImDrawList, th: anytype, base: [*]const u8, word: Word, sp: *const md.Span, font: *c.ImFont, size: f32, pad: f32, x: f32, y: f32, w: f32, space_w: f32, o: Opts, line_start: bool) void {
     const start: u32 = @intCast(@intFromPtr(word.text.ptr) - @intFromPtr(base));
     const end: u32 = start + @as(u32, @intCast(word.text.len));
-    const atomic = sp.mention != .none or sp.emoji != 0;
+    const atomic = sp.flags.bullet or sp.mention != .none or sp.emoji != 0;
     if (o.sel_from < o.sel_to and start < o.sel_to and end > o.sel_from) {
         var hx0 = x;
         var hx1 = x + w;
@@ -303,13 +364,19 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
         d.rect(dl, .{ .x = x, .y = y, .w = w, .h = lh }, if (o.on_accent) d.Rgba.black.alpha(0.18) else th.c(.code_bg), 0);
         c.ImDrawList_PushClipRect(dl, d.v(x, y), d.v(x + w - pad, y + lh), true);
         const plain = if (o.on_accent) o.color else th.c(.text).mix(th.c(.accent), 0.15);
+        const code_x = x + pad + 4 + o.code_gutter;
+        if (o.code_line > 0) {
+            var nb: [12]u8 = undefined;
+            const num = std.fmt.bufPrint(&nb, "{d}", .{o.code_line}) catch "";
+            d.text(dl, font, size, code_x - 10 - d.width(font, size, num), ty, if (o.on_accent) o.color.alpha(o.color.a * 0.5) else th.c(.faint), num);
+        }
         if (sp.lang == .none) {
-            d.text(dl, font, size, x + pad + 4, ty, plain, s);
+            d.text(dl, font, size, code_x, ty, plain, s);
         } else {
             // Um pedaço por token, cada um na cor do seu tipo. Passou da borda:
             // só lê o resto da linha (o realce da próxima depende dele).
             var lx = syntax.Lexer.init(sp.lang, s, syn);
-            var tx = x + pad + 4;
+            var tx = code_x;
             while (lx.next()) |t| {
                 if (tx > x + w) continue;
                 d.text(dl, font, size, tx, ty, tokenColor(th, t.kind, plain, o.on_accent), t.text);
@@ -342,12 +409,19 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
             const drag = c.ImGui_GetMouseDragDelta(0, -1);
             if (c.ImGui_IsMouseReleased(0) and @abs(drag.x) + @abs(drag.y) < 4) {
                 // Link do Discord abre aqui dentro; o resto, no navegador.
-                if (o.ctx) |ctx| @import("links.zig").open(ctx, sp.text) else @import("attachments.zig").openUrl(sp.text);
+                if (o.ctx) |ctx| @import("links.zig").open(ctx, sp.target()) else @import("attachments.zig").openUrl(sp.target());
             }
+            // Link com texto: o endereço de verdade aparece antes do clique.
+            if (sp.url.len > 0) if (o.ctx) |ctx| d.tip(ctx, r, sp.url, true);
         }
         return;
     }
-    const color = if (sp.flags.bold) o.color.mix(th.c(.text), if (o.on_accent) 0 else 0.4) else o.color;
+    if (sp.flags.bullet) {
+        d.text(dl, font, size, x - size * 0.9, ty, o.color, s);
+        return;
+    }
+    var color = if (sp.flags.bold or sp.flags.head != 0) o.color.mix(th.c(.text), if (o.on_accent) 0 else 0.4) else o.color;
+    if (sp.flags.sub) color = if (o.on_accent) color.alpha(color.a * 0.75) else th.c(.muted).alpha(o.color.a);
     d.text(dl, font, size, x, ty, color, s);
     if (sp.flags.strike) d.line(dl, x, ty + size * 0.62, x + w, ty + size * 0.62, color, 1.2);
 }

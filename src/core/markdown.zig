@@ -3,7 +3,7 @@
 const std = @import("std");
 const Id = @import("types.zig").Id;
 
-pub const Flags = packed struct(u8) {
+pub const Flags = packed struct(u16) {
     bold: bool = false,
     italic: bool = false,
     strike: bool = false,
@@ -14,6 +14,19 @@ pub const Flags = packed struct(u8) {
     block: bool = false,
     /// A mensagem é só emoji: todos os trechos dela ficam grandes (como no Discord).
     jumbo: bool = false,
+    /// Título (#, ## ou ###: 1 a 3; 0 = não é). Vale até o fim da linha.
+    head: u2 = 0,
+    /// Letra pequena e apagada (-#).
+    sub: bool = false,
+    /// Citação (> ou >>>): barra à esquerda.
+    quote: bool = false,
+    /// Item de lista: a linha (e o que quebra dela) fica recuada.
+    list: bool = false,
+    /// Item de lista dentro de outro (dois espaços antes do marcador).
+    nested: bool = false,
+    /// Este trecho é o próprio marcador (`-` ou `*`): aparece como "•".
+    bullet: bool = false,
+    _: u1 = 0,
 };
 
 pub const Mention = union(enum) {
@@ -67,6 +80,13 @@ pub const Span = struct {
     /// Emoji personalizado (0 = não é). `text` é `:nome:` ou `<a:nome:id>`.
     emoji: Id = 0,
     emoji_anim: bool = false,
+    /// Link com texto (`[texto](url)`): `text` é o que aparece.
+    url: []const u8 = "",
+
+    /// Para onde o link leva.
+    pub fn target(sp: *const Span) []const u8 {
+        return if (sp.url.len > 0) sp.url else sp.text;
+    }
 
     /// O nome do emoji personalizado deste trecho.
     pub fn emojiName(sp: *const Span) []const u8 {
@@ -182,7 +202,8 @@ fn unicodeEmojiCount(s: []const u8) ?usize {
 fn markJumbo(spans: []Span) void {
     var n: usize = 0;
     for (spans) |sp| {
-        if (sp.flags.code or sp.flags.link or sp.flags.spoiler or sp.mention != .none) return;
+        const f = sp.flags;
+        if (f.code or f.link or f.spoiler or f.head != 0 or f.sub or f.quote or f.list or sp.mention != .none) return;
         if (sp.emoji != 0) {
             n += 1;
         } else {
@@ -191,6 +212,65 @@ fn markJumbo(spans: []Span) void {
     }
     if (n == 0 or n > 30) return;
     for (spans) |*sp| sp.flags.jumbo = true;
+}
+
+/// `#`, `##`, `###` ou `-#` no começo da linha: quantos bytes a marca ocupa.
+fn headingAt(rest: []const u8) ?struct { len: usize, level: u2 = 0, sub: bool = false } {
+    if (std.mem.startsWith(u8, rest, "### ")) return .{ .len = 4, .level = 3 };
+    if (std.mem.startsWith(u8, rest, "## ")) return .{ .len = 3, .level = 2 };
+    if (std.mem.startsWith(u8, rest, "# ")) return .{ .len = 2, .level = 1 };
+    if (std.mem.startsWith(u8, rest, "-# ")) return .{ .len = 3, .sub = true };
+    return null;
+}
+
+/// Item de lista no começo da linha: `- `, `* ` ou `1. ` (com recuo opcional).
+/// `mark` fica de fora dos espaços; `len` conta até o texto do item.
+fn listAt(rest: []const u8) ?struct { indent: usize, mark: usize, len: usize, bullet: bool } {
+    var k: usize = 0;
+    while (k < rest.len and rest[k] == ' ') k += 1;
+    if (k >= rest.len) return null;
+    if ((rest[k] == '-' or rest[k] == '*') and k + 1 < rest.len and rest[k + 1] == ' ')
+        return .{ .indent = k, .mark = 1, .len = k + 2, .bullet = true };
+    var e = k;
+    while (e < rest.len and e - k < 4 and std.ascii.isDigit(rest[e])) e += 1;
+    if (e > k and e + 1 < rest.len and rest[e] == '.' and rest[e + 1] == ' ')
+        return .{ .indent = k, .mark = e + 1 - k, .len = e + 2, .bullet = false };
+    return null;
+}
+
+/// `[texto](https://…)` em `rest`, ou null. O texto não atravessa linhas; a
+/// URL pode vir entre `<>` e ter parênteses equilibrados.
+fn maskedLink(rest: []const u8) ?struct { label: []const u8, url: []const u8, len: usize } {
+    const mid = std.mem.indexOf(u8, rest, "](") orelse return null;
+    const label = rest[1..mid];
+    if (label.len == 0 or std.mem.indexOfScalar(u8, label, '\n') != null) return null;
+    var u = mid + 2;
+    const angled = u < rest.len and rest[u] == '<';
+    if (angled) u += 1;
+    const start = u;
+    var depth: usize = 0;
+    while (u < rest.len) : (u += 1) {
+        const ch = rest[u];
+        if (ch == '\n') return null;
+        if (angled) {
+            if (ch == '>') break;
+            continue;
+        }
+        if (ch == ' ') break;
+        if (ch == '(') depth += 1;
+        if (ch == ')') {
+            if (depth == 0) break;
+            depth -= 1;
+        }
+    }
+    if (u >= rest.len) return null;
+    const url = rest[start..u];
+    if (!std.mem.startsWith(u8, url, "https://") and !std.mem.startsWith(u8, url, "http://")) return null;
+    if (angled) u += 1;
+    // Um título opcional (`"…"`) depois da URL fica de fora.
+    const close = std.mem.indexOfScalarPos(u8, rest, u, ')') orelse return null;
+    if (std.mem.indexOfScalar(u8, rest[u..close], '\n') != null) return null;
+    return .{ .label = label, .url = url, .len = close + 1 };
 }
 
 pub fn parse(gpa: std.mem.Allocator, s: []const u8) ![]Span {
@@ -208,6 +288,10 @@ pub fn parseRaw(gpa: std.mem.Allocator, s: []const u8, raw: []const u8) ![]Span 
     var flags: Flags = .{};
     var run_start: usize = 0;
     var i: usize = 0;
+    // Onde o texto da linha começa (depois de uma marca de citação).
+    var line_at: usize = 0;
+    // `>>>`: citação até o fim da mensagem.
+    var quote_rest = false;
 
     const Flush = struct {
         fn run(list: *std.ArrayList(Span), a: std.mem.Allocator, src: []const u8, from: usize, to: usize, f: Flags) !void {
@@ -217,6 +301,52 @@ pub fn parseRaw(gpa: std.mem.Allocator, s: []const u8, raw: []const u8) ![]Span 
 
     while (i < s.len) {
         const rest = s[i..];
+        // O que vale até o fim da linha termina aqui.
+        if (rest[0] == '\n') {
+            line_at = i + 1;
+            if (flags.head != 0 or flags.sub or flags.list or (flags.quote and !quote_rest)) {
+                try Flush.run(&out, gpa, s, run_start, i, flags);
+                flags.head = 0;
+                flags.sub = false;
+                flags.list = false;
+                flags.nested = false;
+                flags.quote = quote_rest;
+                run_start = i;
+            }
+            i += 1;
+            continue;
+        }
+        if (i == line_at) {
+            const mark: usize = if (std.mem.startsWith(u8, rest, ">>> ")) 4 else if (std.mem.startsWith(u8, rest, "> ")) 2 else 0;
+            if (mark > 0 and !flags.quote) {
+                try Flush.run(&out, gpa, s, run_start, i, flags);
+                flags.quote = true;
+                quote_rest = mark == 4;
+                i += mark;
+                run_start = i;
+                line_at = i;
+                continue;
+            }
+            if (headingAt(rest)) |h| {
+                try Flush.run(&out, gpa, s, run_start, i, flags);
+                flags.head = h.level;
+                flags.sub = h.sub;
+                i += h.len;
+                run_start = i;
+                continue;
+            }
+            if (listAt(rest)) |l| {
+                try Flush.run(&out, gpa, s, run_start, i, flags);
+                flags.list = true;
+                flags.nested = l.indent >= 2;
+                var f = flags;
+                f.bullet = l.bullet;
+                try out.append(gpa, .{ .text = rest[l.indent .. l.indent + l.mark], .flags = f });
+                i += l.len;
+                run_start = i;
+                continue;
+            }
+        }
         // Emoji personalizado (o que ficou em bloco de código passa direto).
         while (next_ref < refs.len and refs[next_ref].at < i) next_ref += 1;
         if (next_ref < refs.len and refs[next_ref].at == i) {
@@ -247,6 +377,7 @@ pub fn parseRaw(gpa: std.mem.Allocator, s: []const u8, raw: []const u8) ![]Span 
                 // A quebra logo depois do ``` não vira linha em branco.
                 if (i < s.len and s[i] == '\n') i += 1;
                 run_start = i;
+                line_at = i;
                 continue;
             }
         }
@@ -291,6 +422,22 @@ pub fn parseRaw(gpa: std.mem.Allocator, s: []const u8, raw: []const u8) ![]Span 
                 } else |_| {}
             }
         }
+        // Link com texto.
+        if (rest[0] == '[') if (maskedLink(rest)) |ml| {
+            try Flush.run(&out, gpa, s, run_start, i, flags);
+            var f = flags;
+            f.link = true;
+            var label = ml.label;
+            // `[**assim**](url)`: o negrito vale para o texto todo.
+            if (label.len > 4 and std.mem.startsWith(u8, label, "**") and std.mem.endsWith(u8, label, "**")) {
+                f.bold = true;
+                label = label[2 .. label.len - 2];
+            }
+            try out.append(gpa, .{ .text = label, .url = ml.url, .flags = f });
+            i += ml.len;
+            run_start = i;
+            continue;
+        };
         // Links.
         if (std.mem.startsWith(u8, rest, "https://") or std.mem.startsWith(u8, rest, "http://")) {
             var end = i;
@@ -418,6 +565,59 @@ test "mensagem só de emoji fica grande" {
     const sp = try parse(a, many.items);
     defer a.free(sp);
     try std.testing.expect(!sp[0].flags.jumbo);
+}
+
+test "títulos, letra pequena, citação e lista valem até o fim da linha" {
+    const a = std.testing.allocator;
+    const sp = try parse(a, "### Título\ntexto\n-# pequeno\n> citado\n- item\n  - dentro\n1. um\nnão é # título");
+    defer a.free(sp);
+    try std.testing.expectEqualStrings("Título", sp[0].text);
+    try std.testing.expectEqual(@as(u2, 3), sp[0].flags.head);
+    try std.testing.expectEqualStrings("\ntexto\n", sp[1].text);
+    try std.testing.expectEqual(@as(u2, 0), sp[1].flags.head);
+    try std.testing.expect(sp[2].flags.sub);
+    try std.testing.expect(!sp[3].flags.sub);
+    try std.testing.expectEqualStrings("citado", sp[4].text);
+    try std.testing.expect(sp[4].flags.quote);
+    try std.testing.expect(sp[6].flags.bullet and sp[6].flags.list);
+    try std.testing.expectEqualStrings("-", sp[6].text);
+    try std.testing.expectEqualStrings("item", sp[7].text);
+    try std.testing.expect(sp[7].flags.list and !sp[7].flags.bullet);
+    try std.testing.expect(sp[9].flags.nested and sp[9].flags.bullet);
+    try std.testing.expectEqualStrings("1.", sp[12].text);
+    try std.testing.expect(sp[12].flags.list and !sp[12].flags.bullet);
+    try std.testing.expectEqualStrings("\nnão é # título", sp[sp.len - 1].text);
+    try std.testing.expectEqual(@as(u2, 0), sp[sp.len - 1].flags.head);
+}
+
+test "citação longa vai até o fim; marca dentro de bloco de código não conta" {
+    const a = std.testing.allocator;
+    const q = try parse(a, ">>> um\ndois");
+    defer a.free(q);
+    try std.testing.expectEqual(@as(usize, 1), q.len);
+    try std.testing.expect(q[0].flags.quote);
+    const code = try parse(a, "```\n# não\n- nem\n```\n# sim");
+    defer a.free(code);
+    try std.testing.expect(code[0].flags.block);
+    try std.testing.expectEqual(@as(u2, 1), code[1].flags.head);
+}
+
+test "link com texto" {
+    const a = std.testing.allocator;
+    const sp = try parse(a, "[Agora Vai](https://a.b/c_(d)) by [**x**](<https://y.z>) [não](ftp://q) [t](https://u \"dica\")");
+    defer a.free(sp);
+    try std.testing.expectEqualStrings("Agora Vai", sp[0].text);
+    try std.testing.expect(sp[0].flags.link);
+    try std.testing.expectEqualStrings("https://a.b/c_(d)", sp[0].target());
+    try std.testing.expectEqualStrings("x", sp[2].text);
+    try std.testing.expect(sp[2].flags.bold);
+    try std.testing.expectEqualStrings("https://y.z", sp[2].url);
+    try std.testing.expectEqualStrings(" [não](ftp://q) ", sp[3].text);
+    try std.testing.expectEqualStrings("https://u", sp[4].url);
+    // Link solto: o endereço é o próprio texto.
+    const bare = try parse(a, "https://a.b");
+    defer a.free(bare);
+    try std.testing.expectEqualStrings("https://a.b", bare[0].target());
 }
 
 test "spoiler e riscado" {

@@ -329,6 +329,7 @@ pub const Store = struct {
     fn freeInvite(i: types.Invite) void {
         if (i.name.len > 0) ev_alloc.free(i.name);
         if (i.icon) |x| ev_alloc.free(x);
+        if (i.banner) |x| ev_alloc.free(x);
     }
 
     /// Guarda o cartão de um convite (com um teto: passando, esquece todos e
@@ -409,6 +410,7 @@ pub const Store = struct {
         ev_alloc.free(g.name);
         ev_alloc.free(g.acronym);
         if (g.icon) |i| ev_alloc.free(i);
+        if (g.banner) |b| ev_alloc.free(b);
     }
 
     fn freeChannelInfo(ch: *const types.Channel) void {
@@ -464,7 +466,7 @@ pub const Store = struct {
 
     fn parseEmbeds(s: *Store, embeds: []const types.Embed) ![]const []const markdown.Span {
         var n: usize = 0;
-        for (embeds) |e| n += 1 + e.fields.len;
+        for (embeds) |e| n += 1 + e.fields.len + e.blocks.len;
         if (n == 0) return &.{};
         const out = try s.gpa.alloc([]const markdown.Span, n);
         var k: usize = 0;
@@ -473,6 +475,10 @@ pub const Store = struct {
             k += 1;
             for (e.fields) |f| {
                 out[k] = try markdown.parse(s.gpa, f.value);
+                k += 1;
+            }
+            for (e.blocks) |b| {
+                out[k] = try markdown.parse(s.gpa, b.text);
                 k += 1;
             }
         }
@@ -533,10 +539,12 @@ pub const Store = struct {
             ev_alloc.free(old.name);
             ev_alloc.free(old.acronym);
             if (old.icon) |i| ev_alloc.free(i);
+            if (old.banner) |b| ev_alloc.free(b);
             old.name = g.name;
             old.acronym = g.acronym;
             old.color = g.color;
             old.icon = g.icon;
+            old.banner = g.banner;
             if (g.owner != 0) old.owner = g.owner;
             if (g.joined_id != 0) old.joined_id = g.joined_id;
             return;
