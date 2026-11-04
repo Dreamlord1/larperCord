@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-root="../" data-page="guide">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice calls · larperCord</title>
+<meta name="description" content="larperCord joins real Discord voice channels, with end-to-end encryption. Everything voice-related runs on its own thread, created only when you join a cal">
+<meta name="color-scheme" content="dark light">
+<link rel="canonical" href="https://rshacudevidro.github.io/larperCord/guide/voice.html">
+<link rel="alternate" hreflang="en" href="https://rshacudevidro.github.io/larperCord/guide/voice.html">
+<link rel="alternate" hreflang="pt-BR" href="https://rshacudevidro.github.io/larperCord/pt/guide/voice.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Voice calls · larperCord">
+<meta property="og:description" content="larperCord joins real Discord voice channels, with end-to-end encryption. Everything voice-related runs on its own thread, created only when you join a cal">
+<meta property="og:image" content="https://rshacudevidro.github.io/larperCord/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="../assets/icon-live.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/icon-32.png">
+<link rel="apple-touch-icon" href="../assets/icon-180.png">
+<link rel="preload" href="../assets/fonts/departure-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/jetbrains-mono-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/site/site.css">
+<script src="../assets/site/data.js"></script>
+<script src="../assets/site/boot.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topnav">
+  <a class="brand" href="../" aria-label="larperCord"><svg class="ma" viewBox="100 110 1200 900" aria-hidden="true" focusable="false"><defs><clipPath id="ma-bn"><path d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/></clipPath><clipPath id="ma-ln"><path d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/></clipPath><clipPath id="ma-en"><path d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></clipPath><linearGradient id="ma-lensn" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b0a44"/><stop offset=".55" stop-color="#0c0316"/><stop offset="1" stop-color="#040108"/></linearGradient></defs><g class="ma-rig"><path class="ma-ghost ma-g1" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-ghost ma-g2" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g clip-path="url(#ma-bn)"><path class="ma-edge" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-core" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z" transform="translate(12.5 45) scale(0.95)"/><path class="ma-shade" d="M150 690 C230 810 330 870 470 900 L440 980 L100 980 L100 690 Z"/></g><path class="ma-line" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g class="ma-eyes"><path class="ma-white" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-white" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/><g clip-path="url(#ma-en)"><ellipse class="ma-iris" cx="520" cy="634" rx="30" ry="36"/><ellipse class="ma-iris" cx="908" cy="538" rx="30" ry="36"/></g><path class="ma-lid" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-lid" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></g><path class="ma-mouth ma-ink" d="M728 742 C830 722 922 700 980 652 C988 668 980 680 962 690 C900 722 822 742 732 750 Z"/><g class="ma-shades"><path class="ma-arm" d="M345 596 L196 566"/><path class="ma-arm" d="M1066 458 L1196 424"/><path class="ma-arm" d="M655 554 Q680 528 702 544"/><path class="ma-lens" fill="url(#ma-lensn)" d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path class="ma-lens" fill="url(#ma-lensn)" d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/><g clip-path="url(#ma-ln)"><path class="ma-tint" d="M300 640 L1100 450 L1100 520 L300 700 Z"/><path class="ma-glare" d="M250 760 L350 760 L620 420 L520 420 Z M400 760 L440 760 L710 420 L670 420 Z"/></g></g><path class="ma-spark" d="M1095 160 C1105 250 1120 282 1240 296 C1130 310 1112 340 1110 436 C1100 340 1080 322 940 322 C1060 306 1088 272 1095 160 Z"/></g></svg><span data-brand>larperCord</span></a>
+  <nav aria-label="Main">
+    <a href="../#themes">Themes</a>
+    <a href="../#playground">Playground</a>
+    <a href="../#features">Features</a>
+    <a href="../guide/getting-started.html" aria-current="page">Guide</a>
+    <a href="https://github.com/RshaCuDeVidro/larperCord" rel="noopener">GitHub</a>
+  </nav>
+  <a class="lang" href="../pt/guide/voice.html" hreflang="pt-BR" lang="pt-BR">Português</a>
+</header>
+<div class="guide">
+<aside class="side" aria-label="Guide pages">
+<button type="button" class="side-search" data-open-palette>Search the guide<span><kbd>Ctrl</kbd><kbd>K</kbd></span></button>
+<div class="side-group"><p>Start</p><a href="../guide/getting-started.html">Getting started</a><a href="../guide/account.html">Connect your account</a></div><div class="side-group"><p>Use</p><a href="../guide/features.html">Feature tour</a><a href="../guide/shortcuts.html">Shortcuts and CLI</a><a href="../guide/settings.html">Settings and files</a><a href="../guide/voice.html" aria-current=page>Voice calls</a></div><div class="side-group"><p>Customize</p><a href="../guide/themes.html">Writing themes</a><a href="../guide/theme-gallery.html">Built-in themes</a><a href="../guide/plugins.html">Lua plugins</a></div><div class="side-group"><p>Internals</p><a href="../guide/architecture.html">Architecture</a><a href="../guide/performance.html">Performance</a><a href="../guide/privacy.html">Privacy and security</a></div><div class="side-group"><p>Project</p><a href="../guide/status.html">Status and roadmap</a><a href="../guide/contributing.html">Contributing</a></div>
+</aside>
+<main id="main" class="prose">
+<h1>Voice calls</h1>
+<p>larperCord joins real Discord voice channels, with end-to-end encryption. Everything voice-related runs on its own thread, created only when you join a call. Outside a call, the module uses no CPU and the app doesn't even initialize audio.</p>
+<h2 id="using-it"><a class="anchor" href="#using-it" aria-hidden="true">#</a>Using it</h2>
+<p>Click a voice channel to join. The panel above your user shows the call, with mute, deafen and disconnect. You can also leave through "Leave call" when you right-click the voice channel. Whoever is talking gets a ring around their avatar.</p>
+<p>The <strong>mixer</strong> gives each person their own volume.</p>
+<p><img src="../assets/shots/en/f-voz.webp" alt="The call mixer" loading="lazy"></p>
+<p>Channels where you lack the permission to connect are shown with a padlock, and the app doesn't try.</p>
+<h2 id="how-it-works"><a class="anchor" href="#how-it-works" aria-hidden="true">#</a>How it works</h2>
+<div class="table-wrap"><table><thead><tr><th>Layer</th><th>What it uses</th></tr></thead><tbody><tr><td>Signaling</td><td>Voice gateway v8 over WebSocket, with heartbeat (<code>seq_ack</code>) and RESUME when the connection drops</td></tr><tr><td>Connection</td><td>IP discovery (74-byte packet) and Select Protocol over UDP</td></tr><tr><td>Transport encryption</td><td>RTP with <code>aead_xchacha20_poly1305_rtpsize</code></td></tr><tr><td>End-to-end encryption</td><td>DAVE over MLS, through libdave and MLSpp</td></tr><tr><td>Codec</td><td>Opus at 48 kHz stereo, 20 ms per packet. Lost packets become Opus packet-loss concealment</td></tr><tr><td>Audio</td><td>SDL3 mixes. Each person is one <code>SDL_AudioStream</code> on the same output device, and their volume is the stream's gain. The microphone is a stream read every 20 ms</td></tr></tbody></table></div>
+<p>A few details that took work to get right:</p>
+<ul><li>The "speaking" opcode (op 5) goes out once when the session opens, and again on resume. It doesn't toggle on every sentence, since the server dropped the start of each one that way.</li><li>The RTP clock keeps moving with real time while you're silent, so receivers don't drop your packets after a pause.</li><li>Jitter margin applies only at the start of each talk spurt. Applying it whenever the queue emptied caused audible gaps.</li><li>People already in a call can arrive before DAVE exists, so they're kept and added when it starts.</li></ul>
+<h2 id="limits-today"><a class="anchor" href="#limits-today" aria-hidden="true">#</a>Limits today</h2>
+<ul><li>It uses your system's default audio device. There's no device picker yet.</li><li>No push-to-talk and no noise suppression.</li><li>No screen sharing, camera or streaming.</li><li>No automated test for a real call. QA covers the UI only.</li></ul>
+<h2 id="debugging"><a class="anchor" href="#debugging" aria-hidden="true">#</a>Debugging</h2>
+<div class="code" data-lang="bash"><span class="code-lang">bash</span><button class="copy" type="button" data-copy>copy</button><pre><code><span class="t-k">LARPER_VOICE_DEBUG</span>=1 larpercord</code></pre></div>
+<p>This prints opcodes, close codes and DAVE events, and microphone level and frames sent. It never prints the token or any keys.</p>
+<p>To test only the connection, <code>--voice-test</code> joins a channel for 25 seconds, <strong>always muted</strong>:</p>
+<div class="code" data-lang="bash"><span class="code-lang">bash</span><button class="copy" type="button" data-copy>copy</button><pre><code><span class="t-k">LARPER_TOKEN</span>=... larpercord <span class="t-p">--voice-test</span> GUILD_ID CHANNEL_ID</code></pre></div>
+<p class="edit"><a href="https://github.com/RshaCuDeVidro/larperCord/blob/main/site/guide/en/voice.md" rel="noopener">Source of this page on GitHub</a></p>
+<nav class="pager"><a href="../guide/settings.html"><small>Previous</small>Settings and files</a><a class="next" href="../guide/themes.html"><small>Next</small>Writing themes</a></nav>
+</main>
+<nav class="toc" aria-label="On this page"><p>On this page</p><a class="l2" href="#using-it">Using it</a><a class="l2" href="#how-it-works">How it works</a><a class="l2" href="#limits-today">Limits today</a><a class="l2" href="#debugging">Debugging</a></nav>
+</div>
+<footer class="statusbar" aria-label="Page theme">
+  <button type="button" class="buddy" data-next-theme aria-label="Next theme"><svg class="ma" viewBox="100 110 1200 900" aria-hidden="true" focusable="false"><defs><clipPath id="ma-bb"><path d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/></clipPath><clipPath id="ma-lb"><path d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/></clipPath><clipPath id="ma-eb"><path d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></clipPath><linearGradient id="ma-lensb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b0a44"/><stop offset=".55" stop-color="#0c0316"/><stop offset="1" stop-color="#040108"/></linearGradient></defs><g class="ma-rig"><path class="ma-ghost ma-g1" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-ghost ma-g2" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g clip-path="url(#ma-bb)"><path class="ma-edge" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-core" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z" transform="translate(12.5 45) scale(0.95)"/><path class="ma-shade" d="M150 690 C230 810 330 870 470 900 L440 980 L100 980 L100 690 Z"/></g><path class="ma-line" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g class="ma-eyes"><path class="ma-white" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-white" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/><g clip-path="url(#ma-eb)"><ellipse class="ma-iris" cx="520" cy="634" rx="30" ry="36"/><ellipse class="ma-iris" cx="908" cy="538" rx="30" ry="36"/></g><path class="ma-lid" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-lid" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></g><path class="ma-mouth ma-ink" d="M728 742 C830 722 922 700 980 652 C988 668 980 680 962 690 C900 722 822 742 732 750 Z"/><g class="ma-shades"><path class="ma-arm" d="M345 596 L196 566"/><path class="ma-arm" d="M1066 458 L1196 424"/><path class="ma-arm" d="M655 554 Q680 528 702 544"/><path class="ma-lens" fill="url(#ma-lensb)" d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path class="ma-lens" fill="url(#ma-lensb)" d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/><g clip-path="url(#ma-lb)"><path class="ma-tint" d="M300 640 L1100 450 L1100 520 L300 700 Z"/><path class="ma-glare" d="M250 760 L350 760 L620 420 L520 420 Z M400 760 L440 760 L710 420 L670 420 Z"/></g></g><path class="ma-spark" d="M1095 160 C1105 250 1120 282 1240 296 C1130 310 1112 340 1110 436 C1100 340 1080 322 940 322 C1060 306 1088 272 1095 160 Z"/></g></svg></button>
+  <i class="sb-prog" aria-hidden="true"></i>
+  <span class="sb-dot" aria-hidden="true"></span>
+  <button type="button" class="sb-btn" data-next-theme title="F2"><span data-theme-name>larper</span></button>
+  <button type="button" class="sb-btn" data-toggle-mode><span data-mode-name>dark</span></button>
+  <span class="sb-spacer"></span>
+  <button type="button" class="sb-btn sb-keys" data-open-palette><kbd>Ctrl</kbd><kbd>K</kbd> palette</button>
+  <span class="sb-keys sb-hint"><kbd>F2</kbd> next theme</span>
+  <span class="sb-pos" data-scroll-pos></span>
+  <time class="sb-clock" data-clock></time>
+</footer>
+<div class="fx-layer" aria-hidden="true"></div>
+<script src="../assets/site/site.js"></script>
+</body>
+</html>

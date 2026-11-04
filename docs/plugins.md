@@ -1,139 +1,134 @@
-# Plugins em Lua
+# Lua plugins
 
-> **English TL;DR**: drop small Lua 5.4 scripts in `~/.config/larpercord/plugins/*.lua`.
-> They can react to messages (`larper.on`), add local slash commands typed in the message box
-> (`larper.command`) and keybinds (`larper.keybind`), show notices (`larper.notify`) and send
-> messages (`larper.send`), but **only** from your own command or keybind, never as an automatic
-> reply. Scripts run in a sandbox (no files, processes or network) with an instruction limit.
-> Manage them in Settings → Plugins.
+**English** · [Português](plugins.pt-BR.md)
 
-Plugins são scripts pequenos que reagem ao que acontece no app e criam comandos e atalhos,
-sem recompilar nada. Cada arquivo `.lua` em
+Plugins are small scripts that react to what happens in the app and add commands and keybinds,
+with no recompiling. Every `.lua` file in
 
 ```
-~/.config/larpercord/plugins/          ($XDG_CONFIG_HOME/larpercord/plugins, se definido)
+~/.config/larpercord/plugins/          ($XDG_CONFIG_HOME/larpercord/plugins, if set)
 ```
 
-é um plugin. Abra **Configurações → Plugins** (`Ctrl+,`) para ver a lista, ligar e desligar cada um
-(a escolha fica em `~/.config/larpercord/plugins.kdl`), ver o erro de quem quebrou e
-**Recarregar** depois de editar um arquivo.
+is a plugin. Open **Settings → Plugins** (`Ctrl+,`) to see the list, turn each one on or off
+(the choice is kept in `~/.config/larpercord/plugins.kdl`), see the error from any that broke, and
+**Reload** after editing a file.
 
-## Um exemplo
+## An example
 
 ```lua
 -- ~/.config/larpercord/plugins/shrug.lua
 larper.command("/shrug", function(args)
-  local texto = "¯\\_(ツ)_/¯"
-  if args ~= "" then texto = args .. " " .. texto end
-  larper.send(larper.channel(), texto)
+  local text = "¯\\_(ツ)_/¯"
+  if args ~= "" then text = args .. " " .. text end
+  larper.send(larper.channel(), text)
 end)
 ```
 
-Digite `/shrug sei lá` na caixa de mensagem e o canal recebe `sei lá ¯\_(ツ)_/¯`. O `/shrug` em si
-nunca vai para o Discord.
+Type `/shrug no idea` in the message box and the channel receives `no idea ¯\_(ツ)_/¯`. The
+`/shrug` itself never goes to Discord.
 
-Os exemplos completos estão em [`docs/plugins/`](plugins/):
+The full examples are in [`docs/plugins/`](plugins/):
 
-- [`shrug.lua`](plugins/shrug.lua): o comando acima;
-- [`alerta.lua`](plugins/alerta.lua): avisa quando alguém escreve uma palavra da sua lista.
+- [`shrug.lua`](plugins/shrug.lua): the command above;
+- [`alerta.lua`](plugins/alerta.lua): notifies you when someone writes a word from your list.
 
-Para instalar: `mkdir -p ~/.config/larpercord/plugins && cp docs/plugins/*.lua ~/.config/larpercord/plugins/`
-e clique em **Recarregar** (ou abra o app de novo).
+To install: `mkdir -p ~/.config/larpercord/plugins && cp docs/plugins/*.lua ~/.config/larpercord/plugins/`
+and click **Reload** (or open the app again).
 
 ## API
 
-Tudo fica na tabela global `larper`. IDs do Discord são strings (`"1234567890"`).
+Everything lives in the global table `larper`. Discord IDs are strings (`"1234567890"`).
 
-### `larper.on(evento, função)`
+### `larper.on(event, function)`
 
-| evento | quando | argumento |
+| event | when | argument |
 |---|---|---|
-| `"message"` | chega uma mensagem nova em qualquer canal (inclusive as suas) | `msg` |
-| `"ready"` | o app conectou (ou o plugin foi carregado/ligado com o app já conectado) | nenhum |
+| `"message"` | a new message arrives in any channel (including your own) | `msg` |
+| `"ready"` | the app connected (or the plugin was loaded or turned on while the app was already connected) | none |
 
-`msg` tem:
+`msg` has:
 
-| campo | exemplo |
+| field | example |
 |---|---|
-| `msg.content` | `"bom dia"` |
+| `msg.content` | `"good morning"` |
 | `msg.author` | `{ id = "1001", name = "ana" }` |
-| `msg.channel` | `{ id = "5000", name = "geral" }` |
-| `msg.guild` | `{ id = "500", name = "Servidor" }`, ou `nil` em mensagens diretas |
-| `msg.mine` | `true` se foi você que mandou |
+| `msg.channel` | `{ id = "5000", name = "general" }` |
+| `msg.guild` | `{ id = "500", name = "Server" }`, or `nil` in direct messages |
+| `msg.mine` | `true` if you sent it |
 | `msg.id` | `"1350000000000000000"` |
 
-O histórico carregado ao abrir um canal não dispara `"message"`, só o que chega ao vivo.
-Mensagens de sistema (fulano entrou, fixou…) também não.
+The history loaded when you open a channel doesn't fire `"message"`, only what arrives live.
+System messages (someone joined, pinned…) don't either.
 
 ```lua
 larper.on("message", function(msg)
   if not msg.mine and msg.content:lower():find("pizza", 1, true) then
-    larper.notify(msg.author.name .. " falou de pizza em #" .. msg.channel.name)
+    larper.notify(msg.author.name .. " talked about pizza in #" .. msg.channel.name)
   end
 end)
 ```
 
-### `larper.command("/nome", função(args))`
+### `larper.command("/name", function(args))`
 
-Um comando local: quando você manda uma mensagem que começa com `/nome`, a função roda com o
-resto do texto (`args`, sem espaços nas pontas, `""` se não tiver nada) e **nada vai para o
-Discord**. O nome é `/` seguido de letras, números, `_` ou `-` (até 32). Se dois plugins
-registrarem o mesmo nome, vale o primeiro em ordem alfabética do arquivo. Um `/algo` que nenhum
-plugin ligado conhece vai como texto normal.
+A local command: when you send a message that starts with `/name`, the function runs with the
+rest of the text (`args`, trimmed at both ends, `""` if there's nothing) and **nothing goes to
+Discord**. The name is `/` followed by letters, numbers, `_` or `-` (up to 32). If two plugins
+register the same name, the first one in file name order wins. A `/something` that no enabled
+plugin knows is sent as normal text.
 
-### `larper.keybind("ctrl+shift+x", função)`
+### `larper.keybind("ctrl+shift+x", function)`
 
-Um atalho de teclado. Modificadores: `ctrl`, `shift`, `alt`, `super`; teclas: `a`–`z`, `0`–`9`,
+A keyboard shortcut. Modifiers: `ctrl`, `shift`, `alt`, `super`; keys: `a`–`z`, `0`–`9`,
 `f1`–`f24`, `enter`, `space`, `tab`, `backspace`, `delete`, `insert`, `home`, `end`, `pageup`,
-`pagedown`, `up`, `down`, `left`, `right`, `,` `.` `/` `;` `-` `=`. Letras e números precisam de
-`ctrl`, `alt` ou `super` (senão disparariam enquanto você digita); as teclas F podem ir sozinhas.
-O atalho vale fora das configurações e da paleta de comandos, inclusive com a caixa de texto em foco.
-Os atalhos do app (`Ctrl+K`, `Ctrl+W`…) continuam funcionando junto: escolha outra combinação.
+`pagedown`, `up`, `down`, `left`, `right`, `,` `.` `/` `;` `-` `=`. Letters and numbers need
+`ctrl`, `alt` or `super` (otherwise they'd fire while you type); F keys can go alone.
+The shortcut works outside settings and the command palette, including with the text box focused.
+The app's own shortcuts (`Ctrl+K`, `Ctrl+W`…) keep working alongside it: pick another combination.
 
-### `larper.notify(texto)`
+### `larper.notify(text)`
 
-Mostra um aviso no topo da janela. Com a janela fora de foco (e "Notificações na área de
-trabalho" ligadas), também sai uma notificação do sistema.
+Shows a notice at the top of the window. With the window unfocused (and "Desktop notifications"
+on), a system notification goes out too.
 
-### `larper.send(canal, texto)`
+### `larper.send(channel, text)`
 
-Manda uma mensagem de verdade, como se você tivesse digitado. `canal` pode ser `nil` (o canal
-aberto), uma tabela com `id` (como `larper.channel()` ou `msg.channel`) ou o ID em string.
-`texto` tem de 1 a 2000 bytes. No máximo 5 por comando/atalho.
+Sends a real message, as if you had typed it. `channel` can be `nil` (the open channel), a table
+with an `id` (like `larper.channel()` or `msg.channel`) or the ID as a string.
+`text` is 1 to 2000 bytes. At most 5 per command or keybind.
 
 > [!IMPORTANT]
-> **`larper.send` só funciona dentro de um `larper.command` ou `larper.keybind`**, ou seja,
-> quando **você** digitou o comando ou apertou o atalho. Chamado no carregamento, em `"ready"` ou
-> em `"message"` ele dá erro. Isso é de propósito: responder sozinho às mensagens dos outros
-> transforma a conta num *self-bot*, o que o Discord proíbe e costuma punir com banimento.
-> Para reagir a mensagens, use `larper.notify`.
+> **`larper.send` only works inside a `larper.command` or `larper.keybind`**, that is, when
+> **you** typed the command or pressed the shortcut. Called at load time, in `"ready"` or in
+> `"message"`, it raises an error. This is on purpose: replying on its own to other people's
+> messages turns the account into a *self-bot*, which Discord forbids and usually punishes with a ban.
+> To react to messages, use `larper.notify`.
 
-### `larper.channel()` e `larper.guild()`
+### `larper.channel()` and `larper.guild()`
 
-O canal aberto (`{ id, name }`) e o servidor dele (`{ id, name }`). `nil` quando não há canal aberto
-(tela de amigos) ou, no caso de `guild()`, numa mensagem direta.
+The open channel (`{ id, name }`) and its server (`{ id, name }`). `nil` when no channel is open
+(friends screen) or, for `guild()`, in a direct message.
 
 ### `print(...)`
 
-Vai para o log do app (`[nome.lua] …` no terminal), não para a interface.
+Goes to the app's log (`[name.lua] …` in the terminal), not to the interface.
 
-## Sandbox e limites
+## Sandbox and limits
 
-Cada plugin roda num Lua 5.4 separado (um não enxerga o outro), na thread da interface.
+Each plugin runs in its own Lua 5.4 (one can't see another), on the interface thread.
 
-- **Bibliotecas**: só `string`, `table`, `math`, `utf8` e as funções básicas, mais `os.time`,
-  `os.date`, `os.clock` e `os.difftime`. Não existem `io`, `os.execute`/`os.remove`/`os.getenv`,
-  `require`, `package`, `debug`, `coroutine`, `load`, `loadfile`, `dofile`, `collectgarbage` nem
-  `string.dump`: um plugin não lê nem grava arquivos, não roda programas e não acessa a rede.
-- **Instruções**: cada chamada (carregar o arquivo, um evento, um comando, um atalho) pode rodar
-  até ~5 milhões de instruções. Passou disso, o plugin é **parado** e o erro aparece na página
-  (um `while true do end` não congela o app). `pcall` não segura esse erro.
-- **Memória**: até 8 MB por plugin; passar disso vira um erro `not enough memory` comum.
-- **Erros** não derrubam o app: viram um aviso vermelho e ficam escritos na página do plugin,
-  com `arquivo:linha`. Depois de 10 erros o plugin é parado. Corrija o arquivo e clique em
-  **Recarregar** (ou desligue e ligue).
-- Arquivos acima de 256 KB não são carregados; no máximo 64 plugins.
-- Sem plugins na pasta, o app não faz trabalho nenhum a mais (nem aloca nada) por mensagem,
-  tecla ou quadro.
+- **Libraries**: only `string`, `table`, `math`, `utf8` and the basic functions, plus `os.time`,
+  `os.date`, `os.clock` and `os.difftime`. There is no `io`, `os.execute`/`os.remove`/`os.getenv`,
+  `require`, `package`, `debug`, `coroutine`, `load`, `loadfile`, `dofile`, `collectgarbage` or
+  `string.dump`: a plugin can't read or write files, run programs or access the network.
+- **Instructions**: each call (loading the file, an event, a command, a keybind) can run
+  up to ~5 million instructions. Go past that and the plugin is **stopped** and the error shows on
+  its page (a `while true do end` doesn't freeze the app). `pcall` can't catch this error.
+- **Memory**: up to 8 MB per plugin; going over becomes a regular `not enough memory` error.
+- **Errors** don't bring the app down: they become a red notice and are written on the plugin's
+  page, with `file:line`. After 10 errors the plugin is stopped. Fix the file and click
+  **Reload** (or turn it off and on).
+- Files over 256 KB aren't loaded; at most 64 plugins.
+- With no plugins in the folder, the app does no extra work (and allocates nothing) per message,
+  key or frame.
 
-Os plugins rodam com a sua conta: só use arquivos que você leu e entende.
+Plugins run with your account: only use files you've read and understand.

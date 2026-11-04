@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-root="../" data-page="guide">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture · larperCord</title>
+<meta name="description" content="About 34,000 lines of Zig on top of a thin C layer. The rule that shapes everything: the UI never changes data directly . # Data flow text copy UI → Action">
+<meta name="color-scheme" content="dark light">
+<link rel="canonical" href="https://rshacudevidro.github.io/larperCord/guide/architecture.html">
+<link rel="alternate" hreflang="en" href="https://rshacudevidro.github.io/larperCord/guide/architecture.html">
+<link rel="alternate" hreflang="pt-BR" href="https://rshacudevidro.github.io/larperCord/pt/guide/architecture.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Architecture · larperCord">
+<meta property="og:description" content="About 34,000 lines of Zig on top of a thin C layer. The rule that shapes everything: the UI never changes data directly . # Data flow text copy UI → Action">
+<meta property="og:image" content="https://rshacudevidro.github.io/larperCord/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="../assets/icon-live.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/icon-32.png">
+<link rel="apple-touch-icon" href="../assets/icon-180.png">
+<link rel="preload" href="../assets/fonts/departure-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/jetbrains-mono-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/site/site.css">
+<script src="../assets/site/data.js"></script>
+<script src="../assets/site/boot.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topnav">
+  <a class="brand" href="../" aria-label="larperCord"><svg class="ma" viewBox="100 110 1200 900" aria-hidden="true" focusable="false"><defs><clipPath id="ma-bn"><path d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/></clipPath><clipPath id="ma-ln"><path d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/></clipPath><clipPath id="ma-en"><path d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></clipPath><linearGradient id="ma-lensn" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b0a44"/><stop offset=".55" stop-color="#0c0316"/><stop offset="1" stop-color="#040108"/></linearGradient></defs><g class="ma-rig"><path class="ma-ghost ma-g1" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-ghost ma-g2" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g clip-path="url(#ma-bn)"><path class="ma-edge" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-core" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z" transform="translate(12.5 45) scale(0.95)"/><path class="ma-shade" d="M150 690 C230 810 330 870 470 900 L440 980 L100 980 L100 690 Z"/></g><path class="ma-line" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g class="ma-eyes"><path class="ma-white" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-white" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/><g clip-path="url(#ma-en)"><ellipse class="ma-iris" cx="520" cy="634" rx="30" ry="36"/><ellipse class="ma-iris" cx="908" cy="538" rx="30" ry="36"/></g><path class="ma-lid" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-lid" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></g><path class="ma-mouth ma-ink" d="M728 742 C830 722 922 700 980 652 C988 668 980 680 962 690 C900 722 822 742 732 750 Z"/><g class="ma-shades"><path class="ma-arm" d="M345 596 L196 566"/><path class="ma-arm" d="M1066 458 L1196 424"/><path class="ma-arm" d="M655 554 Q680 528 702 544"/><path class="ma-lens" fill="url(#ma-lensn)" d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path class="ma-lens" fill="url(#ma-lensn)" d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/><g clip-path="url(#ma-ln)"><path class="ma-tint" d="M300 640 L1100 450 L1100 520 L300 700 Z"/><path class="ma-glare" d="M250 760 L350 760 L620 420 L520 420 Z M400 760 L440 760 L710 420 L670 420 Z"/></g></g><path class="ma-spark" d="M1095 160 C1105 250 1120 282 1240 296 C1130 310 1112 340 1110 436 C1100 340 1080 322 940 322 C1060 306 1088 272 1095 160 Z"/></g></svg><span data-brand>larperCord</span></a>
+  <nav aria-label="Main">
+    <a href="../#themes">Themes</a>
+    <a href="../#playground">Playground</a>
+    <a href="../#features">Features</a>
+    <a href="../guide/getting-started.html" aria-current="page">Guide</a>
+    <a href="https://github.com/RshaCuDeVidro/larperCord" rel="noopener">GitHub</a>
+  </nav>
+  <a class="lang" href="../pt/guide/architecture.html" hreflang="pt-BR" lang="pt-BR">Português</a>
+</header>
+<div class="guide">
+<aside class="side" aria-label="Guide pages">
+<button type="button" class="side-search" data-open-palette>Search the guide<span><kbd>Ctrl</kbd><kbd>K</kbd></span></button>
+<div class="side-group"><p>Start</p><a href="../guide/getting-started.html">Getting started</a><a href="../guide/account.html">Connect your account</a></div><div class="side-group"><p>Use</p><a href="../guide/features.html">Feature tour</a><a href="../guide/shortcuts.html">Shortcuts and CLI</a><a href="../guide/settings.html">Settings and files</a><a href="../guide/voice.html">Voice calls</a></div><div class="side-group"><p>Customize</p><a href="../guide/themes.html">Writing themes</a><a href="../guide/theme-gallery.html">Built-in themes</a><a href="../guide/plugins.html">Lua plugins</a></div><div class="side-group"><p>Internals</p><a href="../guide/architecture.html" aria-current=page>Architecture</a><a href="../guide/performance.html">Performance</a><a href="../guide/privacy.html">Privacy and security</a></div><div class="side-group"><p>Project</p><a href="../guide/status.html">Status and roadmap</a><a href="../guide/contributing.html">Contributing</a></div>
+</aside>
+<main id="main" class="prose">
+<h1>Architecture</h1>
+<p>About 34,000 lines of Zig on top of a thin C layer. The rule that shapes everything: <strong>the UI never changes data directly</strong>.</p>
+<h2 id="data-flow"><a class="anchor" href="#data-flow" aria-hidden="true">#</a>Data flow</h2>
+<div class="code" data-lang="text"><span class="code-lang">text</span><button class="copy" type="button" data-copy>copy</button><pre><code>UI → Action → app → Command → gateway → Event → Store → UI</code></pre></div>
+<p>The UI only reads the Store and requests actions. The app turns them into commands for the gateway, which runs on its own thread, and events come back through a queue into the Store. That's why swapping the demo gateway for the real one doesn't touch the UI.</p>
+<h2 id="source-tree"><a class="anchor" href="#source-tree" aria-hidden="true">#</a>Source tree</h2>
+<div class="code" data-lang="text"><span class="code-lang">text</span><button class="copy" type="button" data-copy>copy</button><pre><code>src/
+  core/       pure data, no window: types (snowflakes), Store, markdown, events,
+              inbox, saved messages, filters, search queries, cache format
+  net/        the real gateway (Discord) and the demo one, queues, voice,
+              settings protobuf, message cache, proxy, media URLs
+  theme/      KDL parser, colors, theme loader, layout engine, manager + inotify
+  ui/         components, rich text, palette, settings, animations, images, video
+  plugins/    the Lua engine and its host
+  platform/   window, renderer, waking the loop, FFmpeg loading. The only
+              place that knows about SDL's windowing
+themes/       the built-in themes (also compiled into the binary)
+third_party/  vendored code: Dear ImGui, dear_bindings, Lua, stb_image, libdave,
+              MLSpp, nlohmann/json
+tools/        QA, memory benchmark, screenshots, logo and site generators</code></pre></div>
+<h2 id="threads"><a class="anchor" href="#threads" aria-hidden="true">#</a>Threads</h2>
+<div class="table-wrap"><table><thead><tr><th>Thread</th><th>When it exists</th><th>Job</th></tr></thead><tbody><tr><td>UI</td><td>Always</td><td>The main loop, sleeping in <code>SDL_WaitEvent</code> when nothing happens. Lua plugins run here too</td></tr><tr><td>Gateway</td><td>With a token</td><td>WebSocket with heartbeat, RESUME, zlib-stream and reconnects, plus REST, one request at a time</td></tr><tr><td>Demo gateway</td><td>Without a token</td><td>Fake servers, people and messages</td></tr><tr><td>Media</td><td>Always, mostly asleep</td><td>Downloads and decodes images at low priority, at most 2 decodes at a time</td></tr><tr><td>Theme watcher</td><td>Unless disabled</td><td>Waits on inotify for changes to theme files and pywal colors</td></tr><tr><td>Video</td><td>While playing</td><td>One thread downloads, another decodes into a 3-frame ring</td></tr><tr><td>Voice</td><td>During a call</td><td>Voice gateway, UDP, Opus and DAVE</td></tr></tbody></table></div>
+<h2 id="talking-to-discord"><a class="anchor" href="#talking-to-discord" aria-hidden="true">#</a>Talking to Discord</h2>
+<p>The gateway uses WebSocket (<code>v=10</code>, JSON, <code>zlib-stream</code>) with heartbeat, session RESUME and reconnects. The behavior was ported to Zig from which also connects as a user client. REST handles history, sending, editing, deleting, reactions and "typing", one request at a time and respecting rate limits.</p>
+<h2 id="the-rendering"><a class="anchor" href="#the-rendering" aria-hidden="true">#</a>The rendering</h2>
+<p>Everything is drawn with Dear ImGui's <code>ImDrawList</code> over SDL_Renderer, and FreeType renders the text. ImGui is an immediate-mode library, so its usual cost is redrawing all the time. Here, the loop only draws when something changes:</p>
+<ul><li><strong>Input, network, inotify and the clock</strong> wake the loop through events.</li><li><strong>Animations</strong> ask for frames only while they're running.</li><li><strong>Lists</strong> use binary search to find the first visible item and draw only what's on screen.</li><li><strong>Markdown</strong> is parsed once, when the message arrives, with a height cache per width.</li></ul>
+<h2 id="themes-as-data"><a class="anchor" href="#themes-as-data" aria-hidden="true">#</a>Themes as data</h2>
+<p>A theme is parsed into colors, styles and a tree of nodes. The layout engine computes rectangles from <code>row</code>, <code>column</code>, <code>stack</code>, <code>flex</code> and sizes, then a table in <code>src/ui/root.zig</code> maps component names to draw functions. A component it doesn't know appears with a red border and the file's line number.</p>
+<p><a href="../guide/themes.html">Writing themes</a> documents the language, and the <a href="../index.html#playground">playground on the home page</a> lets you try it in your browser.</p>
+<h2 id="how-it-stays-light"><a class="anchor" href="#how-it-stays-light" aria-hidden="true">#</a>How it stays light</h2>
+<p>See <a href="../guide/performance.html">Performance</a>.</p>
+<p class="edit"><a href="https://github.com/RshaCuDeVidro/larperCord/blob/main/site/guide/en/architecture.md" rel="noopener">Source of this page on GitHub</a></p>
+<nav class="pager"><a href="../guide/plugins.html"><small>Previous</small>Lua plugins</a><a class="next" href="../guide/performance.html"><small>Next</small>Performance</a></nav>
+</main>
+<nav class="toc" aria-label="On this page"><p>On this page</p><a class="l2" href="#data-flow">Data flow</a><a class="l2" href="#source-tree">Source tree</a><a class="l2" href="#threads">Threads</a><a class="l2" href="#talking-to-discord">Talking to Discord</a><a class="l2" href="#the-rendering">The rendering</a><a class="l2" href="#themes-as-data">Themes as data</a><a class="l2" href="#how-it-stays-light">How it stays light</a></nav>
+</div>
+<footer class="statusbar" aria-label="Page theme">
+  <button type="button" class="buddy" data-next-theme aria-label="Next theme"><svg class="ma" viewBox="100 110 1200 900" aria-hidden="true" focusable="false"><defs><clipPath id="ma-bb"><path d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/></clipPath><clipPath id="ma-lb"><path d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/></clipPath><clipPath id="ma-eb"><path d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></clipPath><linearGradient id="ma-lensb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b0a44"/><stop offset=".55" stop-color="#0c0316"/><stop offset="1" stop-color="#040108"/></linearGradient></defs><g class="ma-rig"><path class="ma-ghost ma-g1" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-ghost ma-g2" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g clip-path="url(#ma-bb)"><path class="ma-edge" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-core" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z" transform="translate(12.5 45) scale(0.95)"/><path class="ma-shade" d="M150 690 C230 810 330 870 470 900 L440 980 L100 980 L100 690 Z"/></g><path class="ma-line" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g class="ma-eyes"><path class="ma-white" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-white" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/><g clip-path="url(#ma-eb)"><ellipse class="ma-iris" cx="520" cy="634" rx="30" ry="36"/><ellipse class="ma-iris" cx="908" cy="538" rx="30" ry="36"/></g><path class="ma-lid" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-lid" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></g><path class="ma-mouth ma-ink" d="M728 742 C830 722 922 700 980 652 C988 668 980 680 962 690 C900 722 822 742 732 750 Z"/><g class="ma-shades"><path class="ma-arm" d="M345 596 L196 566"/><path class="ma-arm" d="M1066 458 L1196 424"/><path class="ma-arm" d="M655 554 Q680 528 702 544"/><path class="ma-lens" fill="url(#ma-lensb)" d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path class="ma-lens" fill="url(#ma-lensb)" d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/><g clip-path="url(#ma-lb)"><path class="ma-tint" d="M300 640 L1100 450 L1100 520 L300 700 Z"/><path class="ma-glare" d="M250 760 L350 760 L620 420 L520 420 Z M400 760 L440 760 L710 420 L670 420 Z"/></g></g><path class="ma-spark" d="M1095 160 C1105 250 1120 282 1240 296 C1130 310 1112 340 1110 436 C1100 340 1080 322 940 322 C1060 306 1088 272 1095 160 Z"/></g></svg></button>
+  <i class="sb-prog" aria-hidden="true"></i>
+  <span class="sb-dot" aria-hidden="true"></span>
+  <button type="button" class="sb-btn" data-next-theme title="F2"><span data-theme-name>larper</span></button>
+  <button type="button" class="sb-btn" data-toggle-mode><span data-mode-name>dark</span></button>
+  <span class="sb-spacer"></span>
+  <button type="button" class="sb-btn sb-keys" data-open-palette><kbd>Ctrl</kbd><kbd>K</kbd> palette</button>
+  <span class="sb-keys sb-hint"><kbd>F2</kbd> next theme</span>
+  <span class="sb-pos" data-scroll-pos></span>
+  <time class="sb-clock" data-clock></time>
+</footer>
+<div class="fx-layer" aria-hidden="true"></div>
+<script src="../assets/site/site.js"></script>
+</body>
+</html>

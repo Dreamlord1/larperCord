@@ -1,0 +1,293 @@
+<main id="main">
+
+<section class="hero">
+  <canvas class="pixels" aria-hidden="true"></canvas>
+  <div class="hero-first">
+    <div class="hero-text">
+      <span class="tag"><b>layout</b> <i>{ row {</i> &nbsp;// {{unofficial native Discord client · v0.4.0||cliente nativo e não oficial de Discord · v0.4.0}}</span>
+      <h1>{{<span data-g="Discord,">Discord,</span><em data-g="without the browser">without the browser</em><span data-g="inside.">inside.</span>||<span data-g="O Discord,">O Discord,</span><em data-g="sem o navegador">sem o navegador</em><span data-g="dentro.">dentro.</span>}}</h1>
+      <p class="typed" aria-hidden="true"><span class="typed-cmd"></span><span class="typed-out"></span><i class="typed-cur"></i></p>
+      <div class="hero-copy">
+        <p>{{A native client that sits under <strong>50&nbsp;MB of RAM</strong> and <strong>0% CPU</strong> when idle. Its entire interface is <strong>one text file</strong> you can edit while it runs. Watch it rearrange.||Um cliente nativo que fica abaixo de <strong>50&nbsp;MB de RAM</strong> e em <strong>0% de CPU</strong> parado. A interface inteira é <strong>um arquivo de texto</strong> que você edita com o app aberto. Olha ela se reorganizando.}}</p>
+        <div class="cta">
+          <a class="btn primary" href="#install">{{Try the demo||Testar a demonstração}} →</a>
+          <a class="btn" href="%GUIDE%getting-started.html">{{Read the guide||Ler o guia}}</a>
+        </div>
+        <p class="risk"><strong>{{Read this first:||Leia antes:}}</strong> {{third-party clients break Discord's Terms of Service and your account can be banned. Demo mode needs no account at all.||clientes de terceiros violam os Termos de Uso do Discord e a sua conta pode ser bloqueada. O modo demonstração não precisa de conta.}}</p>
+      </div>
+    </div>
+    <div class="morph" data-morph>
+      <div class="aurora" aria-hidden="true"></div>
+      <span class="quip" aria-live="polite"></span>
+      <button type="button" class="mascot" data-next-theme aria-label="{{Next theme||Próximo tema}}">%MASCOT%</button>
+      <div class="morph-scene" aria-hidden="true"><div class="morph-sway"><div class="morph-tilt"><div class="morph-app"></div></div></div></div>
+      <p class="morph-hud"><b data-morph-file></b><span data-morph-desc></span></p>
+      <div class="tabs" role="tablist" aria-label="{{Theme for this page||Tema desta página}}">%THEME_TABS%</div>
+    </div>
+  </div>
+  <div class="stage">
+    <p class="stage-head">{{And this is the real thing. Same data, same binary:||E esse é o app de verdade. Mesmos dados, mesmo binário:}}</p>
+    <div class="stage-float"><div class="stage-tilt">
+      <span class="sticker">{{NOT DISCORD INC.||NÃO É A DISCORD INC.}}</span>
+      <div class="window"><div class="winbar" aria-hidden="true"><i></i><i></i><i></i><span data-win-title></span></div><div class="shots"><img data-hero-shot decoding="async" src="%ROOT%assets/shots/%LANG%/larper.webp" alt="{{The larperCord app showing a conversation||O app larperCord mostrando uma conversa}}" width="1280" height="800"><img class="shot-next" decoding="async" alt="" width="1280" height="800"><i class="shot-laser"></i></div></div>
+    </div></div>
+    <p class="stage-note" data-stage-note></p>
+    <dl class="stats">
+      <div><dt>RAM</dt><dd>&lt;50 MB</dd></div>
+      <div><dt>{{idle CPU||CPU parado}}</dt><dd>0%</dd></div>
+      <div><dt>{{themes||temas}}</dt><dd>10</dd></div>
+      <div><dt>electron</dt><dd>0</dd></div>
+    </dl>
+  </div>
+</section>
+
+<div class="ticker" aria-hidden="true"><div><span>{{ZERO ELECTRON||ZERO ELECTRON}}</span><span>{{UNDER 50 MB OF RAM||MENOS DE 50 MB DE RAM}}</span><span>{{0% CPU AT IDLE||0% DE CPU PARADO}}</span><span>{{10 THEMES||10 TEMAS}}</span><span>{{ONE TEXT FILE||UM ARQUIVO DE TEXTO}}</span><span>{{REAL VOICE, E2EE||VOZ DE VERDADE, E2EE}}</span><span>{{LUA IN A CAGE||LUA NUMA JAULA}}</span><span>{{NOT DISCORD INC.||NÃO É A DISCORD INC.}}</span><span>{{ZERO ELECTRON||ZERO ELECTRON}}</span><span>{{UNDER 50 MB OF RAM||MENOS DE 50 MB DE RAM}}</span><span>{{0% CPU AT IDLE||0% DE CPU PARADO}}</span><span>{{10 THEMES||10 TEMAS}}</span><span>{{ONE TEXT FILE||UM ARQUIVO DE TEXTO}}</span><span>{{REAL VOICE, E2EE||VOZ DE VERDADE, E2EE}}</span><span>{{LUA IN A CAGE||LUA NUMA JAULA}}</span><span>{{NOT DISCORD INC.||NÃO É A DISCORD INC.}}</span><span>{{ZERO ELECTRON||ZERO ELECTRON}}</span><span>{{UNDER 50 MB OF RAM||MENOS DE 50 MB DE RAM}}</span><span>{{0% CPU AT IDLE||0% DE CPU PARADO}}</span><span>{{10 THEMES||10 TEMAS}}</span><span>{{ONE TEXT FILE||UM ARQUIVO DE TEXTO}}</span><span>{{REAL VOICE, E2EE||VOZ DE VERDADE, E2EE}}</span><span>{{LUA IN A CAGE||LUA NUMA JAULA}}</span><span>{{NOT DISCORD INC.||NÃO É A DISCORD INC.}}</span><span>{{ZERO ELECTRON||ZERO ELECTRON}}</span><span>{{UNDER 50 MB OF RAM||MENOS DE 50 MB DE RAM}}</span><span>{{0% CPU AT IDLE||0% DE CPU PARADO}}</span><span>{{10 THEMES||10 TEMAS}}</span><span>{{ONE TEXT FILE||UM ARQUIVO DE TEXTO}}</span><span>{{REAL VOICE, E2EE||VOZ DE VERDADE, E2EE}}</span><span>{{LUA IN A CAGE||LUA NUMA JAULA}}</span><span>{{NOT DISCORD INC.||NÃO É A DISCORD INC.}}</span></div></div>
+
+<section class="node" id="numbers">
+  <span class="tag reveal"><b>status-bar</b> <i>items="ram cpu size" {</i></span>
+  <h2 class="h reveal">{{1,279&nbsp;MB to say <em>good morning.</em>||1.279&nbsp;MB para dar <em>bom dia.</em>}}</h2>
+  <p class="lede reveal">{{An Electron client is a whole browser dressed up as an app. Same machine, same window size. One square is 5&nbsp;MB of RAM.||Um cliente em Electron é um navegador inteiro fantasiado de app. Mesma máquina, mesmo tamanho de janela. Cada quadradinho é 5&nbsp;MB de RAM.}}</p>
+  <div class="ledger reveal">
+    <div class="bar-row">
+      <div class="bar-label"><strong data-count="1279">1,279&nbsp;MB</strong><span>Vesktop (Electron)</span></div>
+      <div class="units" data-units="1279" role="img" aria-label="{{Vesktop: 1,279 MB of RAM, about 256 squares||Vesktop: 1.279 MB de RAM, cerca de 256 quadradinhos}}"></div>
+    </div>
+    <div class="bar-row">
+      <div class="bar-label us"><strong>&lt;50&nbsp;MB</strong><span>larperCord</span></div>
+      <div class="units us" data-units="50" role="img" aria-label="{{larperCord: under 50 MB of RAM, 10 squares||larperCord: menos de 50 MB de RAM, 10 quadradinhos}}"></div>
+    </div>
+  </div>
+  <div class="table-scroll reveal">
+  <table class="facts">
+    <thead><tr><th></th><th>Vesktop (Electron)</th><th>larperCord</th></tr></thead>
+    <tbody>
+      <tr><th>{{RAM (PSS)||RAM (PSS)}}</th><td>1,279 MB</td><td class="us">45–50 MB</td></tr>
+      <tr><th>{{CPU when idle||CPU parado}}</th><td>12–47%</td><td class="us">0–0.5%</td></tr>
+      <tr><th>{{Binary on disk||Binário em disco}}</th><td>287 MB</td><td class="us">~5 MB</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="foot reveal">{{larperCord: ReleaseFast build, demo data, hidden window on the real GPU, across all 10 themes. A real account with many servers will use more. Vesktop: average since launch, measured with <code>ps</code>. Arch Linux, Hyprland, GTX 1050 Ti, 1280×800. About half of larperCord's PSS is the NVIDIA driver and system libraries. Reproduce it with <code>tools/membench.sh</code>. <a href="%GUIDE%performance.html">How this was measured →</a>||larperCord: build ReleaseFast, dados de demonstração, janela oculta na GPU real, nos 10 temas. Uma conta real com muitos servidores usa mais. Vesktop: média desde a abertura, medida com <code>ps</code>. Arch Linux, Hyprland, GTX 1050 Ti, 1280×800. Cerca de metade do PSS do larperCord é o driver da NVIDIA e as bibliotecas do sistema. Reproduza com <code>tools/membench.sh</code>. <a href="%GUIDE%performance.html">Como foi medido →</a>}}</p>
+  <span class="close">}</span>
+</section>
+
+<section class="node" id="playground">
+  <span class="tag reveal"><b>messages</b> <i>flex=1 {</i></span>
+  <h2 class="h reveal">{{The interface is a file. <em>Go on, break it.</em>||A interface é um arquivo. <em>Vai, quebra ele.</em>}}</h2>
+  <p class="lede reveal">{{These are the real layouts from <code>themes/*.kdl</code>. Change a width, move a node, rename a component. In the app, saving the file reloads the window through inotify. An error points to <code>file:line:column</code> and the previous theme stays on screen.||Estes são os layouts de verdade de <code>themes/*.kdl</code>. Mude uma largura, mova um nó, troque o nome de um componente. No app, salvar o arquivo recarrega a janela pelo inotify. Um erro aponta <code>arquivo:linha:coluna</code> e o tema anterior continua na tela.}}</p>
+  <div class="pg reveal" data-playground>
+    <div class="pg-edit">
+      <div class="pg-bar">
+        <select aria-label="{{Theme file||Arquivo de tema}}">%PRESET_OPTIONS%</select>
+        <span class="pg-spacer"></span>
+        <button type="button" data-pg-swap>{{member list first||membros primeiro}}</button>
+        <button type="button" data-pg-break>{{break it||quebrar}}</button>
+        <button type="button" data-pg-reset>{{reset||restaurar}}</button>
+      </div>
+      <div class="pg-code"><pre aria-hidden="true"><code></code></pre><textarea spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="{{Theme file editor||Editor do arquivo de tema}}"></textarea></div>
+      <div class="pg-status" role="status"></div>
+    </div>
+    <div class="pg-view">
+      <div class="pg-screen"><div class="pg-frame"></div></div>
+      <div class="pg-note">{{A JavaScript sketch of the layout engine, with placeholder content. The app itself draws with Dear ImGui. Widths are real pixels of a 1280×800 window.||Um esboço em JavaScript do motor de layout, com conteúdo de mentira. O app desenha com Dear ImGui. As larguras são pixels reais de uma janela de 1280×800.}}</div>
+    </div>
+  </div>
+  <p class="foot reveal"><a href="%GUIDE%themes.html">{{Full theme language reference →||Referência completa da linguagem de temas →}}</a></p>
+  <span class="close">}</span>
+</section>
+
+<section class="node" id="themes">
+  <span class="tag reveal"><b>guild-bar</b> <i>variant=dock {</i></span>
+  <h2 class="h reveal">{{Ten themes. <em>Not ten color schemes.</em>||Dez temas. <em>Não dez esquemas de cor.</em>}}</h2>
+  <p class="lede reveal">{{Same binary, same data, different file. Components move, change shape and swap variants. Move your pointer across a screenshot to see light mode. Click one to dress this whole page in its colors (or press <kbd>F2</kbd>, like in the app).||Mesmo binário, mesmos dados, outro arquivo. Os componentes mudam de lugar, de forma e de variante. Passe o ponteiro por cima de um print para ver o modo claro. Clique para vestir esta página inteira com as cores dele (ou aperte <kbd>F2</kbd>, como no app).}}</p>
+  <div class="wall reveal">
+%THEME_CARDS%
+  </div>
+  <span class="close">}</span>
+</section>
+
+<section class="node" id="features">
+  <span class="tag reveal"><b>channel-list</b> <i>variant=tree {</i></span>
+  <h2 class="h reveal">{{It speaks the real gateway. <em>It's a real client.</em>||Fala com o gateway de verdade. <em>É um cliente de verdade.</em>}}</h2>
+  <div class="tour">
+    <ol class="tour-list">
+      <li><h3>{{Split view||Tela dividida}}</h3><p>{{Up to three conversations side by side, each with its own history and scroll position. The composer follows the focused pane.||Até três conversas lado a lado, cada uma com o histórico e a rolagem dela. A caixa de texto segue o painel em foco.}}</p><img src="%ROOT%assets/shots/%LANG%/f-mosaico.webp" alt="{{Two conversations side by side||Duas conversas lado a lado}}" loading="lazy"></li>
+      <li><h3>{{Inbox||Caixa de entrada}}</h3><p>{{<kbd>Ctrl</kbd>+<kbd>I</kbd>: unread DMs and mentions from every server, by channel, with previews and “mark all as read”.||<kbd>Ctrl</kbd>+<kbd>I</kbd>: DMs e menções não lidas de todos os servidores, por canal, com prévia e “marcar tudo como lido”.}}</p><img src="%ROOT%assets/shots/%LANG%/f-caixa.webp" alt="{{The inbox panel||O painel da caixa de entrada}}" loading="lazy"></li>
+      <li><h3>{{Offline search||Busca offline}}</h3><p>{{<kbd>Ctrl</kbd>+<kbd>F</kbd> searches memory and the local cache on every keystroke, no internet needed. Filters: <code>from:</code>, <code>in:</code>, <code>has:link</code>, <code>has:image</code>, <code>has:file</code>.||<kbd>Ctrl</kbd>+<kbd>F</kbd> busca na memória e no cache local a cada tecla, sem internet. Filtros: <code>from:</code>, <code>in:</code>, <code>has:link</code>, <code>has:imagem</code>, <code>has:arquivo</code>.}}</p><img src="%ROOT%assets/shots/%LANG%/f-busca.webp" alt="{{Search results filtered by author||Resultados da busca filtrados por autor}}" loading="lazy"></li>
+      <li><h3>{{Command palette||Paleta de comandos}}</h3><p>{{<kbd>Ctrl</kbd>+<kbd>K</kbd>: fuzzy search for channels, DMs, servers, themes, status and every toggle. This page has one too. Try it.||<kbd>Ctrl</kbd>+<kbd>K</kbd>: busca aproximada de canais, DMs, servidores, temas, status e todas as opções. Esta página também tem uma. Experimente.}}</p><img src="%ROOT%assets/shots/%LANG%/f-paleta.webp" alt="{{The command palette||A paleta de comandos}}" loading="lazy"></li>
+      <li><h3>{{Video in the chat||Vídeo na conversa}}</h3><p>{{Attachments and direct links play in place through your system's FFmpeg, loaded only on the first play. Up to 480p and about 30 fps. Without FFmpeg, the video opens in your browser.||Anexos e links diretos tocam no lugar, com o FFmpeg do sistema, carregado só no primeiro play. Até 480p e cerca de 30 qps. Sem FFmpeg, o vídeo abre no navegador.}}</p><img src="%ROOT%assets/shots/%LANG%/f-video.webp" alt="{{A video playing inside a conversation||Um vídeo tocando dentro da conversa}}" loading="lazy"></li>
+      <li><h3>{{Code that reads like code||Código que parece código}}</h3><p>{{Discord markdown, parsed once when the message arrives. Code blocks get highlighting in your theme's colors and a copy button, and a live preview sits above the composer.||Markdown do Discord, interpretado uma vez quando a mensagem chega. Blocos de código têm realce nas cores do tema e botão de copiar, e uma prévia aparece acima da caixa enquanto você digita.}}</p><img src="%ROOT%assets/shots/%LANG%/f-codigo.webp" alt="{{A highlighted code block||Um bloco de código com realce}}" loading="lazy"></li>
+      <li><h3>{{Full profiles||Perfis completos}}</h3><p>{{Banner, bio, activity, mutual friends and servers, connections, roles and a private note.||Banner, bio, atividade, amigos e servidores em comum, conexões, cargos e uma nota só sua.}}</p><img src="%ROOT%assets/shots/%LANG%/f-perfil.webp" alt="{{A full user profile||Um perfil completo de usuário}}" loading="lazy"></li>
+      <li><h3>{{Saved messages, with notes||Mensagens salvas, com anotação}}</h3><p>{{<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>: bookmarks that live only on your computer. Nothing goes to Discord.||<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>: favoritos que ficam só no seu computador. Nada vai para o Discord.}}</p><img src="%ROOT%assets/shots/%LANG%/f-salvas.webp" alt="{{A saved message with a note||Uma mensagem salva com anotação}}" loading="lazy"></li>
+      <li><h3>{{Alerts and filters||Alertas e filtros}}</h3><p>{{Alert words count as mentions, a word filter collapses messages, “ignore” hides someone without blocking them, and focus mode quiets everything but DMs and mentions. All local.||Palavras de alerta contam como menção, o filtro recolhe mensagens, “ignorar” esconde alguém sem bloquear e o modo foco silencia tudo menos DMs e menções. Tudo local.}}</p><img src="%ROOT%assets/shots/%LANG%/f-alertas.webp" alt="{{The alerts and filters settings page||A página de alertas e filtros}}" loading="lazy"></li>
+      <li><h3>{{And the rest||E o resto}}</h3><p>{{Replies, edits, reactions, right-click menus everywhere, multi-message text selection, images and GIFs, server folders, channel tabs, multiple accounts, drafts per channel, proxy and Tor support, English and Portuguese, optional vim keys. <a href="%GUIDE%features.html">Full tour →</a>||Respostas, edição, reações, botão direito em tudo, seleção de texto entre mensagens, imagens e GIFs, pastas de servidores, abas de canal, várias contas, rascunho por canal, proxy e Tor, inglês e português, teclas de vim opcionais. <a href="%GUIDE%features.html">Tour completo →</a>}}</p><img src="%ROOT%assets/shots/%LANG%/f-menu.webp" alt="{{The right-click menu on a message||O menu do botão direito numa mensagem}}" loading="lazy"></li>
+    </ol>
+    <div class="tour-stage" aria-hidden="true"></div>
+  </div>
+  <span class="close">}</span>
+</section>
+
+<section class="node" id="voice">
+  <span class="tag reveal"><b>voice</b> <i>e2ee=#true {</i></span>
+  <h2 class="h reveal">{{Real calls. <em>Encrypted end to end.</em>||Chamadas de verdade. <em>Com criptografia de ponta a ponta.</em>}}</h2>
+  <div class="chain reveal">
+    <div><b>01</b><strong>{{Microphone||Microfone}}</strong>{{SDL3 stream, read every 20&nbsp;ms||Stream do SDL3, lido a cada 20&nbsp;ms}}</div>
+    <div><b>02</b><strong>Opus</strong>{{48&nbsp;kHz stereo, with packet-loss concealment||48&nbsp;kHz estéreo, com PLC para pacote perdido}}</div>
+    <div><b>03</b><strong>DAVE</strong>{{End-to-end encryption over MLS, through libdave||Ponta a ponta sobre MLS, via libdave}}</div>
+    <div><b>04</b><strong>RTP</strong><code>aead_xchacha20_poly1305_rtpsize</code></div>
+    <div><b>05</b><strong>UDP</strong>{{Voice gateway v8, with heartbeat and resume||Gateway de voz v8, com heartbeat e resume}}</div>
+  </div>
+  <div class="split reveal">
+    <img src="%ROOT%assets/shots/%LANG%/f-voz.webp" alt="{{The per-person volume mixer during a call||O mixer com o volume de cada pessoa durante uma chamada}}" loading="lazy">
+    <ul class="ticks">
+      <li><strong>{{A mixer with one volume per person.||Mixer com um volume para cada pessoa.}}</strong> {{Each person is their own audio stream on the same output device.||Cada pessoa é um stream de áudio próprio no mesmo dispositivo de saída.}}</li>
+      <li><strong>{{No call, no cost.||Sem call, sem custo.}}</strong> {{The voice thread is only created when you join, and audio isn't even initialized before that.||A thread de voz só nasce quando você entra, e o áudio nem é iniciado antes disso.}}</li>
+      <li><strong>{{Honest limits.||Limites sinceros.}}</strong> {{Default audio device only, no push-to-talk and no noise suppression yet. No screen sharing or camera.||Só o dispositivo de áudio padrão, ainda sem push-to-talk e sem supressão de ruído. Sem compartilhar tela nem câmera.}} <a href="%GUIDE%voice.html">{{Voice guide →||Guia de voz →}}</a></li>
+    </ul>
+  </div>
+  <span class="close">}</span>
+</section>
+
+<section class="node" id="plugins">
+  <span class="tag reveal"><b>plugins</b> <i>sandbox=#true {</i></span>
+  <h2 class="h reveal">{{Lua, <em>in a cage.</em>||Lua, <em>numa jaula.</em>}}</h2>
+  <div class="split reveal">
+    <div>
+      <p class="lede" style="margin-top:0">{{Drop a <code>.lua</code> file in <code>~/.config/larpercord/plugins/</code> to react to messages and add local commands and keybinds, without recompiling anything.||Coloque um <code>.lua</code> em <code>~/.config/larpercord/plugins/</code> para reagir a mensagens e criar comandos locais e atalhos, sem recompilar nada.}}</p>
+      <code-block lang="lua">larper.command("/shrug", function(args)
+  local text = "¯\\_(ツ)_/¯"
+  if args ~= "" then text = args .. " " .. text end
+  larper.send(larper.channel(), text)
+end)
+
+larper.on("message", function(msg)
+  if not msg.mine and msg.content:lower():find("pizza", 1, true) then
+    larper.notify(msg.author.name .. " mentioned pizza")
+  end
+end)</code-block>
+    </div>
+    <ul class="ticks">
+      <li><strong>{{No files, no processes, no network.||Sem arquivos, sem processos, sem rede.}}</strong> {{<code>io</code>, <code>os.execute</code>, <code>require</code>, <code>load</code> and <code>debug</code> simply don't exist.||<code>io</code>, <code>os.execute</code>, <code>require</code>, <code>load</code> e <code>debug</code> simplesmente não existem.}}</li>
+      <li><strong>{{About 5 million instructions per call.||Cerca de 5 milhões de instruções por chamada.}}</strong> {{A <code>while true do end</code> gets stopped and doesn't freeze the app. <code>pcall</code> can't catch that.||Um <code>while true do end</code> é parado e não congela o app. O <code>pcall</code> não segura esse erro.}}</li>
+      <li><strong>{{8&nbsp;MB per plugin.||8&nbsp;MB por plugin.}}</strong> {{Each one runs in its own Lua state. After 10 errors, it's stopped.||Cada um roda num Lua separado. Depois de 10 erros, ele é parado.}}</li>
+      <li><strong>{{<code>larper.send</code> only works from your own keypress.||<code>larper.send</code> só funciona a partir de uma tecla sua.}}</strong> {{Automatic replies would make your account a self-bot, so they're blocked by design.||Responder sozinho transformaria a conta num self-bot, então isso é bloqueado de propósito.}} <a href="%GUIDE%plugins.html">{{Plugin API →||API de plugins →}}</a></li>
+    </ul>
+  </div>
+  <span class="close">}</span>
+</section>
+
+<section class="node" id="light">
+  <span class="tag reveal"><b>metrics</b> <i>budget=50 {</i></span>
+  <h2 class="h reveal">{{No magic. <em>Ten boring decisions.</em>||Sem mágica. <em>Dez decisões chatas.</em>}}</h2>
+  <ol class="rules reveal">
+    <li><strong>{{It sleeps when nothing happens.||Dorme quando nada acontece.}}</strong> {{The main loop waits in <code>SDL_WaitEvent</code>. Network, inotify and the clock wake it up with events. No animation, no redraw.||O laço principal espera em <code>SDL_WaitEvent</code>. Rede, inotify e relógio acordam o app com eventos. Sem animação, sem redesenho.}}</li>
+    <li><strong>{{No browser.||Nada de navegador.}}</strong> {{Everything is drawn with Dear ImGui's <code>ImDrawList</code> on top of SDL_Renderer.||Tudo é desenhado com o <code>ImDrawList</code> do Dear ImGui sobre o SDL_Renderer.}}</li>
+    <li><strong>{{Fonts are mapped, not copied.||Fontes mapeadas, não copiadas.}}</strong> {{Each font file is one <code>mmap</code> shared by every weight, so only the pages read stay in RAM.||Cada arquivo de fonte é um <code>mmap</code> usado por todos os pesos, então só as páginas lidas ficam na RAM.}}</li>
+    <li><strong>{{Only the video driver it needs.||Só o driver de vídeo necessário.}}</strong> {{On NVIDIA-only machines, glvnd would also load Mesa and LLVM for nothing. The app detects that and avoids it.||Em máquinas só com NVIDIA, o glvnd também carregaria o Mesa e o LLVM à toa. O app detecta e evita.}}</li>
+    <li><strong>{{Markdown is parsed once.||Markdown interpretado uma vez.}}</strong> {{When the message arrives. After that, the UI only lays out spans, with a height cache per width.||Quando a mensagem chega. Depois, a interface só faz layout dos trechos, com cache de altura por largura.}}</li>
+    <li><strong>{{A virtualized list.||Lista virtualizada.}}</strong> {{Binary search for the first visible item, then draw only what's on screen.||Busca binária pelo primeiro item visível e desenha só o que está na tela.}}</li>
+    <li><strong>{{Memory has ceilings.||Memória com teto.}}</strong> {{1,500 messages per channel and 3,000 in total. Forgotten conversations get unloaded, and the image cache has a fixed 64&nbsp;MB budget.||1.500 mensagens por canal e 3.000 no total. Conversas esquecidas são descarregadas, e o cache de imagens tem um teto fixo de 64&nbsp;MB.}}</li>
+    <li><strong>{{fontconfig gets freed.||fontconfig liberado.}}</strong> {{After fonts are resolved: <code>FcFini</code>, then <code>malloc_trim</code>.||Depois de resolver as fontes: <code>FcFini</code> e <code>malloc_trim</code>.}}</li>
+    <li><strong>{{No blinking cursor.||Sem cursor piscando.}}</strong> {{A blinking cursor would keep the CPU awake for no good reason.||Um cursor piscando manteria a CPU acordada à toa.}}</li>
+    <li><strong>{{Things start when you ask.||As coisas nascem quando você pede.}}</strong> {{The voice thread on your first call, FFmpeg on your first video. Without plugins, plugins cost nothing per message, key or frame.||A thread de voz na primeira call, o FFmpeg no primeiro vídeo. Sem plugins, plugins não custam nada por mensagem, tecla ou quadro.}}</li>
+  </ol>
+  <div class="flow reveal" aria-label="{{Data flow||Fluxo de dados}}">
+    <b class="hot">{{UI||interface}}</b> → <b>Action</b> → <b>app</b> → <b>Command</b> → <b>gateway</b> → <b>Event</b> → <b>Store</b> → <b class="hot">{{UI||interface}}</b>
+  </div>
+  <p class="foot reveal">{{The UI never changes data directly. It only reads the Store and asks for actions, which is why swapping the demo gateway for the real one doesn't touch the UI.||A interface nunca muda dados direto. Ela só lê o Store e pede ações, e é por isso que trocar o gateway de demonstração pelo real não toca na interface.}} <a href="%GUIDE%architecture.html">{{Architecture →||Arquitetura →}}</a></p>
+  <span class="close">}</span>
+</section>
+
+<section class="node" id="status">
+  <span class="tag reveal"><b>options</b> <i>honest=#true {</i></span>
+  <h2 class="h reveal">{{What works today. <em>And what doesn't.</em>||O que funciona hoje. <em>E o que não.</em>}}</h2>
+  <div class="table-scroll reveal">
+  <table class="state">
+    <thead><tr><th>{{Area||Área}}</th><th>{{State||Estado}}</th><th>{{Detail||Detalhe}}</th></tr></thead>
+    <tbody>
+      <tr><th>{{Messages, DMs, reactions, replies||Mensagens, DMs, reações, respostas}}</th><td><span class="chip ok">{{works||funciona}}</span></td><td>{{Send, edit, delete, history, mentions||Enviar, editar, excluir, histórico, menções}}</td></tr>
+      <tr><th>{{Images||Imagens}}</th><td><span class="chip ok">{{works||funciona}}</span></td><td>{{Avatars and attachments, with a fixed-size cache||Avatares e anexos, com cache de tamanho fixo}}</td></tr>
+      <tr><th>{{Video in chat||Vídeo na conversa}}</th><td><span class="chip ok">{{works||funciona}}</span></td><td>{{Attachments and direct links, needs system FFmpeg||Anexos e links diretos, precisa do FFmpeg do sistema}}</td></tr>
+      <tr><th>{{Inbox, saved, offline search||Caixa de entrada, salvas, busca offline}}</th><td><span class="chip ok">{{works||funciona}}</span></td><td>{{All local, can be turned off and erased||Tudo local, dá para desligar e apagar}}</td></tr>
+      <tr><th>{{Accounts, proxy, Lua plugins||Contas, proxy, plugins em Lua}}</th><td><span class="chip ok">{{works||funciona}}</span></td><td></td></tr>
+      <tr><th>{{Themes||Temas}}</th><td><span class="chip ok">{{works||funciona}}</span></td><td>{{10 built-in, light and dark, reload on save||10 embutidos, claro e escuro, recarregam ao salvar}}</td></tr>
+      <tr><th>{{Voice||Voz}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{E2EE, mixer and mute work. Default device only, no push-to-talk or noise suppression||E2EE, mixer e mudo funcionam. Só o dispositivo padrão, sem push-to-talk nem supressão de ruído}}</td></tr>
+      <tr><th>{{Permissions||Permissões}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{Locked channels and voice are enforced. The composer, reactions and member list don't check yet||Canais trancados e voz são respeitados. Caixa de texto, reações e membros ainda não consultam}}</td></tr>
+      <tr><th>{{Notifications||Notificações}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{Through <code>notify-send</code>. Clicking doesn't open the channel, no system tray||Pelo <code>notify-send</code>. Clicar não abre o canal, sem bandeja do sistema}}</td></tr>
+      <tr><th>{{Accessibility||Acessibilidade}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{Font scale, reduced motion, keyboard palette. No visible focus or high contrast||Escala de fonte, reduzir movimento, paleta por teclado. Sem foco visível nem alto contraste}}</td></tr>
+      <tr><th>{{Platforms||Plataformas}}</th><td><span class="chip part">{{partial||parcial}}</span></td><td>{{Linux only (inotify, <code>/proc</code>). Tested on Arch with Hyprland||Só Linux (inotify, <code>/proc</code>). Testado no Arch com Hyprland}}</td></tr>
+      <tr><th>{{Custom emoji||Emojis personalizados}}</th><td><span class="chip no">{{missing||falta}}</span></td><td>{{<code>&lt;:name:id&gt;</code> shows up as text||<code>&lt;:nome:id&gt;</code> aparece como texto}}</td></tr>
+      <tr><th>{{Joining servers by invite||Entrar em servidor por convite}}</th><td><span class="chip no">{{missing||falta}}</span></td><td></td></tr>
+      <tr><th>{{Threads and forums||Threads e fóruns}}</th><td><span class="chip no">{{missing||falta}}</span></td><td>{{You see the “started a thread” notice but can't open it||O aviso “criou um tópico” aparece, mas não dá para abrir}}</td></tr>
+      <tr><th>{{Screen sharing and camera||Compartilhar tela e câmera}}</th><td><span class="chip no">{{missing||falta}}</span></td><td></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="foot reveal"><a href="%GUIDE%status.html">{{Roadmap →||Roteiro →}}</a></p>
+  <span class="close">}</span>
+</section>
+
+<div class="ticker rev" aria-hidden="true"><div><span>{{READ THE TERMS||LEIA OS TERMOS}}</span><span>{{YOUR ACCOUNT CAN BE BANNED||SUA CONTA PODE SER BLOQUEADA}}</span><span>{{--demo NEEDS NO ACCOUNT||--demo NÃO PRECISA DE CONTA}}</span><span>{{LINUX ONLY, FOR NOW||SÓ LINUX, POR ENQUANTO}}</span><span>{{BUILD FROM SOURCE||COMPILE DO CÓDIGO}}</span><span>{{READ THE TERMS||LEIA OS TERMOS}}</span><span>{{YOUR ACCOUNT CAN BE BANNED||SUA CONTA PODE SER BLOQUEADA}}</span><span>{{--demo NEEDS NO ACCOUNT||--demo NÃO PRECISA DE CONTA}}</span><span>{{LINUX ONLY, FOR NOW||SÓ LINUX, POR ENQUANTO}}</span><span>{{BUILD FROM SOURCE||COMPILE DO CÓDIGO}}</span><span>{{READ THE TERMS||LEIA OS TERMOS}}</span><span>{{YOUR ACCOUNT CAN BE BANNED||SUA CONTA PODE SER BLOQUEADA}}</span><span>{{--demo NEEDS NO ACCOUNT||--demo NÃO PRECISA DE CONTA}}</span><span>{{LINUX ONLY, FOR NOW||SÓ LINUX, POR ENQUANTO}}</span><span>{{BUILD FROM SOURCE||COMPILE DO CÓDIGO}}</span><span>{{READ THE TERMS||LEIA OS TERMOS}}</span><span>{{YOUR ACCOUNT CAN BE BANNED||SUA CONTA PODE SER BLOQUEADA}}</span><span>{{--demo NEEDS NO ACCOUNT||--demo NÃO PRECISA DE CONTA}}</span><span>{{LINUX ONLY, FOR NOW||SÓ LINUX, POR ENQUANTO}}</span><span>{{BUILD FROM SOURCE||COMPILE DO CÓDIGO}}</span></div></div>
+
+<div class="warn-band reveal">
+  {{Third-party clients break Discord's Terms of Service.||Clientes de terceiros violam os Termos de Uso do Discord.}}
+  <small>{{Your account can be banned, so use it at your own risk, ideally with a secondary account. larperCord has no affiliation with Discord Inc. With <code>--demo</code>, the app runs on fake data and connects to nothing.||Sua conta pode ser bloqueada: use por sua conta e risco, de preferência com uma conta secundária. O larperCord não tem relação com a Discord Inc. Com <code>--demo</code>, o app roda com dados falsos e não conecta em nada.}}</small>
+</div>
+
+<section class="node" id="install" style="padding-top:clamp(40px,6vw,72px)">
+  <span class="tag reveal"><b>composer</b> <i>variant=prompt {</i></span>
+  <h2 class="h reveal">{{Three commands. <em>No account.</em>||Três comandos. <em>Sem conta.</em>}}</h2>
+  <div class="install reveal">
+    <div>
+      <code-block lang="bash"># Arch Linux
+sudo pacman -S zig sdl3 freetype2 fontconfig curl zlib libwebp opus openssl \
+    inter-font ttf-jetbrains-mono noto-fonts-emoji
+
+# {{Build (Zig 0.17)||Compilar (Zig 0.17)}}
+zig build -Doptimize=ReleaseFast
+
+# {{Demo mode: fake data, connects to nothing||Modo demonstração: dados falsos, não conecta em nada}}
+./zig-out/bin/larpercord --demo --theme subsolo</code-block>
+      <p class="foot">{{Only built and tested on Linux so far. There are no prebuilt packages yet.||Por enquanto, só compilado e testado no Linux. Ainda não há pacotes prontos.}}</p>
+      <div class="cta" style="margin-top:20px">
+        <a class="btn primary" href="%GUIDE%getting-started.html">{{Getting started →||Primeiros passos →}}</a>
+        <a class="btn" href="%REPO%">{{Source on GitHub||Código no GitHub}}</a>
+      </div>
+    </div>
+    <div>
+      <video src="%ROOT%assets/shots/%LANG%/login.mp4" poster="%ROOT%assets/shots/%LANG%/login-poster.webp" muted loop playsinline preload="none" aria-label="{{The app's animated sign-in screen||A tela de login animada do app}}" width="1280" height="800"></video>
+      <p class="aside">{{The mascot has seen your RAM usage. It is not impressed.||O mascote viu o seu uso de RAM. Não ficou impressionado.}}</p>
+    </div>
+  </div>
+  <span class="close">}</span>
+</section>
+
+<footer class="colophon">
+  <div>
+    <p><strong style="color:var(--text)">larperCord</strong> v0.4.0</p>
+    <p>{{An independent project. Not affiliated with, endorsed by or connected to Discord Inc. “Discord” is a trademark of its owner.||Projeto independente. Não tem relação nem aval da Discord Inc. “Discord” é uma marca de seu dono.}}</p>
+    <p><a href="%REPO%/blob/main/LICENSE" style="display:inline">{{MIT License||Licença MIT}}</a>. {{Third-party code keeps its own licenses.||O código de terceiros segue as licenças próprias.}}</p>
+  </div>
+  <div><h2>{{Guide||Guia}}</h2>
+    <a href="%GUIDE%getting-started.html">{{Getting started||Primeiros passos}}</a>
+    <a href="%GUIDE%features.html">{{Feature tour||Tour dos recursos}}</a>
+    <a href="%GUIDE%shortcuts.html">{{Shortcuts and CLI||Atalhos e linha de comando}}</a>
+    <a href="%GUIDE%settings.html">{{Settings and files||Configurações e arquivos}}</a>
+  </div>
+  <div><h2>{{Customize||Personalize}}</h2>
+    <a href="%GUIDE%themes.html">{{Writing themes||Escrevendo temas}}</a>
+    <a href="%GUIDE%theme-gallery.html">{{Built-in themes||Temas embutidos}}</a>
+    <a href="%GUIDE%plugins.html">{{Lua plugins||Plugins em Lua}}</a>
+  </div>
+  <div><h2>{{Project||Projeto}}</h2>
+    <a href="%GUIDE%architecture.html">{{Architecture||Arquitetura}}</a>
+    <a href="%GUIDE%privacy.html">{{Privacy and security||Privacidade e segurança}}</a>
+    <a href="%GUIDE%status.html">{{Status and roadmap||Estado e roteiro}}</a>
+    <a href="%GUIDE%contributing.html">{{Contributing||Contribuir}}</a>
+    <a href="%REPO%/blob/main/THIRD_PARTY_NOTICES.md">{{Third-party notices||Avisos de terceiros}}</a>
+  </div>
+</footer>
+</main>
+<script src="%ROOT%assets/site/playground.js" defer></script>
+<script src="%ROOT%assets/site/layouts.js" defer></script>
+<script src="%ROOT%assets/site/morph.js" defer></script>

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="pt-BR" data-lang="pt" data-root="../../" data-page="guide">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arquitetura · larperCord</title>
+<meta name="description" content="Cerca de 34.000 linhas de Zig sobre uma camada fina de C. A regra que molda tudo: a interface nunca muda dados diretamente . # Fluxo de dados text copy UI ">
+<meta name="color-scheme" content="dark light">
+<link rel="canonical" href="https://rshacudevidro.github.io/larperCord/pt/guide/architecture.html">
+<link rel="alternate" hreflang="en" href="https://rshacudevidro.github.io/larperCord/guide/architecture.html">
+<link rel="alternate" hreflang="pt-BR" href="https://rshacudevidro.github.io/larperCord/pt/guide/architecture.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Arquitetura · larperCord">
+<meta property="og:description" content="Cerca de 34.000 linhas de Zig sobre uma camada fina de C. A regra que molda tudo: a interface nunca muda dados diretamente . # Fluxo de dados text copy UI ">
+<meta property="og:image" content="https://rshacudevidro.github.io/larperCord/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="../../assets/icon-live.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../../assets/icon-32.png">
+<link rel="apple-touch-icon" href="../../assets/icon-180.png">
+<link rel="preload" href="../../assets/fonts/departure-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../../assets/fonts/jetbrains-mono-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../../assets/site/site.css">
+<script src="../../assets/site/data.js"></script>
+<script src="../../assets/site/boot.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Pular para o conteúdo</a>
+<header class="topnav">
+  <a class="brand" href="../../pt/" aria-label="larperCord"><svg class="ma" viewBox="100 110 1200 900" aria-hidden="true" focusable="false"><defs><clipPath id="ma-bn"><path d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/></clipPath><clipPath id="ma-ln"><path d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/></clipPath><clipPath id="ma-en"><path d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></clipPath><linearGradient id="ma-lensn" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b0a44"/><stop offset=".55" stop-color="#0c0316"/><stop offset="1" stop-color="#040108"/></linearGradient></defs><g class="ma-rig"><path class="ma-ghost ma-g1" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-ghost ma-g2" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g clip-path="url(#ma-bn)"><path class="ma-edge" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-core" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z" transform="translate(12.5 45) scale(0.95)"/><path class="ma-shade" d="M150 690 C230 810 330 870 470 900 L440 980 L100 980 L100 690 Z"/></g><path class="ma-line" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g class="ma-eyes"><path class="ma-white" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-white" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/><g clip-path="url(#ma-en)"><ellipse class="ma-iris" cx="520" cy="634" rx="30" ry="36"/><ellipse class="ma-iris" cx="908" cy="538" rx="30" ry="36"/></g><path class="ma-lid" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-lid" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></g><path class="ma-mouth ma-ink" d="M728 742 C830 722 922 700 980 652 C988 668 980 680 962 690 C900 722 822 742 732 750 Z"/><g class="ma-shades"><path class="ma-arm" d="M345 596 L196 566"/><path class="ma-arm" d="M1066 458 L1196 424"/><path class="ma-arm" d="M655 554 Q680 528 702 544"/><path class="ma-lens" fill="url(#ma-lensn)" d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path class="ma-lens" fill="url(#ma-lensn)" d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/><g clip-path="url(#ma-ln)"><path class="ma-tint" d="M300 640 L1100 450 L1100 520 L300 700 Z"/><path class="ma-glare" d="M250 760 L350 760 L620 420 L520 420 Z M400 760 L440 760 L710 420 L670 420 Z"/></g></g><path class="ma-spark" d="M1095 160 C1105 250 1120 282 1240 296 C1130 310 1112 340 1110 436 C1100 340 1080 322 940 322 C1060 306 1088 272 1095 160 Z"/></g></svg><span data-brand>larperCord</span></a>
+  <nav aria-label="Principal">
+    <a href="../../pt/#themes">Temas</a>
+    <a href="../../pt/#playground">Playground</a>
+    <a href="../../pt/#features">Recursos</a>
+    <a href="../../pt/guide/getting-started.html" aria-current="page">Guia</a>
+    <a href="https://github.com/RshaCuDeVidro/larperCord" rel="noopener">GitHub</a>
+  </nav>
+  <a class="lang" href="../../guide/architecture.html" hreflang="en" lang="en">English</a>
+</header>
+<div class="guide">
+<aside class="side" aria-label="Páginas do guia">
+<button type="button" class="side-search" data-open-palette>Buscar no guia<span><kbd>Ctrl</kbd><kbd>K</kbd></span></button>
+<div class="side-group"><p>Comece</p><a href="../../pt/guide/getting-started.html">Primeiros passos</a><a href="../../pt/guide/account.html">Conectar sua conta</a></div><div class="side-group"><p>Use</p><a href="../../pt/guide/features.html">Tour dos recursos</a><a href="../../pt/guide/shortcuts.html">Atalhos e linha de comando</a><a href="../../pt/guide/settings.html">Configurações e arquivos</a><a href="../../pt/guide/voice.html">Chamadas de voz</a></div><div class="side-group"><p>Personalize</p><a href="../../pt/guide/themes.html">Escrevendo temas</a><a href="../../pt/guide/theme-gallery.html">Temas embutidos</a><a href="../../pt/guide/plugins.html">Plugins em Lua</a></div><div class="side-group"><p>Por dentro</p><a href="../../pt/guide/architecture.html" aria-current=page>Arquitetura</a><a href="../../pt/guide/performance.html">Desempenho</a><a href="../../pt/guide/privacy.html">Privacidade e segurança</a></div><div class="side-group"><p>Projeto</p><a href="../../pt/guide/status.html">Estado e roteiro</a><a href="../../pt/guide/contributing.html">Contribuir</a></div>
+</aside>
+<main id="main" class="prose">
+<h1>Arquitetura</h1>
+<p>Cerca de 34.000 linhas de Zig sobre uma camada fina de C. A regra que molda tudo: <strong>a interface nunca muda dados diretamente</strong>.</p>
+<h2 id="fluxo-de-dados"><a class="anchor" href="#fluxo-de-dados" aria-hidden="true">#</a>Fluxo de dados</h2>
+<div class="code" data-lang="text"><span class="code-lang">text</span><button class="copy" type="button" data-copy>copy</button><pre><code>UI → Action → app → Command → gateway → Event → Store → UI</code></pre></div>
+<p>A interface só lê o Store e pede ações. O app transforma essas ações em comandos para o gateway, que roda na própria thread, e os eventos voltam por uma fila até o Store. Por isso trocar o gateway de demonstração pelo real não mexe na interface.</p>
+<h2 id="arvore-do-codigo"><a class="anchor" href="#arvore-do-codigo" aria-hidden="true">#</a>Árvore do código</h2>
+<div class="code" data-lang="text"><span class="code-lang">text</span><button class="copy" type="button" data-copy>copy</button><pre><code>src/
+  core/       dados puros, sem janela: tipos (snowflakes), Store, markdown, eventos,
+              caixa de entrada, mensagens salvas, filtros, consultas de busca, formato do cache
+  net/        o gateway real (Discord) e o de demonstração, filas, voz,
+              protobuf das configurações, cache de mensagens, proxy, URLs de mídia
+  theme/      parser KDL, cores, carregador de tema, motor de layout, gerenciador + inotify
+  ui/         componentes, texto rico, paleta, configurações, animações, imagens, vídeo
+  plugins/    o motor Lua e o seu host
+  platform/   janela, renderizador, acordar o laço, carregamento do FFmpeg. O único
+              lugar que conhece o sistema de janelas do SDL
+themes/       os temas embutidos (também compilados dentro do binário)
+third_party/  código de terceiros copiado: Dear ImGui, dear_bindings, Lua, stb_image, libdave,
+              MLSpp, nlohmann/json
+tools/        QA, benchmark de memória, capturas de tela, geradores de logo e do site</code></pre></div>
+<h2 id="threads"><a class="anchor" href="#threads" aria-hidden="true">#</a>Threads</h2>
+<div class="table-wrap"><table><thead><tr><th>Thread</th><th>Quando existe</th><th>O que faz</th></tr></thead><tbody><tr><td>Interface</td><td>Sempre</td><td>O laço principal, dormindo em <code>SDL_WaitEvent</code> quando nada acontece. Os plugins Lua também rodam aqui</td></tr><tr><td>Gateway</td><td>Com token</td><td>WebSocket com heartbeat, RESUME, zlib-stream e reconexão, mais o REST, uma requisição por vez</td></tr><tr><td>Gateway de demonstração</td><td>Sem token</td><td>Servidores, pessoas e mensagens falsos</td></tr><tr><td>Mídia</td><td>Sempre, quase sempre dormindo</td><td>Baixa e decodifica imagens com baixa prioridade, no máximo 2 decodificações por vez</td></tr><tr><td>Vigia de temas</td><td>A menos que desligada</td><td>Espera o inotify avisar de mudanças nos arquivos de tema e nas cores do pywal</td></tr><tr><td>Vídeo</td><td>Enquanto toca</td><td>Uma thread baixa, outra decodifica num anel de 3 quadros</td></tr><tr><td>Voz</td><td>Durante uma call</td><td>Gateway de voz, UDP, Opus e DAVE</td></tr></tbody></table></div>
+<h2 id="conversando-com-o-discord"><a class="anchor" href="#conversando-com-o-discord" aria-hidden="true">#</a>Conversando com o Discord</h2>
+<p>O gateway usa WebSocket (<code>v=10</code>, JSON, <code>zlib-stream</code>) com heartbeat, RESUME de sessão e reconexão. O comportamento foi portado para Zig a partir do que também conecta como cliente de usuário. O REST cuida de histórico, envio, edição, exclusão, reações e "digitando", uma requisição por vez e respeitando o rate limit.</p>
+<h2 id="a-renderizacao"><a class="anchor" href="#a-renderizacao" aria-hidden="true">#</a>A renderização</h2>
+<p>Tudo é desenhado com o <code>ImDrawList</code> do Dear ImGui sobre o SDL_Renderer, e o FreeType renderiza o texto. O ImGui é uma biblioteca de modo imediato, então o custo normal dela é redesenhar o tempo todo. Aqui, o laço só desenha quando algo muda:</p>
+<ul><li><strong>Entrada, rede, inotify e o relógio</strong> acordam o laço por eventos.</li><li><strong>Animações</strong> pedem quadros só enquanto estão rodando.</li><li><strong>Listas</strong> usam busca binária para achar o primeiro item visível e desenham só o que está na tela.</li><li><strong>Markdown</strong> é interpretado uma vez, quando a mensagem chega, com cache de altura por largura.</li></ul>
+<h2 id="temas-como-dados"><a class="anchor" href="#temas-como-dados" aria-hidden="true">#</a>Temas como dados</h2>
+<p>Um tema é lido como cores, estilos e uma árvore de nós. O motor de layout calcula os retângulos a partir de <code>row</code>, <code>column</code>, <code>stack</code>, <code>flex</code> e tamanhos, e depois uma tabela em <code>src/ui/root.zig</code> liga os nomes dos componentes às funções de desenho. Um componente que ele não conhece aparece com uma borda vermelha e o número da linha do arquivo.</p>
+<p><a href="../../pt/guide/themes.html">Escrevendo temas</a> documenta a linguagem, e o <a href="../../pt/index.html#playground">playground da página inicial</a> deixa você testar no navegador.</p>
+<h2 id="como-ele-fica-leve"><a class="anchor" href="#como-ele-fica-leve" aria-hidden="true">#</a>Como ele fica leve</h2>
+<p>Veja <a href="../../pt/guide/performance.html">Desempenho</a>.</p>
+<p class="edit"><a href="https://github.com/RshaCuDeVidro/larperCord/blob/main/site/guide/pt/architecture.md" rel="noopener">Fonte desta página no GitHub</a></p>
+<nav class="pager"><a href="../../pt/guide/plugins.html"><small>Anterior</small>Plugins em Lua</a><a class="next" href="../../pt/guide/performance.html"><small>Próximo</small>Desempenho</a></nav>
+</main>
+<nav class="toc" aria-label="Nesta página"><p>Nesta página</p><a class="l2" href="#fluxo-de-dados">Fluxo de dados</a><a class="l2" href="#arvore-do-codigo">Árvore do código</a><a class="l2" href="#threads">Threads</a><a class="l2" href="#conversando-com-o-discord">Conversando com o Discord</a><a class="l2" href="#a-renderizacao">A renderização</a><a class="l2" href="#temas-como-dados">Temas como dados</a><a class="l2" href="#como-ele-fica-leve">Como ele fica leve</a></nav>
+</div>
+<footer class="statusbar" aria-label="Tema da página">
+  <button type="button" class="buddy" data-next-theme aria-label="Próximo tema"><svg class="ma" viewBox="100 110 1200 900" aria-hidden="true" focusable="false"><defs><clipPath id="ma-bb"><path d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/></clipPath><clipPath id="ma-lb"><path d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/></clipPath><clipPath id="ma-eb"><path d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></clipPath><linearGradient id="ma-lensb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b0a44"/><stop offset=".55" stop-color="#0c0316"/><stop offset="1" stop-color="#040108"/></linearGradient></defs><g class="ma-rig"><path class="ma-ghost ma-g1" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-ghost ma-g2" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g clip-path="url(#ma-bb)"><path class="ma-edge" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><path class="ma-core" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z" transform="translate(12.5 45) scale(0.95)"/><path class="ma-shade" d="M150 690 C230 810 330 870 470 900 L440 980 L100 980 L100 690 Z"/></g><path class="ma-line" d="M340 258 L568 188 L625 268 Q700 262 778 268 L838 182 Q960 200 1048 248 C1180 420 1260 620 1262 812 C1180 880 1080 920 985 945 L930 830 Q700 850 482 802 L428 938 C320 910 220 870 148 830 C150 620 220 420 340 258 Z"/><g class="ma-eyes"><path class="ma-white" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-white" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/><g clip-path="url(#ma-eb)"><ellipse class="ma-iris" cx="520" cy="634" rx="30" ry="36"/><ellipse class="ma-iris" cx="908" cy="538" rx="30" ry="36"/></g><path class="ma-lid" d="M399.4 612.4 L592.6 581.2 C580.6 636.4 550.6 673.6 485.8 675.4 C436.6 675.4 404.2 649.6 399.4 612.4 Z"/><path class="ma-lid" d="M771.8 539.0 L993.8 488.0 C1004.6 539.0 981.8 582.2 923.0 583.4 C858.2 583.4 794.6 575.0 771.8 539.0 Z"/></g><path class="ma-mouth ma-ink" d="M728 742 C830 722 922 700 980 652 C988 668 980 680 962 690 C900 722 822 742 732 750 Z"/><g class="ma-shades"><path class="ma-arm" d="M345 596 L196 566"/><path class="ma-arm" d="M1066 458 L1196 424"/><path class="ma-arm" d="M655 554 Q680 528 702 544"/><path class="ma-lens" fill="url(#ma-lensb)" d="M338 600 L660 548 C640 640 590 702 482 705 C400 705 346 662 338 600 Z"/><path class="ma-lens" fill="url(#ma-lensb)" d="M698 540 L1068 455 C1086 540 1048 612 950 614 C842 614 736 600 698 540 Z"/><g clip-path="url(#ma-lb)"><path class="ma-tint" d="M300 640 L1100 450 L1100 520 L300 700 Z"/><path class="ma-glare" d="M250 760 L350 760 L620 420 L520 420 Z M400 760 L440 760 L710 420 L670 420 Z"/></g></g><path class="ma-spark" d="M1095 160 C1105 250 1120 282 1240 296 C1130 310 1112 340 1110 436 C1100 340 1080 322 940 322 C1060 306 1088 272 1095 160 Z"/></g></svg></button>
+  <i class="sb-prog" aria-hidden="true"></i>
+  <span class="sb-dot" aria-hidden="true"></span>
+  <button type="button" class="sb-btn" data-next-theme title="F2"><span data-theme-name>larper</span></button>
+  <button type="button" class="sb-btn" data-toggle-mode><span data-mode-name>dark</span></button>
+  <span class="sb-spacer"></span>
+  <button type="button" class="sb-btn sb-keys" data-open-palette><kbd>Ctrl</kbd><kbd>K</kbd> paleta</button>
+  <span class="sb-keys sb-hint"><kbd>F2</kbd> próximo tema</span>
+  <span class="sb-pos" data-scroll-pos></span>
+  <time class="sb-clock" data-clock></time>
+</footer>
+<div class="fx-layer" aria-hidden="true"></div>
+<script src="../../assets/site/site.js"></script>
+</body>
+</html>
