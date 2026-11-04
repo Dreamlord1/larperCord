@@ -19,6 +19,7 @@ const icons = @import("icons.zig");
 const att = @import("attachments.zig");
 const emb = @import("embeds.zig");
 const popup = @import("popup.zig");
+const mosaic = @import("mosaic.zig");
 const sigil = @import("comp_chat.zig").sigil;
 const store_mod = @import("../core/store.zig");
 const types = @import("../core/types.zig");
@@ -193,7 +194,15 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     // A bandeja de arquivos fica entre a conversa e a caixa de texto.
     var r = r_in;
     r.h = @max(40, r.h - att.trayHeight(ctx));
+    // Tela dividida: cada painel chama `history` com o canal dele.
+    if (mosaic.on()) return mosaic.draw(ctx, n, r);
     const ch_id = ctx.st.activeChannel() orelse return;
+    history(ctx, n, r, ch_id, "##messages");
+}
+
+/// O histórico de um canal, com rolagem própria. `region` é o nome da
+/// região do ImGui (um por painel: os IDs dos botões ficam separados).
+pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*:0]const u8) void {
     const cs = ctx.store.channel(ch_id) orelse return;
     const g = geometry(ctx, n, r);
     ctx.hot = false;
@@ -267,8 +276,8 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     }
     // Perto do topo: pede as anteriores.
     if (cs.older == .idle and msgs.len > 0 and sc.pos >= 0 and sc.pos < r.h * 0.6 + 200) ctx.act(.{ .load_older = ch_id });
-    // Pulo para uma mensagem (clique numa resposta).
-    if (st.jump != 0) {
+    // Pulo para uma mensagem (clique numa resposta): só no painel focado.
+    if (st.jump != 0 and st.activeChannel() == ch_id) {
         const found = for (msgs, 0..) |m, i| {
             if (m.msg.id != st.jump) continue;
             sc.target = std.math.clamp(st.offsets.items[i] - r.h / 3, 0, max_scroll);
@@ -295,7 +304,7 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     sc.pos = anim.step(sc.pos, sc.target, 18);
 
     c.ImGui_SetNextWindowScroll(d.v(-1, sc.pos));
-    const dl = d.beginRegion(ctx, "##messages", r, c.ImGuiWindowFlags_NoScrollWithMouse);
+    const dl = d.beginRegion(ctx, region, r, c.ImGuiWindowFlags_NoScrollWithMouse);
     const s = c.ImGui_GetScrollY();
     if (@abs(s - sc.pos) > 1 and c.ImGui_IsMouseDown(0) and ctx.mouse.x >= r.right() - 14) {
         sc.pos = s;
@@ -375,13 +384,13 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
             }
             if (c.ImGui_IsMouseClicked(1)) ctx.popup(.{ .menu = .{ .kind = .message, .id = m.msg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
         }
-        if (st.selection.dragging and c.ImGui_IsMouseDown(0) and !c.ImGui_IsMouseDoubleClicked(0)) {
+        if (st.selection.dragging and st.selection.channel == ch_id and c.ImGui_IsMouseDown(0) and !c.ImGui_IsMouseDoubleClicked(0)) {
             st.selection.b_id = m.msg.id;
             st.selection.b_off = off;
         }
     }
     if (st.selection.dragging and !c.ImGui_IsMouseDown(0)) st.selection.dragging = false;
-    if (!st.selection.empty() and ctx.io.*.KeyCtrl and c.ImGui_IsKeyPressed(c.ImGuiKey_C) and !ctx.io.*.WantTextInput) {
+    if (!st.selection.empty() and st.selection.channel == ch_id and ctx.io.*.KeyCtrl and c.ImGui_IsKeyPressed(c.ImGuiKey_C) and !ctx.io.*.WantTextInput) {
         if (popup.selectionText(ctx)) |txt| ctx.act(.{ .copy = txt });
     }
     // Voltar para o fim: desenhado dentro da própria região (fica por baixo
