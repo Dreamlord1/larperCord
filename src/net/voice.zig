@@ -209,6 +209,10 @@ const Worker = struct {
     speaking_now: bool = false,
     last_voice_ms: i64 = 0,
     trailing_silence: u8 = 0,
+    // Diagnóstico (LARPER_VOICE_DEBUG).
+    mic_peak_rms: f64 = 0,
+    sent_frames: u64 = 0,
+    stats_ms: i64 = 0,
     ws_in: std.ArrayList(u8) = .empty,
     in_buf: [65536]u8 = undefined,
     url_buf: [320]u8 = undefined,
@@ -791,12 +795,19 @@ const Worker = struct {
             var sum: u64 = 0;
             for (pcm) |s| sum += @intCast(@as(i32, s) * @as(i32, s));
             const rms = std.math.sqrt(@as(f64, @floatFromInt(sum)) / @as(f64, pcm.len));
-            loud = rms > 180;
+            loud = rms > 120;
+            w.mic_peak_rms = @max(w.mic_peak_rms, rms);
         }
         if (loud) w.last_voice_ms = now;
         // 300 ms de "rabo" para não cortar o fim das palavras.
-        const talking = have and now - w.last_voice_ms < 300;
+        const talking = have and now - w.last_voice_ms < 400;
+        if (debug_on and now - w.stats_ms >= 3000) {
+            dbg("mic: {s}, rms máx {d:.0}, {d} quadros enviados, DAVE {s}", .{ if (w.capture == null) "sem microfone" else if (muted) "mudo" else "ligado", w.mic_peak_rms, w.sent_frames, if (w.dave) |dv| (if (dv.enabled) "cifrando" else "esperando") else "não" });
+            w.stats_ms = now;
+            w.mic_peak_rms = 0;
+        }
         if (talking != w.speaking_now) {
+            dbg("falando: {}", .{talking});
             w.speaking_now = talking;
             w.setSpeaking(talking);
             if (!talking) w.trailing_silence = 5;
@@ -852,7 +863,8 @@ const Worker = struct {
         @memcpy(buf[off + payload.len ..][0..16], &tag);
         @memcpy(buf[off + payload.len + 16 ..][0..4], nonce[0..4]);
         const total = off + payload.len + 16 + 4;
-        _ = c.sendto(w.udp, &buf, total, 0, @ptrCast(&w.server), @sizeOf(std.posix.sockaddr.in));
+        const rc = c.sendto(w.udp, &buf, total, 0, @ptrCast(&w.server), @sizeOf(std.posix.sockaddr.in));
+        if (rc < 0) dbg("sendto falhou", .{}) else w.sent_frames += 1;
         w.rtp_seq +%= 1;
         w.rtp_ts +%= frame_samples;
     }
@@ -896,7 +908,7 @@ const Worker = struct {
             const n = dave.decrypt(ssrc, src.user, frame, &dave_out) orelse return;
             frame = dave_out[0..n];
         }
-        w.play(src, frame);
+        w.play(src, frame, std.mem.readInt(u16, buf[2..4], .big));
     }
 
     // --- Áudio ------------------------------------------------------------
@@ -999,33 +1011,50 @@ const Worker = struct {
     }
 
     /// Opus -> PCM -> o stream da pessoa (o SDL mistura e toca).
-    fn play(w: *Worker, src: *Source, frame: []const u8) void {
+    fn play(w: *Worker, src: *Source, frame: []const u8, seq: u16) void {
         const now = nowMs();
+        // Começo de uma fala (silêncio antes): a fila do SDL recomeça com
+        // uma folga contra o jitter. No meio da fala nunca entra silêncio.
+        const spurt = now - src.last_ms > 250;
         if (!src.speaking or now - src.last_emit_ms > 1000) {
             src.speaking = true;
             src.last_emit_ms = now;
             if (src.user != 0) w.v.emit(.{ .voice_speaking = .{ .user = src.user, .speaking = true } });
         }
         src.last_ms = now;
-        if (w.deaf_applied) return;
+        if (w.deaf_applied) {
+            src.last_seq = seq;
+            return;
+        }
         const st = src.stream orelse return;
         var pcm: [5760 * channels]i16 = undefined;
         const n = c.opus_decode(src.dec, frame.ptr, @intCast(frame.len), &pcm, 5760, 0);
         if (n <= 0) return;
         const queued = c.SDL_GetAudioStreamQueued(st);
-        // Mais de 300 ms na fila: a rede engasgou; recomeça no presente.
-        if (queued > 300 * bytes_per_ms) _ = c.SDL_ClearAudioStream(st);
-        // Fila vazia (começo de uma fala): 40 ms de folga contra o jitter.
-        if (queued <= 0) {
-            const pad: [40 * bytes_per_ms]u8 = @splat(0);
+        if (spurt or queued > 250 * bytes_per_ms) {
+            // Fila velha demais (a rede engasgou): recomeça no presente.
+            if (queued > 250 * bytes_per_ms) _ = c.SDL_ClearAudioStream(st);
+            const pad: [60 * bytes_per_ms]u8 = @splat(0);
             _ = c.SDL_PutAudioStreamData(st, &pad, pad.len);
+        } else {
+            // Pacotes perdidos no meio da fala: o Opus inventa o pedaço que
+            // faltou (PLC) em vez de um buraco.
+            const lost = seq -% src.last_seq -% 1;
+            if (lost > 0 and lost <= 3) {
+                var plc: [frame_samples * channels]i16 = undefined;
+                for (0..lost) |_| {
+                    const m = c.opus_decode(src.dec, null, 0, &plc, frame_samples, 0);
+                    if (m > 0) _ = c.SDL_PutAudioStreamData(st, &plc, @intCast(@as(usize, @intCast(m)) * channels * @sizeOf(i16)));
+                }
+            }
         }
+        src.last_seq = seq;
         _ = c.SDL_PutAudioStreamData(st, &pcm, @intCast(@as(usize, @intCast(n)) * channels * @sizeOf(i16)));
     }
 
     /// Quem parou de mandar áudio há 300 ms parou de falar (o anel apaga).
     fn expireSpeakers(w: *Worker, now: i64) void {
-        for (w.sources[0..w.n_sources]) |*s| if (s.speaking and now - s.last_ms > 300) {
+        for (w.sources[0..w.n_sources]) |*s| if (s.speaking and now - s.last_ms > 400) {
             s.speaking = false;
             if (s.user != 0) w.v.emit(.{ .voice_speaking = .{ .user = s.user, .speaking = false } });
         };
@@ -1041,6 +1070,7 @@ const Source = struct {
     speaking: bool = false,
     last_ms: i64 = 0,
     last_emit_ms: i64 = 0,
+    last_seq: u16 = 0,
 
     fn deinit(s: *Source) void {
         c.opus_decoder_destroy(s.dec);
