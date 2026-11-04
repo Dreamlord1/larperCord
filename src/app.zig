@@ -46,6 +46,9 @@ const lsp_net = @import("net/lsp.zig");
 const updater = @import("net/updater.zig");
 const lsp_ui = @import("ui/lsp_ui.zig");
 const mem_tune = @import("platform/mem_tune.zig");
+const tray = @import("platform/tray.zig");
+const instance = @import("platform/instance.zig");
+const janela = @import("core/janela.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -109,11 +112,14 @@ pub const App = struct {
     started_ns: u64,
     layout_key: u32 = 0,
     login: login_mod.Login = .{},
+    /// Parar o laço e sair de verdade (nunca para a bandeja). Só da thread da
+    /// interface: de outra, chame `Window.wake` em seguida para acordar o laço.
+    restart_wanted: bool = false,
+    /// Verificações seguidas sem painel com a janela escondida.
+    tray_misses: u8 = 0,
     images: images.Cache = undefined,
     /// Arquivos escolhidos no seletor (o SDL pode responder de outra thread).
     picked: Queue([:0]u8) = undefined,
-    /// "Reiniciar": para o laço, fecha tudo e o `main` abre uma cópia nova.
-    restart_wanted: bool = false,
     /// Já tem um aviso da rede na fila do SDL: os próximos eventos só entram
     /// na fila de eventos, sem acordar a janela de novo.
     gw_signaled: std.atomic.Value(bool) = .init(false),
@@ -244,11 +250,49 @@ pub const App = struct {
         updater.setup(&lspWake);
         updater.offline = opts.qa;
         updater.cleanLeftovers();
+        if (opts.qa) tray.fake = false;
         timeline.mark(.create_fim);
         return app;
     }
 
+    /// Fechou a janela e ela deve ficar na bandeja? O app segue conectado e
+    /// avisando, sem desenhar. Falso: sem bandeja, ou opção desligada; aí fechar
+    /// sai de verdade, nunca fica um processo invisível sem caminho de volta.
+    fn hideToTray(app: *App) bool {
+        if (app.opts.shot != null or app.restart_wanted) return false;
+        const logged_in = app.store.ready and !app.login.visible();
+        if (!janela.wantsTray(app.st.settings.close_to_tray, logged_in)) return false;
+        if (!tray.show(app.win.wake_type, i18n.trZ("Abrir o larperCord", "Open larperCord").ptr, i18n.trZ("Sair", "Quit").ptr)) return false;
+        _ = c.SDL_HideWindow(app.win.window);
+        // Sem quadros daqui em diante: o que depende do quadro fica certo agora.
+        // Ninguém está olhando: confirmar leitura e o medidor do microfone param,
+        // e o vídeo (a imagem também parou) pausa em vez de cortar o som depois de 1 s.
+        app.st.window_focused = false;
+        voz_audio.setPageOpen(false);
+        @import("ui/video.zig").pause();
+        // Aperte para falar: a tecla solta fora da janela não chegaria aqui.
+        var lost = std.mem.zeroes(c.SDL_Event);
+        lost.type = c.SDL_EVENT_WINDOW_FOCUS_LOST;
+        _ = voz_audio.onSdlEvent(&lost);
+        app.tray_misses = 0;
+        // Um desligamento com a janela escondida pode nem passar por destroy.
+        app.saveSettings();
+        return true;
+    }
+
+    /// Volta da bandeja (ou traz para a frente, se a janela já estava aberta).
+    fn showWindow(app: *App) void {
+        tray.hide();
+        app.tray_misses = 0;
+        _ = c.SDL_ShowWindow(app.win.window);
+        _ = c.SDL_RestoreWindow(app.win.window);
+        _ = c.SDL_RaiseWindow(app.win.window);
+    }
+
     pub fn destroy(app: *App) void {
+        tray.hide();
+        sys.toastExpire(0, true);
+        instance.stopListening();
         app.saveSettings();
         // Primeiro: mesmo com um servidor travado, o filho morre antes do vigia de main.zig.
         lsp_net.shutdown();
@@ -283,6 +327,8 @@ pub const App = struct {
         c.cImGui_ImplSDL3_Shutdown();
         c.ImGui_DestroyContext(null);
         app.win.deinit();
+        // Por último: quem assumir a trava (um reinício) já acha tudo gravado.
+        instance.release();
         app.gpa.destroy(app);
     }
 
@@ -1738,9 +1784,11 @@ pub const App = struct {
     fn notify(app: *App, m: types.Message, cs: *const @import("core/store.zig").ChannelState) void {
         if (app.opts.qa or app.store.demo) return;
         const set = &app.st.settings;
-        const focused = (c.SDL_GetWindowFlags(app.win.window) & c.SDL_WINDOW_INPUT_FOCUS) != 0;
+        const flags = c.SDL_GetWindowFlags(app.win.window);
+        const hidden = flags & c.SDL_WINDOW_HIDDEN != 0;
+        const focused = !hidden and flags & c.SDL_WINDOW_INPUT_FOCUS != 0;
         if (focused and app.st.activeChannel() == m.channel) return;
-        if (set.taskbar_flash and !focused) _ = c.SDL_FlashWindow(app.win.window, c.SDL_FLASH_UNTIL_FOCUSED);
+        if (set.taskbar_flash and !focused and !hidden) _ = c.SDL_FlashWindow(app.win.window, c.SDL_FLASH_UNTIL_FOCUSED);
         if (!set.desktop_notifs or focused or app.notifiers.items.len >= 8) return;
 
         const who = if (app.store.user(m.author)) |u| u.name else "?";
@@ -1756,6 +1804,7 @@ pub const App = struct {
         while (cut > 0 and cut < body_src.len and (body_src[cut] & 0xC0) == 0x80) cut -= 1;
         var bb: [208]u8 = undefined;
         const body = std.fmt.bufPrintSentinel(&bb, "{s}{s}", .{ body_src[0..cut], if (cut < body_src.len) "…" else "" }, 0) catch return;
+        if (sys.windows) return sys.toast(c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(app.win.window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null), now(), title, body);
         var args = [_:null]?[*:0]const u8{ "notify-send", "--app-name=larperCord", "--", title.ptr, body.ptr };
         const proc = c.SDL_CreateProcess(@ptrCast(&args), false) orelse return;
         app.notifiers.append(app.gpa, proc) catch c.SDL_DestroyProcess(proc);
@@ -2016,6 +2065,11 @@ pub const App = struct {
         var record_n: u32 = 0;
 
         while (running) {
+            // Reinício pedido: sai como qualquer "Sair", sem passar pela bandeja.
+            if (app.restart_wanted) {
+                _ = c.SDL_HideWindow(app.win.window);
+                break;
+            }
             var e: c.SDL_Event = undefined;
             // O relógio do sistema andou para trás: sem isso, o quadro adiado
             // só viria quando ele alcançasse a hora antiga.
@@ -2066,6 +2120,13 @@ pub const App = struct {
                                 app.cache_flush_ms = now();
                                 if (msg_cache.flushSome(&app.store, 4)) app.cache_flush_ms -= 50_000;
                             }
+                            sys.toastExpire(now(), false);
+                            // O painel sumiu com a janela escondida (fechou, travou):
+                            // a janela volta em vez de ficar sem caminho de volta.
+                            if (tray.active()) {
+                                app.tray_misses = if (tray.hostAvailable()) 0 else app.tray_misses + 1;
+                                if (app.tray_misses >= janela.tray_misses_max) app.showWindow();
+                            }
                         },
                         .media => bg_dirty = true,
                         .token => {
@@ -2073,6 +2134,11 @@ pub const App = struct {
                             app_accounts.finishStartupLookup(app);
                             pending = 3;
                         },
+                        .show => {
+                            app.showWindow();
+                            pending = 3;
+                        },
+                        .quit => running = false,
                     }
                 } else {
                     input = true;
@@ -2080,7 +2146,8 @@ pub const App = struct {
                     const for_list = e.type == c.SDL_EVENT_KEY_DOWN and autocomplete.takeSdlKey(e.key.key, e.key.mod);
                     // Aperte para falar (e "aperte uma tecla" nas Configurações).
                     if (!for_list and !voz_audio.onSdlEvent(&e)) _ = c.cImGui_ImplSDL3_ProcessEvent(&e);
-                    if (e.type == c.SDL_EVENT_QUIT or e.type == c.SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+                    // QUIT é sair sempre (sinal, fim da sessão); o fechar da janela, depende.
+                    if (e.type == c.SDL_EVENT_QUIT or (e.type == c.SDL_EVENT_WINDOW_CLOSE_REQUESTED and !app.hideToTray())) {
                         running = false;
                         // Some da tela na hora; o resto do encerramento é por trás.
                         _ = c.SDL_HideWindow(app.win.window);
@@ -2117,7 +2184,6 @@ pub const App = struct {
                 }
                 if (picked.items.len > 0) pending = 3;
             }
-            if (app.restart_wanted) running = false;
             if (updater.takeNotice()) app.st.showToast(now(), false, "atualização disponível: veja em Configurações → Atualizações", "update available: see Settings → Updates", .{});
             const now_ms = now();
             // Nada venceu ainda: não há por que redesenhar.

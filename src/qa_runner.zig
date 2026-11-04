@@ -346,6 +346,10 @@ fn tVideoMute(_: *App, b: []u8) []const u8 {
     if (!video.info().has_audio) return "";
     return tVideoMark(b, "video-mute");
 }
+fn tVideoVol(_: *App, b: []u8) []const u8 {
+    if (!video.info().has_audio) return "";
+    return tVideoMark(b, "video-vol");
+}
 fn videoPlaying(app: *App) bool {
     if (!hasFfmpeg()) return !video.info().active and std.mem.indexOf(u8, app.st.toast.text(), "vídeo") != null;
     const v = video.info();
@@ -385,6 +389,39 @@ fn videoResumed(_: *App) bool {
 fn videoMuted(_: *App) bool {
     const v = video.info();
     return !hasFfmpeg() or !v.has_audio or v.muted;
+}
+/// Confere no SDL o ganho aplicado de fato.
+fn videoGainIs(app: *App, volume: u8, gain: f32) bool {
+    const v = video.info();
+    if (!hasFfmpeg() or !v.has_audio) return true;
+    return app.st.settings.video_volume == volume and @abs(v.gain - gain) < 0.002;
+}
+fn videoVolHalf(app: *App) bool {
+    return videoGainIs(app, 50, 0.25);
+}
+fn videoVolZero(app: *App) bool {
+    return videoGainIs(app, 0, 0) and (!hasFfmpeg() or !video.info().has_audio or video.info().muted);
+}
+fn videoVolFull(app: *App) bool {
+    return videoGainIs(app, 100, 1);
+}
+fn trayFake(_: *App) void {
+    @import("platform/tray.zig").fake = true;
+}
+fn trayFakeOff(_: *App) void {
+    @import("platform/tray.zig").fake = false;
+}
+fn pushCloseEvent(app: *App) void {
+    var e = std.mem.zeroes(c.SDL_Event);
+    e.type = c.SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+    e.window.windowID = c.SDL_GetWindowID(app.win.window);
+    _ = c.SDL_PushEvent(&e);
+}
+fn wakeShowWindow(app: *App) void {
+    @import("platform/window.zig").Window.wake(app.win.wake_type, .show);
+}
+fn hiddenAndPaused(app: *App) bool {
+    return @import("qa_bandeja.zig").isHidden(app) and (!hasFfmpeg() or !video.info().playing);
 }
 fn videoEnded(_: *App) bool {
     if (!hasFfmpeg()) return true;
@@ -2154,6 +2191,24 @@ const ops = [_]Op{
     .{ .expect = .{ .name = "clicar na barra pula para o ponto", .check = videoSeeked, .timeout_ms = 3000 } },
     .{ .click = .{ .dyn = tVideoPlay } },
     expect("o botão continua", videoResumed),
+    .{ .click = .{ .dyn_at = .{ .f = tVideoVol, .fx = 0.5, .fy = 0.5 } } },
+    expect("o meio do volume muda o ganho do som na hora", videoVolHalf),
+    .{ .shot = "video-volume" },
+    .{ .click = .{ .dyn = tVideoMute } },
+    expect("o botão de som zera o volume", videoVolZero),
+    .{ .click = .{ .dyn = tVideoMute } },
+    expect("e volta ao volume de antes", videoVolHalf),
+    .{ .click = .{ .dyn_at = .{ .f = tVideoVol, .fx = 0.01, .fy = 0.5 } } },
+    expect("o começo do volume é mudo", videoVolZero),
+    .{ .click = .{ .dyn_at = .{ .f = tVideoVol, .fx = 0.99, .fy = 0.5 } } },
+    expect("o fim do volume é o som cheio", videoVolFull),
+    .{ .run = trayFake },
+    .{ .run = pushCloseEvent },
+    expect("ir para a bandeja pausa o vídeo", hiddenAndPaused),
+    .{ .run = wakeShowWindow },
+    .{ .run = trayFakeOff },
+    .{ .click = .{ .dyn = tVideoPlay } },
+    expect("voltou e continua", videoResumed),
     .{ .click = .{ .dyn = tVideoMute } },
     expect("o botão de som silencia", videoMuted),
     .{ .expect = .{ .name = "o vídeo chega ao fim e para no último quadro", .check = videoEnded, .timeout_ms = 5000 } },
@@ -2341,7 +2396,7 @@ const ops = [_]Op{
     .{ .sweep = &.{ "toggle:", "button:" } },
     key(c.ImGuiKey_Escape),
 
-} ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ lsp_ops ++ [_]Op{
+} ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ @import("qa_bandeja.zig").ops ++ lsp_ops ++ [_]Op{
     s("caixa de entrada"),
     click("guild:500000"),
     click("channel:500005"),
@@ -2595,6 +2650,11 @@ const ops_leitura = [_]Op{
 const ops_voz = [_]Op{ expect("pronto", ready), click("guild:500000") } ++ @import("qa_voz.zig").ops;
 const ops_lsp = [_]Op{expect("pronto", ready)} ++ lsp_ops;
 const ops_lsp_quit = [_]Op{expect("pronto", ready)} ++ lsp_ops_quit;
+const qa_bandeja = @import("qa_bandeja.zig");
+const ops_bandeja = [_]Op{expect("pronto", ready)} ++ qa_bandeja.ops;
+const ops_bandeja_sair = [_]Op{ expect("pronto", ready), click("guild:500000") } ++ qa_bandeja.ops_no_tray;
+const ops_bandeja_menu = [_]Op{ expect("pronto", ready), click("guild:500000") } ++ qa_bandeja.ops_quit;
+const ops_bandeja_reinicio = [_]Op{expect("pronto", ready)} ++ qa_bandeja.ops_restart;
 const ops_lsp_real = [_]Op{expect("pronto", ready)} ++ lsp_ops_real;
 
 const ops_voice = [_]Op{
@@ -2906,6 +2966,10 @@ fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "voz")) return &ops_voz;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp")) return &ops_lsp;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp-quit")) return &ops_lsp_quit;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "bandeja")) return &ops_bandeja;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "bandeja-sair")) return &ops_bandeja_sair;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "bandeja-menu")) return &ops_bandeja_menu;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "bandeja-reinicio")) return &ops_bandeja_reinicio;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp-real")) return &ops_lsp_real;
     const scene = std.mem.span(c.SDL_getenv("QA_SCENE") orelse return &ops);
     if (std.mem.eql(u8, scene, "ctrl")) return &ops_ctrl;
@@ -3041,7 +3105,7 @@ pub const Runner = struct {
         @import("ui/video.zig").stop();
         st.palette.open = false;
         if (search.open) search.close();
-        st.role_picker = false;
+        @import("ui/dropdown.zig").close();
         st.selection = .{};
         st.reply_to = 0;
         st.editing = 0;
@@ -3074,7 +3138,7 @@ pub const Runner = struct {
         h.update(std.mem.sliceAsBytes(st.tabs.items));
         h.update(std.mem.asBytes(&st.friends));
         h.update(std.mem.asBytes(&st.friends_tab));
-        h.update(&.{ @intFromBool(st.viewer != null), @intFromBool(st.palette.open), @intFromBool(st.role_picker), @intFromBool(st.muted), @intFromBool(st.deafened), @intFromBool(search.open) });
+        h.update(&.{ @intFromBool(st.viewer != null), @intFromBool(st.palette.open), @intFromBool(@import("ui/dropdown.zig").anyOpen()), @intFromBool(st.muted), @intFromBool(st.deafened), @intFromBool(search.open) });
         h.update(std.mem.asBytes(&st.voice));
         h.update(std.mem.asBytes(&st.reply_to));
         h.update(std.mem.asBytes(&st.editing));

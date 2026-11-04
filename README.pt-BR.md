@@ -2,7 +2,7 @@
 
 # larperCord
 
-**Um cliente de Discord nativo de cerca de 50 MB, cuja interface inteira é um arquivo de tema.**
+**Um cliente de Discord para Linux e Windows, nativo de cerca de 50 MB, cuja interface inteira é um arquivo de tema.**
 
 Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 
@@ -61,6 +61,10 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   criam comandos locais (`/shrug`) e atalhos, num sandbox com limite de instruções; liga/desliga,
   erros e plugins de exemplo em Configurações → Plugins. [Guia e API →](docs/plugins.pt-BR.md)
 - **Voz:** em Configurações → Voz você escolhe microfone e saída (lembrados pelo nome, voltam ao padrão se sumirem, trocam em plena call), ajusta os volumes, vê o nível do microfone ao vivo e usa "Testar microfone" para ouvir a si mesmo. A detecção de voz tem limiar ajustável sobre a barra ou modo automático que aprende o ruído de fundo. O modo "aperte para falar" aceita tecla ou botão do mouse e funciona com a janela em foco (atalho global não é portável pelo SDL). Há passa-altas contra ronco, porta de ruído e bipes de entrar, sair, mutar e desmutar, tudo desligável. O painel de voz mostra ping, qualidade por cor, quando você está transmitindo e avisa se o microfone não abrir ou se o servidor te mutou ou ensurdeceu; mudo e surdo dos outros aparecem na lista da call.
+- **Roda no Linux e no Windows.** O Windows 10/11 sai do mesmo código; os tokens ficam no Gerenciador de Credenciais.
+- **Fica na bandeja.** Fechar mantém a conexão na bandeja do sistema, com Abrir e Sair no menu dela; "Fechar para a bandeja" em Configurações → Avançado desliga isso. Sem bandeja, fechar encerra. Abrir de novo traz a janela que já está rodando. No Linux a bandeja precisa de um painel StatusNotifier e de libappindicator ou ayatana.
+- **Atualiza sozinho.** Verifica ao abrir ou em Configurações → Atualizações. Um botão baixa, instala e reinicia. As atualizações são assinadas, e uma versão sem a assinatura certa não é instalada. Há botão de reiniciar e uma página de Novidades com o que mudou em cada versão.
+- **Volume dos vídeos.** O player do app tem um controle de volume, lembrado entre uma vez e outra.
 - **Supressão de ruído no microfone.** Configurações → Voz → Supressão de ruído (Desligada / RNNoise), ligada por padrão e trocável em plena call. Usa o [RNNoise](https://github.com/xiph/rnnoise) 0.2 (BSD), embutido no executável e rodando neste computador, sem internet. Reduz ruído constante como ventilador, chiado e ar-condicionado; teclado e pancadas podem passar, outras vozes continuam e a sua pode abafar um pouco. Atrasa o microfone em 20 ms e custa de 2% a 5% de um núcleo com o microfone aberto; desligada, no mudo ou com a tecla do aperte para falar solta, não custa nada.
 - **Mensagens de bot completas.** As mensagens com componentes novos do Discord (Components V2) mostram texto, miniaturas, separadores, galerias, arquivos e botões de link. Encaminhadas e enquetes aparecem como cartões. Botões que falam com o bot ainda não são suportados, então não aparecem.
 - **Markdown do Discord.** Títulos, texto pequeno com `-#`, citações, listas e links `[texto](url)`, que mostram o endereço real ao passar o mouse. Blocos de código têm número de linha, e o texto de embeds pode ser selecionado e copiado.
@@ -126,6 +130,22 @@ Todos têm **modo claro e escuro** e **opções próprias** em Configurações �
 | `papel` | caderno com índice na margem e títulos em serifa | folha pautada com margem vermelha |
 | `escritorio` | ferramenta de trabalho, barra lateral escura | barra superior com busca e ajuda |
 | `cupertino` | mesa de trabalho estilo Mac: papel de parede e janela flutuante | semáforo que funciona, barra lateral translúcida, Dock com lupa, balões |
+
+## Instalação
+
+**Linux** (x86_64, em `~/.local`, sem sudo):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.sh | sh
+```
+
+**Windows 10/11** (para o seu usuário, sem administrador), no PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.ps1 | iex
+```
+
+Os dois baixam a última [versão publicada](https://github.com/RshaCuDeVidro/larperCord/releases) e conferem com o `SHA256SUMS`. No Linux as bibliotecas vêm do sistema, e o script lista o que falta. Algumas distros mais antigas ainda não têm SDL3; nelas, [compile do código](#compilando). Depois disso, o app se atualiza sozinho: Configurações → Atualizações.
 
 ## Conectando sua conta
 
@@ -222,7 +242,9 @@ gateway falso pelo real não toca na interface.
 - [x] Presenças, membros e eventos de servidor/canal (GUILD_CREATE, CHANNEL_*)
 - [x] Imagens: avatares, anexos e emojis personalizados com cache de tamanho fixo
 - [x] Permissões por canal (cadeado no que não dá pra ler), threads e fóruns
-- [ ] Notificações nativas via D-Bus
+- [x] Windows 10/11
+- [x] Bandeja do sistema, atualização assinada e scripts de instalação
+- [ ] Notificações nativas via D-Bus no Linux
 - [x] Voz (DAVE/MLS + Opus)
 - [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB
 - [ ] Componentes de tema escritos em Lua (sandbox)

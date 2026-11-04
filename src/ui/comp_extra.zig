@@ -345,8 +345,10 @@ pub fn windowControls(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
                 if (qa.on()) {
                     qa_close_requests += 1;
                 } else {
+                    // Igual ao botão do sistema: pode ser ficar na bandeja.
                     var ev = std.mem.zeroes(c.SDL_Event);
-                    ev.type = c.SDL_EVENT_QUIT;
+                    ev.type = c.SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+                    if (win) |w| ev.window.windowID = c.SDL_GetWindowID(w);
                     _ = c.SDL_PushEvent(&ev);
                 }
             },

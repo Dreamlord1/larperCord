@@ -31,6 +31,8 @@ The complete list is in [Settings and files](page:settings).
 
 ## What goes over the network
 
+The only request that isn't to Discord or its CDNs is the update check: when the app opens (if "Check when opening" is on) or when you press the button, it asks `api.github.com` for the latest version, and sends no account data. Downloads come from GitHub and are checked against a signed list.
+
 - **Discord**: gateway, REST and media.
 - **External media, only when you ask for it**: animated Tenor and Giphy GIFs are off by default because those sites see your IP. When off, you get a still preview through Discord's proxy.
 - Links open in your browser.

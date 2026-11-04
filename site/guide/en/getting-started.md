@@ -1,6 +1,6 @@
 # Getting started
 
-larperCord is a native Discord client for Linux, written in Zig. You can run it without an account: `--demo` starts **demo mode**, with fake servers and fake people, and it doesn't connect to anything. With no token configured, the app opens the sign-in screen, which also offers the demo.
+larperCord is a native Discord client for Linux and Windows, written in Zig. You can run it without an account: `--demo` starts **demo mode**, with fake servers and fake people, and it doesn't connect to anything. With no token configured, the app opens the sign-in screen, which also offers the demo.
 
 > [!WARNING]
 > **Third-party clients break Discord's Terms of Service**, and your account can be banned. Use a real account at your own risk, ideally a secondary one. This project has no affiliation with Discord Inc.
@@ -9,13 +9,29 @@ larperCord is a native Discord client for Linux, written in Zig. You can run it 
 
 | | |
 |---|---|
-| Operating system | Linux. It uses inotify and `/proc`, and it's tested on Arch with Hyprland |
+| Operating system | Linux (tested daily on Arch with Hyprland) or Windows 10/11 |
 | Compiler | Zig 0.17 |
 | Libraries | SDL3, FreeType, fontconfig, libcurl (with WebSocket support, 7.86 or newer), zlib, libwebp, Opus, OpenSSL |
 | Recommended fonts | Inter, JetBrains Mono and Noto Color Emoji. fontconfig picks substitutes if one is missing |
 | Optional | FFmpeg 7, 8 or 9 (libavformat 61–63) to play video inside the app. Any other version is ignored and videos open in the browser |
 
-There are no prebuilt packages yet, so you build from source.
+## Install
+
+On Linux (into `~/.local`, no sudo):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.sh | sh
+```
+
+On Windows, in PowerShell (for your user, no administrator):
+
+```powershell
+irm https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.ps1 | iex
+```
+
+Both check the download against `SHA256SUMS`. On Linux the script lists any system library that's missing. After that the app updates itself from Settings → Updates.
+
+The table above matters if you build from source, below.
 
 ## Build and run
 

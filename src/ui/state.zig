@@ -150,8 +150,6 @@ pub const State = struct {
     palette: Palette = .{},
     settings: Settings = .{},
     popup: Popup = .none,
-    /// Lista de cargos para dar, aberta no cartão de perfil.
-    role_picker: bool = false,
     /// Aba do perfil grande: 0 atividade, 1 amigos em comum, 2 servidores em comum.
     profile_tab: u8 = 0,
     /// Editando a nota do perfil (texto em `note_input`).

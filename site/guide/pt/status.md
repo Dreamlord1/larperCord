@@ -17,7 +17,9 @@ O larperCord é um projeto jovem: versão 0.4.0, com o primeiro commit em 2 de n
 | Temas | **funciona** | 11 embutidos, cada um em claro e escuro, recarregam ao salvar |
 | Voz | parcial | E2EE (DAVE), mixer, mudo, seletor de dispositivo, aperte para falar, filtro passa-altas, porta de ruído e supressão de ruído com RNNoise funcionam. O aperte para falar precisa da janela em foco, e nenhum teste automático cobre uma call de verdade |
 | Permissões | parcial | Canais sem acesso ganham cadeado, voz sem permissão é bloqueada, e threads e fóruns conferem se você pode postar. Esses canais ainda aparecem, e a caixa de texto nos canais comuns, as reações e a lista de membros não consultam a permissão |
-| Notificações | parcial | Pelo `notify-send`. Clicar não abre o canal, e não há bandeja do sistema |
+| Bandeja, atualizações | **funciona** | Fechar mantém na bandeja; atualização assinada nas Configurações. No Linux a bandeja precisa de painel StatusNotifier |
+| Windows | parcial | Windows 10/11 do mesmo código. Mais novo que o Linux e menos usado |
+| Notificações | parcial | Por `notify-send` no Linux e pela bandeja no Windows. O clique não abre o canal |
 | Acessibilidade | parcial | Escala da fonte, reduzir movimento, paleta e navegação estilo vim. Sem foco visível e sem alto contraste |
 | Primeiro uso | parcial | Tela de login e modo demonstração, sem apresentação do app |
 | Plataformas | parcial | Só Linux (usa inotify e `/proc`). Testado no Arch com Hyprland |
@@ -43,7 +45,7 @@ O larperCord é um projeto jovem: versão 0.4.0, com o primeiro commit em 2 de n
 
 - [ ] Permissões de verdade: esconder o que você não pode ver, desabilitar a caixa de texto e as reações, filtrar os membros
 - [ ] Entrar em servidor por convite
-- [ ] Notificações nativas via D-Bus com "abrir conversa", e bandeja do sistema
+- [ ] Notificações nativas via D-Bus com "abrir conversa"
 - [ ] Voz: aperte para falar global e teste automático de call
 - [ ] Acessibilidade e primeiro uso: foco visível, alto contraste, uma tela de boas-vindas
 

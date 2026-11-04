@@ -18,6 +18,7 @@ const ffmpeg = @import("../platform/ffmpeg.zig");
 const images = @import("images.zig");
 const platform = @import("../platform/window.zig");
 const media_url = @import("../net/media_url.zig");
+const S = @import("settings_state.zig");
 
 const alloc = std.heap.c_allocator;
 
@@ -116,7 +117,8 @@ const Player = struct {
     pos_ms: f64 = 0,
     playing: bool = true,
     ended: bool = false,
-    muted: bool = false,
+    /// O ganho já passado para o som (-1: ainda nenhum).
+    gain: f32 = -1,
     clock_ms: i64 = 0,
     drawn: bool = false,
     last_drawn_ms: i64 = 0,
@@ -137,6 +139,9 @@ const Player = struct {
 };
 
 var cur: ?Player = null;
+/// O volume antes de silenciar pelo botão.
+var unmute_to: u8 = 0;
+var vol_dragging = false;
 var audio_tried = false;
 var audio_ok = false;
 
@@ -302,10 +307,10 @@ pub fn endFrame(now_ms: i64) void {
 /// Para o QA: o que mudou no player (entra na impressão digital da varredura).
 pub fn qaState() u64 {
     const p = cur orelse return 0;
-    return p.key ^ (@as(u64, @intFromBool(p.playing)) << 1) ^ (@as(u64, @intFromBool(p.muted)) << 2);
+    return p.key ^ (@as(u64, @intFromBool(p.playing)) << 1) ^ (@as(u64, @intFromBool(p.gain == 0)) << 2);
 }
 
-pub const Info = struct { active: bool = false, playing: bool = false, ended: bool = false, failed: bool = false, ready: bool = false, w: u32 = 0, h: u32 = 0, pos_ms: f64 = 0, duration_ms: i64 = 0, shown: u32 = 0, decoded: u32 = 0, has_audio: bool = false, muted: bool = false, audio_queued: i32 = 0, drawn_ms: i64 = 0 };
+pub const Info = struct { active: bool = false, playing: bool = false, ended: bool = false, failed: bool = false, ready: bool = false, w: u32 = 0, h: u32 = 0, pos_ms: f64 = 0, duration_ms: i64 = 0, shown: u32 = 0, decoded: u32 = 0, has_audio: bool = false, muted: bool = false, gain: f32 = -1, audio_queued: i32 = 0, drawn_ms: i64 = 0 };
 
 pub fn info() Info {
     const p = cur orelse return .{};
@@ -325,7 +330,9 @@ pub fn info() Info {
         .shown = p.shown,
         .decoded = sh.decoded,
         .has_audio = sh.audio != null,
-        .muted = p.muted,
+        .muted = p.gain == 0,
+        // O que o SDL está aplicando de fato, não o que pedimos.
+        .gain = if (sh.audio) |s| c.SDL_GetAudioStreamGain(s) else -1,
         .audio_queued = if (sh.audio) |s| c.SDL_GetAudioStreamQueued(s) else 0,
         .drawn_ms = p.last_drawn_ms,
     };
@@ -338,6 +345,12 @@ fn setPlaying(p: *Player, on: bool) void {
     }
     p.playing = on;
     syncAudio(p);
+}
+
+/// A janela foi para a bandeja: pausa, sem fechar o vídeo.
+pub fn pause() void {
+    const p = if (cur) |*pp| pp else return;
+    if (p.playing) setPlaying(p, false);
 }
 
 fn seek(p: *Player, ms: i64) void {
@@ -362,6 +375,17 @@ fn syncAudio(p: *Player) void {
     if (want == p.audio_running) return;
     p.audio_running = want;
     _ = if (want) c.SDL_ResumeAudioStreamDevice(s) else c.SDL_PauseAudioStreamDevice(s);
+}
+
+/// O slider vale na hora, mesmo no meio do que já está na fila do som.
+fn applyVolume(p: *Player, volume: u8) void {
+    const s = p.sh.audio orelse return;
+    const gain = S.videoGain(volume);
+    if (gain != p.gain and c.SDL_SetAudioStreamGain(s, gain)) p.gain = gain;
+}
+
+fn saveVolume(ctx: *d.Ctx) void {
+    ctx.act(.{ .set_setting = .{ .index = S.fieldIndex("video_volume"), .value = ctx.st.settings.video_volume } });
 }
 
 /// Avança o relógio e sobe o quadro da vez.
@@ -437,6 +461,8 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, alpha: f32, msg_id: u64, 
     p.drawn = true;
     p.last_drawn_ms = ctx.now_ms;
     update(p, ctx.images.renderer, ctx.now_ms);
+    // Antes de soltar o som: o primeiro instante já sai no volume certo.
+    applyVolume(p, ctx.st.settings.video_volume);
     syncAudio(p);
     const radius: f32 = 8;
     const ids: usize = @truncate(p.key);
@@ -505,7 +531,7 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, alpha: f32, msg_id: u64, 
     }
 
     // Barra de controles: com o mouse em cima, pausado ou no fim.
-    const show_bar = !failed and (hovered or !p.playing or p.ended);
+    const show_bar = !failed and (hovered or !p.playing or p.ended or vol_dragging);
     const bar: d.Rect = .{ .x = r.x, .y = r.bottom() - 36, .w = r.w, .h = 36 };
     if (show_bar) {
         const top = d.Rgba.black.col(0);
@@ -537,8 +563,10 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, alpha: f32, msg_id: u64, 
         std.fmt.bufPrint(&tbuf, "{s} / {s}", .{ fmtTime(&tb1, p.pos_ms), fmtTime(&tb2, @floatFromInt(p.duration_ms)) }) catch ""
     else
         fmtTime(&tb1, p.pos_ms);
-    const tw = d.width(f, 12, ttxt);
-    if (show_bar) d.text(dl, f, 12, pr.right() + 6, d.centerY(bar, 12), d.Rgba.white.alpha(0.9 * alpha), ttxt);
+    // Num vídeo estreito, o espaço do tempo fica para as barras.
+    const show_time = r.w >= 260;
+    const tw = if (show_time) d.width(f, 12, ttxt) else 0;
+    if (show_bar and show_time) d.text(dl, f, 12, pr.right() + 6, d.centerY(bar, 12), d.Rgba.white.alpha(0.9 * alpha), ttxt);
 
     // Som (só se o vídeo tem).
     var right = bar.right() - 8;
@@ -547,15 +575,43 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, alpha: f32, msg_id: u64, 
         right = mr.x - 6;
         const mh = d.hit(ctx, ids +% 3, mr);
         qa.mark(mr, "video-mute", .{});
-        if (show_bar) speakerIcon(dl, mr.x + 13, mr.y + 13, d.Rgba.white.alpha((if (mh.hovered) @as(f32, 1) else 0.85) * alpha), p.muted);
+        const volume = &ctx.st.settings.video_volume;
+        if (show_bar) speakerIcon(dl, mr.x + 13, mr.y + 13, d.Rgba.white.alpha((if (mh.hovered) @as(f32, 1) else 0.85) * alpha), volume.*);
         if (mh.clicked) {
-            p.muted = !p.muted;
-            if (p.sh.audio) |s| _ = c.SDL_SetAudioStreamGain(s, if (p.muted) 0 else 1);
+            if (volume.* > 0) {
+                unmute_to = volume.*;
+                volume.* = 0;
+            } else volume.* = if (unmute_to > 0) unmute_to else 100;
+            applyVolume(p, volume.*);
+            saveVolume(ctx);
+        }
+
+        // Volume: à esquerda do alto-falante, no mesmo desenho da barra de progresso.
+        const vw: f32 = if (r.w >= 320) 72 else 44;
+        const vt: d.Rect = .{ .x = right - vw, .y = bar.y + 16, .w = vw, .h = 4 };
+        right = vt.x - 10;
+        const vr: d.Rect = .{ .x = vt.x - 6, .y = bar.y + 6, .w = vw + 12, .h = 24 };
+        const vh = d.hit(ctx, ids +% 6, vr);
+        qa.mark(vr, "video-vol", .{});
+        if (vh.held) {
+            volume.* = @intFromFloat(std.math.round(std.math.clamp((ctx.mouse.x - vt.x) / vt.w, 0, 1) * 100));
+            applyVolume(p, volume.*);
+            vol_dragging = true;
+        } else if (vol_dragging) {
+            // Grava ao soltar, mesmo fora da barra (não a cada pixel do arrasto).
+            vol_dragging = false;
+            saveVolume(ctx);
+        }
+        if (show_bar) {
+            const k = @as(f32, @floatFromInt(@min(volume.*, 100))) / 100;
+            d.rect(dl, vt, d.Rgba.white.alpha(0.25 * alpha), 2);
+            d.rect(dl, .{ .x = vt.x, .y = vt.y, .w = vt.w * k, .h = vt.h }, d.Rgba.white.alpha(0.9 * alpha), 2);
+            if (vh.hovered or vh.held) d.circle(dl, vt.x + vt.w * k, vt.y + 2, 6, d.Rgba.white.alpha(alpha));
         }
     }
 
     // Barra de progresso (clicar pula para o ponto).
-    const tx0 = pr.right() + 6 + tw + 12;
+    const tx0 = if (show_time) pr.right() + 6 + tw + 12 else pr.right() + 8;
     const track: d.Rect = .{ .x = tx0, .y = bar.y + 16, .w = @max(10, right - tx0 - 4), .h = 4 };
     const hr: d.Rect = .{ .x = track.x - 4, .y = bar.y + 6, .w = track.w + 8, .h = 24 };
     const th = d.hit(ctx, ids +% 4, hr);
@@ -591,18 +647,20 @@ pub fn draw(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, alpha: f32, msg_id: u64, 
     }
 }
 
-fn speakerIcon(dl: *c.ImDrawList, cx: f32, cy: f32, col: d.Rgba, muted: bool) void {
+fn speakerIcon(dl: *c.ImDrawList, cx: f32, cy: f32, col: d.Rgba, volume: u8) void {
     d.rect(dl, .{ .x = cx - 8, .y = cy - 3, .w = 4, .h = 6 }, col, 0);
     c.ImDrawList_AddTriangleFilled(dl, d.v(cx - 5, cy - 3), d.v(cx + 1, cy - 8), d.v(cx + 1, cy + 8), col.u());
     c.ImDrawList_AddTriangleFilled(dl, d.v(cx - 5, cy - 3), d.v(cx + 1, cy + 8), d.v(cx - 5, cy + 3), col.u());
-    if (muted) {
+    if (volume == 0) {
         d.line(dl, cx + 4, cy - 4, cx + 10, cy + 4, col, 1.6);
         d.line(dl, cx + 10, cy - 4, cx + 4, cy + 4, col, 1.6);
     } else {
         c.ImDrawList_PathArcTo(dl, d.v(cx + 1, cy), 5, -0.9, 0.9, 10);
         c.ImDrawList_PathStroke(dl, col.u(), 1.5, 0);
-        c.ImDrawList_PathArcTo(dl, d.v(cx + 1, cy), 9, -0.9, 0.9, 12);
-        c.ImDrawList_PathStroke(dl, col.u(), 1.5, 0);
+        if (volume >= 50) {
+            c.ImDrawList_PathArcTo(dl, d.v(cx + 1, cy), 9, -0.9, 0.9, 12);
+            c.ImDrawList_PathStroke(dl, col.u(), 1.5, 0);
+        }
     }
 }
 

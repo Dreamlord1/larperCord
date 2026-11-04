@@ -2,7 +2,7 @@
 
 # larperCord
 
-**A native Discord client of about 50 MB, whose entire interface is a theme file.**
+**A native Discord client for Linux and Windows, of about 50 MB, whose entire interface is a theme file.**
 
 Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 
@@ -60,6 +60,10 @@ The official client is a whole browser dressed up as an app. On the same PC:
   create local commands (`/shrug`) and shortcuts, in a sandbox with an instruction limit; on/off,
   errors and example plugins in Settings → Plugins. [Guide and API →](docs/plugins.md)
 - **Voice settings.** In Settings → Voice you pick the microphone and output (remembered by name, back to the default if they disappear, switchable mid-call), adjust volumes, see the mic level live and use "Test microphone" to hear yourself. Voice activity has an adjustable threshold on the meter or an automatic mode that learns your background noise. "Push to talk" takes a key or mouse button and works while the window is focused (SDL has no portable global shortcut). There's a high-pass against rumble, a noise gate and beeps for joining, leaving, muting and unmuting, all of which can be turned off. The voice panel shows ping, quality by color and when you're transmitting, and warns you if the mic doesn't open or if the server muted or deafened you. Other people's mute and deafen show in the call list.
+- **Runs on Linux and Windows.** Windows 10/11 builds come from the same code; tokens stay in Credential Manager.
+- **Stays in the tray.** Closing keeps it connected in the system tray, with Open and Quit in the tray menu; "Close to tray" in Settings → Advanced turns it off. Without a tray, closing quits. Opening it a second time brings up the running window. On Linux the tray needs a StatusNotifier panel and libappindicator or ayatana.
+- **Updates itself.** Checks when opening or from Settings → Updates. One button downloads, installs and restarts. Updates are signed, and a version without the right signature isn't installed. There's a restart button and a What's new page with the changes in each version.
+- **Video volume.** The in-app player has a volume slider, remembered between runs.
 - **Microphone noise suppression.** Settings → Voice → Noise suppression (Off / RNNoise), on by default and switchable mid-call. It uses [RNNoise](https://github.com/xiph/rnnoise) 0.2 (BSD), built into the executable and running on your computer, with no internet. It reduces steady noise such as fans, hiss and air conditioning; typing and bangs may get through, other voices stay and yours may get a bit muffled. It delays your mic by 20 ms and costs 2% to 5% of a core while the mic is open; off, muted or with the push-to-talk key released, it costs nothing.
 - **Bot messages in full.** Discord's newer component messages (Components V2) show text, thumbnails, separators, galleries, files and link buttons. Forwarded messages and polls appear as cards. Buttons that talk to the bot aren't supported yet, so they aren't shown.
 - **Discord markdown.** Headings, `-#` small text, quotes, lists and `[text](url)` links, which show the real address on hover. Code blocks have line numbers, and text in embeds can be selected and copied.
@@ -126,6 +130,22 @@ All of them have **light and dark modes** and **their own options** in Settings 
 | `escritorio` | a work tool, dark sidebar | top bar with search and help |
 | `cupertino` | a Mac-style desktop: wallpaper and a floating window | working traffic lights, translucent sidebar, Dock with magnifier, bubbles |
 
+## Install
+
+**Linux** (x86_64, into `~/.local`, no sudo):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.sh | sh
+```
+
+**Windows 10/11** (for your user, no administrator), in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.ps1 | iex
+```
+
+Both download the latest [release](https://github.com/RshaCuDeVidro/larperCord/releases) and check it against `SHA256SUMS`. On Linux the libraries come from your system, and the script lists what's missing. Some older distros don't package SDL3 yet; there, [build from source](#building). After that, the app updates itself: Settings → Updates.
+
 ## Connecting your account
 
 The token is **never** in the code, in a log or in an error message, and it's wiped from memory on
@@ -169,6 +189,8 @@ No magic, just many small decisions:
 10. **A lean binary**: a release build without debug symbols, about 6 MB.
 
 ## Building
+
+To build for Windows from Linux: `tools/windows_deps.sh && zig build -Dtarget=x86_64-windows-gnu`.
 
 You need **Zig 0.17**, **SDL3**, **FreeType**, **fontconfig** and **libcurl** (with WebSocket, 7.86+). Recommended fonts: Inter,
 JetBrains Mono and Noto Color Emoji (fontconfig picks substitutes if one is missing).
@@ -221,7 +243,9 @@ swapping the fake gateway for the real one doesn't touch the UI.
 - [x] Presences, members and server/channel events (GUILD_CREATE, CHANNEL_*)
 - [x] Images: avatars, attachments and custom emoji with a fixed-size cache
 - [x] Per-channel permissions (a padlock on what you can't read), threads and forums
-- [ ] Native notifications through D-Bus
+- [x] Windows 10/11
+- [x] System tray, signed self-updates and install scripts
+- [ ] Native notifications through D-Bus on Linux
 - [x] Voice (DAVE/MLS + Opus)
 - [ ] A software backend (`wl_shm`, no GPU) to get to about 15–20 MB
 - [ ] Theme components written in Lua (sandboxed)

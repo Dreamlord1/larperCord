@@ -17,7 +17,9 @@ larperCord is a young project: version 0.4.0, with its first commit on November 
 | Themes | **works** | 11 built-in, each light and dark, reload on save |
 | Voice | partial | E2EE (DAVE), mixer, mute, device picker, push-to-talk, high-pass filter, noise gate and RNNoise noise suppression work. Push-to-talk needs the window focused, and no automated test covers a real call |
 | Permissions | partial | Channels without access get a padlock, voice without permission is blocked, and threads and forums check whether you can post. Those channels still appear, and the composer in regular channels, reactions and the member list don't check permissions |
-| Notifications | partial | Through `notify-send`. Clicking doesn't open the channel, and there's no system tray |
+| System tray, updates | **works** | Closing keeps it in the tray; signed updates from Settings. On Linux the tray needs a StatusNotifier panel |
+| Windows | partial | Windows 10/11 from the same code. Newer than Linux and less used |
+| Notifications | partial | Through `notify-send` on Linux and the tray on Windows. Clicking doesn't open the channel |
 | Accessibility | partial | Font scale, reduced motion, palette and vim navigation. No visible focus and no high contrast |
 | First run | partial | Sign-in screen and demo mode, no introduction to the app |
 | Platforms | partial | Linux only (uses inotify and `/proc`). Tested on Arch with Hyprland |
@@ -43,7 +45,7 @@ larperCord is a young project: version 0.4.0, with its first commit on November 
 
 - [ ] Real permissions: hide what you can't see, disable composer and reactions, filter members
 - [ ] Join a server by invite
-- [ ] Native D-Bus notifications with "open conversation", and a system tray
+- [ ] Native D-Bus notifications with "open conversation"
 - [ ] Voice: a global push-to-talk and an automated call test
 - [ ] Accessibility and first run: visible focus, high contrast, a welcome screen
 

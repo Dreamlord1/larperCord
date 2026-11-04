@@ -19,6 +19,7 @@ const discord = @import("net/discord.zig");
 const ev = @import("core/event.zig");
 const Queue = @import("net/queue.zig").Queue;
 const timeline = @import("platform/timeline.zig");
+const instance = @import("platform/instance.zig");
 
 const usage =
     \\larperCord — cliente de Discord nativo e leve
@@ -36,6 +37,7 @@ const usage =
     \\  --no-live         desliga as mensagens automáticas do modo demonstração
     \\  --stats           mostra a linha do tempo da abertura e o custo de cada quadro
     \\  --voice-test G C  entra no canal de voz C do servidor G por 25 s
+    \\  --restarted       toma o lugar do larperCord que está fechando (usado ao reiniciar)
     \\
     \\atalhos: Ctrl+K paleta · Ctrl+, configurações · F2 próximo tema
     \\         Ctrl+Tab abas · Alt+1..9 · Ctrl+W fecha aba
@@ -45,6 +47,7 @@ const usage =
 pub fn main(init: std.process.Init.Minimal) !void {
     sys.init();
     var opts: Options = .{};
+    var restarted = false;
     var it = if (sys.windows) try std.process.Args.Iterator.initAllocator(init.args, std.heap.c_allocator) else std.process.Args.Iterator.init(init.args);
     _ = it.skip();
     while (it.next()) |arg| {
@@ -68,6 +71,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
             opts.lang = if (std.mem.startsWith(u8, l, "pt")) .pt else .en;
         } else if (std.mem.eql(u8, arg, "--login")) {
             opts.login = true;
+        } else if (std.mem.eql(u8, arg, "--restarted")) {
+            restarted = true;
         } else if (std.mem.eql(u8, arg, "--demo")) {
             opts.demo = true;
         } else if (std.mem.eql(u8, arg, "--settings")) {
@@ -92,8 +97,21 @@ pub fn main(init: std.process.Init.Minimal) !void {
         } else return fail("opção desconhecida (veja --help)");
     }
 
+    // Um por vez: a demonstração, os prints e o QA não têm conexão para repetir
+    // e rodam ao lado do app de verdade (LARPER_INSTANCE=1 liga para testar).
+    const single = (!opts.qa and opts.shot == null and !opts.demo) or c.SDL_getenv("LARPER_INSTANCE") != null;
+    if (single) switch (instance.begin(restarted)) {
+        .primary, .alone => {},
+        .signaled => return,
+        .stuck => {
+            _ = c.SDL_ShowSimpleMessageBox(c.SDL_MESSAGEBOX_ERROR, "larperCord", "O larperCord já está aberto, mas não está respondendo.\nThe larperCord already running isn't responding.", null);
+            std.process.exit(1);
+        },
+    };
+
     if (opts.stats) timeline.begin();
     const app = try App.create(std.heap.c_allocator, opts);
+    instance.listen(app.win.wake_type);
     const ok = app.run();
     // Fechou a janela: o processo termina de qualquer jeito, mesmo que uma
     // thread de rede demore a largar (nunca fica rodando escondido).

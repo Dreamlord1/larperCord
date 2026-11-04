@@ -1,6 +1,6 @@
 # Primeiros passos
 
-O larperCord é um cliente de Discord nativo para Linux, escrito em Zig. Você pode rodar sem conta: `--demo` abre o **modo demonstração**, com servidores e pessoas falsos, sem conectar em nada. Sem token configurado, o app abre a tela de login, que também oferece a demonstração.
+O larperCord é um cliente de Discord nativo para Linux e Windows, escrito em Zig. Você pode rodar sem conta: `--demo` abre o **modo demonstração**, com servidores e pessoas falsos, sem conectar em nada. Sem token configurado, o app abre a tela de login, que também oferece a demonstração.
 
 > [!WARNING]
 > **Clientes de terceiros violam os Termos de Uso do Discord**, e a sua conta pode ser banida. Use uma conta real por sua conta e risco, de preferência uma secundária. Este projeto não tem relação com a Discord Inc.
@@ -9,13 +9,29 @@ O larperCord é um cliente de Discord nativo para Linux, escrito em Zig. Você p
 
 | | |
 |---|---|
-| Sistema operacional | Linux. Usa inotify e `/proc`, e é testado no Arch com Hyprland |
+| Sistema operacional | Linux (testado todo dia no Arch com Hyprland) ou Windows 10/11 |
 | Compilador | Zig 0.17 |
 | Bibliotecas | SDL3, FreeType, fontconfig, libcurl (com suporte a WebSocket, 7.86 ou mais nova), zlib, libwebp, Opus, OpenSSL |
 | Fontes recomendadas | Inter, JetBrains Mono e Noto Color Emoji. O fontconfig escolhe substitutas se faltar alguma |
 | Opcional | FFmpeg 7, 8 ou 9 (libavformat 61–63) para tocar vídeo dentro do app. Qualquer outra versão é ignorada e os vídeos abrem no navegador |
 
-Ainda não há pacotes prontos, então você compila a partir do código-fonte.
+## Instalar
+
+No Linux (em `~/.local`, sem sudo):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.sh | sh
+```
+
+No Windows, no PowerShell (para o seu usuário, sem administrador):
+
+```powershell
+irm https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.ps1 | iex
+```
+
+Os dois conferem o download com o `SHA256SUMS`. No Linux o script lista as bibliotecas do sistema que faltam. Depois disso o app se atualiza em Configurações → Atualizações.
+
+A tabela acima vale para quem compila do código, abaixo.
 
 ## Compilar e rodar
 

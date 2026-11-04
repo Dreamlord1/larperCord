@@ -14,6 +14,7 @@ const voz = @import("../core/voz.zig");
 const ruido = @import("../core/ruido.zig");
 const voz_audio = @import("../net/voz_audio.zig");
 const channels_ui = @import("comp_channels.zig");
+const dropdown = @import("dropdown.zig");
 
 /// Ids de `d.hit` desta página (longe dos sequenciais de settings.Page).
 const base_id: usize = 0x5E000;
@@ -21,8 +22,6 @@ const base_id: usize = 0x5E000;
 var mic_list: voz_audio.DeviceList = .{};
 var out_list: voz_audio.DeviceList = .{};
 var list_gen: u32 = 0;
-/// A lista aberta: 0 nenhuma, 1 microfone, 2 saída.
-var open_picker: u8 = 0;
 
 pub fn draw(p: anytype) void {
     const ctx = p.ctx;
@@ -73,8 +72,8 @@ pub fn draw(p: anytype) void {
 
 // --- Dispositivos -----------------------------------------------------------
 
-/// Caixa com o dispositivo atual; clicar abre a lista logo abaixo. Devolve
-/// onde a coluna terminou.
+/// Caixa com o dispositivo atual; clicar abre a lista por cima da página, sem
+/// empurrar nada. Devolve onde a coluna terminou.
 fn picker(p: anytype, x: f32, wd: f32, y0: f32, which: u8, label: []const u8, comptime tag: []const u8, list: *const voz_audio.DeviceList, value: *S.Text, fallback: bool) f32 {
     const ctx = p.ctx;
     var y = y0;
@@ -83,10 +82,11 @@ fn picker(p: anytype, x: f32, wd: f32, y0: f32, which: u8, label: []const u8, co
     const default_label = i18n.tr("Padrão do sistema", "System default");
     const saved = value.slice();
     const r: d.Rect = .{ .x = x, .y = y, .w = wd, .h = 42 };
-    const hb = d.hit(ctx, base_id + which, r);
+    const key = base_id + which;
+    const hb = d.hit(ctx, key, r);
     qa.mark(r, tag, .{});
-    if (hb.clicked) open_picker = if (open_picker == which) 0 else which;
-    const opened = open_picker == which;
+    if (hb.clicked) dropdown.toggle(key);
+    const opened = dropdown.isOpen(key);
     d.rect(p.dl, r, ctx.col(.rail).mix(ctx.col(.elevated), if (hb.hovered) 0.4 else 0.2), ctx.th.radius);
     d.border(p.dl, r, if (hb.hovered or opened) ctx.col(.accent).alpha(0.6) else ctx.col(.border), ctx.th.radius, 1);
     _ = d.textClipped(p.dl, p.font(.medium), 15, r.x + 12, d.centerY(r, 15), ctx.col(.text), if (saved.len > 0) saved else default_label, r.w - 44);
@@ -99,23 +99,45 @@ fn picker(p: anytype, x: f32, wd: f32, y0: f32, which: u8, label: []const u8, co
         y += 22;
     }
     y += 6;
-    if (!opened) return y;
+    const row_h: f32 = 34;
     const rows = 1 + @as(usize, list.n);
-    for (0..rows) |i| {
-        const name = if (i == 0) default_label else list.slice(i - 1);
-        const ro: d.Rect = .{ .x = x, .y = y, .w = wd, .h = 34 };
-        const ho = d.hit(ctx, base_id + 0x100 * @as(usize, which) + i, ro);
-        qa.mark(ro, tag ++ "-opt:{d}", .{i});
-        const sel = if (i == 0) saved.len == 0 else std.mem.eql(u8, saved, name);
-        if (ho.clicked) {
-            if (i == 0) value.* = .{} else value.set(name);
-            open_picker = 0;
+    var at: f32 = 0;
+    for (0..rows) |i| if (i > 0 and std.mem.eql(u8, saved, list.slice(i - 1))) {
+        at = row_h * @as(f32, @floatFromInt(i));
+    };
+    if (dropdown.beginAt(ctx, key, r, wd, row_h * @as(f32, @floatFromInt(rows)), at)) |dd_c| {
+        var dd = dd_c;
+        defer dd.end();
+        for (0..rows) |i| {
+            const name = if (i == 0) default_label else list.slice(i - 1);
+            const sel = if (i == 0) saved.len == 0 else std.mem.eql(u8, saved, name);
+            const ro = dd.row(row_h, sel);
+            qa.mark(ro.rect, tag ++ "-opt:{d}", .{i});
+            if (ro.hit.clicked) {
+                if (i == 0) value.* = .{} else value.set(name);
+                dropdown.close();
+            }
+            _ = d.textClipped(dd.dl, p.font(if (sel) .semibold else .regular), 14, ro.rect.x + 8, d.centerY(ro.rect, 14), if (sel) ctx.col(.text) else ctx.col(.muted), name, ro.rect.w - 16);
         }
-        if (sel) d.rect(p.dl, ro, ctx.col(.selected), ctx.th.radius) else if (ho.hovered) d.rect(p.dl, ro, ctx.col(.hover), ctx.th.radius);
-        _ = d.textClipped(p.dl, p.font(if (sel) .semibold else .regular), 14, ro.x + 12, d.centerY(ro, 14), if (sel) ctx.col(.text) else ctx.col(.muted), name, ro.w - 24);
-        y += 36;
     }
-    return y + 8;
+    return y;
+}
+
+/// Lista de mentira para o QA ver a rolagem e a virada para cima (o driver mudo
+/// só tem um dispositivo).
+var qa_mic_saved: voz_audio.DeviceList = .{};
+pub fn qaManyDevices(n: u8) void {
+    if (!qa.compiled) return;
+    if (n == 0) {
+        mic_list = qa_mic_saved;
+        return;
+    }
+    qa_mic_saved = mic_list;
+    mic_list.n = @min(n, mic_list.names.len);
+    for (0..mic_list.n) |i| {
+        var b: [32]u8 = undefined;
+        mic_list.names[i].set(std.fmt.bufPrint(&b, "Microfone de teste {d}", .{i + 1}) catch "");
+    }
 }
 
 // --- Volume -----------------------------------------------------------------

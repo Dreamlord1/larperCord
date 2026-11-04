@@ -31,6 +31,8 @@ A lista completa está em [Configurações e arquivos](page:settings).
 
 ## O que passa pela rede
 
+A única requisição que não vai para o Discord nem para os CDNs dele é a verificação de atualização: ao abrir o app (com "Verificar ao abrir" ligado) ou quando você aperta o botão, ele pergunta a última versão a `api.github.com`, sem nenhum dado da conta. Os downloads vêm do GitHub e são conferidos com uma lista assinada.
+
 - **Discord**: gateway, REST e mídia.
 - **Mídia externa, só quando você pede**: os GIFs animados do Tenor e do Giphy ficam desligados por padrão porque esses sites veem o seu IP. Desligado, você recebe uma prévia parada pelo proxy do Discord.
 - Os links abrem no seu navegador.

@@ -66,7 +66,7 @@ if [ -n "$missing" ]; then
 elif [ -n "$glibc" ]; then
     echo "The published build does not run on this system:"
     echo "$glibc" | head -3
-    echo "Build from source: https://github.com/$repo#build"
+    echo "Build from source: https://github.com/$repo#building"
     exit 1
 fi
 

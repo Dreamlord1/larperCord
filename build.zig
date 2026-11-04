@@ -110,6 +110,9 @@ pub fn build(b: *std.Build) void {
     mod.addImport("c", translate.createModule());
     mod.addImport("builtin_themes", builtin_themes);
     mod.addImport("plugin_examples", plugin_examples);
+    // Ícones da janela e da bandeja (tools/gen_icons.py).
+    mod.addAnonymousImport("icon_64", .{ .root_source_file = b.path("assets/icon-64.png") });
+    mod.addAnonymousImport("icon_32", .{ .root_source_file = b.path("assets/icon-32.png") });
 
     mod.addIncludePath(imgui_dir);
     mod.addIncludePath(imgui_dir.path(b, "backends"));
@@ -244,6 +247,7 @@ pub fn build(b: *std.Build) void {
     exe.link_gc_sections = release;
     if (windows) {
         exe.win32_manifest = b.path("assets/larpercord.manifest");
+        mod.addWin32ResourceFile(.{ .file = b.path("assets/larpercord.rc") });
         // Sem janela de console no build final.
         if (release) exe.subsystem = .windows;
     }
