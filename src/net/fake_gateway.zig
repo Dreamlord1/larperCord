@@ -14,6 +14,8 @@ const Id = types.Id;
 
 const alloc = std.heap.c_allocator;
 
+const voice_mod = @import("voice.zig");
+
 pub const Sink = struct {
     ctx: *anyopaque,
     push: *const fn (ctx: *anyopaque, event: ev.Event) void,
@@ -48,6 +50,8 @@ pub const Gateway = struct {
     next_live_ms: i64 = 0,
     pending_typing: ?struct { channel: Id, user: Id, at_ms: i64 } = null,
     next_latency_ms: i64 = 0,
+    voice: ?*voice_mod.Voice = null,
+    voice_channel: ?Id = null,
     nonce_replies: std.ArrayList(struct { at_ms: i64, msg: types.Message }) = .empty,
     history_replies: std.ArrayList(struct { at_ms: i64, channel: Id }) = .empty,
     /// Servidores cujos cargos já foram mandados.
@@ -73,6 +77,28 @@ pub const Gateway = struct {
         g.thread = c.SDL_CreateThread(threadMain, "gateway", g) orelse return error.SdlThread;
     }
 
+    /// A call da demonstração: só o áudio local (net/voice.zig, `local`).
+    fn stopVoice(g: *Gateway) void {
+        const vc = g.voice orelse return;
+        vc.stop();
+        vc.deinit();
+        alloc.destroy(vc);
+        g.voice = null;
+    }
+
+    fn startVoice(g: *Gateway, guild: Id, channel: Id, mute: bool, deaf: bool) void {
+        g.stopVoice();
+        const vc = alloc.create(voice_mod.Voice) catch return;
+        vc.* = voice_mod.Voice.init(g.sink, guild, channel, me_id, "", "", "", mute, deaf);
+        vc.local = true;
+        vc.start() catch {
+            vc.deinit();
+            alloc.destroy(vc);
+            return;
+        };
+        g.voice = vc;
+    }
+
     pub fn stop(g: *Gateway) void {
         g.commands.push(.shutdown);
         if (g.thread) |t| c.SDL_WaitThread(t, null);
@@ -92,6 +118,10 @@ pub const Gateway = struct {
         g.epoch_ms = nowMs();
         g.emit(.{ .ready = try buildReady() });
         g.emit(.{ .read_states = .{ .entries = try demoReadStates(g.epoch_ms) } });
+        // Quem está em call na demonstração: um mudo, uma surda, um mudado pelo servidor.
+        g.emit(.{ .voice_member_flags = .{ .user = 1001, .flags = .{ .self_mute = true } } });
+        g.emit(.{ .voice_member_flags = .{ .user = 1005, .flags = .{ .self_mute = true, .self_deaf = true } } });
+        g.emit(.{ .voice_member_flags = .{ .user = 1003, .flags = .{ .mute = true } } });
         // O @everyone do segundo servidor (que não é nosso): com ele, o #bugs
         // e o AFK de lá aparecem trancados (demoOverwrites).
         {
@@ -119,6 +149,7 @@ pub const Gateway = struct {
 
         var cmds: std.ArrayList(ev.Command) = .empty;
         defer cmds.deinit(alloc);
+        defer g.stopVoice();
         while (true) {
             const now = nowMs();
             const wait: i32 = @intCast(std.math.clamp(g.nextDeadline() - now, 1, 2000));
@@ -256,10 +287,22 @@ pub const Gateway = struct {
                     } });
                 },
                 .join_voice => |v| {
-                    g.emit(.{ .voice_state = .{ .channel = v.channel, .user = me_id } });
+                    g.emit(.{ .voice_state = .{ .channel = v.channel, .user = me_id, .flags = .{ .self_mute = v.mute, .self_deaf = v.deaf } } });
                     g.emit(.{ .voice_status = .{ .status = if (v.channel != null) .connected else .disconnected, .channel = v.channel orelse 0 } });
+                    if (v.channel) |ch| {
+                        g.startVoice(v.guild, ch, v.mute, v.deaf);
+                        g.voice_channel = ch;
+                        g.emit(.{ .voice_ping = 38 + g.rng.random().uintLessThan(u32, 24) });
+                    } else {
+                        g.stopVoice();
+                        g.voice_channel = null;
+                    }
                 },
-                .voice_flags, .voice_volume => {},
+                .voice_flags => |f| {
+                    if (g.voice) |vc| vc.setFlags(f.mute, f.deaf);
+                    g.emit(.{ .voice_state = .{ .channel = g.voice_channel, .user = me_id, .flags = .{ .self_mute = f.mute, .self_deaf = f.deaf } } });
+                },
+                .voice_volume => {},
                 .fetch_mentions => {
                     const t = nowMs();
                     if (g.mention_log.len > 0) freeMessages(g.mention_log);
@@ -644,6 +687,7 @@ pub const Gateway = struct {
         if (now >= g.next_latency_ms) {
             g.emit(.{ .latency = 38 + g.rng.random().uintLessThan(u32, 24) });
             g.next_latency_ms = now + 20_000;
+            if (g.voice != null) g.emit(.{ .voice_ping = 38 + g.rng.random().uintLessThan(u32, 24) });
         }
         if (!g.live) {
             g.next_live_ms = std.math.maxInt(i64) / 2;

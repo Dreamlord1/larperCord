@@ -621,7 +621,9 @@ fn mixer(ctx: *d.Ctx, x: f32, y: f32) void {
         if (speaking) c.ImDrawList_AddCircleEx(dl, d.v(ax, ay), 15.5, ctx.col(.online).u(), 0, 2, 0);
         w.avatar(ctx, dl, ax, ay, 28, uid, .circle, null, 1);
         _ = d.textClipped(dl, ctx.ui.get(.semibold), 13, rowr.x + 46, rowr.y + 6, ctx.col(.text), u.name, 86);
-        d.text(dl, ctx.ui.get(.regular), 10, rowr.x + 46, rowr.y + 23, if (speaking) ctx.col(.online) else ctx.col(.faint), if (speaking) i18n.tr("falando", "speaking") else "");
+        const vf = ctx.store.voiceFlags(uid);
+        const vf_text = if (vf.deaf) i18n.tr("surdo pelo servidor", "server deafened") else if (vf.serverMuted()) i18n.tr("mudo pelo servidor", "server muted") else if (vf.self_deaf) i18n.tr("surdo", "deafened") else if (vf.self_mute) i18n.tr("mudo", "muted") else "";
+        d.text(dl, ctx.ui.get(.regular), 10, rowr.x + 46, rowr.y + 23, if (speaking) ctx.col(.online) else if (vf.deaf or vf.serverMuted()) ctx.col(.danger) else ctx.col(.faint), if (speaking) i18n.tr("falando", "speaking") else vf_text);
 
         const vol = ctx.st.voice_volumes.get(uid) orelse 1.0;
         const tr: d.Rect = .{ .x = rowr.x + 140, .y = rowr.y + rowr.h / 2 - 2, .w = 92, .h = 6 };

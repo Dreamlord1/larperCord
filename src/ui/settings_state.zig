@@ -1,5 +1,5 @@
 //! Valores das configurações. Todas têm efeito de verdade (o que ainda não
-//! existe, como a voz, não aparece aqui até existir).
+//! existe não aparece aqui até existir).
 //! São salvos em ~/.config/larpercord/settings.kdl.
 const std = @import("std");
 
@@ -10,6 +10,7 @@ pub const Page = enum {
     aparencia,
     acessibilidade,
     chat,
+    voz,
     notificacoes,
     atalhos,
     idioma,
@@ -96,6 +97,25 @@ pub const Settings = struct {
     desktop_notifs: bool = true,
     taskbar_flash: bool = true,
 
+    // Voz (net/voz_audio.zig, core/voz.zig)
+    /// Nome do microfone e da saída; vazio = padrão do sistema. Se o dispositivo
+    /// sumiu, usa o padrão e o nome fica guardado para quando ele voltar.
+    voice_mic: Text = .{},
+    voice_out: Text = .{},
+    /// Volumes em % (0..200).
+    voice_in_gain: u8 = 100,
+    voice_out_gain: u8 = 100,
+    /// Limiar da detecção de voz: posição na barra (0..100; -80..0 dB).
+    voice_sens: u8 = 39,
+    /// O limiar segue o ruído de fundo em vez de `voice_sens`.
+    voice_auto: bool = false,
+    /// Aperte para falar, com a tecla ou o botão em `voice_key` ("k:44", "m:4").
+    voice_ptt: bool = false,
+    voice_key: Text = .{},
+    voice_highpass: bool = true,
+    voice_gate: bool = false,
+    voice_sounds: bool = true,
+
     // Atalhos
     /// Navegação estilo vim com a caixa de texto sem foco (ui/vim.zig).
     vim_keys: bool = false,
@@ -171,6 +191,7 @@ pub fn setByte(s: *Settings, index: usize, value: u8) bool {
 
 /// Índice do campo em `fields()` (para tabelas montadas em tempo de compilação).
 pub fn fieldIndex(comptime name: []const u8) usize {
+    @setEvalBranchQuota(20_000);
     if (!@hasField(Settings, name)) @compileError("configuração inexistente: " ++ name);
     @setEvalBranchQuota(20_000);
     for (fields(), 0..) |f, i| if (std.mem.eql(u8, f.name, name)) return i;
@@ -242,6 +263,45 @@ test "configurações vão e voltam pelo KDL" {
     try std.testing.expectEqualStrings("socks5h://127.0.0.1:9050", back.proxy.slice());
     try std.testing.expectEqualStrings("😀 ❤️ pepe:12", back.emoji_recent.slice());
     try std.testing.expectEqualStrings("vidro", nodes[0].str("theme").?);
+}
+
+test "configurações de voz vão e voltam (volume acima de 3x e nome com acento)" {
+    const kdl = @import("../theme/kdl.zig");
+    var s: Settings = .{};
+    s.voice_mic.set("Microfone do headset (USB) ção");
+    s.voice_out.set("Saída HDMI");
+    s.voice_in_gain = 180;
+    s.voice_out_gain = 0;
+    s.voice_sens = 12;
+    s.voice_auto = true;
+    s.voice_ptt = true;
+    s.voice_key.set("k:44");
+    s.voice_highpass = false;
+    s.voice_gate = true;
+    s.voice_sounds = false;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try write(&s, "vidro", &out, std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const nodes = try kdl.parse(arena.allocator(), out.items, null);
+    var back: Settings = .{};
+    apply(&back, &nodes[0]);
+    try std.testing.expectEqualStrings("Microfone do headset (USB) ção", back.voice_mic.slice());
+    try std.testing.expectEqualStrings("Saída HDMI", back.voice_out.slice());
+    try std.testing.expectEqual(@as(u8, 180), back.voice_in_gain);
+    try std.testing.expectEqual(@as(u8, 0), back.voice_out_gain);
+    try std.testing.expectEqual(@as(u8, 12), back.voice_sens);
+    try std.testing.expect(back.voice_auto and back.voice_ptt and back.voice_gate);
+    try std.testing.expect(!back.voice_highpass and !back.voice_sounds);
+    try std.testing.expectEqualStrings("k:44", back.voice_key.slice());
+    // Arquivo antigo, sem nada disso: os padrões.
+    const old = try kdl.parse(arena.allocator(), "settings compact=#true\n", null);
+    var fresh: Settings = .{};
+    apply(&fresh, &old[0]);
+    try std.testing.expectEqual(@as(u8, 100), fresh.voice_in_gain);
+    try std.testing.expectEqual(@as(usize, 0), fresh.voice_mic.slice().len);
+    try std.testing.expect(fresh.voice_highpass and fresh.voice_sounds and !fresh.voice_ptt);
 }
 
 test "campos pelo índice (paleta de comandos)" {

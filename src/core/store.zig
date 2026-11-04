@@ -7,6 +7,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const markdown = @import("markdown.zig");
 const Event = @import("event.zig").Event;
+const event = @import("event.zig");
 const Id = types.Id;
 
 /// Strings que chegam em eventos são alocadas com o c_allocator (podem vir
@@ -202,6 +203,8 @@ pub const Store = struct {
     /// Até quando cada pessoa conta como "falando" (o gateway de voz manda
     /// curtinho; o anel verde some sozinho se o pacote de parar se perder).
     speaking: std.AutoHashMapUnmanaged(Id, i64) = .empty,
+    /// Mudo/surdo de quem está em alguma call.
+    voice_flags: std.AutoHashMapUnmanaged(Id, event.VoiceFlags) = .empty,
     /// Amigos desde (ms), das relações.
     friend_since: std.AutoHashMapUnmanaged(Id, i64) = .empty,
     /// Notas que só a gente vê (buscadas ao abrir o perfil).
@@ -284,6 +287,7 @@ pub const Store = struct {
         while (ai.next()) |a| freeActivities(a.*);
         s.activities.deinit(s.gpa);
         s.speaking.deinit(s.gpa);
+        s.voice_flags.deinit(s.gpa);
         s.friend_since.deinit(s.gpa);
         var ni = s.notes.valueIterator();
         while (ni.next()) |n| ev_alloc.free(n.*);
@@ -384,6 +388,11 @@ pub const Store = struct {
             if (found == 0) found = cs.*.info.id;
         }
         return found;
+    }
+
+    /// Mudo/surdo de quem está numa call (o que o último VOICE_STATE disse).
+    pub fn voiceFlags(s: *const Store, user_id: Id) event.VoiceFlags {
+        return s.voice_flags.get(user_id) orelse .{};
     }
 
     /// A pessoa está falando agora? (o anel verde some sozinho)
@@ -811,7 +820,7 @@ pub const Store = struct {
     pub fn apply(s: *Store, ev: Event, now_ms: i64) !void {
         // O que chega o tempo todo e não aparece na caixa de entrada não conta.
         switch (ev) {
-            .typing_start, .presence_update, .voice_state, .voice_speaking, .voice_status, .latency, .status, .notice, .member_list, .profile, .relationship, .note, .app_icon, .pins, .pins_changed, .invite, .read, .thread_members, .thread_joined, .thread_open, .threads_page => {},
+            .typing_start, .presence_update, .voice_state, .voice_member_flags, .voice_speaking, .voice_ping, .voice_audio, .voice_status, .latency, .status, .notice, .member_list, .profile, .relationship, .note, .app_icon, .pins, .pins_changed, .invite, .read, .thread_members, .thread_joined, .thread_open, .threads_page => {},
             else => s.rev +%= 1,
         }
         switch (ev) {
@@ -834,6 +843,7 @@ pub const Store = struct {
                 // em vez de empilhar em cima do que sobrou da sessão anterior.
                 var vit = s.channels.valueIterator();
                 while (vit.next()) |cs| cs.*.voice_members.clearRetainingCapacity();
+                s.voice_flags.clearRetainingCapacity();
                 for (r.voice) |pair| {
                     if (s.channel(pair[0])) |cs| {
                         if (std.mem.indexOfScalar(Id, cs.voice_members.items, pair[1]) == null) {
@@ -965,16 +975,25 @@ pub const Store = struct {
             },
             .voice_state => |v| {
                 var it = s.channels.valueIterator();
+                var stayed = false;
                 while (it.next()) |cs| {
                     const list = &cs.*.voice_members;
                     for (list.items, 0..) |id, i| if (id == v.user) {
-                        _ = list.orderedRemove(i);
+                        // Só mudou mudo/surdo: continua no mesmo lugar da lista.
+                        if (v.channel == cs.*.info.id) {
+                            stayed = true;
+                        } else _ = list.orderedRemove(i);
                         break;
                     };
                 }
-                if (v.channel) |id| if (s.channel(id)) |cs| try cs.voice_members.append(s.gpa, v.user);
-                if (v.channel == null) _ = s.speaking.remove(v.user);
+                if (!stayed) if (v.channel) |id| if (s.channel(id)) |cs| try cs.voice_members.append(s.gpa, v.user);
+                if (v.channel == null) {
+                    _ = s.speaking.remove(v.user);
+                    _ = s.voice_flags.remove(v.user);
+                } else try s.voice_flags.put(s.gpa, v.user, v.flags);
             },
+            .voice_member_flags => |v| try s.voice_flags.put(s.gpa, v.user, v.flags),
+            .voice_ping, .voice_audio => {},
             .voice_speaking => |v| {
                 if (v.speaking) {
                     try s.speaking.put(s.gpa, v.user, now_ms + 4000);
@@ -2259,6 +2278,36 @@ test "envio que falhou fica marcado e a busca continua achando as outras" {
     s.discardPending(10, 77);
     try std.testing.expect(s.pendingByNonce(10, 77) == null);
     try std.testing.expectEqual(@as(usize, 43), cs.messages.items.len);
+}
+
+test "voz: mudar mudo/surdo não muda o lugar na lista; sair esquece" {
+    const gpa = std.testing.allocator;
+    var s: Store = .{ .gpa = gpa };
+    defer s.deinit();
+    const c_alloc = std.heap.c_allocator;
+    const chans = try c_alloc.alloc(types.Channel, 2);
+    chans[0] = .{ .id = 10, .guild = 1, .name = try c_alloc.dupe(u8, "a"), .topic = try c_alloc.dupe(u8, ""), .kind = .voice };
+    chans[1] = .{ .id = 11, .guild = 1, .name = try c_alloc.dupe(u8, "b"), .topic = try c_alloc.dupe(u8, ""), .kind = .voice };
+    try s.apply(.{ .ready = .{ .me = 1, .users = try c_alloc.alloc(types.User, 0), .guilds = try c_alloc.alloc(types.Guild, 0), .channels = chans, .voice = try c_alloc.alloc([2]Id, 0) } }, 0);
+    try s.apply(.{ .voice_state = .{ .channel = 10, .user = 5 } }, 0);
+    try s.apply(.{ .voice_state = .{ .channel = 10, .user = 6 } }, 0);
+    try s.apply(.{ .voice_state = .{ .channel = 10, .user = 5, .flags = .{ .mute = true } } }, 0);
+    const list = s.channel(10).?.voice_members.items;
+    try std.testing.expectEqualSlices(Id, &.{ 5, 6 }, list);
+    try std.testing.expect(s.voiceFlags(5).serverMuted());
+    try std.testing.expect(!s.voiceFlags(6).muted());
+    // Mudou de canal: sai de um e entra no outro.
+    try s.apply(.{ .voice_state = .{ .channel = 11, .user = 5, .flags = .{ .self_deaf = true } } }, 0);
+    try std.testing.expectEqualSlices(Id, &.{6}, s.channel(10).?.voice_members.items);
+    try std.testing.expectEqualSlices(Id, &.{5}, s.channel(11).?.voice_members.items);
+    try std.testing.expect(s.voiceFlags(5).deafened() and s.voiceFlags(5).muted());
+    // Saiu da call: esquece.
+    try s.apply(.{ .voice_state = .{ .channel = null, .user = 5 } }, 0);
+    try std.testing.expect(!s.voiceFlags(5).muted());
+    try std.testing.expectEqual(@as(usize, 0), s.channel(11).?.voice_members.items.len);
+    // Quem já estava na call ao conectar.
+    try s.apply(.{ .voice_member_flags = .{ .user = 6, .flags = .{ .self_mute = true } } }, 0);
+    try std.testing.expect(s.voiceFlags(6).self_mute);
 }
 
 test "confirmação atrasada vai para o lugar certo e nada duplica" {

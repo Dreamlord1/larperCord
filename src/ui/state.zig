@@ -132,6 +132,11 @@ pub const State = struct {
     /// Volume individual de cada pessoa na call (0..2).
     voice_volumes: std.AutoHashMapUnmanaged(Id, f32) = .empty,
     voice_save_ms: i64 = 0,
+    /// Ping da call (heartbeat do gateway de voz); 0 = ainda não mediu.
+    voice_ping_ms: u32 = 0,
+    /// O microfone ou a saída da call não abriram (a barra de voz avisa).
+    voice_mic_failed: bool = false,
+    voice_out_failed: bool = false,
     muted: bool = false,
     deafened: bool = false,
     collapsed: std.AutoHashMapUnmanaged(Id, void) = .empty,

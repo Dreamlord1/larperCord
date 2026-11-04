@@ -1080,7 +1080,7 @@ pub const Gateway = struct {
         if (std.mem.eql(u8, t, "VOICE_STATE_UPDATE")) {
             const user = j.id(j.get(d, "user_id")) orelse return;
             const chan = j.id(j.get(d, "channel_id"));
-            g.emit(.{ .voice_state = .{ .channel = chan, .user = user } });
+            g.emit(.{ .voice_state = .{ .channel = chan, .user = user, .flags = voiceFlagsOf(d) } });
             if (user == g.me) {
                 if (j.str(j.get(d, "session_id"))) |sid| {
                     // Sessão de voz nova (outro dispositivo, reconexão): a
@@ -1322,7 +1322,7 @@ pub const Gateway = struct {
             for (j.array(j.get(gv, "voice_states"))) |vs| {
                 const ch = j.id(j.get(vs, "channel_id")) orelse continue;
                 const uid = j.id(j.get(vs, "user_id")) orelse continue;
-                g.emit(.{ .voice_state = .{ .channel = ch, .user = uid } });
+                g.emit(.{ .voice_state = .{ .channel = ch, .user = uid, .flags = voiceFlagsOf(vs) } });
             }
         }
     }
@@ -1563,6 +1563,7 @@ pub const Gateway = struct {
             .channels = try channels.toOwnedSlice(alloc),
             .voice = try voice.toOwnedSlice(alloc),
         } });
+        g.emitVoiceFlags(j.array(j.get(d, "voice_states")));
     }
 
     /// Mensagem da API -> nosso tipo (conteúdo alocado).
@@ -2015,6 +2016,7 @@ pub const Gateway = struct {
             .premium_type = @intCast(std.math.clamp(j.int(j.get(me, "premium_type")) orelse 0, 0, 255)),
         } });
         g.emitReadStates(d);
+        for (j.array(j.get(d, "guilds"))) |gv| g.emitVoiceFlags(j.array(j.get(gv, "voice_states")));
         for (j.array(j.get(d, "relationships"))) |rv| {
             const uid = j.id(j.get(rv, "user_id")) orelse j.id(j.get(rv, "id")) orelse continue;
             g.emit(.{ .relationship = .{ .user = uid, .kind = relationshipKind(j.get(rv, "type")), .since_ms = sinceMs(rv) } });
@@ -2404,6 +2406,34 @@ pub const Gateway = struct {
         while (g.acks.takeAny()) |a| {
             if (nowMs() > g.flush_until) return;
             g.sendAck(a.channel, a.message, a.last_viewed);
+        }
+    }
+
+    /// Mudo/surdo de um objeto voice state do Discord.
+    fn voiceFlagsOf(vs: Value) ev.VoiceFlags {
+        const on = struct {
+            fn f(o: Value, key: []const u8) bool {
+                const b = j.get(o, key) orelse return false;
+                return b == .bool and b.bool;
+            }
+        }.f;
+        return .{
+            .self_mute = on(vs, "self_mute"),
+            .self_deaf = on(vs, "self_deaf"),
+            .mute = on(vs, "mute"),
+            .deaf = on(vs, "deaf"),
+            .suppress = on(vs, "suppress"),
+        };
+    }
+
+    /// Quem já está na call ao conectar: a lista vai no READY/GUILD_CREATE e
+    /// o mudo/surdo logo depois (só de quem tem algum).
+    fn emitVoiceFlags(g: *Gateway, states: []const Value) void {
+        for (states) |vs| {
+            const uid = j.id(j.get(vs, "user_id")) orelse continue;
+            if (j.id(j.get(vs, "channel_id")) == null) continue;
+            const flags = voiceFlagsOf(vs);
+            if (flags.muted()) g.emit(.{ .voice_member_flags = .{ .user = uid, .flags = flags } });
         }
     }
 

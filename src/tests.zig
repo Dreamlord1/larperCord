@@ -11,6 +11,7 @@ test {
     _ = @import("core/filtros.zig");
     _ = @import("core/leitura.zig");
     _ = @import("core/links.zig");
+    _ = @import("core/voz.zig");
     _ = @import("ui/rascunhos.zig");
     _ = @import("core/inbox.zig");
     _ = @import("core/saved.zig");

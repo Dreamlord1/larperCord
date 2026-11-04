@@ -182,8 +182,9 @@ fn ensureAudio() bool {
     if (audio_tried) return audio_ok;
     audio_tried = true;
     // No QA o som vai para o driver mudo (testa o caminho sem fazer barulho).
-    if (qa.enabled) _ = c.SDL_SetHint(c.SDL_HINT_AUDIO_DRIVER, "dummy");
-    audio_ok = c.SDL_InitSubSystem(c.SDL_INIT_AUDIO);
+    if (qa.enabled) @import("../net/voz_audio.zig").force_dummy = true;
+    // Pelo mesmo caminho da voz: duas threads não podem iniciar o áudio juntas.
+    audio_ok = @import("../net/voz_audio.zig").acquire();
     return audio_ok;
 }
 

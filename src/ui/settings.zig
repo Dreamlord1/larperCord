@@ -25,6 +25,7 @@ pub const sections = [_]Section{
         .{ .page = .aparencia, .label = "Aparência", .label_en = "Appearance" },
         .{ .page = .acessibilidade, .label = "Acessibilidade", .label_en = "Accessibility" },
         .{ .page = .chat, .label = "Chat", .label_en = "Chat" },
+        .{ .page = .voz, .label = "Voz", .label_en = "Voice" },
         .{ .page = .notificacoes, .label = "Notificações", .label_en = "Notifications" },
         .{ .page = .atalhos, .label = "Atalhos de teclado", .label_en = "Keybinds" },
         .{ .page = .idioma, .label = "Idioma", .label_en = "Language" },
@@ -655,6 +656,7 @@ fn page(p: *Page, previews: []const Preview) void {
             p.toggle(i18n.tr("Recarregar temas ao salvar", "Reload themes on save"), i18n.tr("Salvar um .kdl em themes/ ou ~/.config/larpercord/themes aplica na hora.", "Saving a .kdl in themes/ or ~/.config/larpercord/themes applies it right away."), &s.hot_reload);
         },
         .filtros => @import("settings_filtros.zig").page(ctx, p.dl, p.x, &p.y, p.w),
+        .voz => @import("settings_voz.zig").draw(p),
         .conta => account(p),
         .desempenho => performance(p),
         .plugins => @import("plugins_page.zig").draw(p),

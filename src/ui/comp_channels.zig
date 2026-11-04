@@ -16,6 +16,8 @@ const icons = @import("icons.zig");
 const i18n = @import("i18n.zig");
 const types = @import("../core/types.zig");
 const threads = @import("comp_threads.zig");
+const ev = @import("../core/event.zig");
+const voz = @import("../core/voz.zig");
 const Id = types.Id;
 
 const Variant = enum { discord, tree, pills };
@@ -253,17 +255,21 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
         for (cs.voice_members.items) |uid| {
             const u = ctx.store.user(uid) orelse continue;
             const speaking = ctx.store.isSpeaking(uid, ctx.now_ms);
+            const vf = ctx.store.voiceFlags(uid);
             // Clicar em quem está na call abre o perfil (botão direito: menu).
             const vr: d.Rect = .{ .x = rr.x + 26, .y = y2, .w = rr.w - 26, .h = if (variant == .tree) 20 else 26 };
             const vh = d.hit(ctx, @truncate(uid *% 31 +% ch.id), vr);
             qa.mark(vr, "voice-member:{d}:{d}", .{ ch.id, uid });
+            if (speaking) qa.mark(vr, "voice-speaking:{d}", .{uid});
+            if (vf.muted()) qa.mark(vr, "voice-flagged:{d}", .{uid});
+            if (voiceFlagsTip(vf)) |vt| d.tip(ctx, vr, vt, vh.hovered);
             if (vh.hovered and variant != .tree) d.rect(dl, vr, ctx.col(.hover), ctx.th.radius);
             if (vh.clicked) ctx.popup(.{ .profile = .{ .user = uid, .x = vr.right() + 8, .y = vr.y } });
             if (vh.right) ctx.popup(.{ .menu = .{ .kind = .user, .id = uid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
             switch (variant) {
                 .tree => {
                     var buf: [80]u8 = undefined;
-                    const t = std.fmt.bufPrint(&buf, "{s}   {s} {s}", .{ if (last) " " else "│", if (speaking) "◉" else "○", u.name }) catch u.name;
+                    const t = std.fmt.bufPrint(&buf, "{s}   {s} {s}{s}", .{ if (last) " " else "│", if (speaking) "◉" else "○", u.name, voiceFlagsTty(vf) }) catch u.name;
                     d.text(dl, fam.get(.regular), fs - 2, rr.x + 4, y2 + 2, if (speaking) ctx.col(.online) else ctx.col(.muted), t);
                     y2 += 20;
                 },
@@ -272,7 +278,8 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
                     const acy = y2 + 13;
                     if (speaking) c.ImDrawList_AddCircleEx(dl, d.v(ax, acy), 12.5, ctx.col(.online).u(), 0, 2, 0);
                     w.avatar(ctx, dl, ax, acy, 21, uid, .circle, null, 1);
-                    d.text(dl, fam.get(.medium), 14, ax + 18, acy - 9, if (speaking) ctx.col(.text) else ctx.col(.muted), u.name);
+                    const icons_w = voiceFlagIcons(ctx, dl, vf, vr.right() - 6, acy);
+                    _ = d.textClipped(dl, fam.get(.medium), 14, ax + 18, acy - 9, if (speaking) ctx.col(.text) else ctx.col(.muted), u.name, vr.right() - (ax + 18) - icons_w - 6);
                     y2 += 28;
                 },
             }
@@ -280,6 +287,50 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
         if (cs.voice_members.items.len > 0) y2 += 4;
     }
     return y2;
+}
+
+/// Mudo e surdo de alguém na lista da call; devolve a largura ocupada.
+/// Vermelho quando foi o servidor que impôs.
+fn voiceFlagIcons(ctx: *d.Ctx, dl: *c.ImDrawList, f: ev.VoiceFlags, right: f32, cy: f32) f32 {
+    var x = right;
+    if (f.deafened()) {
+        x -= 11;
+        const col = if (f.deaf) ctx.col(.danger) else ctx.col(.faint);
+        smallIcon(dl, .headset, x, cy, col);
+        x -= 11;
+    }
+    if (f.self_mute or f.serverMuted()) {
+        x -= 9;
+        const col = if (f.serverMuted()) ctx.col(.danger) else ctx.col(.faint);
+        smallIcon(dl, .mic, x, cy, col);
+        x -= 9;
+    }
+    return right - x;
+}
+
+/// Ícone do painel com o risco de "desligado" por cima.
+fn smallIcon(dl: *c.ImDrawList, kind: enum { mic, headset }, cx: f32, cy: f32, col: d.Rgba) void {
+    switch (kind) {
+        .mic => icons.mic(dl, cx, cy, col.u()),
+        .headset => icons.headset(dl, cx, cy, col.u()),
+    }
+    d.line(dl, cx - 8, cy - 8, cx + 8, cy + 8, col, 1.8);
+}
+
+fn voiceFlagsTty(f: ev.VoiceFlags) []const u8 {
+    if (f.deaf) return i18n.tr(" [surdo:srv]", " [deaf:srv]");
+    if (f.serverMuted()) return i18n.tr(" [mudo:srv]", " [mute:srv]");
+    if (f.self_deaf) return i18n.tr(" [surdo]", " [deaf]");
+    if (f.self_mute) return i18n.tr(" [mudo]", " [mute]");
+    return "";
+}
+
+fn voiceFlagsTip(f: ev.VoiceFlags) ?[]const u8 {
+    if (f.deaf) return i18n.tr("Surdo pelo servidor", "Server deafened");
+    if (f.serverMuted()) return i18n.tr("Mudo pelo servidor", "Server muted");
+    if (f.self_deaf) return i18n.tr("Ensurdeceu", "Deafened");
+    if (f.self_mute) return i18n.tr("Mutou o microfone", "Muted");
+    return null;
 }
 
 // --- Painel do usuário ---------------------------------------------------
@@ -345,7 +396,14 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             1 => if (ctx.st.deafened) i18n.tr("Voltar a ouvir", "Undeafen") else i18n.tr("Ensurdecer", "Deafen"),
             else => i18n.tr("Configurações  (Ctrl+,)", "User Settings  (Ctrl+,)"),
         }, hb.hovered);
-        const active = (i == 0 and ctx.st.muted) or (i == 1 and ctx.st.deafened);
+        const vf = ctx.store.voiceFlags(ctx.store.me);
+        const in_call = ctx.st.voice != null;
+        const forced = in_call and ((i == 0 and vf.serverMuted()) or (i == 1 and vf.deaf));
+        if (forced) {
+            qa.mark(br, "user-forced:{d}", .{i});
+            d.tip(ctx, br, if (i == 0) i18n.tr("Mudo pelo servidor: ninguém te ouve", "Server muted: nobody can hear you") else i18n.tr("Surdo pelo servidor", "Server deafened"), hb.hovered);
+        }
+        const active = (i == 0 and ctx.st.muted) or (i == 1 and ctx.st.deafened) or forced;
         if (hb.clicked) switch (i) {
             0 => ctx.act(.toggle_mute),
             1 => ctx.act(.toggle_deafen),
@@ -373,6 +431,11 @@ pub fn userPanel(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             else => icons.gear(ctx.dl, cx, cy, ink.u()),
         }
         if (active) d.line(ctx.dl, cx - 9, cy - 9, cx + 9, cy + 9, ctx.col(.danger), 2.2);
+        // Quem impôs foi o servidor: o clique aqui não resolve.
+        if (forced) {
+            d.circle(ctx.dl, cx + 8, cy + 9, 7, ctx.col(.sidebar));
+            icons.lock(ctx.dl, cx + 8, cy + 8, ctx.col(.danger).u());
+        }
     }
 }
 
@@ -397,40 +460,141 @@ fn modeLine(ctx: *d.Ctx, buf: []u8) ?[]const u8 {
 
 /// Altura da faixa "Voz conectada" (a lista de canais reserva esse espaço).
 pub fn voiceBarHeight(tty: bool) f32 {
-    return if (tty) 22 else 54;
+    return if (tty) 40 else 74;
+}
+
+/// O que dizer na última linha da faixa de voz: um problema (em vermelho), ou
+/// se estamos transmitindo agora.
+const VoiceLine = struct { text: []const u8, tone: enum { danger, on, quiet } };
+
+fn voiceLine(ctx: *d.Ctx, buf: []u8) VoiceLine {
+    const f = ctx.store.voiceFlags(ctx.store.me);
+    if (f.deaf) return .{ .text = i18n.tr("Surdo pelo servidor: sem som e sem microfone", "Server deafened: no sound and no mic"), .tone = .danger };
+    if (f.serverMuted()) return .{ .text = i18n.tr("Mudo pelo servidor: ninguém te ouve", "Server muted: nobody can hear you"), .tone = .danger };
+    if (ctx.st.voice_mic_failed) return .{ .text = i18n.tr("Microfone não abriu: clique para ver", "Microphone didn't open: click to check"), .tone = .danger };
+    if (ctx.st.voice_out_failed) return .{ .text = i18n.tr("Saída de áudio não abriu: clique para ver", "Audio output didn't open: click to check"), .tone = .danger };
+    if (ctx.st.deafened) return .{ .text = i18n.tr("Surdo", "Deafened"), .tone = .quiet };
+    if (ctx.st.muted) return .{ .text = i18n.tr("Mudo", "Muted"), .tone = .quiet };
+    if (ctx.store.isSpeaking(ctx.store.me, ctx.now_ms)) return .{ .text = i18n.tr("Transmitindo", "Transmitting"), .tone = .on };
+    if (ctx.st.settings.voice_ptt) {
+        const b = voz.Binding.parse(ctx.st.settings.voice_key.slice());
+        if (b == .none) return .{ .text = i18n.tr("Aperte para falar: escolha um atalho", "Push to talk: choose a shortcut"), .tone = .danger };
+        var kb: [48]u8 = undefined;
+        return .{ .text = i18n.fmt(buf, "Aperte {s} para falar", "Hold {s} to talk", .{bindingName(&kb, b)}), .tone = .quiet };
+    }
+    return .{ .text = i18n.tr("Detecção de voz", "Voice activity"), .tone = .quiet };
+}
+
+/// Nome do atalho para mostrar (a tecla no teclado de quem usa).
+pub fn bindingName(buf: []u8, b: voz.Binding) []const u8 {
+    return switch (b) {
+        .none => "",
+        .key => |k| blk: {
+            const n = std.mem.span(c.SDL_GetScancodeName(@intCast(k)));
+            break :blk if (n.len > 0) n else std.fmt.bufPrint(buf, "#{d}", .{k}) catch "";
+        },
+        .mouse => |m| switch (m) {
+            2 => i18n.tr("botão do meio", "middle button"),
+            3 => i18n.tr("botão direito", "right button"),
+            else => i18n.fmt(buf, "botão {d} do mouse", "mouse button {d}", .{m}),
+        },
+    };
+}
+
+/// Três barrinhas com a cor da qualidade da call (o ping do heartbeat de voz).
+fn signalBars(ctx: *d.Ctx, x: f32, bottom: f32, q: voz.Quality, col: d.Rgba) void {
+    const lit: usize = switch (q) {
+        .unknown, .bad => 1,
+        .fair => 2,
+        .good => 3,
+    };
+    for (0..3) |i| {
+        const fi: f32 = @floatFromInt(i);
+        const h = 5 + fi * 4;
+        d.rect(ctx.dl, .{ .x = x + fi * 5, .y = bottom - h, .w = 3.5, .h = h }, if (i < lit) col else ctx.col(.faint).alpha(0.4), 1);
+    }
 }
 
 fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     const cs = ctx.store.channel(vc) orelse return;
     const g = ctx.store.guild(cs.info.guild);
     const connected = ctx.st.voice_status == .connected;
+    const ping = ctx.st.voice_ping_ms;
+    const q = voz.qualityOf(ping);
+    const qcol = switch (q) {
+        .unknown, .good => ctx.col(.online),
+        .fair => ctx.col(.idle),
+        .bad => ctx.col(.danger),
+    };
     var buf: [160]u8 = undefined;
+    var lb: [96]u8 = undefined;
+    const vl = voiceLine(ctx, &lb);
+    const vl_col = switch (vl.tone) {
+        .danger => ctx.col(.danger),
+        .on => ctx.col(.online),
+        .quiet => ctx.col(.muted),
+    };
+    if (vl.tone == .danger) qa.mark(r, "voice-warning", .{});
+    if (vl.tone == .on) qa.mark(r, "voice-transmitting", .{});
+    if (connected and ping > 0) qa.mark(r, "voice-ping", .{});
+    // A última linha leva à página de voz.
+    const line_h: f32 = if (tty) 18 else 22;
+    const lr: d.Rect = .{ .x = r.x + 6, .y = r.bottom() - line_h - 1, .w = r.w - 12, .h = line_h };
+    const lh = d.hitRaw(ctx, lr);
+    qa.mark(lr, "voice-line", .{});
+    if (lh.clicked) {
+        ctx.st.settings.page = .voz;
+        ctx.act(.open_settings);
+    }
     if (tty) {
-        const t = i18n.fmt(&buf, "♪ {s}  [mixer] [sair]", "♪ {s}  [mixer] [leave]", .{cs.info.name});
-        d.text(ctx.dl, fam.get(.bold), ctx.th.font_size - 2, r.x + 10, d.centerY(r, ctx.th.font_size - 2), if (connected) ctx.col(.online) else ctx.col(.idle), t);
-        const leave_r: d.Rect = .{ .x = r.right() - 44, .y = r.y, .w = 44, .h = r.h };
-        const mix_r: d.Rect = .{ .x = r.right() - 104, .y = r.y, .w = 58, .h = r.h };
+        const fs = ctx.th.font_size - 2;
+        var pb: [16]u8 = undefined;
+        const ps = if (connected and ping > 0) (std.fmt.bufPrint(&pb, " {d}ms", .{ping}) catch "") else "";
+        const t = i18n.fmt(&buf, "♪ {s}{s}  [mixer] [sair]", "♪ {s}{s}  [mixer] [leave]", .{ cs.info.name, ps });
+        d.text(ctx.dl, fam.get(.bold), fs, r.x + 10, r.y + 3, if (!connected) ctx.col(.idle) else qcol, t);
+        const leave_r: d.Rect = .{ .x = r.right() - 44, .y = r.y, .w = 44, .h = 22 };
+        const mix_r: d.Rect = .{ .x = r.right() - 104, .y = r.y, .w = 58, .h = 22 };
         qa.mark(leave_r, "hangup", .{});
         if (d.hitRaw(ctx, leave_r).clicked) ctx.act(.leave_voice);
         qa.mark(mix_r, "voice-mixer", .{});
         if (d.hitRaw(ctx, mix_r).clicked) ctx.popup(.{ .mixer = .{ .x = r.x + 4, .y = r.y - 300 } });
+        _ = d.textClipped(ctx.dl, fam.get(.regular), fs, r.x + 10, lr.y + 1, vl_col, vl.text, r.w - 20);
         return;
     }
     d.line(ctx.dl, r.x + 8, r.bottom() - 0.5, r.right() - 8, r.bottom() - 0.5, ctx.col(.border), 1);
-    d.text(ctx.dl, fam.get(.semibold), 14, r.x + 14, r.y + 8, if (connected) ctx.col(.online) else ctx.col(.idle), if (connected) i18n.tr("Voz conectada", "Voice Connected") else i18n.tr("Conectando à call…", "Connecting to the call…"));
+    signalBars(ctx, r.x + 14, r.y + 22, q, if (connected) qcol else ctx.col(.idle));
+    const status_txt = if (connected) i18n.tr("Voz conectada", "Voice Connected") else i18n.tr("Conectando à call…", "Connecting to the call…");
+    _ = d.textClipped(ctx.dl, fam.get(.semibold), 14, r.x + 33, r.y + 7, if (connected) qcol else ctx.col(.idle), status_txt, r.w - 33 - 88);
+    var sb: [160]u8 = undefined;
     const sub = if (g) |x|
-        std.fmt.bufPrint(&buf, "{s} / {s}{s}{s}", .{
-            cs.info.name,
-            x.name,
-            if (ctx.st.muted) (if (i18n.en()) " · muted" else " · mudo") else "",
-            if (ctx.st.deafened) (if (i18n.en()) " · deafened" else " · surdo") else "",
-        }) catch cs.info.name
+        std.fmt.bufPrint(&sb, "{s} / {s}", .{ cs.info.name, x.name }) catch cs.info.name
     else
         cs.info.name;
     _ = d.textClipped(ctx.dl, fam.get(.regular), 12, r.x + 14, r.y + 28, ctx.col(.muted), sub, r.w - 98);
 
+    // A última linha: transmitindo, aperte para falar ou o problema.
+    if (lh.hovered) d.rect(ctx.dl, lr, ctx.col(.hover), ctx.th.radius);
+    const dot_y = lr.y + line_h / 2;
+    if (vl.tone == .quiet) {
+        c.ImDrawList_AddCircleEx(ctx.dl, d.v(r.x + 18, dot_y), 3.5, vl_col.alpha(0.7).u(), 0, 1.4, 0);
+    } else d.circle(ctx.dl, r.x + 18, dot_y, 4, vl_col);
+    // O ping fica à direita da mesma linha, na cor da qualidade.
+    var ping_w: f32 = 0;
+    if (connected and ping > 0) {
+        const pt = std.fmt.bufPrint(&buf, "{d} ms", .{ping}) catch "";
+        ping_w = d.width(fam.get(.semibold), 12, pt) + 8;
+        d.text(ctx.dl, fam.get(.semibold), 12, lr.right() - ping_w, d.centerY(lr, 12), qcol, pt);
+        const pr: d.Rect = .{ .x = lr.right() - ping_w, .y = lr.y, .w = ping_w, .h = lr.h };
+        d.tip(ctx, pr, switch (q) {
+            .good, .unknown => i18n.tr("Conexão boa com o servidor de voz", "Good connection to the voice server"),
+            .fair => i18n.tr("Conexão razoável com o servidor de voz", "Fair connection to the voice server"),
+            .bad => i18n.tr("Conexão ruim: a voz pode falhar ou atrasar", "Bad connection: voice may drop or lag"),
+        }, ctx.hovering(pr));
+    }
+    _ = d.textClipped(ctx.dl, fam.get(if (vl.tone == .quiet) .regular else .semibold), 12, r.x + 28, d.centerY(lr, 12), vl_col, vl.text, r.w - 40 - ping_w);
+
     // Mixer: três faders.
-    const mr: d.Rect = .{ .x = r.right() - 80, .y = r.y + 11, .w = 32, .h = 32 };
+    const mr: d.Rect = .{ .x = r.right() - 80, .y = r.y + 9, .w = 32, .h = 32 };
     const mh = d.hitRaw(ctx, mr);
     qa.mark(mr, "voice-mixer", .{});
     const mk = anim.to(anim.id("voice-mixer", 0), if (mh.hovered) 1 else 0, 24);
@@ -447,7 +611,7 @@ fn voicePanel(ctx: *d.Ctx, fam: *d.Family, r: d.Rect, vc: Id, tty: bool) void {
     d.tip(ctx, mr, i18n.tr("Mixer da call", "Call mixer"), mh.hovered);
     if (mh.clicked) ctx.popup(.{ .mixer = .{ .x = r.x + 4, .y = r.y - 300 } });
 
-    const br: d.Rect = .{ .x = r.right() - 44, .y = r.y + 11, .w = 32, .h = 32 };
+    const br: d.Rect = .{ .x = r.right() - 44, .y = r.y + 9, .w = 32, .h = 32 };
     const hb = d.hitRaw(ctx, br);
     qa.mark(br, "hangup", .{});
     const k = anim.to(anim.id("hangup", 0), if (hb.hovered) 1 else 0, 24);
