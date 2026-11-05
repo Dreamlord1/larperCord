@@ -58,7 +58,7 @@ fn configHash(s: *const S.Settings) u64 {
     h.update(s.lsp_plugins_ok.slice());
     if (s.lsp_plugins_ok.len > 0) if (engine.current) |e| {
         for (e.list.items) |p| {
-            if (p.L == null) continue;
+            if (!p.isRunning()) continue;
             for (p.lsp.items) |*srv| {
                 h.update(p.name);
                 h.update(srv.lang.slice());
@@ -103,7 +103,7 @@ pub fn resolve(s: *const S.Settings, tag: []const u8, out: *net.Spec) bool {
     if (tag.len > low.len) return false;
     const key: []const u8 = if (found) |f| L.known[f.index].key else std.ascii.lowerString(&low, tag);
     for (e.list.items) |p| {
-        if (p.L == null) continue;
+        if (!p.isRunning()) continue;
         for (p.lsp.items) |*srv| {
             if (!std.mem.eql(u8, L.canonicalLang(srv.lang.slice()), key)) continue;
             const k = L.approvalKey(p.name, srv.lang.slice(), &srv.cmd);

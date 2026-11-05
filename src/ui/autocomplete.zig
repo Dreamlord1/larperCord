@@ -334,7 +334,7 @@ fn searchEmoji(ctx: *d.Ctx, ch: *const types.Channel, q: []const u8) void {
 fn searchCommands(q: []const u8) void {
     const e = engine.current orelse return;
     for (e.list.items) |p| {
-        if (p.L == null) continue;
+        if (!p.isRunning()) continue;
         for (p.commands.items) |cmd| {
             const bare = if (cmd.len > 0 and cmd[0] == '/') cmd[1..] else cmd;
             const sc = nameScore(bare, q);

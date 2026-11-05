@@ -21,6 +21,7 @@ const mosaic = @import("mosaic.zig");
 const guild_color = @import("guild_color.zig");
 const accounts_menu = @import("accounts_menu.zig");
 const forum = @import("forum.zig");
+const engine = @import("../plugins/engine.zig");
 
 const quick = [_][]const u8{ "👍", "😂", "😭", "🔥" };
 
@@ -197,11 +198,36 @@ fn voiceTargets(ctx: *d.Ctx, uid: Id, buf: []Id) []Id {
     return buf[0..n];
 }
 
+/// Entradas dos plugins neste menu, depois das do app. O `id` a partir de 200 é a
+/// posição delas (a mesma ordem de `plugin_host.menuClick`).
+fn pluginItems(items: *[32]Item, n: *usize, kind: state.MenuKind) void {
+    const want: engine.MenuKind = switch (kind) {
+        .message => .message,
+        .user => .user,
+        else => return,
+    };
+    const e = engine.current orelse return;
+    var i: usize = 0;
+    var first = true;
+    for (e.list.items) |p| {
+        if (!p.isRunning()) continue;
+        for (p.menus.items) |*m| {
+            if (m.kind != want) continue;
+            if (n.* < items.len and i < 32) {
+                items[n.*] = .{ .label = m.pt, .en = m.en, .id = @intCast(200 + i), .sep = first };
+                n.* += 1;
+                first = false;
+            }
+            i += 1;
+        }
+    }
+}
+
 fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
-    var items: [24]Item = undefined;
+    var items: [32]Item = undefined;
     var n: usize = 0;
     const add = struct {
-        fn f(list: *[24]Item, count: *usize, it: Item) void {
+        fn f(list: *[32]Item, count: *usize, it: Item) void {
             if (count.* < list.len) {
                 list[count.*] = it;
                 count.* += 1;
@@ -328,6 +354,8 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         },
     }
 
+    pluginItems(&items, &n, kind);
+
     const row_h: f32 = 32;
     const quick_h: f32 = if (kind == .message) 46 else 0;
     // "Cor do servidor": uma fileira de cores no fim do menu do servidor.
@@ -379,7 +407,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         const base = if (it.danger) ctx.col(.danger) else ctx.col(.accent);
         if (hb.hovered) d.rect(dl, ir, base, @max(ctx.th.radius - 2, 2));
         const tc = if (hb.hovered) (if (it.danger) d.Rgba.white else ctx.col(.accent_text)) else if (it.danger) ctx.col(.danger) else ctx.col(.text).mix(ctx.col(.muted), 0.15);
-        d.text(dl, fam.get(.medium), 14, ir.x + 10, d.centerY(ir, 14), tc, i18n.tr(it.label, it.en));
+        _ = d.textClipped(dl, fam.get(.medium), 14, ir.x + 10, d.centerY(ir, 14), tc, i18n.tr(it.label, it.en), ir.w - 18);
         if (hb.clicked) return choose(ctx, kind, id, it.id, r);
         yy += row_h;
     }
@@ -430,6 +458,7 @@ fn guildPart(buf: []u8, guild: Id) []const u8 {
 fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
     const st = ctx.st;
     close(ctx);
+    if (item >= 200) return @import("../plugins/host.zig").menuClick(@import("../plugins/host.zig").appOf(), if (kind == .user) .user else .message, item - 200, id);
     if (kind == .voice_move and item >= 100) {
         var tb: [20]Id = undefined;
         const list = voiceTargets(ctx, id, &tb);

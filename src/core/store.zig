@@ -42,6 +42,11 @@ pub const StoredMessage = struct {
     /// Cache das palavras de alerta/filtro que o texto contém (core/filtros.zig).
     flt_key: u32 = 0,
     flt: u8 = 0,
+    /// Cache das regras de decoração dos plugins (plugins/deco.zig) e assinatura
+    /// da decoração da última vez que a altura foi medida.
+    dc_key: u32 = 0,
+    dc_ver: u32 = 0,
+    dc_rule: u16 = 0,
     /// Cache de "fala com a gente" (core/inbox.zig `mentionsMe`).
     mm_key: u32 = 0,
     mm: bool = false,

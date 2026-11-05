@@ -12,6 +12,8 @@ const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const icons = @import("icons.zig");
 const i18n = @import("i18n.zig");
+const plugin_panel = @import("plugin_panel.zig");
+const engine = @import("../plugins/engine.zig");
 const types = @import("../core/types.zig");
 const Id = types.Id;
 
@@ -34,14 +36,27 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const pl = "[pin]";
         const pw = d.width(fam.get(.bold), fs, pl);
         const pr: d.Rect = .{ .x = r.right() - pw - 8, .y = r.y, .w = pw + 4, .h = r.h };
+        // O que fica à direita do título: o alfinete e, se algum plugin tem, os painéis.
+        var right_x = pr.x;
+        if (plugin_panel.available()) {
+            const xl = "[+]";
+            const xw = d.width(fam.get(.bold), fs, xl);
+            const xr: d.Rect = .{ .x = pr.x - xw - 8, .y = r.y, .w = xw + 4, .h = r.h };
+            const xh = d.hit(ctx, 7, xr);
+            qa.mark(xr, "header-plugins", .{});
+            if (xh.clicked) plugin_panel.toggleAny();
+            d.text(dl, fam.get(.bold), fs, xr.x + 2, d.centerY(r, fs), if (xh.hovered or panelOpen()) ctx.col(.text) else ctx.col(.muted), xl);
+            d.tip(ctx, xr, i18n.tr("Painéis dos plugins", "Plugin panels"), xh.hovered);
+            right_x = xr.x;
+        }
         const ph = d.hit(ctx, 6, pr);
         qa.mark(pr, "header-pins", .{});
         if (ph.clicked) ctx.act(.{ .open_pins = ch_id });
         d.text(dl, fam.get(.bold), fs, pr.x + 2, d.centerY(r, fs), if (ph.hovered) ctx.col(.text) else ctx.col(.muted), pl);
         d.tip(ctx, pr, i18n.tr("Mensagens fixadas", "Pinned messages"), ph.hovered);
-        const tw = d.textClipped(dl, fam.get(.bold), fs, r.x + 6, d.centerY(r, fs), ctx.col(.accent), t, r.w - 22 - pw);
+        const tw = d.textClipped(dl, fam.get(.bold), fs, r.x + 6, d.centerY(r, fs), ctx.col(.accent), t, right_x - r.x - 14);
         const ly = r.y + r.h / 2;
-        d.line(dl, r.x + 6 + tw + 4, ly, pr.x - 4, ly, ctx.col(.border), 1);
+        d.line(dl, r.x + 6 + tw + 4, ly, right_x - 4, ly, ctx.col(.border), 1);
         return;
     }
     if (std.mem.eql(u8, variant, "minimal")) {
@@ -50,9 +65,11 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const t = std.fmt.bufPrint(&buf, "{s}", .{ch.name}) catch "";
         d.text(dl, fam.get(.bold), 22, r.x + 4, r.y + r.h / 2 - 22, ctx.col(.text), t);
         const sub = if (ch.guild == 0) i18n.tr("mensagem direta", "direct message") else d.printClip(&buf, "{s}  ·  {s}", .{ if (g) |x| x.name else "", ch.topic });
-        _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - 120);
+        const has_panels = plugin_panel.available();
+        _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - (if (has_panels) @as(f32, 156) else 120));
         inboxButtons(ctx, dl, r.right() - 32, r.y + r.h / 2 - 14);
         pinsButton(ctx, dl, ch_id, r.right() - 104, r.y + r.h / 2 - 14);
+        if (has_panels) panelsButton(ctx, dl, r.right() - 140, r.y + r.h / 2 - 14);
         return;
     }
 
@@ -60,30 +77,35 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const search_w: f32 = 180;
     const sx = r.right() - 16 - search_w;
     // Título longo (post de fórum) corta com "…": os botões e o canal pai ficam.
-    const name_room = @max(80, sx - (r.x + 42) - 14 - 214 - 110);
+    // Apertado demais (o próprio painel aberto pode tirar o lugar): o botão sai e o
+    // nome do canal fica. Os painéis continuam na paleta e nas configurações.
+    const has_panels = plugin_panel.available() and sx - 220 >= r.x + 42 + 60;
+    const panels_w: f32 = if (has_panels) 36 else 0;
+    const name_room = @max(80, sx - (r.x + 42) - 14 - 214 - 110 - panels_w);
     const name_w = d.textClipped(dl, fam.get(.semibold), 16, r.x + 42, d.centerY(r, 16), ctx.col(.text), ch.name, name_room);
     const tx = r.x + 42 + name_w + 14;
     // Da direita para a esquerda: busca, membros, buscar mensagens, salvas, caixa de entrada, fixadas.
     // Numa thread, no lugar do tópico: o canal pai, e clicar volta para ele.
     const parent_cs = if (ch.thread != null and ch.parent != null) ctx.store.channel(ch.parent.?) else null;
     if (parent_cs) |pcs| {
-        if (sx - tx > 222) {
+        if (sx - tx > 222 + panels_w) {
             var pb: [120]u8 = undefined;
             const lbl = d.printClip(&pb, "{s}{s}", .{ sigil(&pcs.info), pcs.info.name });
             d.rect(dl, .{ .x = tx, .y = r.y + r.h / 2 - 10, .w = 1, .h = 20 }, ctx.col(.border).mix(ctx.col(.text), 0.05), 0);
-            const room = sx - tx - 214;
+            const room = sx - tx - 214 - panels_w;
             const pr: d.Rect = .{ .x = tx + 14, .y = r.y + r.h / 2 - 12, .w = @min(d.width(fam.get(.regular), 14, lbl), room), .h = 24 };
             const ph = d.hit(ctx, 6, pr);
             qa.mark(pr, "header-parent", .{});
             if (ph.clicked) ctx.act(.{ .select_channel = pcs.info.id });
             _ = d.textClipped(dl, fam.get(.regular), 14, pr.x, d.centerY(r, 14), if (ph.hovered) ctx.col(.text) else ctx.col(.muted), lbl, room);
         }
-    } else if (ch.topic.len > 0 and sx - tx > 222) {
+    } else if (ch.topic.len > 0 and sx - tx > 222 + panels_w) {
         d.rect(dl, .{ .x = tx, .y = r.y + r.h / 2 - 10, .w = 1, .h = 20 }, ctx.col(.border).mix(ctx.col(.text), 0.05), 0);
-        _ = d.textClipped(dl, fam.get(.regular), 14, tx + 14, d.centerY(r, 14), ctx.col(.muted), ch.topic, sx - tx - 214);
+        _ = d.textClipped(dl, fam.get(.regular), 14, tx + 14, d.centerY(r, 14), ctx.col(.muted), ch.topic, sx - tx - 214 - panels_w);
     }
     inboxButtons(ctx, dl, sx - 112, r.y + r.h / 2 - 14);
     pinsButton(ctx, dl, ch_id, sx - 184, r.y + r.h / 2 - 14);
+    if (has_panels) panelsButton(ctx, dl, sx - 220, r.y + r.h / 2 - 14);
     const sr: d.Rect = .{ .x = sx, .y = r.y + r.h / 2 - 13, .w = search_w, .h = 26 };
     const sh = d.hit(ctx, 1, sr);
     qa.mark(sr, "header-search", .{});
@@ -107,6 +129,25 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     icons.members(dl, mr.x + 14, mr.y + 14, (if (ctx.st.settings.show_member_list or mh.hovered) ctx.col(.text) else ctx.col(.muted)).u());
     d.tip(ctx, mr, if (ctx.st.settings.show_member_list) i18n.tr("Esconder membros", "Hide Member List") else i18n.tr("Mostrar membros", "Show Member List"), mh.hovered);
     if (d.pflag(n, "divider", true)) d.line(dl, r.x, r.bottom() - 0.5, r.right(), r.bottom() - 0.5, ctx.col(.border), 1);
+}
+
+fn panelOpen() bool {
+    const e = engine.current orelse return false;
+    return e.panel_open != null;
+}
+
+/// Abre e fecha o painel lateral dos plugins (só aparece se algum tem painel).
+fn panelsButton(ctx: *d.Ctx, dl: *c.ImDrawList, x: f32, y: f32) void {
+    const pr: d.Rect = .{ .x = x, .y = y, .w = 28, .h = 28 };
+    const ph = d.hit(ctx, 7, pr);
+    qa.mark(pr, "header-plugins", .{});
+    if (ph.clicked) plugin_panel.toggleAny();
+    const ink = (if (panelOpen() or ph.hovered) ctx.col(.text) else ctx.col(.muted));
+    // Uma janela com a faixa do lado, como o painel.
+    const box: d.Rect = .{ .x = pr.x + 6, .y = pr.y + 8, .w = 16, .h = 12 };
+    d.border(dl, box, ink, 2, 1.4);
+    d.rect(dl, .{ .x = box.right() - 6, .y = box.y, .w = 6, .h = box.h }, ink, 1);
+    d.tip(ctx, pr, i18n.tr("Painéis dos plugins", "Plugin panels"), ph.hovered);
 }
 
 /// Alfinete: abre o painel de mensagens fixadas do canal.
