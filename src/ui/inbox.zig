@@ -69,7 +69,7 @@ pub fn buttonWidth(ctx: *const d.Ctx, label: []const u8) f32 {
 /// Texto quebrado por palavra em até `max_lines` linhas (a última corta com
 /// "…"). Com `dl` null só mede. Retorna a altura usada.
 pub fn wrapText(dl: ?*c.ImDrawList, font: *c.ImFont, size: f32, x: f32, y: f32, max_w: f32, text: []const u8, max_lines: usize, color: d.Rgba) f32 {
-    const lh = size * 1.38;
+    const lh = size * d.text_scale * 1.38;
     const space = d.width(font, size, " ");
     var lines: usize = 0;
     var start: ?usize = null;

@@ -14,6 +14,7 @@ const Preview = @import("../theme/manager.zig").Preview;
 const proxy = @import("../net/proxy.zig");
 const dropdown = @import("dropdown.zig");
 const tray = @import("../platform/tray.zig");
+const inbox = @import("inbox.zig");
 
 const Section = struct { title: []const u8, title_en: []const u8, items: []const struct { page: S.Page, label: []const u8, label_en: []const u8 } };
 
@@ -51,10 +52,20 @@ const Page = struct {
     y: f32,
     w: f32,
     ids: usize = 0,
+    /// Marcações do QA para o que é só texto (o QA confere que nada se sobrepõe).
+    marks: usize = 0,
+    /// Fim do último botão e, depois de `sameLine`, onde vem o próximo.
+    button_end: f32 = 0,
+    line_x: ?f32 = null,
 
-    fn id(p: *Page) usize {
+    pub fn id(p: *Page) usize {
         p.ids += 1;
         return p.ids;
+    }
+
+    fn markText(p: *Page, r: d.Rect) void {
+        qa.mark(r, "pg:{d}", .{p.marks});
+        p.marks += 1;
     }
 
     pub fn font(p: *Page, wt: d.Weight) *c.ImFont {
@@ -63,19 +74,31 @@ const Page = struct {
 
     pub fn title(p: *Page, t: []const u8) void {
         d.text(p.dl, p.font(.bold), 22, p.x, p.y, p.ctx.col(.text), t);
+        p.markText(.{ .x = p.x, .y = p.y, .w = d.width(p.font(.bold), 22, t), .h = 28 });
         p.y += 44;
+    }
+
+    /// Uma linha de texto solta, que ocupa `advance` de altura.
+    pub fn line(p: *Page, wt: d.Weight, size: f32, col: d.Rgba, t: []const u8, advance: f32) void {
+        const tw = d.textClipped(p.dl, p.font(wt), size, p.x, p.y, col, t, p.w);
+        p.markText(.{ .x = p.x, .y = p.y, .w = tw, .h = advance - 4 });
+        p.y += advance;
     }
 
     pub fn heading(p: *Page, t: []const u8) void {
         p.y += 8;
         var buf: [96]u8 = undefined;
-        d.text(p.dl, p.font(.bold), 12, p.x, p.y, p.ctx.col(.muted), d.upper(&buf, t));
+        const up = d.upper(&buf, t);
+        d.text(p.dl, p.font(.bold), 12, p.x, p.y, p.ctx.col(.muted), up);
+        p.markText(.{ .x = p.x, .y = p.y, .w = d.width(p.font(.bold), 12, up), .h = 16 });
         p.y += 26;
     }
 
+    /// Texto de apoio: quebra a linha em vez de passar da página.
     pub fn note(p: *Page, t: []const u8) void {
-        d.text(p.dl, p.font(.regular), 13.5, p.x, p.y, p.ctx.col(.faint), t);
-        p.y += 26;
+        const h = inbox.wrapText(p.dl, p.font(.regular), 13.5, p.x, p.y, p.w, t, 8, p.ctx.col(.faint));
+        p.markText(.{ .x = p.x, .y = p.y, .w = @min(d.width(p.font(.regular), 13.5, t), p.w), .h = h });
+        p.y += @round(h + 7.4);
     }
 
     pub fn divider(p: *Page) void {
@@ -87,14 +110,18 @@ const Page = struct {
     /// Linha com título, descrição e um interruptor à direita.
     pub fn toggle(p: *Page, label: []const u8, desc: []const u8, value: *bool) void {
         const ctx = p.ctx;
-        const row_h: f32 = if (desc.len > 0) 58 else 40;
+        // A descrição quebra a linha (numa janela estreita, cortar perderia o que
+        // a opção faz), e a linha cresce junto.
+        const desc_w = p.w - 80;
+        const desc_h = if (desc.len > 0) inbox.wrapText(null, p.font(.regular), 13.5, 0, 0, desc_w, desc, 6, ctx.col(.muted)) else 0;
+        const row_h: f32 = if (desc.len > 0) 58 + @round(@max(desc_h - 19, 0)) else 40;
         const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = row_h };
         const k_id = p.id();
         const hb = d.hit(ctx, k_id, r);
         qa.mark(r, "toggle:{s}", .{label});
         if (hb.clicked) value.* = !value.*;
         d.text(p.dl, p.font(.medium), 16, r.x, r.y + 4, ctx.col(.text), label);
-        if (desc.len > 0) _ = d.textClipped(p.dl, p.font(.regular), 13.5, r.x, r.y + 28, ctx.col(.muted), desc, r.w - 80);
+        if (desc.len > 0) _ = inbox.wrapText(p.dl, p.font(.regular), 13.5, r.x, r.y + 28, desc_w, desc, 6, ctx.col(.muted));
         // Interruptor.
         const sw: d.Rect = .{ .x = r.right() - 44, .y = r.y + 4, .w = 40, .h = 24 };
         const on = anim.to(anim.id("sw", k_id + @as(usize, @intFromEnum(ctx.st.settings.page)) * 1000), if (value.*) 1 else 0, 22);
@@ -217,11 +244,14 @@ const Page = struct {
         p.y += 60;
     }
 
+    /// Quanto um botão ocupa na página.
+    const button_step: f32 = 44;
+
+    /// O botão anda com o cursor da página, como tudo aqui: quem vem depois nunca
+    /// cai em cima dele. Dois na mesma linha: `sameLine` entre eles.
     pub fn button(p: *Page, label: []const u8, danger: bool) bool {
         const ctx = p.ctx;
-        const f = p.font(.semibold);
-        const tw = d.width(f, 14, label);
-        const r: d.Rect = .{ .x = p.x, .y = p.y, .w = tw + 32, .h = 36 };
+        const r = p.buttonRect(label);
         const hb = d.hit(ctx, p.id(), r);
         qa.mark(r, "button:{s}", .{label});
         const base = if (danger) ctx.col(.danger) else ctx.col(.accent);
@@ -230,8 +260,36 @@ const Page = struct {
         return hb.clicked;
     }
 
+    /// Um botão que não é a ação principal da página: sem a cor de destaque.
+    pub fn buttonSoft(p: *Page, label: []const u8) bool {
+        const ctx = p.ctx;
+        const r = p.buttonRect(label);
+        const hb = d.hit(ctx, p.id(), r);
+        qa.mark(r, "button:{s}", .{label});
+        d.rect(p.dl, r, ctx.col(.elevated).mix(ctx.col(.text), if (hb.hovered) @as(f32, 0.08) else 0), ctx.th.radius);
+        d.border(p.dl, r, ctx.col(.border).mix(ctx.col(.text), 0.08), ctx.th.radius, 1);
+        d.text(p.dl, p.font(.semibold), 14, r.x + 16, d.centerY(r, 14), ctx.col(.text), label);
+        return hb.clicked;
+    }
+
+    /// Onde vai o próximo botão; o cursor da página já anda.
+    fn buttonRect(p: *Page, label: []const u8) d.Rect {
+        const r: d.Rect = .{ .x = p.line_x orelse p.x, .y = p.y, .w = d.width(p.font(.semibold), 14, label) + 32, .h = 36 };
+        p.line_x = null;
+        p.button_end = r.right();
+        p.y += button_step;
+        return r;
+    }
+
+    /// O próximo botão fica ao lado do último, em vez de embaixo.
+    pub fn sameLine(p: *Page) void {
+        p.y -= button_step;
+        p.line_x = p.button_end + 8;
+    }
+
     fn keyRow(p: *Page, action: []const u8, keys: []const u8) void {
         const ctx = p.ctx;
+        p.markText(.{ .x = p.x, .y = p.y, .w = p.w, .h = 36 });
         d.text(p.dl, p.font(.medium), 15, p.x, p.y + 8, ctx.col(.text), action);
         var x = p.x + p.w;
         var it = std.mem.splitBackwardsScalar(u8, keys, '+');
@@ -473,13 +531,12 @@ fn colorEditor(p: *Page) void {
     qa.mark(.{ .x = q.x + 38, .y = q.y, .w = q.w - 38, .h = 30 }, "theme-color-input", .{});
     q.y += 38;
     if (color_bad) q.note(i18n.tr("hex inválido — use #RRGGBB ou #RRGGBBAA", "invalid hex — use #RRGGBB or #RRGGBBAA"));
-    if (enter or q.button(i18n.tr("Aplicar", "Apply"), false)) applyColor(ctx);
-    q.y += 44;
+    const apply_click = q.button(i18n.tr("Aplicar", "Apply"), false);
+    if (enter or apply_click) applyColor(ctx);
     if (q.button(i18n.tr("Limpar esta cor", "Clear this color"), false)) {
         ctx.act(.{ .set_theme_color = .{ .slot = @intCast(color_slot), .rgba = null } });
         color_sync = true;
     }
-    q.y += 44;
     if (q.button(i18n.tr("Restaurar tema", "Reset theme"), false)) {
         ctx.act(.reset_theme_colors);
         color_sync = true;
@@ -528,7 +585,8 @@ fn network(p: *Page) void {
         const shown = if (std.mem.lastIndexOfScalar(u8, u, '@')) |at| (if (std.mem.indexOf(u8, u, "://")) |sch| std.fmt.bufPrint(&shown_buf, "{s}…@{s}", .{ u[0 .. sch + 3], u[at + 1 ..] }) catch u else u) else u;
         p.note(i18n.fmt(&nbuf, "Em uso: {s} ({s}).", "In use: {s} ({s}).", .{ shown, scope }));
     } else p.note(i18n.tr("Sem proxy: conexão direta.", "No proxy: direct connection."));
-    if (enter or p.button(i18n.tr("Salvar proxy", "Save proxy"), false)) {
+    const save_click = p.button(i18n.tr("Salvar proxy", "Save proxy"), false);
+    if (enter or save_click) {
         const text = std.mem.trim(u8, std.mem.sliceTo(&proxy_buf, 0), " ");
         if (text.len == 0) {
             s.proxy = .{};
@@ -542,10 +600,8 @@ fn network(p: *Page) void {
             ctx.st.showToast(ctx.now_ms, true, "proxy inválido", "invalid proxy", .{});
         }
     }
-    p.y += 44;
     if (s.proxy.len > 0) {
         if (p.button(i18n.tr("Remover proxy", "Remove proxy"), true)) s.proxy = .{};
-        p.y += 44;
     }
     p.toggle(i18n.tr("Usar o proxy em tudo", "Use the proxy for everything"), i18n.tr("Também o Discord: API, imagens, vídeos e o gateway (este a partir da próxima conexão).", "Discord too: API, images, videos and the gateway (from the next connection)."), &s.proxy_all);
 }
@@ -591,6 +647,13 @@ fn page(p: *Page, previews: []const Preview) void {
             p.heading("Layout");
             p.toggle(i18n.tr("Lista de membros", "Member list"), i18n.tr("Mostra quem está no servidor (quando o tema tem uma).", "Shows who's in the server (when the theme has one)."), &s.show_member_list);
             p.toggle(i18n.tr("Barra de status", "Status bar"), i18n.tr("Conexão, ping, RAM e relógio (quando o tema tem uma).", "Connection, ping, RAM and clock (when the theme has one)."), &s.show_status_bar);
+            p.note(i18n.tr("Arraste a divisa entre os painéis para mudar a largura da lista de canais, da lista de membros e da tela dividida. Duplo clique na divisa volta ao padrão do tema.", "Drag the edge between panels to resize the channel list, the member list and split view. Double-click an edge to go back to the theme's default."));
+            if (!s.panelsAtDefault()) {
+                if (p.button(i18n.tr("Restaurar larguras", "Reset panel sizes"), false)) {
+                    s.resetPanels();
+                    ctx.act(.save_settings);
+                }
+            }
         },
         .acessibilidade => {
             p.title(i18n.tr("Acessibilidade", "Accessibility"));
@@ -633,7 +696,7 @@ fn page(p: *Page, previews: []const Preview) void {
                 var lb: [64]u8 = undefined;
                 const size = msg_cache.formatSize(&sb, msg_cache.totalBytes(), i18n.en());
                 if (p.button(i18n.fmt(&lb, "Apagar cache ({s})", "Clear cache ({s})", .{size}), true)) ctx.act(.clear_cache);
-                p.y += 52;
+                p.y += 8;
             }
             p.note(i18n.tr("Fora isso, imagens e avatares só vêm dos servidores do Discord.", "Everything else (images, avatars) only comes from Discord's servers."));
             p.divider();
@@ -880,7 +943,7 @@ fn account(p: *Page) void {
     p.heading(i18n.tr("Sessão", "Session"));
     p.note(if (ctx.store.demo) i18n.tr("Você está no modo demonstração. Sair leva à tela de login.", "You're in demo mode. Logging out takes you to the sign-in screen.") else i18n.tr("Sair desconecta e apaga o token desta conta neste computador (as outras contas guardadas continuam).", "Logging out disconnects and deletes this account's token from this computer (other saved accounts stay)."));
     if (p.button(i18n.tr("Sair", "Log Out"), true)) ctx.act(.logout);
-    p.y += 52;
+    p.y += 8;
 }
 
 fn performance(p: *Page) void {

@@ -21,13 +21,12 @@ pub fn draw(p: anytype) void {
         e.reload();
         return;
     }
-    p.y += 52;
+    p.y += 8;
     if (missingExamples(e) > 0) {
         if (p.button(i18n.tr("Instalar exemplos", "Install examples"), false)) {
             installExamples(e);
             return;
         }
-        p.y += 44;
         p.note(i18n.tr("Copia para a pasta acima os plugins de exemplo que faltam: /dado, /calc, /mock, /hora, /resumo e outros.", "Copies the missing example plugins to the folder above: /dado, /calc, /mock, /hora, /resumo and more."));
     }
 

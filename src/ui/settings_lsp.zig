@@ -33,7 +33,7 @@ pub fn draw(p: anytype) void {
     p.divider();
     for (L.known, 0..) |k, i| language(p, s, k, i);
     if (p.button(i18n.tr("Procurar no PATH de novo", "Search PATH again"), false)) net.scanStart();
-    p.y += 52;
+    p.y += 8;
     plugins(p, s);
 }
 
@@ -112,13 +112,11 @@ fn language(p: anytype, s: *S.Settings, k: L.Known, i: usize) void {
             on.* = true;
             anim.active = true;
         }
-        p.y += 44;
     };
 
     if (st.state == .failed) {
         var lb: [80]u8 = undefined;
         if (p.button(i18n.fmt(&lb, "Tentar de novo: {s}", "Try again: {s}", .{k.label}), false)) lsp_ui.retry(k.key);
-        p.y += 44;
     }
     p.y += 10;
 }
@@ -161,7 +159,6 @@ fn pluginRow(p: anytype, s: *S.Settings, pl: *engine.Plugin, srv: *const engine.
             p.y += 24;
             var rb: [80]u8 = undefined;
             if (p.button(i18n.fmt(&rb, "Tentar de novo: {s}", "Try again: {s}", .{srv.lang.slice()}), false)) lsp_ui.retry(key_name);
-            p.y += 44;
         }
         return;
     }

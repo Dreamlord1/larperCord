@@ -18,8 +18,7 @@ pub fn draw(p: anytype) void {
     const s = updater.snapshot();
     p.title(i18n.tr("Atualizações", "Updates"));
     var vb: [64]u8 = undefined;
-    d.text(p.dl, p.font(.semibold), 16, p.x, p.y, ctx.col(.text), i18n.fmt(&vb, "Versão {s}", "Version {s}", .{updater.current}));
-    p.y += 28;
+    p.line(.semibold, 16, ctx.col(.text), i18n.fmt(&vb, "Versão {s}", "Version {s}", .{updater.current}), 28);
     var mb: [120]u8 = undefined;
     const line: []const u8 = switch (s.phase) {
         .idle => i18n.tr("Ainda não verificou nesta sessão.", "Not checked yet in this session."),
@@ -38,41 +37,74 @@ pub fn draw(p: anytype) void {
         },
     };
     const good = s.phase == .available or s.phase == .ready;
-    d.text(p.dl, p.font(.regular), 14, p.x, p.y, if (s.phase == .failed) ctx.col(.danger) else if (good) ctx.col(.accent) else ctx.col(.muted), line);
     qa.mark(.{ .x = p.x, .y = p.y, .w = 300, .h = 20 }, "update-status:{t}", .{s.phase});
-    p.y += 30;
+    p.line(.regular, 14, if (s.phase == .failed) ctx.col(.danger) else if (good) ctx.col(.accent) else ctx.col(.muted), line, 30);
     const working = s.phase == .checking or s.phase == .downloading;
-    if (working) @import("anim.zig").every(100);
+    if (working) anim.every(100);
     if (s.phase == .available) {
         if (p.button(i18n.tr("Baixar e instalar", "Download and install"), false)) updater.install();
+        p.sameLine();
     }
     if (s.phase == .ready) {
         if (p.button(i18n.tr("Reiniciar agora", "Restart now"), false)) ctx.act(.restart);
     } else if (!working) {
-        if (p.button(i18n.tr("Verificar atualizações", "Check for updates"), false)) updater.check();
+        // Com uma versão nova na tela, a ação principal é instalar.
+        if (if (s.phase == .available) p.buttonSoft(i18n.tr("Verificar atualizações", "Check for updates")) else p.button(i18n.tr("Verificar atualizações", "Check for updates"), false)) updater.check();
     }
+    p.y += 8;
     p.toggle(i18n.tr("Verificar ao abrir", "Check when opening"), i18n.tr("Pergunta ao GitHub qual é a última versão ao abrir o app. Nenhum dado da conta vai junto.", "Asks GitHub for the latest version when the app opens. No account data is sent."), &ctx.st.settings.check_updates);
-    p.divider();
+    p.y += 10;
     p.heading(i18n.tr("Reiniciar", "Restart"));
     p.note(i18n.tr("Fecha e abre o larperCord de novo. Se estiver em uma call, ela cai.", "Closes and reopens larperCord. If you're in a call, you'll leave it."));
-    if (p.button(i18n.tr("Reiniciar o larperCord", "Restart larperCord"), false)) ctx.act(.restart);
+    if (p.buttonSoft(i18n.tr("Reiniciar o larperCord", "Restart larperCord"))) ctx.act(.restart);
     p.divider();
     p.note(i18n.tr("Toda atualização é assinada; uma versão sem a assinatura certa não é instalada.", "Every update is signed; a version without the right signature isn't installed."));
-    if (p.button(i18n.tr("Ver as versões no GitHub", "See releases on GitHub"), false)) att.openUrl(updater.releases_page);
+    if (p.buttonSoft(i18n.tr("Ver as versões no GitHub", "See releases on GitHub"))) att.openUrl(updater.releases_page);
 }
 
-var spans_en: ?[]md.Span = null;
-var spans_pt: ?[]md.Span = null;
+// --- Novidades -----------------------------------------------------------------
 
-pub fn changelog(p: anytype) void {
-    const ctx = p.ctx;
-    p.title(i18n.tr("Novidades", "What's new"));
+const Item = struct { bullet: bool, spans: []md.Span };
+const Section = struct { title: []const u8, items: []const Item };
+const Version = struct { name: []const u8, sections: []const Section };
+
+var parsed_en: ?[]const Version = null;
+var parsed_pt: ?[]const Version = null;
+
+/// O CHANGELOG do idioma, já com o markdown de cada item. Uma vez por idioma.
+fn versions() ?[]const Version {
     const en = i18n.en();
-    const slot = if (en) &spans_en else &spans_pt;
-    const text: []const u8 = if (en) changelog_en else changelog_pt;
-    if (slot.* == null) slot.* = md.parse(std.heap.c_allocator, text) catch null;
-    const spans = slot.* orelse return;
-    const o: rich.Opts = .{
+    const slot = if (en) &parsed_en else &parsed_pt;
+    if (slot.* == null) slot.* = load(if (en) changelog_en else changelog_pt) catch null;
+    return slot.*;
+}
+
+fn load(text: []const u8) ![]const Version {
+    const gpa = std.heap.c_allocator;
+    const list = try log.parse(gpa, text);
+    const out = try gpa.alloc(Version, list.len);
+    for (list, out) |v, *o| {
+        const secs = try gpa.alloc(Section, v.sections.len);
+        for (v.sections, secs) |sec, *so| {
+            const items = try gpa.alloc(Item, sec.items.len);
+            for (sec.items, items) |it, *io| io.* = .{ .bullet = it.bullet, .spans = try md.parse(gpa, it.text) };
+            so.* = .{ .title = sec.title, .items = items };
+        }
+        o.* = .{ .name = v.name, .sections = secs };
+    }
+    return out;
+}
+
+/// Quais versões a pessoa abriu ou fechou, em relação ao padrão (só a mais nova
+/// e a instalada abertas).
+var flipped: [64]bool = @splat(false);
+
+const head_h: f32 = 52;
+const pad: f32 = 18;
+const rail_w: f32 = 28;
+
+fn textOpts(ctx: *d.Ctx) rich.Opts {
+    return .{
         .ctx = ctx,
         .family = ctx.ui,
         .size = 14,
