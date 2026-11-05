@@ -270,7 +270,9 @@ fn decoBlock(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, x: f32, 
     var y = y_in;
     for (v.slice(), 0..) |*part, i| {
         const h = partHeight(g, part);
-        d.rect(dl, .{ .x = x, .y = y + 2, .w = 2, .h = h - 4 }, ctx.col(.accent).alpha(0.7), 1);
+        const tint = if (part.danger) ctx.col(.danger) else ctx.col(.accent);
+        d.rect(dl, .{ .x = x, .y = y + 2, .w = 2, .h = h - 4 }, tint.alpha(if (part.danger) 1 else 0.7), 1);
+        if (part.danger) qa.mark(.{ .x = x, .y = y, .w = 2, .h = h }, "deco-danger:{d}", .{m.msg.id});
         var tx = x + 8;
         // A nota de uma mensagem só (não de uma regra) pode ser dispensada. O × fica
         // à esquerda: à direita, a barra de ações da mensagem cobriria ele.
@@ -289,7 +291,7 @@ fn decoBlock(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, x: f32, 
             const bw = badgeW(g, part);
             const f = g.fam.get(.semibold);
             const br: d.Rect = .{ .x = tx, .y = y + 2, .w = bw, .h = 18 };
-            d.rect(dl, br, ctx.col(.accent).alpha(0.16), 9);
+            d.rect(dl, br, tint.alpha(if (part.danger) 0.22 else 0.16), 9);
             d.text(dl, f, 11.5, br.x + 7, d.centerY(br, 11.5), ctx.col(.text), part.badge);
             qa.mark(br, "deco-badge:{d}", .{m.msg.id});
             tx += bw + 4;
@@ -297,7 +299,7 @@ fn decoBlock(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, x: f32, 
         if (part.note.len > 0) {
             const size = g.size - note_size_delta;
             const tw = @max(g.wrap - 10 - 20 - badgeW(g, part), 60);
-            _ = inbox_ui.wrapText(dl, noteFont(g), size, tx, y + 3, tw, part.note, 12, ctx.col(.muted).mix(ctx.col(.text), 0.35));
+            _ = inbox_ui.wrapText(dl, noteFont(g), size, tx, y + 3, tw, part.note, 12, if (part.danger) ctx.col(.danger) else ctx.col(.muted).mix(ctx.col(.text), 0.35));
             qa.mark(.{ .x = tx, .y = y, .w = tw, .h = h }, "deco-note:{d}", .{m.msg.id});
         }
         y += h + 2;

@@ -115,6 +115,8 @@ const fixtures = [_]exemplos.Exemplo{
     .{ .name = "bookmarks.lua", .source = @embedFile("plugins/testdata/bookmarks.lua") },
     .{ .name = "filter.lua", .source = @embedFile("plugins/testdata/filter.lua") },
     .{ .name = "stats.lua", .source = @embedFile("plugins/testdata/stats.lua") },
+    .{ .name = "snippets.lua", .source = @embedFile("plugins/testdata/snippets.lua") },
+    .{ .name = "timestamps.lua", .source = @embedFile("plugins/testdata/timestamps.lua") },
 };
 
 fn writeFixtures(_: *App) void {
@@ -227,6 +229,10 @@ fn reply(client: sys.Socket, req: []const u8) void {
     if (std.mem.startsWith(u8, req, "GET /get")) {
         sys.tcpSend(client, std.fmt.bufPrint(&head, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{translated_body.len}) catch return);
         sys.tcpSend(client, translated_body);
+    } else if (std.mem.startsWith(u8, req, "GET /api/cve/")) {
+        replyCve(client, req);
+    } else if (std.mem.startsWith(u8, req, "GET /repos/")) {
+        replyGithub(client, req);
     } else if (std.mem.startsWith(u8, req, "GET /big")) {
         // Mais que o limite, sem avisar o tamanho.
         sys.tcpSend(client, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
@@ -243,6 +249,43 @@ fn reply(client: sys.Socket, req: []const u8) void {
     } else {
         sys.tcpSend(client, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     }
+}
+
+/// Respostas guardadas do serviço de verdade, e o 404 dele para o que não existe.
+fn replyCve(client: sys.Socket, req: []const u8) void {
+    const rest = req["GET /api/cve/".len..];
+    const id = rest[0 .. std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len];
+    const records = [_]struct { id: []const u8, body: []const u8 }{
+        .{ .id = "CVE-2021-44228", .body = @embedFile("plugins/testdata/cve/CVE-2021-44228.json") },
+        .{ .id = "CVE-2024-3094", .body = @embedFile("plugins/testdata/cve/CVE-2024-3094.json") },
+        .{ .id = "CVE-1999-0001", .body = @embedFile("plugins/testdata/cve/CVE-1999-0001.json") },
+        .{ .id = "CVE-2016-0001", .body = @embedFile("plugins/testdata/cve/CVE-2016-0001.json") },
+    };
+    var head: [256]u8 = undefined;
+    for (records) |r| if (std.mem.eql(u8, r.id, id)) {
+        sys.tcpSend(client, std.fmt.bufPrint(&head, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{r.body.len}) catch return);
+        return sys.tcpSend(client, r.body);
+    };
+    const missing = "{\"error\":\"CVE_RECORD_DNE\",\"message\":\"The cve record for the cve id does not exist.\"}";
+    sys.tcpSend(client, std.fmt.bufPrint(&head, "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{missing.len}) catch return);
+    sys.tcpSend(client, missing);
+}
+
+/// Respostas guardadas da API de verdade.
+fn replyGithub(client: sys.Socket, req: []const u8) void {
+    const rest = req["GET ".len..];
+    const path = rest[0 .. std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len];
+    const body: []const u8 = if (std.mem.eql(u8, path, "/repos/curl/curl"))
+        @embedFile("plugins/testdata/github/repo-curl.json")
+    else if (std.mem.eql(u8, path, "/repos/curl/curl/issues/1"))
+        @embedFile("plugins/testdata/github/issue-curl.json")
+    else
+        @embedFile("plugins/testdata/github/missing.json");
+    const found = !std.mem.startsWith(u8, body, "{\"message\":\"Not Found");
+    var head: [256]u8 = undefined;
+    const line = if (found) "200 OK" else "404 Not Found";
+    sys.tcpSend(client, std.fmt.bufPrint(&head, "HTTP/1.1 {s}\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ line, body.len }) catch return);
+    sys.tcpSend(client, body);
 }
 
 fn serverCount() u32 {
@@ -912,6 +955,238 @@ fn linksForgotten(app: *App) bool {
     return panelClosed(app) and linkItemUrl(app) == null;
 }
 
+// --- Anti-golpe -----------------------------------------------------------------------------
+
+var scam_id: Id = 0;
+var official_id: Id = 0;
+var talk_id: Id = 0;
+var scam2_id: Id = 0;
+
+fn partOf(app: *App, id: Id) ?engine.deco.Part {
+    const f = app.store.findAny(id) orelse return null;
+    const v = app.plugins.deco.view(f.m, app.store.me);
+    return if (v.n > 0) v.slice()[0] else null;
+}
+fn sendScams(app: *App) void {
+    official_id = inject(app, geral, 1001, "entra no nosso servidor https://discord.gg/abc");
+    talk_id = inject(app, geral, 1001, "alguém sabe se nitro grátis existe mesmo?");
+    scam_id = inject(app, geral, 1001, "pessoal, ganhe nitro grátis por 3 meses nesse link https://dlscord-nitro.ru/gift/abc");
+}
+fn scamMarked(app: *App) bool {
+    const part = partOf(app, scam_id) orelse return false;
+    return part.danger and std.mem.indexOf(u8, part.note, "Possível golpe") != null and std.mem.indexOf(u8, part.note, "dlscord-nitro.ru") != null;
+}
+fn scamDrawnRed(_: *App) bool {
+    return qa.find(mark(&mbuf, "deco-danger:{d}", scam_id)) != null;
+}
+fn othersClean(app: *App) bool {
+    return app.store.findAny(talk_id) != null and app.store.findAny(official_id) != null and partOf(app, talk_id) == null and partOf(app, official_id) == null;
+}
+fn scamBadge(app: *App) bool {
+    const p = plugin(app, "scamguard.lua") orelse return false;
+    const t = p.tree orelse return false;
+    return std.mem.eql(u8, t.badge, "1") and qa.find("header-plugins-badge") != null;
+}
+fn scamListed(app: *App) bool {
+    return openIs(app, "scamguard.lua") and qa.find(mark(&mbuf, "pp-item:{d}", scam_id)) != null;
+}
+fn onlyThisScam(app: *App) bool {
+    // Nada do que a demonstração já tem no canal é marcado.
+    const p = plugin(app, "scamguard.lua") orelse return false;
+    const t = p.tree orelse return false;
+    var items: usize = 0;
+    for (t.nodes.items) |*n| {
+        if (n.kind == .item) items += 1;
+    }
+    return items == 1;
+}
+fn tScamItem(_: *App, buf: []u8) []const u8 {
+    return mark(buf, "pp-item:{d}", scam_id);
+}
+fn scamJumped(app: *App) bool {
+    return app.st.activeChannel() == geral and qa.find(mark(&mbuf, "msg:{d}", scam_id)) != null;
+}
+fn pickScam(_: *App) void {
+    msg_id = scam_id;
+}
+fn scamCleared(app: *App) bool {
+    return partOf(app, scam_id) == null and qa.find(mark(&mbuf, "pp-item:{d}", scam_id)) == null;
+}
+fn trustedRow(_: *App) bool {
+    return qa.find("pp-btn:untrust1") != null;
+}
+fn sendSameDomain(app: *App) void {
+    scam2_id = inject(app, geral, 1001, "de novo https://dlscord-nitro.ru/outro");
+}
+fn sameDomainClean(app: *App) bool {
+    return app.store.findAny(scam2_id) != null and partOf(app, scam2_id) == null;
+}
+fn sameDomainMarked(app: *App) bool {
+    const part = partOf(app, scam2_id) orelse return false;
+    return part.danger;
+}
+fn deleteScam2(app: *App) void {
+    deleteMsg(app, geral, scam2_id);
+}
+fn scam2Gone(_: *App) bool {
+    return qa.find(mark(&mbuf, "pp-item:{d}", scam2_id)) == null;
+}
+fn sendIpLink(app: *App) void {
+    scam2_id = inject(app, geral, 1001, "baixa aqui http://45.33.32.156/ferramenta");
+}
+
+// --- Radar de CVE ---------------------------------------------------------------------------
+
+const cve_host = "host:cve.lua:cveawg.mitre.org";
+var cve_id: Id = 0;
+var cve2_id: Id = 0;
+var cve_old_id: Id = 0;
+var cve_rejected_id: Id = 0;
+var cve_missing_id: Id = 0;
+
+fn noteOf(app: *App, id: Id) []const u8 {
+    const part = partOf(app, id) orelse return "";
+    return part.note;
+}
+fn sendCve(app: *App) void {
+    cve_id = inject(app, geral, 1001, "cuidado com o cve-2021-44228, atualizem tudo");
+}
+fn cveCardShows(_: *App) bool {
+    return qa.find("plugin-chip:cve.lua:http") != null and qa.find(cve_host) != null and qa.find("plugin-alert:cve.lua") != null;
+}
+fn cveNote(app: *App) bool {
+    return std.mem.startsWith(u8, noteOf(app, cve_id), "🛡 CVE-2021-44228 · CRÍTICA · CVSS 10.0 · Apache Log4j2");
+}
+fn cveOnlyNumber(_: *App) bool {
+    return serverLastHas("GET /api/cve/CVE-2021-44228 ") and !serverLastHas("atualizem") and !srv_leak;
+}
+fn cveRed(app: *App) bool {
+    const part = partOf(app, cve_id) orelse return false;
+    return part.danger;
+}
+fn sendCveAgain(app: *App) void {
+    cve2_id = inject(app, geral, 1002, "CVE-2021-44228 de novo");
+}
+fn cveAgainNote(app: *App) bool {
+    return std.mem.indexOf(u8, noteOf(app, cve2_id), "CVSS 10.0") != null;
+}
+fn sendCveKinds(app: *App) void {
+    cve_old_id = inject(app, geral, 1001, "o velho CVE-1999-0001");
+    cve_rejected_id = inject(app, geral, 1001, "esse CVE-2016-0001 foi rejeitado");
+    cve_missing_id = inject(app, geral, 1001, "e o CVE-2099-99999 nem existe");
+}
+fn cveOldNote(app: *App) bool {
+    const n = noteOf(app, cve_old_id);
+    return std.mem.indexOf(u8, n, "sem nota CVSS") != null and std.mem.indexOf(u8, n, "ip_input.c") != null;
+}
+fn cveRejectedNote(app: *App) bool {
+    return std.mem.indexOf(u8, noteOf(app, cve_rejected_id), "rejeitado") != null;
+}
+fn cveMissingNote(app: *App) bool {
+    return std.mem.indexOf(u8, noteOf(app, cve_missing_id), "não existe") != null;
+}
+fn panelCve(app: *App) bool {
+    return openIs(app, "cve.lua") and qa.find("pp-item:CVE-2024-3094") != null;
+}
+fn cveFilled(app: *App) bool {
+    const p = plugin(app, "cve.lua") orelse return false;
+    const t = p.tree orelse return false;
+    for (t.nodes.items) |*n| if (std.mem.eql(u8, n.key, "CVE-2024-3094")) return std.mem.indexOf(u8, n.sub, "Xz") != null;
+    return false;
+}
+fn cveOpened(_: *App) bool {
+    return std.mem.eql(u8, attachments.last_opened[0..attachments.last_opened_len], "https://www.cve.org/CVERecord?id=CVE-2024-3094");
+}
+fn cveApproved(app: *App) bool {
+    return app.plugins.isApproved("cve.lua", "cveawg.mitre.org");
+}
+fn cveNotApproved(app: *App) bool {
+    return !cveApproved(app);
+}
+
+// --- Cartões do GitHub ------------------------------------------------------------------------
+
+const github_host = "host:github.lua:api.github.com";
+var gh_issue_id: Id = 0;
+var gh_repo_id: Id = 0;
+var gh_missing_id: Id = 0;
+
+fn sendGithub(app: *App) void {
+    gh_issue_id = inject(app, geral, 1001, "lembra do curl/curl#1 lá de trás?");
+    gh_repo_id = inject(app, geral, 1001, "o código está em https://github.com/curl/curl");
+    gh_missing_id = inject(app, geral, 1001, "esse aqui não existe: https://github.com/curl/curl/issues/99999999");
+}
+fn githubCardShows(_: *App) bool {
+    return qa.find("plugin-chip:github.lua:http") != null and qa.find(github_host) != null;
+}
+fn githubApproved(app: *App) bool {
+    return app.plugins.isApproved("github.lua", "api.github.com");
+}
+fn githubNotApproved(app: *App) bool {
+    return !githubApproved(app);
+}
+fn ghIssueNote(app: *App) bool {
+    return std.mem.eql(u8, noteOf(app, gh_issue_id), "🔀 curl/curl#1 · fechado · docs/libcurl/libcurl.m4 bug");
+}
+fn ghRepoNote(app: *App) bool {
+    return std.mem.startsWith(u8, noteOf(app, gh_repo_id), "📦 curl/curl · ★ ");
+}
+fn ghMissingClean(app: *App) bool {
+    return app.store.findAny(gh_missing_id) != null and partOf(app, gh_missing_id) == null and serverLastHas("/issues/99999999");
+}
+fn ghOnlyName(_: *App) bool {
+    return !serverLastHas("não existe") and !serverLastHas("lembra") and !srv_leak;
+}
+
+// --- O que perdi ----------------------------------------------------------------------------
+
+var missed_mention: Id = 0;
+fn sendMissed(app: *App) void {
+    var b: [64]u8 = undefined;
+    const text = std.fmt.bufPrint(&b, "oi <@{d}>, viu o deploy?", .{app.store.me}) catch return;
+    missed_mention = inject(app, geral, 1001, text);
+    _ = inject(app, geral, 1002, "alguém sabe onde fica o manual novo?");
+    _ = inject(app, geral, 1002, "achei uma pista em https://exemplo.com/manual");
+}
+fn missedShown(app: *App) bool {
+    return openIs(app, "catchup.lua") and qa.find("pp-bar:person1") != null and qa.find("pp-item:mention1") != null and
+        qa.find("pp-item:question1") != null and qa.find("pp-item:link1") != null;
+}
+fn missedOnlyUnread(app: *App) bool {
+    const p = plugin(app, "catchup.lua") orelse return false;
+    const t = p.tree orelse return false;
+    var total: f32 = 0;
+    for (t.nodes.items) |*n| {
+        if (std.mem.eql(u8, n.key, "nothing-new")) return false;
+        if (std.mem.startsWith(u8, n.key, "person")) total += n.value;
+    }
+    return total == 3;
+}
+fn missedJumped(app: *App) bool {
+    return app.st.activeChannel() == geral and qa.find(mark(&mbuf, "msg:{d}", missed_mention)) != null;
+}
+fn modeMenu(_: *App) bool {
+    return qa.find("pp-opt:mode:50") != null;
+}
+fn missedMore(app: *App) bool {
+    const p = plugin(app, "catchup.lua") orelse return false;
+    const t = p.tree orelse return false;
+    var total: f32 = 0;
+    for (t.nodes.items) |*n| {
+        if (std.mem.startsWith(u8, n.key, "person")) total += n.value;
+    }
+    return total > 3;
+}
+fn missedForgotten(app: *App) bool {
+    const p = plugin(app, "catchup.lua") orelse return false;
+    const t = p.tree orelse return false;
+    if (!panelClosed(app)) return false;
+    for (t.nodes.items) |*n| {
+        if (std.mem.eql(u8, n.key, "person1")) return false;
+    }
+    return true;
+}
+
 // --- Estatísticas ------------------------------------------------------------------------
 
 fn panelStats(app: *App) bool {
@@ -1544,6 +1819,159 @@ pub const ops = [_]Op{
     click("pp-close"),
     expectLong("fechou: a lista some da memória", linksForgotten),
 
+    s("plugins: anti-golpe"),
+    run(toGeral),
+    .{ .wait = 200 },
+    run(sendScams),
+    run(stickBottom),
+    expect("o golpe ganha a nota, em vermelho e com o motivo", scamMarked),
+    expect("desenhada em vermelho", scamDrawnRed),
+    .{ .wait = 200 },
+    expect("o convite oficial e a conversa sobre nitro sem link, não", othersClean),
+    expect("com o painel fechado, o número avisa", scamBadge),
+    .{ .shot = "plugin-golpe" },
+    click("composer"),
+    .{ .text = "/scam" },
+    key(c.ImGuiKey_Enter),
+    key(c.ImGuiKey_Enter),
+    expect("/scam abre o painel com a detecção", scamListed),
+    expect("e nada do que já estava no canal foi marcado", onlyThisScam),
+    .{ .shot = "plugin-golpe-painel" },
+    run(toMemes),
+    expect("muda de canal", onMemes),
+    dyn(tScamItem),
+    expect("clicar na detecção volta para a mensagem", scamJumped),
+    run(pickScam),
+    .{ .wait = 300 },
+    rmsg,
+    click("menu:Não é golpe"),
+    expect("\"Não é golpe\" tira a nota e a linha do painel", scamCleared),
+    expect("o endereço vai para a lista dos confiáveis", trustedRow),
+    run(sendSameDomain),
+    .{ .wait = 300 },
+    expect("o mesmo endereço não marca mais", sameDomainClean),
+    click("pp-btn:untrust1"),
+    .{ .wait = 100 },
+    run(sendSameDomain),
+    expect("tirar da lista volta a marcar", sameDomainMarked),
+    run(deleteScam2),
+    expect("apagaram a mensagem: sai do painel", scam2Gone),
+    run(sendIpLink),
+    expect("link para IP marca", sameDomainMarked),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("pp-toggle:mark_ip"),
+    .{ .wait = 100 },
+    key(c.ImGuiKey_Escape),
+    run(sendIpLink),
+    .{ .wait = 300 },
+    expect("com a opção desligada, não", sameDomainClean),
+    click("pp-close"),
+    expect("fecha o painel", panelClosed),
+
+    s("plugins: radar de CVE"),
+    run(startServer),
+    run(toGeral),
+    .{ .wait = 150 },
+    run(rememberCount),
+    run(sendCve),
+    .{ .wait = 400 },
+    expect("sem aprovar o host, nada sai", nothingSent),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    expect("o cartão mostra o host, a internet e o aviso", cveCardShows),
+    click(cve_host),
+    expect("aprovar o host", cveApproved),
+    key(c.ImGuiKey_Escape),
+    run(stickBottom),
+    expectLong("aprovar busca o que estava esperando, e a nota aparece", cveNote),
+    expect("só o número do CVE sai daqui", cveOnlyNumber),
+    expect("crítico vem em vermelho", cveRed),
+    .{ .shot = "plugin-cve" },
+    .{ .wait = 3400 },
+    run(rememberCount),
+    run(sendCveAgain),
+    expect("citado de novo: a nota vem sem pedir nada", cveAgainNote),
+    expect("nenhum pedido a mais", nothingSent),
+    run(restartAll),
+    .{ .wait = 300 },
+    run(rememberCount),
+    run(sendCveAgain),
+    expect("depois de reiniciar também", cveAgainNote),
+    expect("nenhum pedido a mais", nothingSent),
+    run(sendCveKinds),
+    expectLong("formato antigo: resumo, sem nota CVSS", cveOldNote),
+    expectLong("rejeitado pelo registro", cveRejectedNote),
+    expectLong("inexistente", cveMissingNote),
+    .{ .shot = "plugin-cve-tipos" },
+    click("composer"),
+    .{ .text = "/cve CVE-2024-3094" },
+    key(c.ImGuiKey_Enter),
+    expect("/cve abre o painel", panelCve),
+    expectLong("e o resumo chega", cveFilled),
+    .{ .shot = "plugin-cve-painel" },
+    click("pp-btn:openCVE-2024-3094"),
+    expect("abrir o registro vai para o navegador", cveOpened),
+    click("pp-close"),
+    expect("fecha o painel", panelClosed),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click(cve_host),
+    expect("tirar a aprovação", cveNotApproved),
+    key(c.ImGuiKey_Escape),
+
+    s("plugins: cartões do GitHub"),
+    run(toGeral),
+    .{ .wait = 150 },
+    run(rememberCount),
+    run(sendGithub),
+    .{ .wait = 400 },
+    expect("sem aprovar o host, nada sai", nothingSent),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    expect("o cartão mostra o host a aprovar", githubCardShows),
+    click(github_host),
+    expect("aprovar o host", githubApproved),
+    key(c.ImGuiKey_Escape),
+    run(stickBottom),
+    expectLong("dono/repo#123 vira uma nota com o título e o estado", ghIssueNote),
+    expectLong("o link do repositório, com as estrelas", ghRepoNote),
+    expectLong("o que não existe fica sem nota", ghMissingClean),
+    expect("só o nome e o número saem daqui", ghOnlyName),
+    .{ .shot = "plugin-github" },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click(github_host),
+    expect("tirar a aprovação", githubNotApproved),
+    key(c.ImGuiKey_Escape),
+
+    s("plugins: o que perdi"),
+    run(toMemes),
+    .{ .wait = 200 },
+    run(sendMissed),
+    .{ .wait = 300 },
+    run(toGeral),
+    .{ .wait = 400 },
+    click("composer"),
+    .{ .text = "/perdi" },
+    key(c.ImGuiKey_Enter),
+    key(c.ImGuiKey_Enter),
+    expectLong("/perdi abre o resumo: pessoas, menção, pergunta e link", missedShown),
+    expect("só das não lidas", missedOnlyUnread),
+    .{ .shot = "plugin-perdi" },
+    click("pp-item:mention1"),
+    expect("clicar na menção vai até a mensagem", missedJumped),
+    click("pp-select:mode"),
+    expect("a lista de quantas abre", modeMenu),
+    click("pp-opt:mode:50"),
+    expectLong("as últimas 50 contam mais", missedMore),
+    .{ .wait = 600 },
+    click("pp-btn:refresh"),
+    .{ .wait = 150 },
+    expect("atualizar mantém o resumo", missedMore),
+    click("pp-close"),
+    expectLong("fechou: o resumo some da memória", missedForgotten),
+
     s("plugins: estatísticas"),
     click("composer"),
     .{ .text = "/stats" },
@@ -1676,6 +2104,60 @@ fn tlsLoaded(app: *App) bool {
     return p.isRunning() and p.menus.items.len > 0;
 }
 
+fn approveCve(app: *App) void {
+    if (plugin(app, "cve.lua")) |p| app.plugins.setApproved(p, "cveawg.mitre.org", true);
+}
+
+fn realLoaded(app: *App) bool {
+    const p = plugin(app, "cve.lua") orelse return false;
+    const g = plugin(app, "github.lua") orelse return false;
+    return p.isRunning() and g.isRunning() and app.store.ready;
+}
+
+fn approveGithub(app: *App) void {
+    if (plugin(app, "github.lua")) |p| app.plugins.setApproved(p, "api.github.com", true);
+}
+fn sendMovedRepo(app: *App) void {
+    gh_issue_id = inject(app, geral, 1001, "lembra do curl/curl#1 lá de trás?");
+    gh_repo_id = inject(app, geral, 1001, "o código está em https://github.com/docker/docker");
+    gh_missing_id = inject(app, geral, 1001, "esse aqui não existe: https://github.com/curl/curl/issues/99999999");
+}
+fn ghMovedNote(app: *App) bool {
+    return std.mem.startsWith(u8, noteOf(app, gh_repo_id), "📦 moby/moby · ★ ");
+}
+fn ghMissingStaysClean(app: *App) bool {
+    return app.store.findAny(gh_missing_id) != null and partOf(app, gh_missing_id) == null;
+}
+
+/// Contra o serviço de verdade: só números de CVE públicos saem daqui. Não entra em
+/// tools/qa.sh, porque depende da internet (QA_SUITE=plugins-real).
+pub const ops_real = [_]Op{
+    s("plugins: o serviço de CVE de verdade"),
+    run(wipeAll),
+    expectLong("os plugins incluídos ligam", realLoaded),
+    run(toGeral),
+    .{ .wait = 200 },
+    run(approveCve),
+    .{ .wait = 100 },
+    run(sendCve),
+    run(sendCveKinds),
+    run(stickBottom),
+    expectLong("registro real: severidade, CVSS e título", cveNote),
+    expectLong("registro real antigo: sem nota, com o resumo", cveOldNote),
+    expectLong("registro real rejeitado", cveRejectedNote),
+    expectLong("o 404 de verdade para o que não existe", cveMissingNote),
+    .{ .shot = "plugin-cve-real" },
+    run(approveGithub),
+    .{ .wait = 100 },
+    run(sendMovedRepo),
+    run(stickBottom),
+    expectLong("GitHub de verdade: um pull request antigo", ghIssueNote),
+    expectLong("e um repositório que mudou de nome", ghMovedNote),
+    .{ .wait = 800 },
+    expect("o que não existe fica sem nota", ghMissingStaysClean),
+    .{ .shot = "plugin-github-real" },
+};
+
 pub const ops_tls = [_]Op{
     s("plugins: HTTPS de verdade"),
     run(wipeAll),
@@ -1790,6 +2272,11 @@ pub const ops_theme = [_]Op{
     .{ .wait = 150 },
     expect("o botão aparece na barra da mensagem", toolbarGlyph),
     .{ .shot = "tema-plugin-barra" },
+    run(sendScams),
+    run(stickBottom),
+    expect("o golpe ganha a nota em vermelho", scamMarked),
+    .{ .wait = 200 },
+    .{ .shot = "tema-plugin-golpe" },
     click("pp-side"),
     expect("encaixado à esquerda", dockedLeft),
     .{ .shot = "tema-plugin-esquerda" },

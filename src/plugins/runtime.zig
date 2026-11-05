@@ -267,6 +267,8 @@ pub const Worker = struct {
                 rt.invoke(.{ .kind = .ready });
             },
             .message => |own| for (w.rts.items) |rt| if (rt.n_message > 0 and !rt.dead) {
+                // Nenhuma função dele quer este texto: o Lua nem acorda.
+                if (!anyWants(rt.msg_filters.items, rt.n_message, own.msg.content)) continue;
                 // Fila atrasada: quem demora em cada mensagem perde esta, e os
                 // outros plugins não esperam por ele.
                 if (w.backlog > shed_backlog and rt.msg_ms >= shed_slow_ms) {
@@ -278,6 +280,7 @@ pub const Worker = struct {
                 rt.msg_ms = rt.msg_ms * 0.75 + @as(f32, @floatFromInt(sync.nowMs() - t0)) * 0.25;
             },
             .edit => |own| for (w.rts.items) |rt| if (rt.n_edit > 0 and !rt.dead) {
+                if (!anyWants(rt.edit_filters.items, rt.n_edit, own.msg.content)) continue;
                 rt.invoke(.{ .kind = .edit, .msg = &own.msg });
             },
             .dismiss => |d| if (w.find(d.run)) |rt| {
@@ -313,6 +316,7 @@ pub const Worker = struct {
                 rt.freeApproved();
                 rt.approved = h.approved;
                 ev.* = .ready; // quem ficou com a lista foi o plugin
+                if (rt.n_hosts > 0) rt.invoke(.{ .kind = .hosts });
             },
         }
         freeEv(w.gpa, ev);
@@ -462,7 +466,8 @@ pub fn freeCmd(gpa: std.mem.Allocator, cmd: *wire.Cmd) void {
             for (list) |*r| r.free(gpa);
             gpa.free(list);
         },
-        .jump, .panel_show, .deco_remove, .want_messages => {},
+        .want_messages => |q| wire.freeNeedles(gpa, q.needles),
+        .jump, .panel_show, .deco_remove => {},
     }
 }
 
@@ -488,7 +493,7 @@ fn startRun(w: *Worker, args: *wire.StartArgs) void {
 
 const Timer = struct { id: u32, due_ms: i64, every_ms: i64 = 0, fired: bool = false };
 
-const Kind = enum { setup, store_load, store_flush, message, edit, dismiss, ready, delete, channel, lang, panel_state, command, key, menu_message, menu_user, panel, timer, http, messages };
+const Kind = enum { setup, store_load, store_flush, message, edit, dismiss, hosts, ready, delete, channel, lang, panel_state, command, key, menu_message, menu_user, panel, timer, http, messages };
 
 /// O que o trampolim protegido vai fazer dentro do Lua.
 const Call = struct {
@@ -544,6 +549,10 @@ pub const Rt = struct {
     n_panel: u16 = 0,
     n_edit: u16 = 0,
     n_dismiss: u16 = 0,
+    n_hosts: u16 = 0,
+    /// O `contains` de cada função de "message" e "edit", na mesma ordem (vazio = todas).
+    msg_filters: std.ArrayList([][]u8) = .empty,
+    edit_filters: std.ArrayList([][]u8) = .empty,
     /// Quanto cada mensagem tem custado (ms, na média).
     msg_ms: f32 = 0,
     commands: std.ArrayList([]u8) = .empty,
@@ -594,6 +603,8 @@ pub const Rt = struct {
         rt.keys.deinit(a);
         rt.lsp.deinit(a);
         rt.menus.deinit(a);
+        rt.msg_filters.deinit(a);
+        rt.edit_filters.deinit(a);
         rt.timers.deinit(a);
         rt.scratch.deinit(a);
         rt.scratch2.deinit(a);
@@ -617,6 +628,11 @@ pub const Rt = struct {
         rt.n_panel = 0;
         rt.n_edit = 0;
         rt.n_dismiss = 0;
+        rt.n_hosts = 0;
+        for (rt.msg_filters.items) |f| wire.freeNeedles(a, f);
+        rt.msg_filters.clearRetainingCapacity();
+        for (rt.edit_filters.items) |f| wire.freeNeedles(a, f);
+        rt.edit_filters.clearRetainingCapacity();
     }
 
     fn closeLua(rt: *Rt) void {
@@ -819,6 +835,20 @@ pub const Rt = struct {
     }
 };
 
+/// A função `i` quer este texto? (Sem filtro registrado, quer tudo.)
+fn filterWants(filters: []const [][]u8, i: usize, text: []const u8) bool {
+    if (i >= filters.len or filters[i].len == 0) return true;
+    return wire.hasAny(text, filters[i]);
+}
+
+/// Alguma das `n` funções quer este texto?
+fn anyWants(filters: []const [][]u8, n: u16, text: []const u8) bool {
+    for (0..n) |i| {
+        if (filterWants(filters, i, text)) return true;
+    }
+    return false;
+}
+
 // --- Ponte C -> Zig ------------------------------------------------------------
 
 fn plug(L: ?*lua.State) *Rt {
@@ -896,11 +926,12 @@ fn trampoline(L: ?*lua.State) callconv(.c) c_int {
         .setup => unreachable,
         .store_load => storageRead(L, plug(L), call.bytes),
         .store_flush => storageWrite(L, plug(L)),
-        .message, .edit, .dismiss, .ready, .delete, .channel, .lang, .panel_state => {
+        .message, .edit, .dismiss, .hosts, .ready, .delete, .channel, .lang, .panel_state => {
             const field: [*:0]const u8 = switch (call.kind) {
                 .message => "message",
                 .edit => "edit",
                 .dismiss => "dismiss",
+                .hosts => "hosts",
                 .ready => "ready",
                 .delete => "delete",
                 .channel => "channel",
@@ -927,8 +958,16 @@ fn trampoline(L: ?*lua.State) callconv(.c) c_int {
                 else => lua.lua_pushnil(L),
             } // 4
             const n: lua.Integer = @intCast(lua.lua_rawlen(L, 3));
+            const filters: []const [][]u8 = switch (call.kind) {
+                .message => plug(L).msg_filters.items,
+                .edit => plug(L).edit_filters.items,
+                else => &.{},
+            };
             var i: lua.Integer = 1;
             while (i <= n) : (i += 1) {
+                if (call.msg) |m| {
+                    if (!filterWants(filters, @intCast(i - 1), m.content)) continue;
+                }
                 _ = lua.lua_rawgeti(L, 3, i);
                 lua.lua_pushvalue(L, 4);
                 lua.call(L, 1, 0);
@@ -1016,6 +1055,10 @@ fn trampoline(L: ?*lua.State) callconv(.c) c_int {
                 pushMessage(L, &o.msg);
                 lua.lua_rawseti(L, -2, @intCast(i));
             }
+            if (list.last_read != 0) {
+                pushId(L, list.last_read);
+                lua.lua_setfield(L, -2, "last_read");
+            }
             lua.call(L, 1, 0);
         },
     }
@@ -1058,6 +1101,14 @@ fn pushMessage(L: ?*lua.State, m: *const wire.Message) void {
     lua.lua_setfield(L, -2, "time");
     lua.lua_pushinteger(L, m.attachments);
     lua.lua_setfield(L, -2, "attachments");
+    if (m.reply_to != 0) {
+        pushId(L, m.reply_to);
+        lua.lua_setfield(L, -2, "reply_to");
+    }
+    if (m.mentions_me) {
+        lua.lua_pushboolean(L, 1);
+        lua.lua_setfield(L, -2, "mentions_me");
+    }
     if (m.files.len > 0) {
         lua.lua_createtable(L, @intCast(m.files.len), 0);
         for (m.files, 1..) |f, i| {
@@ -1189,7 +1240,7 @@ fn setup(L: ?*lua.State) void {
     }
     lua.lua_setglobal(L, "larper");
     // As funções registradas ficam no registro, longe do script.
-    const lists = [_][*:0]const u8{ "message", "edit", "dismiss", "ready", "delete", "channel", "lang", "panel", "commands", "keys", "menus", "timers", "http", "msgs", "cb_now", "cb_prev", "opt_now", "opt_prev", "storage" };
+    const lists = [_][*:0]const u8{ "message", "edit", "dismiss", "hosts", "ready", "delete", "channel", "lang", "panel", "commands", "keys", "menus", "timers", "http", "msgs", "cb_now", "cb_prev", "opt_now", "opt_prev", "storage" };
     lua.lua_createtable(L, 0, lists.len);
     for (lists) |k| {
         lua.newtable(L);
@@ -1281,7 +1332,43 @@ fn registryList(L: ?*lua.State, field: [*:0]const u8) void {
     _ = lua.lua_getfield(L, -1, field);
 }
 
-/// larper.on("message" | "edit" | "dismiss" | "ready" | "delete" | "channel" | "lang" | "panel", fn)
+/// O `contains` de uma tabela de opções: até 16 pedaços de texto. Vazio = sem filtro.
+fn optNeedles(L: ?*lua.State, p: *Rt, opts: c_int, api: []const u8) [][]u8 {
+    _ = lua.lua_pushstring(L, "contains");
+    if (lua.lua_rawget(L, opts) != lua.TTABLE) {
+        lua.pop(L, 1);
+        return &.{};
+    }
+    const t = lua.lua_gettop(L);
+    const n: usize = @intCast(lua.lua_rawlen(L, t));
+    if (n == 0 or n > 16) raiseFmt(L, "{s}: `contains` é uma lista de 1 a 16 textos", "{s}: `contains` is a list of 1 to 16 strings", .{api});
+    // Lê tudo antes de alocar (os textos continuam na tabela, que é argumento).
+    var raw: [16][]const u8 = undefined;
+    for (raw[0..n], 1..) |*r, i| {
+        const kind = lua.lua_rawgeti(L, t, @intCast(i));
+        const s = (if (kind == lua.TSTRING) lua.toSlice(L, -1) else null) orelse "";
+        if (s.len == 0 or s.len > 64) raiseFmt(L, "{s}: `contains` é uma lista de textos de 1 a 64 bytes", "{s}: `contains` is a list of strings of 1 to 64 bytes", .{api});
+        r.* = s;
+        lua.pop(L, 1);
+    }
+    lua.pop(L, 1);
+    const a = p.gpa();
+    const list = a.alloc([]u8, n) catch raise(L, tr("sem memória", "out of memory"));
+    var made: usize = 0;
+    for (raw[0..n], list) |r, *to| {
+        to.* = a.dupe(u8, r) catch {
+            for (list[0..made]) |x| a.free(x);
+            a.free(list);
+            raise(L, tr("sem memória", "out of memory"));
+        };
+        made += 1;
+    }
+    return list;
+}
+
+/// larper.on("message" | "edit" | "dismiss" | "hosts" | "ready" | "delete" | "channel" | "lang" | "panel", fn, [opções])
+/// Em "message" e "edit", {contains={"texto", …}} só chama a função para o que tem um
+/// deles: o resto nem chega ao Lua.
 fn lOn(L: ?*lua.State) callconv(.c) c_int {
     const p = plug(L);
     const event = lua.checkSlice(L, 1);
@@ -1293,6 +1380,8 @@ fn lOn(L: ?*lua.State) callconv(.c) c_int {
         .{ "edit", &p.n_edit }
     else if (eql(u8, event, "dismiss"))
         .{ "dismiss", &p.n_dismiss }
+    else if (eql(u8, event, "hosts"))
+        .{ "hosts", &p.n_hosts }
     else if (eql(u8, event, "ready"))
         .{ "ready", &p.n_ready }
     else if (eql(u8, event, "delete"))
@@ -1304,14 +1393,28 @@ fn lOn(L: ?*lua.State) callconv(.c) c_int {
     else if (eql(u8, event, "panel"))
         .{ "panel", &p.n_panel }
     else
-        raise(L, tr("larper.on: evento desconhecido (use \"message\", \"edit\", \"dismiss\", \"ready\", \"delete\", \"channel\", \"lang\" ou \"panel\")", "larper.on: unknown event (use \"message\", \"edit\", \"dismiss\", \"ready\", \"delete\", \"channel\", \"lang\" or \"panel\")"));
+        raise(L, tr("larper.on: evento desconhecido (use \"message\", \"edit\", \"dismiss\", \"hosts\", \"ready\", \"delete\", \"channel\", \"lang\" ou \"panel\")", "larper.on: unknown event (use \"message\", \"edit\", \"dismiss\", \"hosts\", \"ready\", \"delete\", \"channel\", \"lang\" or \"panel\")"));
     if (eql(u8, event, "message") or eql(u8, event, "edit") or eql(u8, event, "delete")) need(L, p, .messages, "larper.on");
     if (eql(u8, event, "dismiss")) need(L, p, .decorate, "larper.on");
+    if (eql(u8, event, "hosts")) need(L, p, .http, "larper.on");
     if (counter.* >= 64) raise(L, tr("larper.on: funções demais para esse evento", "larper.on: too many functions for that event"));
+    const filters: ?*std.ArrayList([][]u8) = if (eql(u8, event, "message")) &p.msg_filters else if (eql(u8, event, "edit")) &p.edit_filters else null;
+    const has_opts = lua.lua_type(L, 3) == lua.TTABLE;
+    if (has_opts and filters == null) raise(L, tr("larper.on: `contains` só vale em \"message\" e \"edit\"", "larper.on: `contains` only works on \"message\" and \"edit\""));
+    if (filters) |list| {
+        // Antes de registrar: um `contains` errado não deixa a função valendo para tudo.
+        while (list.items.len > counter.*) wire.freeNeedles(p.gpa(), list.pop().?);
+        const needles = if (has_opts) optNeedles(L, p, 3, "larper.on") else @as([][]u8, &.{});
+        list.append(p.gpa(), needles) catch {
+            wire.freeNeedles(p.gpa(), needles);
+            raise(L, tr("sem memória", "out of memory"));
+        };
+    }
     registryList(L, field);
-    const n = lua.lua_rawlen(L, -1);
+    const list_at = lua.lua_gettop(L);
+    const n = lua.lua_rawlen(L, list_at);
     lua.lua_pushvalue(L, 2);
-    lua.lua_rawseti(L, -2, @intCast(n + 1));
+    lua.lua_rawseti(L, list_at, @intCast(n + 1));
     counter.* += 1;
     p.reg_dirty = true;
     return 0;
@@ -2183,6 +2286,7 @@ fn lDecorate(L: ?*lua.State) callconv(.c) c_int {
     const note_s = clip(fieldText(L, 2, "note"), 2000);
     const label_s = clip(fieldText(L, 2, "label"), 80);
     const collapse = fieldBool(L, 2, "collapse");
+    const danger = std.mem.eql(u8, fieldText(L, 2, "style"), "danger");
     const a = p.gpa();
     const badge = a.dupe(u8, badge_s) catch return 0;
     const note = a.dupe(u8, note_s) catch {
@@ -2194,7 +2298,7 @@ fn lDecorate(L: ?*lua.State) callconv(.c) c_int {
         a.free(note);
         return 0;
     };
-    _ = p.w.emit(p.run, .{ .deco_set = .{ .id = id, .badge = badge, .note = note, .label = label, .collapse = collapse } });
+    _ = p.w.emit(p.run, .{ .deco_set = .{ .id = id, .badge = badge, .note = note, .label = label, .collapse = collapse, .danger = danger } });
     return 0;
 }
 
@@ -2301,7 +2405,8 @@ fn lMessages(L: ?*lua.State) callconv(.c) c_int {
     lua.lua_pushvalue(L, cb);
     lua.lua_rawseti(L, -2, id);
     p.budgetCmd(L);
-    _ = p.w.emit(p.run, .{ .want_messages = .{ .req = id, .channel = channel, .limit = limit, .files = files } });
+    const needles = if (cb == 2) optNeedles(L, p, 1, "larper.messages") else @as([][]u8, &.{});
+    _ = p.w.emit(p.run, .{ .want_messages = .{ .req = id, .channel = channel, .limit = limit, .files = files, .needles = needles } });
     lua.lua_pushboolean(L, 1);
     return 1;
 }

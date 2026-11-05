@@ -1049,7 +1049,7 @@ fn examplesLoaded(app: *App) bool {
         const p = plugin(app, ex.name) orelse return false;
         if (p.status() != .running) return false;
     }
-    return app.plugins.list.items.len == 14 and qa.find("button:Instalar os incluídos") == null;
+    return app.plugins.list.items.len == @import("plugin_examples").list.len + qa_plugins.len and qa.find("button:Instalar os incluídos") == null;
 }
 fn contaSent(app: *App) bool {
     const m = lastMsg(app, 0) orelse return false;
@@ -1864,7 +1864,7 @@ const ops_plugin_section = [_]Op{
     click("toggle:shrug.lua"),
     expect("religar o plugin", shrugOn),
     click("button:Instalar os incluídos"),
-    expect("Instalar põe os 7 plugins incluídos na pasta", examplesLoaded),
+    expect("Instalar põe os plugins incluídos na pasta", examplesLoaded),
     key(c.ImGuiKey_Escape),
     click("composer"),
     .{ .text = "/conta 2+3*4" },
@@ -3039,6 +3039,7 @@ const ops_login = [_]Op{
 
 const ops_plugins_only = [_]Op{expect("carrega e mostra a conversa", ready)} ++ ops_plugin_section;
 const ops_plugins_tls = [_]Op{expect("carrega e mostra a conversa", ready)} ++ @import("qa_plugins.zig").ops_tls;
+const ops_plugins_real = [_]Op{expect("carrega e mostra a conversa", ready)} ++ @import("qa_plugins.zig").ops_real;
 const ops_plugins_a = [_]Op{expect("carrega e mostra a conversa", ready)} ++ @import("qa_plugins.zig").ops_persist_a;
 const ops_plugins_b = [_]Op{expect("carrega e mostra a conversa", ready)} ++ @import("qa_plugins.zig").ops_persist_b;
 
@@ -3059,6 +3060,7 @@ fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "quadros")) return &ops_quadros;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins")) return &ops_plugins_only;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins-tls")) return &ops_plugins_tls;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins-real")) return &ops_plugins_real;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins-a")) return &ops_plugins_a;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins-b")) return &ops_plugins_b;
     const scene = std.mem.span(c.SDL_getenv("QA_SCENE") orelse return &ops);

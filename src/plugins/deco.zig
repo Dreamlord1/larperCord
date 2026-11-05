@@ -19,6 +19,8 @@ pub const Part = struct {
     /// Qual plugin pôs, e a mensagem (0 = regra): o "×" da nota usa os dois.
     run: u32 = 0,
     id: u64 = 0,
+    /// Em vermelho: um aviso, não só uma anotação.
+    danger: bool = false,
 };
 
 pub const View = struct {
@@ -40,6 +42,7 @@ const Entry = struct {
     label: []u8,
     collapse: bool,
     ver: u32,
+    danger: bool = false,
 };
 
 pub const Rule = struct {
@@ -104,7 +107,7 @@ pub const Index = struct {
 
     /// Troca a decoração da mensagem por este plugin. Os textos passam a ser do
     /// índice. false = sem lugar (o plugin passou do teto).
-    pub fn set(ix: *Index, run: u32, id: u64, badge: []u8, note: []u8, label: []u8, collapse: bool) bool {
+    pub fn set(ix: *Index, run: u32, id: u64, badge: []u8, note: []u8, label: []u8, collapse: bool, danger: bool) bool {
         const gpa = ix.gpa;
         const key: Key = .{ .id = id, .run = run };
         const slot = ix.runIndex(run) orelse blk: {
@@ -124,7 +127,7 @@ pub const Index = struct {
             }
             ix.counts[slot] += 1;
         }
-        gop.value_ptr.* = .{ .badge = badge, .note = note, .label = label, .collapse = collapse, .ver = ix.next_ver };
+        gop.value_ptr.* = .{ .badge = badge, .note = note, .label = label, .collapse = collapse, .ver = ix.next_ver, .danger = danger };
         ix.next_ver +%= 1;
         return true;
     }
@@ -268,7 +271,7 @@ pub const Index = struct {
             if (e.collapse) v.collapse = true;
             if (e.label.len > 0) v.label = e.label;
             if ((e.badge.len > 0 or e.note.len > 0) and v.n < max_parts) {
-                v.parts[v.n] = .{ .badge = e.badge, .note = e.note, .run = run, .id = m.msg.id };
+                v.parts[v.n] = .{ .badge = e.badge, .note = e.note, .run = run, .id = m.msg.id, .danger = e.danger };
                 v.n += 1;
             }
         }
@@ -293,8 +296,8 @@ test "decoração por mensagem: selo, nota, recolher e tirar" {
     defer ix.deinit();
     var m = msg(10, 2, "oi");
     try std.testing.expect(!ix.active());
-    try std.testing.expect(ix.set(5, 10, dup("salvo"), dup(""), dup(""), false));
-    try std.testing.expect(ix.set(6, 10, dup(""), dup("hi"), dup(""), false));
+    try std.testing.expect(ix.set(5, 10, dup("salvo"), dup(""), dup(""), false, false));
+    try std.testing.expect(ix.set(6, 10, dup(""), dup("hi"), dup(""), false, false));
     try std.testing.expect(ix.active());
     var v = ix.view(&m, 1);
     try std.testing.expectEqual(@as(u8, 2), v.n);
@@ -305,7 +308,7 @@ test "decoração por mensagem: selo, nota, recolher e tirar" {
     m.layout_w = 100;
     _ = ix.view(&m, 1);
     try std.testing.expectEqual(@as(f32, 100), m.layout_w);
-    try std.testing.expect(ix.set(5, 10, dup("outro"), dup(""), dup("rótulo"), true));
+    try std.testing.expect(ix.set(5, 10, dup("outro"), dup(""), dup("rótulo"), true, false));
     v = ix.view(&m, 1);
     try std.testing.expectEqual(@as(f32, -1), m.layout_w);
     try std.testing.expect(v.collapse);
@@ -347,13 +350,13 @@ test "plugin parado leva tudo o que pôs, e há teto por plugin" {
     var ix = Index.init(std.testing.allocator);
     defer ix.deinit();
     var i: u64 = 0;
-    while (i < 50) : (i += 1) try std.testing.expect(ix.set(1, i, dup("x"), dup(""), dup(""), false));
-    try std.testing.expect(ix.set(2, 7, dup("y"), dup(""), dup(""), false));
+    while (i < 50) : (i += 1) try std.testing.expect(ix.set(1, i, dup("x"), dup(""), dup(""), false, false));
+    try std.testing.expect(ix.set(2, 7, dup("y"), dup(""), dup(""), false, false));
     ix.clearRun(1);
     try std.testing.expectEqual(@as(usize, 1), ix.entries.count());
     var m = msg(7, 2, "");
     try std.testing.expectEqualStrings("y", ix.view(&m, 1).slice()[0].badge);
     ix.counts[0] = max_per_run;
-    try std.testing.expect(!ix.set(2, 8, dup("z"), dup(""), dup(""), false));
-    try std.testing.expect(ix.set(2, 7, dup("w"), dup(""), dup(""), false));
+    try std.testing.expect(!ix.set(2, 8, dup("z"), dup(""), dup(""), false, false));
+    try std.testing.expect(ix.set(2, 7, dup("w"), dup(""), dup(""), false, false));
 }

@@ -38,7 +38,7 @@ const labels = [_]Label{
 
 /// Vinham com o app e saíram: uns viraram funções do próprio app, outros eram só
 /// demonstração. Quem já tem continua usando até decidir arquivar.
-const retired = [_][]const u8{ "alerta.lua", "calc.lua", "dado.lua", "relogio.lua", "resumo.lua", "shrug.lua", "zoeira.lua", "bookmarks.lua", "filter.lua", "stats.lua" };
+const retired = [_][]const u8{ "alerta.lua", "calc.lua", "dado.lua", "relogio.lua", "resumo.lua", "shrug.lua", "zoeira.lua", "bookmarks.lua", "filter.lua", "stats.lua", "snippets.lua", "timestamps.lua" };
 
 /// Um clique troca a lista de plugins: quem clicou fica aqui até o fim do desenho.
 var pending_update: ?*const exemplos.Exemplo = null;
@@ -67,7 +67,7 @@ pub fn draw(p: anytype) void {
     }
     p.y += 6;
     if (missingExamples(e) > 0) {
-        para(p, i18n.tr("Instalar copia para a pasta os que faltam: tradução, lembretes, destaques, trechos, links limpos, horários e links e arquivos. O que você já tem não é mexido.", "Install copies the missing ones to the folder: translate, reminders, highlights, snippets, clean links, timestamps and links and files. What you already have is left alone."), .faint);
+        para(p, i18n.tr("Instalar copia para a pasta os que faltam: tradução, lembretes, destaques, links e arquivos, links limpos, anti-golpe, radar de CVE, cartões do GitHub e o que perdi. O que você já tem não é mexido.", "Install copies the missing ones to the folder: translate, reminders, highlights, links and files, clean links, scam guard, CVE radar, GitHub cards and what did I miss. What you already have is left alone."), .faint);
         p.y += 4;
     }
     if (retiredLoaded(e) > 0 and archiveRow(p, e)) return;

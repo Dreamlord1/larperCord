@@ -830,14 +830,14 @@ pub const Engine = struct {
                     e.gpa.free(s.badge);
                     e.gpa.free(s.note);
                     e.gpa.free(s.label);
-                } else _ = e.deco.set(p.run, s.id, s.badge, s.note, s.label, s.collapse);
+                } else _ = e.deco.set(p.run, s.id, s.badge, s.note, s.label, s.collapse, s.danger);
             },
             .deco_remove => |id| e.deco.remove(p.run, id),
             .deco_rules => |list| e.deco.setRules(p.run, list),
             .want_messages => |q| {
-                const w = e.worker orelse return;
-                const list = e.gpa.create(MsgList) catch return;
-                list.* = .{ .gpa = e.gpa, .files = q.files };
+                const w = e.worker orelse return wire.freeNeedles(e.gpa, q.needles);
+                const list = e.gpa.create(MsgList) catch return wire.freeNeedles(e.gpa, q.needles);
+                list.* = .{ .gpa = e.gpa, .files = q.files, .needles = q.needles };
                 e.host.messages(e.host.ctx, q.channel, q.limit, list);
                 w.push(.{ .messages = .{ .run = cmd.run, .req = q.req, .list = list } });
             },
@@ -947,6 +947,7 @@ const T = struct {
     var opened_len: usize = 0;
     var dummy: u8 = 0;
     var loaded: []const Message = &.{};
+    var last_read: u64 = 0;
     // O "disco" do armazenamento, usado pela thread dos plugins.
     var disk_lock: ?sync.Lock = null;
     var disk: [8]struct { name: [32]u8 = undefined, name_len: usize = 0, data: [2 * 1024 * 1024]u8 = undefined, len: usize = 0 } = undefined;
@@ -1030,6 +1031,7 @@ const T = struct {
         opened_len = k;
     }
     fn messages(_: *anyopaque, _: u64, limit: u32, out: *MsgList) void {
+        out.last_read = last_read;
         for (loaded[0..@min(loaded.len, limit)]) |*m| {
             var one = m.*;
             if (!out.files) one.files = &.{};
@@ -2238,7 +2240,7 @@ test "plugins: filtro vira regras, e trechos só põem na caixa" {
     try std.testing.expect(e.deco.collapses(&sm, 1));
 
     T.wipeDisk();
-    const s = testOne(&e, Bundled.src("snippets.lua"));
+    const s = testOne(&e, @embedFile("testdata/snippets.lua"));
     try cmdOk(&e, "/snip nada");
     try std.testing.expect(std.mem.indexOf(u8, T.note(T.n_notes - 1), "nada") != null);
     const m: Message = .{ .id = 5, .content = "texto", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
@@ -2320,7 +2322,7 @@ test "plugins incluídos: todos ligam, com cabeçalho completo e nos dois idioma
         try std.testing.expect(p.man.description.len > 0 and p.man.description_pt.len > 0);
         try std.testing.expect(p.man.version.len > 0);
         // Estes não precisam de painel: menu, regras ou comando.
-        const no_panel = std.mem.eql(u8, ex.name, "translate.lua") or std.mem.eql(u8, ex.name, "cleanlinks.lua") or std.mem.eql(u8, ex.name, "timestamps.lua");
+        const no_panel = std.mem.eql(u8, ex.name, "translate.lua") or std.mem.eql(u8, ex.name, "cleanlinks.lua") or std.mem.eql(u8, ex.name, "github.lua");
         try std.testing.expect(p.tree != null or no_panel);
     }
 }
@@ -3018,12 +3020,12 @@ test "plugins incluídos: destaques silencia canal, conta o que não foi visto e
     try std.testing.expectEqual(@as(f32, 1), nodeKey(p.settings.?, "desktop").value);
 }
 
-test "plugins incluídos: trechos viram sugestões da caixa" {
+test "plugins: trechos viram sugestões da caixa" {
     T.wipeDisk();
     var e = T.engine();
     defer e.deinit();
     _ = T.writeData(&T.dummy, 1, "t.lua", "{\"items\":[{\"name\":\"oi\",\"text\":\"olá, tudo bem?\"}]}");
-    const p = testOne(&e, Bundled.src("snippets.lua"));
+    const p = testOne(&e, @embedFile("testdata/snippets.lua"));
     try std.testing.expect(p.err() == null);
     try std.testing.expectEqualStrings("olá, tudo bem?", e.completionText(p.run, ';', "oi").?);
     e.panelGesture(p, nodeKey(p.tree.?, "rmoi").click, null);
@@ -3032,11 +3034,11 @@ test "plugins incluídos: trechos viram sugestões da caixa" {
     try std.testing.expectEqual(@as(usize, 0), T.n_sent);
 }
 
-test "plugins incluídos: horários entendem o pedido e põem na caixa" {
+test "plugins: horários entendem o pedido e põem na caixa" {
     T.wipeDisk();
     var e = T.engine();
     defer e.deinit();
-    const p = testOne(&e, Bundled.src("timestamps.lua"));
+    const p = testOne(&e, @embedFile("testdata/timestamps.lua"));
     try std.testing.expect(p.err() == null);
     const ok = [_][]const u8{ "/ts", "/ts 15h", "/ts 15:30", "/ts amanhã 15h", "/ts tomorrow 3pm", "/ts sexta 20h", "/ts friday 20:00", "/ts 25/12 20h", "/ts 25/12/2030", "/ts em 2h", "/ts in 1h30m", "/ts +30m", "/ts hoje 23:59" };
     for (ok) |cmd| {
@@ -3172,4 +3174,860 @@ test "plugins incluídos: destaques só escuta as mensagens quando tem palavra" 
     try std.testing.expectEqual(@as(u32, 1), e.n_message);
     try cmdOk(&e, "/highlights batata");
     try std.testing.expectEqual(@as(u32, 1), e.n_message);
+}
+
+// --- Filtros de texto, nota em vermelho e o que larper.messages traz a mais ---------
+
+test "plugins: contains só chama a função para o texto pedido, e confere o que recebe" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    _ = testOne(&e,
+        \\-- @capabilities messages, notify
+        \\larper.on("message", function(m) larper.notify("a:" .. m.content) end, { contains = { "CVE-", "://" } })
+        \\larper.on("message", function(m) larper.notify("b:" .. m.content) end, { contains = { "pizza" } })
+        \\larper.on("edit", function(m) larper.notify("e:" .. m.content) end, { contains = { "cve-" } })
+    );
+    chega(&e, "conversa normal");
+    try std.testing.expectEqual(@as(usize, 0), T.n_notes);
+    // Sem ligar para maiúsculas, e cada função só com o dela.
+    chega(&e, "veja o cve-2021-44228");
+    try std.testing.expectEqual(@as(usize, 1), T.n_notes);
+    try std.testing.expectEqualStrings("a:veja o cve-2021-44228", lastNote());
+    chega(&e, "PIZZA hoje");
+    try std.testing.expectEqualStrings("b:PIZZA hoje", lastNote());
+    const notes = T.n_notes;
+    const m: Message = .{ .id = 3, .content = "sem nada", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    e.onEdit(&m);
+    e.waitIdle();
+    try std.testing.expectEqual(notes, T.n_notes);
+    const n: Message = .{ .id = 3, .content = "CVE-1", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    e.onEdit(&n);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("e:CVE-1", lastNote());
+    for ([_][]const u8{
+        "-- @capabilities messages\nlarper.on(\"message\", function() end, { contains = {} })",
+        "-- @capabilities messages\nlarper.on(\"message\", function() end, { contains = { 1 } })",
+        "-- @capabilities messages\nlarper.on(\"message\", function() end, { contains = { \"\" } })",
+        "-- @capabilities messages\nlarper.on(\"delete\", function() end, { contains = { \"a\" } })",
+    }) |src| {
+        const q = testOne(&e, src);
+        try std.testing.expect(q.err() != null);
+    }
+}
+
+test "plugins: larper.messages filtra pelo texto, e traz resposta, menção e até onde foi lido" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const msgs = [_]Message{
+        .{ .id = 3, .content = "sem link", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .mentions_me = true },
+        .{ .id = 4, .content = "veja https://a.com", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .reply_to = 3 },
+    };
+    T.loaded = &msgs;
+    T.last_read = 3;
+    defer T.last_read = 0;
+    _ = testOne(&e,
+        \\-- @capabilities messages, notify
+        \\larper.command("/com", function()
+        \\  larper.messages({ contains = { "://" } }, function(list)
+        \\    larper.notify(#list .. ":" .. list[1].id .. ":" .. list[1].reply_to .. ":" .. tostring(list.last_read))
+        \\  end)
+        \\end)
+        \\larper.command("/todas", function()
+        \\  larper.messages(function(list) larper.notify(#list .. ":" .. tostring(list[1].mentions_me) .. ":" .. tostring(list[2].mentions_me)) end)
+        \\end)
+    );
+    try cmdOk(&e, "/com");
+    try std.testing.expectEqualStrings("1:4:3:3", lastNote());
+    sync.sleepMs(520);
+    try cmdOk(&e, "/todas");
+    try std.testing.expectEqualStrings("2:true:nil", lastNote());
+}
+
+test "plugins: nota em vermelho, e larper.on(\"hosts\") avisa quando aprovam" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e,
+        \\-- @capabilities decorate, http, notify
+        \\-- @hosts api.exemplo.com
+        \\larper.command("/d", function() larper.decorate("5", { note = "cuidado", style = "danger" }) end)
+        \\larper.command("/n", function() larper.decorate("5", { note = "normal" }) end)
+        \\larper.on("hosts", function() larper.notify("hosts:" .. tostring(larper.http.allowed("api.exemplo.com"))) end)
+    );
+    var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = 5, .channel = 42, .author = 7, .timestamp = 0, .content = "x" }, .spans = &.{} };
+    try cmdOk(&e, "/d");
+    try std.testing.expect(e.deco.view(&sm, 1).slice()[0].danger);
+    try cmdOk(&e, "/n");
+    try std.testing.expect(!e.deco.view(&sm, 1).slice()[0].danger);
+    e.setApproved(p, "api.exemplo.com", true);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("hosts:true", lastNote());
+    e.setApproved(p, "api.exemplo.com", false);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("hosts:false", lastNote());
+}
+
+// --- Anti-golpe ---------------------------------------------------------------------
+
+const Scam = struct {
+    var next_id: u64 = 10_000;
+
+    /// Manda a mensagem e diz o que ficou nela (null = nada).
+    fn check(e: *Engine, content: []const u8) ?[]const u8 {
+        next_id += 1;
+        const m: Message = .{ .id = next_id, .content = content, .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 };
+        e.onMessage(&m);
+        e.waitIdle();
+        var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = next_id, .channel = 42, .author = 7, .timestamp = 0, .content = "x" }, .spans = &.{} };
+        const v = e.deco.view(&sm, 1);
+        if (v.n == 0) return null;
+        const part = v.slice()[0];
+        if (!part.danger) return null;
+        return part.note;
+    }
+};
+
+test "anti-golpe: endereços oficiais e conversa normal nunca marcam" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("scamguard.lua"));
+    try std.testing.expect(p.err() == null);
+    const clean = [_][]const u8{
+        // Os oficiais, com subdomínio e tudo.
+        "https://discord.com/channels/1/2",
+        "https://discord.gg/abc",
+        "https://discordapp.com/invite/abc",
+        "https://cdn.discordapp.com/attachments/1/2/a.png",
+        "https://media.discordapp.net/attachments/1/2/a.png",
+        "https://ptb.discord.com/app",
+        "https://canary.discord.com/app",
+        "https://discord.gift/AbCdEf",
+        "https://support.discord.com/hc/pt-br",
+        "https://store.steampowered.com/app/730",
+        "https://steamcommunity.com/id/alguem",
+        "https://help.steampowered.com/pt-br",
+        "HTTPS://DISCORD.COM/channels/1/2",
+        // Oficial, mesmo com a isca do lado.
+        "free nitro https://discord.gift/AbCdEf",
+        "o nitro grátis acabou, leia https://support.discord.com/hc/pt-br",
+        "[clique aqui](https://discord.gg/abc)",
+        // Conversa sobre nitro, sem link.
+        "alguém sabe se tem nitro grátis esse mês?",
+        "free nitro é sempre golpe, cuidado",
+        "ganhei um presente de nitro do meu irmão",
+        "steam gift card vale a pena?",
+        // Link qualquer, sem isca.
+        "olha esse vídeo https://www.youtube.com/watch?v=abc",
+        "https://github.com/discord/discord-api-docs/issues/1",
+        "https://exemplo.com/discord-nitro-free",
+        "https://bit.ly/abc123",
+        "dá uma olhada https://tinyurl.com/abc",
+        "comprei um steam gift card em https://loja.exemplo.com/cartoes",
+        // Grandes, junto de uma promessa: é conversa.
+        "tutorial de free nitro https://www.youtube.com/watch?v=abc",
+        "skins grátis é golpe https://www.reddit.com/r/csgo",
+        // Terceiros de verdade com nome parecido.
+        "https://discordjs.guide/",
+        "https://discord.js.org/docs",
+        "https://discordpy.readthedocs.io/en/stable/",
+        "https://disboard.org/server/1",
+        "https://www.discords.com/servers",
+        "https://steamdb.info/app/730",
+        "https://steamcharts.com/app/730",
+        "https://www.steamgifts.com/",
+        "https://steamdeck.exemplo.com/",
+        "https://discord.projeto.org/convite",
+        "https://discordbotlist.com/bots",
+        // Parecem, mas não são marcas.
+        "https://stream.com/",
+        "https://streamlabs.com/",
+        "https://team.com/",
+        "https://steemit.com/",
+        "https://record.com/",
+        "https://discard.com/",
+        "https://discourse.org/",
+        "https://discover.com/",
+        // Letras de outros alfabetos não são golpe por si só.
+        "https://xn--mnchen-3ya.de/",
+        "https://xn--corao-dra1a.com.br/",
+        // Rede local e o próprio computador.
+        "http://192.168.0.1/admin",
+        "http://10.0.0.5:8080/",
+        "http://172.16.1.1/",
+        "http://127.0.0.1:3000/",
+        "http://localhost:3000/",
+        // Quem cita entre crases está falando do link, não mandando clicar.
+        "cuidado com `https://dlscord.com/nitro`",
+        "```\nhttps://discord.com.golpe.ru/x\n```",
+        "hxxps://dlscord.com/nitro",
+        // Links com texto que não enganam.
+        "[README.md](https://github.com/a/b/blob/main/README.md)",
+        "[manual.pdf](https://exemplo.com/arquivo/123)",
+        "[site](https://exemplo.com)",
+        "[exemplo.com](https://www.exemplo.com/x)",
+        "[www.exemplo.com](https://exemplo.com/x)",
+        "[youtube.com](https://youtu.be/abc)",
+    };
+    for (clean) |text| {
+        if (Scam.check(&e, text)) |note| {
+            std.debug.print("marcou o que não devia: {s}\n  nota: {s}\n", .{ text, note });
+            return error.FalsoPositivo;
+        }
+    }
+}
+
+test "anti-golpe: os golpes clássicos marcam, e a nota diz o motivo" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("scamguard.lua"));
+    try std.testing.expect(p.err() == null);
+    const Case = struct { text: []const u8, why: []const u8 };
+    const scams = [_]Case{
+        // Letras trocadas.
+        .{ .text = "https://dlscord.com/nitro", .why = "letras trocadas" },
+        .{ .text = "https://disc0rd.com/nitro", .why = "letras trocadas" },
+        .{ .text = "https://d1scord.gg/abc", .why = "letras trocadas" },
+        .{ .text = "https://discrod.com/x", .why = "letras trocadas" },
+        .{ .text = "https://dicsord.gift/x", .why = "letras trocadas" },
+        .{ .text = "https://discordd.com/x", .why = "letras trocadas" },
+        .{ .text = "https://dis-cord.com/x", .why = "letras trocadas" },
+        .{ .text = "https://discorcl.com/x", .why = "letras trocadas" },
+        .{ .text = "https://steamcommunlty.com/tradeoffer", .why = "letras trocadas" },
+        .{ .text = "https://stearncommunity.com/x", .why = "letras trocadas" },
+        .{ .text = "https://steamcomnunity.ru/x", .why = "letras trocadas" },
+        .{ .text = "https://steampowerd.com/x", .why = "letras trocadas" },
+        .{ .text = "https://st3am.com/x", .why = "letras trocadas" },
+        .{ .text = "https://login.dlscord.com/x", .why = "letras trocadas" },
+        // Outro alfabeto, escrito e em punycode.
+        .{ .text = "https://d\u{456}scord.com/nitro", .why = "letras trocadas" },
+        .{ .text = "https://xn--dscord-pvf.com/nitro", .why = "outro alfabeto" },
+        .{ .text = "https://xn--discrd-zqf.com/x", .why = "outro alfabeto" },
+        .{ .text = "https://xn--stem-73d.com/x", .why = "outro alfabeto" },
+        .{ .text = "https://XN--STEAMCOMMUNTY-EIL.com/x", .why = "outro alfabeto" },
+        // Subdomínio enganoso e usuário de disfarce.
+        .{ .text = "https://discord.com.golpe.ru/nitro", .why = "parece o discord.com" },
+        .{ .text = "https://discordapp.com.login.xyz/", .why = "parece o discordapp.com" },
+        .{ .text = "https://steamcommunity.com.tradeoffer.ru/new", .why = "parece o steamcommunity.com" },
+        .{ .text = "https://store.steampowered.com.evil.ru/", .why = "parece o steampowered.com" },
+        .{ .text = "https://discord.com@golpe.ru/nitro", .why = "disfarce" },
+        // O nome certo no lugar errado, e a marca colada numa isca.
+        .{ .text = "https://discord.ru/nitro", .why = "não é o site" },
+        .{ .text = "https://steamcommunity.xyz/x", .why = "não é o site" },
+        .{ .text = "https://discord-nitro.ru/x", .why = "não é o site" },
+        .{ .text = "https://discordgift.site/x", .why = "não é o site" },
+        .{ .text = "https://discord-login.com/x", .why = "não é o site" },
+        .{ .text = "https://steam-gift.ru/x", .why = "não é o site" },
+        .{ .text = "https://nitro-discord.com/x", .why = "não é o site" },
+        .{ .text = "https://discord-nitro.com.br/x", .why = "não é o site" },
+        // Site de Nitro de graça, sem precisar de texto nenhum.
+        .{ .text = "https://free-nitro.xyz/x", .why = "Nitro de graça" },
+        .{ .text = "https://nitrogift.site/x", .why = "Nitro de graça" },
+        // Isca e link.
+        .{ .text = "free nitro aqui https://qualquer.site/x", .why = "promessa" },
+        .{ .text = "NITRO GRÁTIS por 3 meses https://qualquer.site/x", .why = "promessa" },
+        .{ .text = "Ganhe Nitro: <https://qualquer.site/x>", .why = "promessa" },
+        .{ .text = "skins grátis no https://loja.exemplo.com/", .why = "promessa" },
+        .{ .text = "@everyone free steam gift https://qualquer.site/", .why = "promessa" },
+        // Encurtador com isca fraca, e encurtador com isca forte.
+        .{ .text = "presente pra você https://bit.ly/abc", .why = "encurtado" },
+        .{ .text = "nitro aqui https://tinyurl.com/abc", .why = "encurtado" },
+        .{ .text = "free nitro https://cutt.ly/abc", .why = "promessa" },
+        // IP.
+        .{ .text = "olha http://45.33.32.156/x", .why = "IP" },
+        .{ .text = "http://3232235777/", .why = "IP" },
+        .{ .text = "http://[2001:db8::1]/x", .why = "IP" },
+        // O texto mostra um endereço e o link abre outro.
+        .{ .text = "[discord.com/gift](https://qualquer.site/x)", .why = "abre outro" },
+        .{ .text = "[https://steamcommunity.com](https://qualquer.site/x)", .why = "abre outro" },
+        .{ .text = "[www.exemplo.com](https://qualquer.site/x)", .why = "abre outro" },
+    };
+    for (scams) |k| {
+        const note = Scam.check(&e, k.text) orelse {
+            std.debug.print("não marcou: {s}\n", .{k.text});
+            return error.GolpeNaoMarcado;
+        };
+        if (std.mem.indexOf(u8, note, k.why) == null) {
+            std.debug.print("{s}\n  nota: {s}\n  esperava: {s}\n", .{ k.text, note, k.why });
+            return error.MotivoErrado;
+        }
+    }
+}
+
+test "anti-golpe: \"não é golpe\" guarda o endereço, o painel lista e nada do texto vai para o disco" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("scamguard.lua"));
+    const secret = "segredo-da-ana https://dlscord.com/x";
+    try std.testing.expect(Scam.check(&e, secret) != null);
+    const id = Scam.next_id;
+    var kb: [32]u8 = undefined;
+    const key = try std.fmt.bufPrint(&kb, "{d}", .{id});
+    // O número no painel, até abrir.
+    try std.testing.expectEqualStrings("1", p.tree.?.badge);
+    const row = nodeKey(p.tree.?, key);
+    try std.testing.expectEqualStrings("dlscord.com", row.text);
+    e.panelGesture(p, row.click, null);
+    e.waitIdle();
+    try std.testing.expectEqual(id, T.jump_id);
+    e.openPanel(p);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("", p.tree.?.badge);
+    e.openPanel(null);
+    e.waitIdle();
+    // A própria mensagem não marca, e quem a pessoa ignora também não.
+    const mine: Message = .{ .id = 90_001, .content = "https://dlscord.com/y", .author = 1, .author_name = "eu", .channel = 42, .channel_name = "geral", .mine = true };
+    e.onMessage(&mine);
+    e.waitIdle();
+    try std.testing.expect(!hasKey(p.tree.?, "90001"));
+    // No disco, o endereço; nunca o texto.
+    e.setEnabled(p, false);
+    e.waitIdle();
+    const data = T.readData(&T.dummy, std.testing.allocator, 1, "t.lua").?;
+    defer std.testing.allocator.free(data);
+    try std.testing.expect(std.mem.indexOf(u8, data, "dlscord.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, data, "segredo") == null);
+    e.setEnabled(p, true);
+    e.waitIdle();
+    try std.testing.expect(hasKey(p.tree.?, key));
+    // "Não é golpe" pelo menu: sai a nota, sai da lista, e o endereço não marca mais.
+    const m: Message = .{ .id = id, .content = secret, .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 };
+    e.menuMessage(p, &p.menus.items[0], &m, null);
+    e.waitIdle();
+    try std.testing.expect(!hasKey(p.tree.?, key));
+    try std.testing.expect(hasKey(p.tree.?, "trust1"));
+    try std.testing.expect(Scam.check(&e, "https://dlscord.com/z") == null);
+    try std.testing.expect(Scam.check(&e, "https://www.dlscord.com/z") == null);
+    // E só ele: o resto continua marcando.
+    try std.testing.expect(Scam.check(&e, "https://disc0rd.com/z") != null);
+    // A escolha fica guardada por conta, e dá para voltar atrás.
+    e.setEnabled(p, false);
+    e.waitIdle();
+    e.setEnabled(p, true);
+    e.waitIdle();
+    try std.testing.expect(Scam.check(&e, "https://dlscord.com/w") == null);
+    e.panelGesture(p, nodeKey(p.tree.?, "untrust1").click, null);
+    e.waitIdle();
+    try std.testing.expect(Scam.check(&e, "https://dlscord.com/w") != null);
+    // Numa mensagem limpa, o menu só avisa.
+    const ok: Message = .{ .id = 90_002, .content = "https://discord.com/x", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    e.menuMessage(p, &p.menus.items[0], &ok, null);
+    e.waitIdle();
+    try std.testing.expect(std.mem.indexOf(u8, lastNote(), "não está marcada") != null);
+}
+
+test "anti-golpe: apagaram ou editaram, a marca sai; e dá para não marcar IP" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("scamguard.lua"));
+    try std.testing.expect(Scam.check(&e, "https://dlscord.com/x") != null);
+    var id = Scam.next_id;
+    var kb: [32]u8 = undefined;
+    e.onDelete(42, id);
+    e.waitIdle();
+    try std.testing.expect(!hasKey(p.tree.?, try std.fmt.bufPrint(&kb, "{d}", .{id})));
+
+    try std.testing.expect(Scam.check(&e, "https://dlscord.com/y") != null);
+    id = Scam.next_id;
+    const edited: Message = .{ .id = id, .content = "foi engano, é https://discord.com/y", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 };
+    e.onEdit(&edited);
+    e.waitIdle();
+    var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = id, .channel = 42, .author = 7, .timestamp = 0, .content = "x" }, .spans = &.{} };
+    try std.testing.expectEqual(@as(u8, 0), e.deco.view(&sm, 1).n);
+    try std.testing.expect(!hasKey(p.tree.?, try std.fmt.bufPrint(&kb, "{d}", .{id})));
+    // Uma edição que passa a ter o golpe marca.
+    const worse: Message = .{ .id = id, .content = "https://disc0rd.com/y", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 };
+    e.onEdit(&worse);
+    e.waitIdle();
+    try std.testing.expect(e.deco.view(&sm, 1).slice()[0].danger);
+
+    try std.testing.expect(Scam.check(&e, "http://45.33.32.156/x") != null);
+    e.panelToggle(p, nodeKey(p.settings.?, "mark_ip").change, false);
+    e.waitIdle();
+    try std.testing.expect(Scam.check(&e, "http://45.33.32.156/x") == null);
+}
+
+test "anti-golpe: olha as mensagens já carregadas ao abrir o canal" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const msgs = [_]Message{
+        .{ .id = 30, .content = "https://dlscord.com/velho", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 },
+        .{ .id = 31, .content = "conversa", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 },
+    };
+    T.loaded = &msgs;
+    const p = testOne(&e, Bundled.src("scamguard.lua"));
+    sync.sleepMs(620);
+    e.frameTick(77, false);
+    e.waitIdle();
+    try std.testing.expect(hasKey(p.tree.?, "30"));
+    // Da história não vem número no painel: é só o que chegou agora.
+    try std.testing.expectEqualStrings("", p.tree.?.badge);
+}
+
+// --- Radar de CVE --------------------------------------------------------------------
+
+const Cve = struct {
+    const log4j = @embedFile("testdata/cve/CVE-2021-44228.json");
+    const xz = @embedFile("testdata/cve/CVE-2024-3094.json");
+    const old = @embedFile("testdata/cve/CVE-1999-0001.json");
+    const rejected = @embedFile("testdata/cve/CVE-2016-0001.json");
+    const many = @embedFile("testdata/cve/CVE-2024-12345.json");
+    const missing = "{\"error\":\"CVE_RECORD_DNE\",\"message\":\"The cve record for the cve id does not exist.\"}";
+
+    fn note(e: *Engine, id: u64) []const u8 {
+        var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = id, .channel = 42, .author = 7, .timestamp = 0, .content = "x" }, .spans = &.{} };
+        const v = e.deco.view(&sm, 1);
+        return if (v.n > 0) v.slice()[0].note else "";
+    }
+
+    fn danger(e: *Engine, id: u64) bool {
+        var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = id, .channel = 42, .author = 7, .timestamp = 0, .content = "x" }, .spans = &.{} };
+        const v = e.deco.view(&sm, 1);
+        return v.n > 0 and v.slice()[0].danger;
+    }
+
+    fn say(e: *Engine, id: u64, text: []const u8) void {
+        const m: Message = .{ .id = id, .content = text, .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 };
+        e.onMessage(&m);
+        e.waitIdle();
+    }
+
+    fn lastUrl() []const u8 {
+        return T.http_reqs[T.http_n - 1].?.url;
+    }
+};
+
+test "radar de CVE: nada sai sem aprovar, e o aprovar solta o que estava esperando" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("cve.lua"));
+    try std.testing.expect(p.err() == null);
+    Cve.say(&e, 101, "cuidado com o cve-2021-44228, gente");
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    try std.testing.expectEqualStrings("", Cve.note(&e, 101));
+    e.setApproved(p, "cveawg.mitre.org", true);
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 1), T.http_n);
+    // Em maiúsculas: o serviço recusa em minúsculas.
+    try std.testing.expectEqualStrings("https://cveawg.mitre.org/api/cve/CVE-2021-44228", Cve.lastUrl());
+    // O texto da mensagem não vai junto.
+    try std.testing.expect(std.mem.indexOf(u8, Cve.lastUrl(), "cuidado") == null);
+    T.respond(200, Cve.log4j);
+    e.waitIdle();
+    // A resposta real: a nota vem do complemento do CISA, e o título do fornecedor.
+    const n = Cve.note(&e, 101);
+    try std.testing.expect(std.mem.startsWith(u8, n, "🛡 CVE-2021-44228 · CRÍTICA · CVSS 10.0 · Apache Log4j2"));
+    try std.testing.expect(Cve.danger(&e, 101));
+}
+
+test "radar de CVE: respostas reais de cada tipo viram a nota certa" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("cve.lua"));
+    e.setApproved(p, "cveawg.mitre.org", true);
+    e.waitIdle();
+    // O CVSS do próprio fornecedor.
+    Cve.say(&e, 201, "CVE-2024-3094");
+    T.respond(200, Cve.xz);
+    e.waitIdle();
+    try std.testing.expect(std.mem.startsWith(u8, Cve.note(&e, 201), "🛡 CVE-2024-3094 · CRÍTICA · CVSS 10.0 · Xz: malicious code"));
+    // Formato antigo: sem nota nenhuma, com o resumo.
+    Cve.say(&e, 202, "o velho CVE-1999-0001");
+    T.respond(200, Cve.old);
+    e.waitIdle();
+    const old = Cve.note(&e, 202);
+    try std.testing.expect(std.mem.indexOf(u8, old, "sem nota CVSS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, old, "ip_input.c") != null);
+    try std.testing.expect(!Cve.danger(&e, 202));
+    // Várias versões de CVSS no mesmo registro: a 3.1, a mais comum.
+    Cve.say(&e, 203, "CVE-2024-12345");
+    try std.testing.expectEqualStrings("https://cveawg.mitre.org/api/cve/CVE-2024-12345", Cve.lastUrl());
+    T.respond(200, Cve.many);
+    e.waitIdle();
+    try std.testing.expect(std.mem.indexOf(u8, Cve.note(&e, 203), "CVSS ") != null);
+    // Rejeitado e inexistente (404 do serviço oficial).
+    Cve.say(&e, 204, "CVE-2016-0001");
+    T.respond(200, Cve.rejected);
+    e.waitIdle();
+    try std.testing.expect(std.mem.indexOf(u8, Cve.note(&e, 204), "rejeitado") != null);
+    Cve.say(&e, 205, "CVE-2099-99999");
+    T.respond(404, Cve.missing);
+    e.waitIdle();
+    try std.testing.expect(std.mem.indexOf(u8, Cve.note(&e, 205), "não existe") != null);
+    // Corpo vazio com 200 (outra fonte faz isso) também é "não existe", nunca um erro.
+    Cve.say(&e, 206, "CVE-2098-1111");
+    T.respond(200, "{}\n");
+    e.waitIdle();
+    try std.testing.expect(std.mem.indexOf(u8, Cve.note(&e, 206), "não existe") != null);
+    // Lixo no lugar de JSON: idem, e o plugin continua de pé.
+    Cve.say(&e, 207, "CVE-2097-1111");
+    T.respond(200, "<html>manutenção</html>");
+    e.waitIdle();
+    try std.testing.expect(std.mem.indexOf(u8, Cve.note(&e, 207), "não existe") != null);
+    try std.testing.expect(p.err() == null);
+}
+
+test "radar de CVE: cada um é pedido uma vez, mesmo citado por muitos e depois de reiniciar" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("cve.lua"));
+    e.setApproved(p, "cveawg.mitre.org", true);
+    e.waitIdle();
+    // Duas mensagens antes de a resposta chegar: um pedido só, e as duas ganham a nota.
+    Cve.say(&e, 301, "CVE-2021-44228");
+    Cve.say(&e, 302, "de novo cve-2021-44228 e CVE-2021-44228");
+    try std.testing.expectEqual(@as(usize, 1), T.http_n);
+    T.respond(200, Cve.log4j);
+    e.waitIdle();
+    try std.testing.expect(Cve.note(&e, 301).len > 0);
+    try std.testing.expect(Cve.note(&e, 302).len > 0);
+    // Já tem: nem pede.
+    Cve.say(&e, 303, "CVE-2021-44228 outra vez");
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    try std.testing.expect(Cve.note(&e, 303).len > 0);
+    // Reiniciou: continua guardado.
+    sync.sleepMs(3100);
+    e.waitIdle();
+    e.setEnabled(p, false);
+    e.waitIdle();
+    e.setEnabled(p, true);
+    e.waitIdle();
+    Cve.say(&e, 304, "CVE-2021-44228 depois de reiniciar");
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    try std.testing.expect(Cve.note(&e, 304).len > 0);
+    // Dois na mesma mensagem: a nota cresce conforme chegam, no máximo 2 no ar.
+    Cve.say(&e, 305, "CVE-2024-3094 e CVE-1999-0001 e CVE-2016-0001");
+    try std.testing.expectEqual(@as(usize, 2), T.http_n);
+}
+
+test "radar de CVE: erro de rede e limite do serviço não ficam guardados" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("cve.lua"));
+    e.setApproved(p, "cveawg.mitre.org", true);
+    e.waitIdle();
+    Cve.say(&e, 401, "CVE-2021-44228");
+    T.respond(500, "erro");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("", Cve.note(&e, 401));
+    // Da próxima vez, pede de novo.
+    Cve.say(&e, 402, "CVE-2021-44228");
+    try std.testing.expectEqual(@as(usize, 1), T.http_n);
+    T.respond(429, "{\"error\": \"Too Many Requests\", \"message\": \"20 per 1 minute\"}");
+    e.waitIdle();
+    // Limite: espera, sem nota e sem insistir; o aviso do serviço nunca aparece.
+    try std.testing.expectEqualStrings("", Cve.note(&e, 402));
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    Cve.say(&e, 403, "CVE-2024-3094");
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    try std.testing.expect(p.err() == null);
+}
+
+test "radar de CVE: o que não é CVE não chega ao Lua, e o painel ordena pelo mais grave" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("cve.lua"));
+    e.setApproved(p, "cveawg.mitre.org", true);
+    e.waitIdle();
+    for ([_][]const u8{ "conversa normal", "cve sem número", "CVE-21-1", "CVE-2021-1", "cve-abcd-1234" }) |text| {
+        Cve.say(&e, 500, text);
+        try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    }
+    // /cve abre o painel e consulta, sem precisar de mensagem.
+    try cmdOk(&e, "/cve CVE-1999-0001");
+    try std.testing.expect(e.panel_open == p);
+    T.respond(200, Cve.old);
+    e.waitIdle();
+    try cmdOk(&e, "/cve CVE-2021-44228");
+    T.respond(200, Cve.log4j);
+    e.waitIdle();
+    var first: []const u8 = "";
+    for (p.tree.?.nodes.items) |*n| if (n.kind == .item) {
+        first = n.key;
+        break;
+    };
+    try std.testing.expectEqualStrings("CVE-2021-44228", first);
+    e.panelGesture(p, nodeKey(p.tree.?, "openCVE-2021-44228").click, null);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("https://www.cve.org/CVERecord?id=CVE-2021-44228", T.opened[0..T.opened_len]);
+    try cmdOk(&e, "/cve batata");
+    try std.testing.expect(std.mem.indexOf(u8, lastNote(), "/cve") != null);
+}
+
+// --- O que perdi ---------------------------------------------------------------------
+
+test "o que perdi: resume as não lidas, com menções, perguntas e links" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const files = [_]FileRef{.{ .name = "foto.png", .url = "https://cdn.exemplo.com/foto.png" }};
+    const msgs = [_]Message{
+        // Já lidas: não contam.
+        .{ .id = 100, .content = "velha com pergunta?", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 },
+        .{ .id = 101, .content = "https://velho.com", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1001 },
+        // Novas.
+        .{ .id = 200, .content = "oi <@1>, viu isso?", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 2000, .mentions_me = true },
+        .{ .id = 201, .content = "vi sim", .author = 8, .author_name = "bia", .channel = 42, .channel_name = "geral", .timestamp = 2010, .reply_to = 200 },
+        .{ .id = 202, .content = "alguém sabe o preço?", .author = 9, .author_name = "caio", .channel = 42, .channel_name = "geral", .timestamp = 5000 },
+        .{ .id = 203, .content = "veja https://a.com/x?y=1.", .author = 9, .author_name = "caio", .channel = 42, .channel_name = "geral", .timestamp = 5010 },
+        .{ .id = 204, .content = "isto aqui https://a.com/x?y=1 é um link", .author = 8, .author_name = "bia", .channel = 42, .channel_name = "geral", .timestamp = 9000 },
+        .{ .id = 205, .content = "", .author = 8, .author_name = "bia", .channel = 42, .channel_name = "geral", .timestamp = 9010, .attachments = 1, .files = &files },
+        .{ .id = 206, .content = "e aí, tudo bem?", .author = 8, .author_name = "bia", .channel = 42, .channel_name = "geral", .timestamp = 20000 },
+        .{ .id = 207, .content = "minha própria pergunta?", .author = 1, .author_name = "eu", .channel = 42, .channel_name = "geral", .timestamp = 20700, .mine = true },
+    };
+    T.loaded = &msgs;
+    T.last_read = 101;
+    defer T.last_read = 0;
+    const p = testOne(&e, Bundled.src("catchup.lua"));
+    try std.testing.expect(p.err() == null);
+    // Só olha quando pedem: fechado, nada de lista.
+    try std.testing.expect(!hasKey(p.tree.?, "person1"));
+    try cmdOk(&e, "/perdi");
+    try std.testing.expect(e.panel_open == p);
+    e.waitIdle();
+    const t = p.tree.?;
+    // Quantas por pessoa, da que mais falou para a que menos.
+    const top = nodeKey(t, "person1");
+    try std.testing.expectEqualStrings("bia", top.text);
+    try std.testing.expectEqual(@as(f32, 4), top.value);
+    try std.testing.expectEqualStrings("caio", nodeKey(t, "person2").text);
+    try std.testing.expectEqualStrings("ana", nodeKey(t, "person3").text);
+    try std.testing.expect(!hasKey(t, "person4"));
+    // A menção, com a marca do Discord trocada por algo legível.
+    const mention = nodeKey(t, "mention1");
+    try std.testing.expectEqualStrings("ana", mention.text);
+    try std.testing.expectEqualStrings("oi @…, viu isso?", mention.sub);
+    try std.testing.expect(!hasKey(t, "mention2"));
+    // Perguntas: a de "vi sim" foi respondida; a do caio teve resposta logo depois de
+    // outra pessoa? Não: ele mesmo continuou, e a próxima pessoa veio muito depois.
+    var questions: usize = 0;
+    var has_price = false;
+    for (t.nodes.items) |*n| if (n.kind == .item and std.mem.startsWith(u8, n.key, "question")) {
+        questions += 1;
+        if (std.mem.indexOf(u8, n.sub, "preço") != null) has_price = true;
+        try std.testing.expect(std.mem.indexOf(u8, n.sub, "viu isso") == null);
+        try std.testing.expect(std.mem.indexOf(u8, n.sub, "própria") == null);
+        try std.testing.expect(std.mem.indexOf(u8, n.sub, "velha") == null);
+        try std.testing.expect(std.mem.indexOf(u8, n.sub, "um link") == null);
+    };
+    try std.testing.expect(has_price);
+    try std.testing.expectEqual(@as(usize, 2), questions);
+    // Links e arquivos, sem repetir, e o link velho de fora.
+    var links: usize = 0;
+    for (t.nodes.items) |*n| if (std.mem.startsWith(u8, n.key, "link") and n.kind == .item) {
+        links += 1;
+        try std.testing.expect(std.mem.indexOf(u8, n.sub, "velho") == null);
+    };
+    try std.testing.expectEqual(@as(usize, 2), links);
+    // Um clique leva à mensagem.
+    e.panelGesture(p, nodeKey(p.tree.?, "mention1").click, null);
+    e.waitIdle();
+    try std.testing.expectEqual(@as(u64, 200), T.jump_id);
+    // Fechou: some da memória.
+    e.openPanel(null);
+    e.waitIdle();
+    try std.testing.expect(!hasKey(p.tree.?, "person1"));
+    try std.testing.expect(!p.man.has(.storage));
+}
+
+test "o que perdi: sem nada novo mostra as últimas, e dá para escolher quantas" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    var msgs: [120]Message = undefined;
+    for (&msgs, 0..) |*m, i| {
+        m.* = .{ .id = 1000 + i, .content = "oi", .author = if (i < 110) 7 else 8, .author_name = if (i < 110) "ana" else "bia", .channel = 42, .channel_name = "geral", .timestamp = @intCast(1000 + i) };
+    }
+    T.loaded = &msgs;
+    const p = testOne(&e, Bundled.src("catchup.lua"));
+    e.openPanel(p);
+    e.waitIdle();
+    try std.testing.expect(hasKey(p.tree.?, "nothing-new"));
+    try std.testing.expectEqual(@as(f32, 90), nodeKey(p.tree.?, "person1").value);
+    sync.sleepMs(520);
+    e.panelGesture(p, nodeKey(p.tree.?, "mode").change, "50");
+    e.waitIdle();
+    try std.testing.expect(!hasKey(p.tree.?, "nothing-new"));
+    try std.testing.expectEqual(@as(f32, 40), nodeKey(p.tree.?, "person1").value);
+    try std.testing.expectEqualStrings("ana", nodeKey(p.tree.?, "person1").text);
+    try std.testing.expectEqual(@as(f32, 10), nodeKey(p.tree.?, "person2").value);
+}
+
+// --- Cartões do GitHub ---------------------------------------------------------------
+
+const Gh = struct {
+    const repo = @embedFile("testdata/github/repo-curl.json");
+    /// O #1 do curl é um pull request antigo.
+    const old_pr = @embedFile("testdata/github/issue-curl.json");
+    const moved = @embedFile("testdata/github/moved.json");
+    const missing = @embedFile("testdata/github/missing.json");
+    const limit = "{\"message\":\"API rate limit exceeded for 1.2.3.4. (But here's the good news: Authenticated requests get a higher rate limit.)\",\"documentation_url\":\"https://docs.github.com/rest\",\"status\":\"403\"}";
+
+    fn start(e: *Engine) *Plugin {
+        const p = testOne(e, Bundled.src("github.lua"));
+        e.setApproved(p, "api.github.com", true);
+        e.waitIdle();
+        return p;
+    }
+};
+
+test "cartões do GitHub: nada sai sem aprovar, e o que sai é só o nome e o número" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("github.lua"));
+    try std.testing.expect(p.err() == null);
+    Cve.say(&e, 601, "olha o curl/curl#1 que coisa");
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    e.setApproved(p, "api.github.com", true);
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 1), T.http_n);
+    try std.testing.expectEqualStrings("https://api.github.com/repos/curl/curl/issues/1", Cve.lastUrl());
+    T.respond(200, Gh.old_pr);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("🔀 curl/curl#1 · fechado · docs/libcurl/libcurl.m4 bug", Cve.note(&e, 601));
+}
+
+test "cartões do GitHub: respostas reais e cada forma de citar" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = Gh.start(&e);
+    // Repositório: estrelas, linguagem e descrição.
+    Cve.say(&e, 611, "usa https://github.com/curl/curl aí");
+    try std.testing.expectEqualStrings("https://api.github.com/repos/curl/curl", Cve.lastUrl());
+    T.respond(200, Gh.repo);
+    e.waitIdle();
+    const n = Cve.note(&e, 611);
+    try std.testing.expect(std.mem.startsWith(u8, n, "📦 curl/curl · ★ "));
+    try std.testing.expect(std.mem.indexOf(u8, n, " · C · ") != null);
+    // Mesmo repositório em qualquer forma: já tem.
+    Cve.say(&e, 612, "https://www.github.com/curl/curl/blob/master/README.md");
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    try std.testing.expect(Cve.note(&e, 612).len > 0);
+    // Link de pull request e de issue viram o mesmo pedido.
+    Cve.say(&e, 613, "https://github.com/zig-lang/zig/pull/42.");
+    try std.testing.expectEqualStrings("https://api.github.com/repos/zig-lang/zig/issues/42", Cve.lastUrl());
+    T.respond(200, "{\"title\":\"Um PR\",\"state\":\"closed\",\"pull_request\":{\"merged_at\":\"2020-01-01T00:00:00Z\"}}");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("🔀 zig-lang/zig#42 · mesclado · Um PR", Cve.note(&e, 613));
+    Cve.say(&e, 614, "(veja ab/cd#7)");
+    T.respond(200, "{\"title\":\"Uma issue\",\"state\":\"open\"}");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("🐞 ab/cd#7 · aberta · Uma issue", Cve.note(&e, 614));
+    Cve.say(&e, 615, "ab/cd#8");
+    T.respond(200, "{\"title\":\"Sem plano\",\"state\":\"closed\",\"state_reason\":\"not_planned\"}");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("🐞 ab/cd#8 · fechada sem correção · Sem plano", Cve.note(&e, 615));
+    Cve.say(&e, 616, "ab/cd#9");
+    T.respond(200, "{\"title\":\"Em curso\",\"state\":\"open\",\"draft\":true,\"pull_request\":{\"merged_at\":null}}");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("🔀 ab/cd#9 · rascunho · Em curso", Cve.note(&e, 616));
+    // Inexistente ou privado: sem nota nenhuma, e sem pedir de novo.
+    Cve.say(&e, 617, "https://github.com/curl/curl/issues/99999999");
+    T.respond(404, Gh.missing);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("", Cve.note(&e, 617));
+    Cve.say(&e, 618, "https://github.com/curl/curl/issues/99999999");
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    try std.testing.expect(p.err() == null);
+}
+
+test "cartões do GitHub: o que não é referência não gasta o limite" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    _ = Gh.start(&e);
+    for ([_][]const u8{
+        "conversa normal",
+        "canal <#123> e issue #45",
+        "e/ou#1 não",
+        "https://docs.github.com/rest/guides/best-practices",
+        "https://gist.github.com/alguem/abc",
+        "https://github.com/",
+        "https://github.com/settings/profile",
+        "https://github.com/orgs/curl/people",
+        "https://github.com/marketplace/actions",
+        "https://github.com/curl",
+        "https://notgithub.com/curl/curl",
+        "`curl/curl#1` em código",
+        "```\nhttps://github.com/curl/curl\n```",
+        "https://exemplo.com/a/b#1",
+    }) |text| {
+        Cve.say(&e, 620, text);
+        if (T.http_n != 0) {
+            std.debug.print("pediu para: {s}\n  {s}\n", .{ text, Cve.lastUrl() });
+            return error.PedidoAToa;
+        }
+    }
+}
+
+test "cartões do GitHub: segue um repositório que mudou de nome, uma vez só" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    _ = Gh.start(&e);
+    Cve.say(&e, 631, "https://github.com/docker/docker");
+    T.respond(301, Gh.moved);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("https://api.github.com/repositories/7691631", Cve.lastUrl());
+    T.respond(200, "{\"full_name\":\"moby/moby\",\"stargazers_count\":1500,\"archived\":true}");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("📦 moby/moby · ★ 1.5k · arquivado", Cve.note(&e, 631));
+    // Outro redirecionamento, ou para fora da API: para aí.
+    Cve.say(&e, 632, "https://github.com/a/fora");
+    T.respond(301, "{\"message\":\"Moved Permanently\",\"url\":\"https://exemplo.com/roubo\"}");
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    try std.testing.expectEqualStrings("", Cve.note(&e, 632));
+    Cve.say(&e, 633, "https://github.com/a/duas");
+    T.respond(301, "{\"url\":\"https://api.github.com/repositories/1\"}");
+    e.waitIdle();
+    T.respond(301, "{\"url\":\"https://api.github.com/repositories/2\"}");
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+}
+
+test "cartões do GitHub: passado o limite, espera sem insistir nem mostrar o aviso" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = Gh.start(&e);
+    Cve.say(&e, 641, "https://github.com/curl/curl");
+    T.respond(403, Gh.limit);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("", Cve.note(&e, 641));
+    // Mais citações não geram pedido nenhum até o tempo passar.
+    Cve.say(&e, 642, "https://github.com/ziglang/zig");
+    Cve.say(&e, 643, "https://github.com/curl/curl");
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    try std.testing.expect(p.err() == null);
+    // No próprio plugin, no máximo 30 pedidos por hora: sobra para o resto da máquina.
+    var f = T.engine();
+    defer f.deinit();
+    T.wipeDisk();
+    _ = Gh.start(&f);
+    var made: usize = 0;
+    var i: usize = 0;
+    while (i < 40) : (i += 1) {
+        var buf: [64]u8 = undefined;
+        Cve.say(&f, 700 + i, std.fmt.bufPrint(&buf, "https://github.com/a/r{d}", .{i}) catch unreachable);
+        while (T.http_n > 0) {
+            made += 1;
+            T.respond(200, "{\"full_name\":\"a/r\"}");
+            f.waitIdle();
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 30), made);
 }
