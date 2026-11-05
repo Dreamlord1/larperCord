@@ -9,7 +9,7 @@ Open settings with `Ctrl+,`. Changes apply right away and are saved in `~/.confi
 | **My Account** | Account details and log out |
 | **Privacy** | Typing indicator, Tenor and Giphy animation, streamer mode, message log, keep messages on disk, clear cache, and the network proxy |
 | **Alerts & Filters** | Alert words, word filter, ignored people and focus mode |
-| **Appearance** | Mode (dark, light, follow the system), theme with thumbnails and its options, font scale, compact mode, avatars, 24-hour clock, status ring, accent color, corners, custom theme colors, member list and status bar |
+| **Appearance** | Mode (dark, light, follow the system), theme with thumbnails and its options, font scale, compact mode, avatars, 24-hour clock, status ring, accent color, corners, custom theme colors, member list, status bar and resetting panel sizes |
 | **Accessibility** | Reduce motion, role colors, underline links |
 | **Chat** | Autoplay GIFs, images from links, data saver, always show spoilers, markdown preview, open at the first unread |
 | **Voice** | Microphone and output, volumes, voice activity or push-to-talk, microphone test, filters and call sounds. See [Voice calls](page:voice) |

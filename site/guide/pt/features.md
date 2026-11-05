@@ -55,6 +55,8 @@ Também: títulos com `#`, `##` e `###`, texto pequeno com `-#`, citações com 
 
 ## Bots e cartões
 
+Bots e webhooks levam a etiqueta BOT ao lado do nome, com um ✓ nos bots verificados. Cada mensagem de webhook fica com o nome e a foto com que foi enviada, e o cartão dele não tem a caixa "Mensagem", porque webhook não é uma conta.
+
 Embeds e as mensagens com componentes novos do Discord mostram texto, miniaturas, separadores, galerias, arquivos e botões de link. O texto deles pode ser selecionado e copiado com Ctrl+C. Encaminhadas e enquetes aparecem como cartões; para votar, use o Discord. Botões que falam com um bot ainda não são suportados, então não aparecem.
 
 ## Mídia
@@ -87,6 +89,7 @@ A busca ignora maiúsculas e acentos, então `nao` encontra `não`.
 
 - **Abas** para os canais abertos. `Ctrl+Clique` abre um em nova aba, e o clique do meio fecha.
 - **Tela dividida**: "Abrir ao lado" no menu de um canal coloca até 3 conversas lado a lado, cada uma com o próprio histórico e posição de rolagem. A caixa de texto e o cabeçalho seguem o painel em foco.
+- **Painéis ajustáveis**: arraste a borda da lista de canais, da lista de membros ou dos painéis da tela dividida. Duplo clique volta à largura do tema. A escolha fica salva, vale nos outros temas e cede quando a janela fica pequena demais para a conversa; Configurações → Aparência restaura tudo.
 - **Esconder a lista de membros ou a barra de status** em Configurações → Aparência, e a conversa ocupa o espaço.
 - **Pastas de servidores** das suas configurações do Discord, atualizadas ao vivo.
 - **Tela de amigos**: pedidos, aceitar e começar DMs.
@@ -95,6 +98,7 @@ A busca ignora maiúsculas e acentos, então `nao` encontra `não`.
 
 - **Cartão de perfil** com banner, cor de destaque, bio em markdown, pronomes, amigos e servidores em comum, jogo atual com o tempo decorrido, e a call em que a pessoa está, com um botão Entrar.
 - **Perfil completo** com abas: atividade, amigos e servidores em comum, conexões, emblemas e a sua nota privada.
+- **Ver maior**: clique no banner ou na foto de um perfil para abrir a imagem inteira. O banner de um servidor abre do mesmo jeito na lista de canais, e os menus do servidor e da pessoa têm Ver ícone e Ver foto de perfil.
 - **Seletor de status**: online, ausente, não perturbe, invisível.
 - **Cargos**: lista de membros por cargo com as cores reais, e dar ou tirar cargos quando você tem permissão.
 

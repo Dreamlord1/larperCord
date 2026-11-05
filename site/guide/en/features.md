@@ -55,6 +55,8 @@ Also: `#`, `##` and `###` headings, `-#` small text, `>` and `>>>` quotes, lists
 
 ## Bots and cards
 
+Bots and webhooks carry a BOT tag next to the name, with a check mark for verified bots. Each webhook message keeps the name and picture it was sent with, and its card has no "Message" box, since a webhook isn't an account.
+
 Embeds and Discord's newer component messages show text, thumbnails, separators, galleries, files and link buttons. Text in them can be selected and copied with Ctrl+C. Forwarded messages and polls appear as cards; to vote, use Discord. Buttons that talk to a bot aren't supported yet, so they aren't shown.
 
 ## Media
@@ -87,6 +89,7 @@ Search ignores case and accents, so `nao` finds `não`.
 
 - **Tabs** for open channels. `Ctrl+Click` opens one in a new tab, and middle-click closes.
 - **Split view**: "Open to the Side" in a channel's menu puts up to 3 conversations side by side, each with its own history and scroll position. The composer and header follow the focused pane.
+- **Resizable panels**: drag the edge of the channel list, the member list or the panes of a split view. A double-click goes back to the theme's width. Your choice is saved, follows you between themes, and gives way when the window gets too small for the conversation; Settings → Appearance can reset it.
 - **Hide the member list or status bar** in Settings → Appearance, and the conversation takes the space.
 - **Server folders** from your Discord settings, updated live.
 - **Friends screen**: requests, accepting them and starting DMs.
@@ -95,6 +98,7 @@ Search ignores case and accents, so `nao` finds `não`.
 
 - **Profile card** with banner, accent color, bio in markdown, pronouns, mutual friends and servers, current game with elapsed time, and the call they're in, with a Join button.
 - **Full profile** with tabs: activity, mutual friends and servers, connections, badges and your private note.
+- **See it bigger**: click a profile banner or picture to open it in full. A server's banner opens the same way from the channel list, and the server and user menus have View Icon and View Picture.
 - **Status picker**: online, idle, do not disturb, invisible.
 - **Roles**: member list by role with real colors, and giving or removing roles when you have permission.
 
