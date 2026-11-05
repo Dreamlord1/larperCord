@@ -1217,9 +1217,9 @@ fn codeCopied(app: *App) bool {
     if (t.len == 0) return true;
     // A área de transferência do Windows guarda as quebras de linha como \r\n.
     var i: usize = 0;
-    for (t) |ch| {
-        if (ch == '\r') continue;
-        if (i >= code_body.len or code_body[i] != ch) return false;
+    for (t) |byte| {
+        if (byte == '\r') continue;
+        if (i >= code_body.len or code_body[i] != byte) return false;
         i += 1;
     }
     return i == code_body.len;

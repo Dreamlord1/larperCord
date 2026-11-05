@@ -576,8 +576,10 @@ pub const App = struct {
 
     fn tick(data: ?*anyopaque, _: c.SDL_TimerID, interval: u32) callconv(.c) u32 {
         const app: *App = @ptrCast(@alignCast(data.?));
-        // Aqui, e não na thread da UI: varrer as arenas leva milissegundos.
-        if (app.trim_wanted.swap(false, .acq_rel)) mem_tune.trim();
+        // Aqui, e não na thread da UI: varrer as arenas leva milissegundos. Em
+        // call fica para depois: durante a varredura, quem pede memória espera,
+        // e a voz não pode esperar. O pedido continua valendo até a call acabar.
+        if (!voz_audio.in_call.load(.acquire) and app.trim_wanted.swap(false, .acq_rel)) mem_tune.trim();
         // O número da RAM: só se está na tela. Varrer o mapa de memória do
         // processo leva milissegundos, e o tique roda mesmo com tudo parado.
         const ram_seen = @atomicRmw(bool, &app.stats.ram_seen, .Xchg, false, .monotonic);

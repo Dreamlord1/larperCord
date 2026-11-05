@@ -166,6 +166,10 @@ pub const Voice = struct {
 
     fn threadMain(data: ?*anyopaque) callconv(.c) c_int {
         const v: *Voice = @ptrCast(@alignCast(data.?));
+        // Compilar ou abrir imagens em paralelo não pode picotar a call.
+        _ = c.SDL_SetCurrentThreadPriority(c.SDL_THREAD_PRIORITY_HIGH);
+        voz_audio.in_call.store(true, .release);
+        defer voz_audio.in_call.store(false, .release);
         if (!v.local) v.status(.connecting);
         // O Worker tem buffers grandes: no heap, não na pilha da thread.
         const worker = alloc.create(Worker) catch {
@@ -239,6 +243,7 @@ const Worker = struct {
     spurt_start: bool = true,
     // Diagnóstico (LARPER_VOICE_DEBUG).
     mic_peak_rms: f64 = 0,
+    stats: Stats = .{},
     sent_frames: u64 = 0,
     stats_ms: i64 = 0,
     ws_in: std.ArrayList(u8) = .empty,
@@ -393,9 +398,12 @@ const Worker = struct {
             const next = if (w.connected) @min(w.next_hb, w.next_frame) else w.next_hb;
             const wait: c_int = @intCast(std.math.clamp(next - now, 0, 50));
             w.waitSockets(wait);
+            const woke = nowMs();
+            w.stats.wake_late_ms = @max(w.stats.wake_late_ms, woke - now - wait);
             w.readWs();
             w.readUdp();
             w.tick(nowMs());
+            w.stats.busy_ms = @max(w.stats.busy_ms, nowMs() - woke);
         }
         return w.end.?;
     }
@@ -875,6 +883,8 @@ const Worker = struct {
             .blocked = blocked or w.mic.stream == null,
         });
         if (debug_on and now - w.stats_ms >= 3000) {
+            dbg("recebido: {d} pacotes, fora de ordem {d}, perdidos refeitos {d}, fila vazia {d}, descartados {d}, recomeços {d}, sem decifrar {d}; thread: acordou atrasada até {d} ms, ocupada até {d} ms", .{ w.stats.packets, w.stats.late, w.stats.rebuilt, w.stats.starved, w.stats.skipped, w.stats.cleared, w.stats.undecrypted, w.stats.wake_late_ms, w.stats.busy_ms });
+            w.stats = .{};
             dbg("mic: {s}, rms máx {d:.0}, {d} quadros enviados, DAVE {s}", .{ if (w.mic.stream == null) "sem microfone" else if (blocked) "mudo" else "ligado", w.mic_peak_rms, w.sent_frames, if (w.dave) |dv| (if (dv.enabled) "cifrando" else "esperando") else "não" });
             w.stats_ms = now;
             w.mic_peak_rms = 0;
@@ -996,7 +1006,10 @@ const Worker = struct {
         var dave_out: [2048]u8 = undefined;
         if (frame.len >= 2 and frame[frame.len - 1] == 0xFA and frame[frame.len - 2] == 0xFA) {
             const dave = if (w.dave) |*d| d else return;
-            const n = dave.decrypt(ssrc, src.user, frame, &dave_out) orelse return;
+            const n = dave.decrypt(ssrc, src.user, frame, &dave_out) orelse {
+                w.stats.undecrypted += 1;
+                return;
+            };
             frame = dave_out[0..n];
         }
         w.play(src, frame, std.mem.readInt(u16, buf[2..4], .big));
@@ -1124,33 +1137,47 @@ const Worker = struct {
             if (src.user != 0) w.v.emit(.{ .voice_speaking = .{ .user = src.user, .speaking = true } });
         }
         src.last_ms = now;
+        w.stats.packets += 1;
         if (w.deaf_applied) {
-            src.last_seq = seq;
+            src.jitter.last_seq = seq;
             return;
         }
         const st = src.stream orelse return;
+        const queued_ms: u32 = @intCast(@divTrunc(@max(c.SDL_GetAudioStreamQueued(st), 0), bytes_per_ms));
+        const plan = src.jitter.plan(seq, spurt, queued_ms);
+        if (plan.late) {
+            w.stats.late += 1;
+            return;
+        }
+        if (plan.clear) {
+            w.stats.cleared += 1;
+            _ = c.SDL_ClearAudioStream(st);
+        }
+        if (!spurt and !plan.clear and plan.pad_ms > 0) w.stats.starved += 1;
+        if (plan.pad_ms > 0) {
+            const silence_buf: [voz.Jitter.cushion_max * bytes_per_ms]u8 = @splat(0);
+            _ = c.SDL_PutAudioStreamData(st, &silence_buf, @intCast(@min(plan.pad_ms, voz.Jitter.cushion_max) * bytes_per_ms));
+        }
+        // O que se perdeu vem antes deste pacote, para o ouvido e para o Opus: o
+        // decodificador continua de onde parou, e fora de ordem a emenda estala.
+        if (plan.lost > 0) {
+            w.stats.rebuilt += plan.lost;
+            var fill: [frame_samples * channels]i16 = undefined;
+            for (0..plan.lost) |i| {
+                // O último dá para recuperar do próprio pacote (FEC do Opus);
+                // sem esses dados, ele faz o mesmo que os outros: inventa.
+                const fec = i + 1 == plan.lost;
+                const m = c.opus_decode(src.dec, if (fec) frame.ptr else null, if (fec) @intCast(frame.len) else 0, &fill, frame_samples, @intFromBool(fec));
+                if (m > 0) _ = c.SDL_PutAudioStreamData(st, &fill, @intCast(@as(usize, @intCast(m)) * channels * @sizeOf(i16)));
+            }
+        }
         var pcm: [5760 * channels]i16 = undefined;
         const n = c.opus_decode(src.dec, frame.ptr, @intCast(frame.len), &pcm, 5760, 0);
         if (n <= 0) return;
-        const queued = c.SDL_GetAudioStreamQueued(st);
-        if (spurt or queued > 250 * bytes_per_ms) {
-            // Fila velha demais (a rede engasgou): recomeça no presente.
-            if (queued > 250 * bytes_per_ms) _ = c.SDL_ClearAudioStream(st);
-            const pad: [60 * bytes_per_ms]u8 = @splat(0);
-            _ = c.SDL_PutAudioStreamData(st, &pad, pad.len);
-        } else {
-            // Pacotes perdidos no meio da fala: o Opus inventa o pedaço que
-            // faltou (PLC) em vez de um buraco.
-            const lost = seq -% src.last_seq -% 1;
-            if (lost > 0 and lost <= 3) {
-                var plc: [frame_samples * channels]i16 = undefined;
-                for (0..lost) |_| {
-                    const m = c.opus_decode(src.dec, null, 0, &plc, frame_samples, 0);
-                    if (m > 0) _ = c.SDL_PutAudioStreamData(st, &plc, @intCast(@as(usize, @intCast(m)) * channels * @sizeOf(i16)));
-                }
-            }
+        if (plan.skip) {
+            w.stats.skipped += 1;
+            return;
         }
-        src.last_seq = seq;
         _ = c.SDL_PutAudioStreamData(st, &pcm, @intCast(@as(usize, @intCast(n)) * channels * @sizeOf(i16)));
     }
 
@@ -1163,6 +1190,19 @@ const Worker = struct {
     }
 };
 
+/// O que aconteceu com o áudio desde o último relatório (LARPER_VOICE_DEBUG=1).
+const Stats = struct {
+    packets: u32 = 0,
+    late: u32 = 0,
+    rebuilt: u32 = 0,
+    starved: u32 = 0,
+    skipped: u32 = 0,
+    cleared: u32 = 0,
+    undecrypted: u32 = 0,
+    wake_late_ms: i64 = 0,
+    busy_ms: i64 = 0,
+};
+
 /// Uma pessoa da call: o decodificador Opus e o stream de áudio dela.
 const Source = struct {
     ssrc: u32,
@@ -1172,7 +1212,7 @@ const Source = struct {
     speaking: bool = false,
     last_ms: i64 = 0,
     last_emit_ms: i64 = 0,
-    last_seq: u16 = 0,
+    jitter: voz.Jitter = .{},
 
     fn deinit(s: *Source) void {
         c.opus_decoder_destroy(s.dec);
@@ -1208,6 +1248,7 @@ const Dave = struct {
 
     fn init(group: Id, me: Id, version: u16) ?Dave {
         var d: Dave = .{ .group = group, .me = me, .version = version, .pending_version = version };
+        c.daveSetLogSinkCallback(logSink);
         d.session = c.daveSessionCreate(null, "", mlsFailure, null);
         if (d.session == null) return null;
         var idbuf: [24]u8 = undefined;
@@ -1230,6 +1271,12 @@ const Dave = struct {
         if (d.session != null) c.daveSessionDestroy(d.session);
         d.users.deinit(alloc);
         d.ssrc_users.deinit(alloc);
+    }
+
+    /// O libdave escreve cada falha e os pacotes do MLS no stderr, e essa escrita
+    /// para a thread de voz se o terminal estiver lento.
+    fn logSink(_: c.DAVELoggingSeverity, file: [*c]const u8, line: c_int, message: [*c]const u8) callconv(.c) void {
+        if (debug_on) std.debug.print("[dave] {s}:{d} {s}\n", .{ std.mem.span(file), line, std.mem.span(message) });
     }
 
     fn mlsFailure(source: [*c]const u8, reason: [*c]const u8, _: ?*anyopaque) callconv(.c) void {
@@ -1324,6 +1371,7 @@ const Dave = struct {
         if (c.daveCommitResultIsIgnored(res)) return null;
         if (c.daveCommitResultIsFailed(res)) return false;
         d.ready = true;
+        d.applyReceiveKeys();
         if (tid == 0) d.executeTransition();
         return true;
     }
@@ -1336,6 +1384,7 @@ const Dave = struct {
         if (res == null) return false;
         c.daveWelcomeResultDestroy(res);
         d.ready = true;
+        d.applyReceiveKeys();
         if (tid == 0) d.executeTransition();
         return true;
     }
@@ -1349,7 +1398,16 @@ const Dave = struct {
         }
     }
 
-    /// O servidor mandou executar (op 22) ou a transição era a 0.
+    /// As chaves novas valem para ouvir assim que o grupo muda: quem recebe o
+    /// "execute" antes de nós já está cifrando com elas. As velhas continuam
+    /// aceitas por 10 s, para quem ainda não mudou.
+    fn applyReceiveKeys(d: *Dave) void {
+        var it = d.ssrc_users.iterator();
+        while (it.next()) |kv| d.setRatchet(kv.key_ptr.*, kv.value_ptr.*);
+    }
+
+    /// O servidor mandou executar (op 22) ou a transição era a 0: só o que
+    /// mandamos muda de chave aqui.
     fn executeTransition(d: *Dave) void {
         d.version = d.pending_version;
         if (d.version == 0) {
@@ -1367,8 +1425,6 @@ const Dave = struct {
             c.daveEncryptorAssignSsrcToCodec(d.encryptor, d.local_ssrc, c.DAVE_CODEC_OPUS);
             c.daveKeyRatchetDestroy(self_ratchet);
         }
-        var it = d.ssrc_users.iterator();
-        while (it.next()) |kv| d.setRatchet(kv.key_ptr.*, kv.value_ptr.*);
         d.enabled = c.daveEncryptorHasKeyRatchet(d.encryptor);
     }
 

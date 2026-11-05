@@ -13,6 +13,8 @@
 
 **Voz**
 - Supressão de ruído no microfone com RNNoise, ligada por padrão e trocável em plena call. Não roda com a tecla do aperte para falar solta.
+- Menos engasgos e nada de estalos quando um pacote se perde ou chega fora de ordem; a folga de áudio cresce quando a rede engasga.
+- As pessoas não somem mais por um instante quando alguém entra ou sai da call.
 
 **Mensagens**
 - Mensagens de bot no formato novo de componentes, que apareciam em branco. Encaminhadas e enquetes aparecem como cartões.

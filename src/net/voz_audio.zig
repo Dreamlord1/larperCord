@@ -31,6 +31,9 @@ var init_lock: c.SDL_SpinLock = 0;
 
 /// SDL_InitSubSystem não pode rodar em duas threads ao mesmo tempo, e aqui
 /// a call, o medidor e o vídeo abrem o áudio cada um por sua conta.
+/// Numa call agora? (Nada que segure a memória do processo deve rodar.)
+pub var in_call = std.atomic.Value(bool).init(false);
+
 pub fn acquire() bool {
     c.SDL_LockSpinlock(&init_lock);
     defer c.SDL_UnlockSpinlock(&init_lock);

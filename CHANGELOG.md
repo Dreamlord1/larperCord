@@ -13,6 +13,8 @@
 
 **Voice**
 - Microphone noise suppression with RNNoise, on by default and switchable mid-call. It doesn't run with the push-to-talk key released.
+- Less stutter and no more clicks when packets are lost or arrive out of order; the audio buffer grows when the network hiccups.
+- People no longer cut out for a moment when someone joins or leaves the call.
 
 **Messages**
 - Bot messages in the newer component format, which used to appear blank. Forwarded messages and polls appear as cards.
