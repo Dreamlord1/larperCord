@@ -808,15 +808,16 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
     d.endRegion(ctx, y + 12, r.x);
 }
 
-/// Ícone de um grupo: a imagem dele ou um círculo com duas pessoas.
+/// Ícone de um grupo: a imagem dele ou, sem ela, duas pessoas num círculo, na
+/// cor do grupo e do mesmo jeito do avatar de quem não tem foto.
 pub fn groupIcon(ctx: *d.Ctx, dl: *c.ImDrawList, ch: *const types.Channel, cx: f32, cy: f32, size: f32) void {
     const r: d.Rect = .{ .x = cx - size / 2, .y = cy - size / 2, .w = size, .h = size };
     if (ch.icon) |h| {
         var ub: [160]u8 = undefined;
         if (w.picture(ctx, dl, w.cdnUrl(&ub, .group, ch.id, h), r, size / 2, 1)) return;
     }
-    d.rect(dl, r, ctx.th.role(@intCast(ch.id % 8)).mix(ctx.col(.surface), 0.3), size / 2);
-    icons.members(dl, cx - 1, cy, d.Rgba.white.u());
+    d.rect(dl, r, ctx.th.role(@intCast(ch.id % 8)).mix(ctx.col(.surface), 0.28), size / 2);
+    icons.people(dl, cx, cy, size / 36, @max(1.7, size / 18), d.Rgba.white.alpha(0.92).u());
 }
 
 pub fn badgeAt(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, right: f32, cy: f32, count: u16) void {

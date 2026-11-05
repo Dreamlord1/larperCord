@@ -231,9 +231,7 @@ pub fn page(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
                 d.line(dl, cx - 6, cy, cx - 2, cy + 5, ink, 2.2);
                 d.line(dl, cx - 2, cy + 5, cx + 6, cy - 5, ink, 2.2);
             } else {
-                // Balão de conversa.
-                d.rect(dl, .{ .x = cx - 8, .y = cy - 6, .w = 16, .h = 11 }, ink, 4);
-                c.ImDrawList_AddTriangleFilled(dl, d.v(cx - 5, cy + 4), d.v(cx, cy + 4), d.v(cx - 6, cy + 9), ink.u());
+                icons.message(dl, cx, cy, ink.u());
             }
             if (bh.clicked) switch (b.act) {
                 .message => ctx.act(.{ .open_dm = uid }),
