@@ -1,5 +1,23 @@
 # What changed in each version
 
+## 0.5.1
+
+**Plugins**
+- Translate has options now: target and source language on its card in Settings → Plugins, and "Translate to…" on the right-click menu for one message. A 🌐 on the message toolbar, and `/tr es hello` puts a translation in the message box.
+- New bundled plugins: Clean links removes tracking from the links you send, Timestamps turns `/ts tomorrow 3pm` into a time each person sees in their own time zone, and Links and files lists what was shared in the channel.
+- Reminders understand times and dates (`/remind tomorrow 9am`, `/remind every day 8:30`), have a second list on the right-click menu, and what already fired can come back in 10 minutes.
+- Highlights shows how many you haven't seen, can mute a channel, follows edits, and can use desktop notifications.
+- Snippets appear as you type `;name`.
+- Bookmarks, the word filter, stats and the demo plugins no longer come with the app: the first two became built-in features. If you have them they keep working, and a button archives them to `plugins/antigos/`. Nothing is deleted.
+- A bundled plugin with a newer version shows an update button on its card, and keeps your file as `.bak`.
+- New for plugin authors: options on the card (`larper.settings`, `select`, `toggle`), second lists and toolbar buttons on menus, suggestions in the message box (`larper.completions`), rules for what you send (`larper.rewrite`), `larper.copy`, `larper.open`, a number on the panel tab, the `edit` and `dismiss` events and attachments in `larper.messages`.
+- A plugin that falls behind loses messages instead of holding up the others, and its card says so. Each plugin has its own limit of desktop notifications, so a noisy one doesn't eat a reminder's.
+- The card warns about a plugin that reads messages and can also send something out.
+- Closing a translation with its × no longer makes the next "Translate" do nothing.
+
+**Messages**
+- `<t:…>` times appear as a date or "in 2 hours", in your time zone, instead of the raw code.
+
 ## 0.5.0
 
 **Windows**

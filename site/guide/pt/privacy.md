@@ -55,7 +55,7 @@ Os plugins rodam com a sua conta, então só use arquivos que você leu e entend
 - Sem acesso a arquivos, programas nem sockets. `io`, `os.execute`, `os.remove`, `os.getenv`, `require`, `package`, `debug`, `coroutine`, `load`, `loadfile`, `dofile`, `collectgarbage` e `string.dump` não existem.
 - Cerca de 5 milhões de instruções por chamada e 8 MB de memória por plugin, numa thread só deles.
 - O `larper.send` só funciona direto de um gesto naquele plugin (comando, atalho, botão ou entrada de menu dele), porque respostas automáticas transformariam a sua conta num self-bot.
-- A única rede é o `larper.http`: só HTTPS, para hosts que o plugin declara e você aprova um a um em Configurações → Plugins, sem cookies, token nem cabeçalhos do Discord. Nada sai antes de você aprovar.
+- A única rede é o `larper.http`: só HTTPS, para hosts que o plugin declara e você aprova um a um em Configurações → Plugins, sem cookies, token nem cabeçalhos do Discord. Nada sai antes de você aprovar. Um plugin com a capacidade `links` também pode abrir um endereço no navegador, quando você clica em algo dele, e o cartão dele diz isso.
 - Os dados de um plugin ficam em `~/.config/larpercord/plugin-data/`, separados por plugin e por conta, e só você lê. Os plugins que vêm com o app não guardam o texto de mensagens depois que elas são apagadas.
 
 Os detalhes estão em [Plugins em Lua](page:plugins).
