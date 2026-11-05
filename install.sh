@@ -9,7 +9,7 @@ app_dir="${HOME}/.local/share/applications"
 icon_dir="${HOME}/.local/share/icons/hicolor/128x128/apps"
 
 if [ "${1:-}" = "--uninstall" ]; then
-    rm -f "$bin_dir/larpercord" "$bin_dir/larpercord.old" "$app_dir/larpercord.desktop" "$icon_dir/larpercord.png"
+    rm -f "$bin_dir/larpercord" "$bin_dir/larpercord.old" "$app_dir/dev.larpercord.desktop" "$app_dir/larpercord.desktop" "$icon_dir/larpercord.png"
     echo "larperCord removed. Your settings are still in ~/.config/larpercord."
     exit 0
 fi
@@ -31,7 +31,9 @@ curl -fsSL --proto '=https' -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"
 mkdir -p "$bin_dir" "$app_dir" "$icon_dir"
 install -m 755 "$tmp/larpercord-linux-x86_64" "$bin_dir/larpercord"
 curl -fsSL --proto '=https' -o "$icon_dir/larpercord.png" "https://raw.githubusercontent.com/$repo/main/docs/assets/icon-180.png" || true
-cat > "$app_dir/larpercord.desktop" <<DESK
+# Taskbars find the icon through the window's app ID, so the file carries that name.
+rm -f "$app_dir/larpercord.desktop"
+cat > "$app_dir/dev.larpercord.desktop" <<DESK
 [Desktop Entry]
 Type=Application
 Name=larperCord
@@ -40,6 +42,7 @@ Exec=$bin_dir/larpercord
 Icon=larpercord
 Terminal=false
 Categories=Network;InstantMessaging;
+StartupWMClass=dev.larpercord
 DESK
 
 # Libraries come from the system: report what is missing and how to get it.
