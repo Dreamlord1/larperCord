@@ -26,7 +26,7 @@ The official client is a whole browser dressed up as an app. On the same PC:
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord** | **44–47 MB**² | **0–0.4%** | **~6 MB** |
+| **larperCord** | **44–47 MB**² | **0–0.4%** | **~6.7 MB** |
 
 <sub>¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, 1280×800 window, `ReleaseFast` build.
 ² Demo data, a real window, GIF autoplay off, measured with `tools/membench.sh`. An animated GIF on screen costs about 2.5% CPU. About half of the total is the NVIDIA driver and system libraries (libcurl, OpenSSL). A real account uses more.</sub>
@@ -192,7 +192,7 @@ No magic, just many small decisions:
 7. **Memory has ceilings**: 1,500 messages per channel and 3,000 in total, with old ones freed.
 8. **fontconfig gets freed** after fonts are resolved (`FcFini` + `malloc_trim`).
 9. **No blinking cursor**: a cursor blinking on its own would keep the CPU awake.
-10. **A lean binary**: a release build without debug symbols, about 6 MB.
+10. **A lean binary**: a release build without debug symbols, about 6.7 MB.
 
 ## Building
 

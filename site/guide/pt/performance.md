@@ -5,7 +5,7 @@
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | 1.279 MB | 12–47% ¹ | 287 MB |
-| **larperCord** ² | **44–47 MB** | **0–0,4%** | **~6 MB** |
+| **larperCord** ² | **44–47 MB** | **0–0,4%** | **~6,7 MB** |
 
 ¹ Média desde a abertura, medida com `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
 

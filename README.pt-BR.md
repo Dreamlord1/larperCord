@@ -27,7 +27,7 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord** | **44–47 MB**² | **0–0,4%** | **~6 MB** |
+| **larperCord** | **44–47 MB**² | **0–0,4%** | **~6,7 MB** |
 
 <sub>¹ média desde a abertura, medida pelo `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
 ² Dados de demonstração, janela de verdade, reprodução automática de GIFs desligada, medido com `tools/membench.sh`. Um GIF animado na tela custa cerca de 2,5% de CPU. Cerca de metade do total é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL). Uma conta real usa mais.</sub>
@@ -193,7 +193,7 @@ Nada de mágica, só muitas decisões pequenas:
 7. **Memória com teto**: 1.500 mensagens por canal e 3.000 no total, e as antigas são liberadas.
 8. **fontconfig liberado** depois de resolver as fontes (`FcFini` + `malloc_trim`).
 9. **Sem cursor piscando**: o cursor piscando sozinho manteria a CPU acordada.
-10. **Binário enxuto**: build release sem símbolos de debug, cerca de 6 MB.
+10. **Binário enxuto**: build release sem símbolos de debug, cerca de 6,7 MB.
 
 ## Compilando
 

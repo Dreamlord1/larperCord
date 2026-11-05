@@ -1939,6 +1939,10 @@ const ops = [_]Op{
     expect("👍 pela barra de ações", reacted),
     .{ .click = .{ .dyn = tChipMine } },
     expect("clicar na reação tira ela", unreacted),
+    .{ .hover = .{ .dyn = tHoverMine } },
+    .{ .rclick = .{ .dyn = tThumbMine } },
+    .{ .wait = 150 },
+    expect("botão direito na barra de ações não reage", unreacted),
 
     s("menu do botão direito"),
     .{ .run = rememberCount },

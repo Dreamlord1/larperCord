@@ -5,7 +5,7 @@
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | 1,279 MB | 12–47% ¹ | 287 MB |
-| **larperCord** ² | **44–47 MB** | **0–0.4%** | **~6 MB** |
+| **larperCord** ² | **44–47 MB** | **0–0.4%** | **~6.7 MB** |
 
 ¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, a 1280×800 window, `ReleaseFast` build.
 

@@ -34,6 +34,7 @@
 - Markdown do Discord: títulos, texto pequeno, citações, listas e links `[texto](url)`. Número de linha nos blocos de código.
 - A seleção de texto dentro de um bloco de código agora aparece.
 - Esc cancela a edição de uma mensagem.
+- Botão direito ou do meio não dispara mais o clique normal de um botão. Na barra de ações da mensagem, por exemplo, ele adicionava a reação.
 - Erros no código enquanto digita um bloco, opcional, com o servidor de linguagem que você escolher.
 
 **Servidores e grupos**

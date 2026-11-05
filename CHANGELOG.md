@@ -34,6 +34,7 @@
 - Discord markdown: headings, small text, quotes, lists and `[text](url)` links. Line numbers in code blocks.
 - Selecting text inside a code block is visible now.
 - Esc cancels editing a message.
+- Right-clicking or middle-clicking a button no longer also triggers its normal click. In the message toolbar, for example, it used to add the reaction.
 - Optional code diagnostics while typing a code block, from a language server you choose.
 
 **Servers and groups**
@@ -43,9 +44,6 @@
 - Click a server banner to see it in full, and the same for a profile banner. Server and user menus can open the icon or picture too.
 - Friends, group and pin icons redrawn.
 
-**Lighter**
-- Smaller executable, faster opening and less memory.
-
 **Plugins**
 - Plugins now run on a thread of their own: a slow or stuck one can't make the interface stutter, and it's stopped with the error on its card. With no plugin on, the thread doesn't exist and no Lua is loaded.
 - New plugins that come with the app: bookmarks, reminders, highlights, local filter, snippets, translate and channel stats. Settings → Plugins installs them, without touching your files.
@@ -53,6 +51,9 @@
 - What plugins can do now: panels in a side panel you dock on either side, right-click entries on messages and people, badges, notes and collapsing with "show" under messages, their own storage, timers, desktop notifications, loaded messages, jumping to a message and inserting text in the message box.
 - Optional HTTPS for plugins, only to hosts you approve one by one, with no cookies, token or Discord headers.
 - Files in the plugin folder from before keep working, and the examples that came with the old versions aren't removed.
+
+**Lighter**
+- Smaller executable, faster opening and less memory.
 
 ## 0.4.0
 

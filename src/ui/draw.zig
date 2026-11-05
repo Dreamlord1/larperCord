@@ -335,10 +335,13 @@ fn hitEx(ctx: *Ctx, id: usize, r: Rect, under: bool) Hit {
     const held = c.ImGui_IsItemActive() and c.ImGui_IsMouseDown(0);
     const middle = c.ImGui_IsItemClickedEx(c.ImGuiMouseButton_Middle);
     const right = c.ImGui_IsItemClickedEx(c.ImGuiMouseButton_Right);
+    // O botão do ImGui dispara ao soltar, com qualquer botão do mouse; o direito e o
+    // do meio já tiveram a ação deles ao apertar.
+    const other_up = c.ImGui_IsMouseReleased(c.ImGuiMouseButton_Right) or c.ImGui_IsMouseReleased(c.ImGuiMouseButton_Middle);
     c.ImGui_PopID();
     if (hovered) c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_Hand);
     if (hovered) ctx.hot = true;
-    return .{ .hovered = hovered, .clicked = clicked and !middle and !right, .held = held, .middle = middle, .right = right, .ctrl = ctx.io.*.KeyCtrl };
+    return .{ .hovered = hovered, .clicked = clicked and !middle and !right and !other_up, .held = held, .middle = middle, .right = right, .ctrl = ctx.io.*.KeyCtrl };
 }
 
 /// Clique direto pelo mouse, para o que fica por cima de uma região com
