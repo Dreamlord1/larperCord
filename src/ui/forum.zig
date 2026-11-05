@@ -322,9 +322,11 @@ fn postRow(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, cs: *const ChannelSta
     const author = if (cs.preview_author != 0) cs.preview_author else t.owner;
     const y2 = rr.y + 34;
     w.avatar(ctx, dl, left + 9, y2 + 9, 18, author, .circle, null, 1);
-    const name = if (ctx.store.user(author)) |u| u.name else "?";
+    const who = ctx.store.user(author);
+    const name = if (who) |u| u.name else "?";
     const nx = left + 24;
-    const nw = d.textClipped(dl, fam.get(.semibold), 13, nx, y2 + 1, w.nameColor(ctx, ch.guild, author), name, 150);
+    const nw0 = d.textClipped(dl, fam.get(.semibold), 13, nx, y2 + 1, w.nameColor(ctx, ch.guild, author), name, 150);
+    const nw = nw0 + w.botTag(ctx, dl, nx + nw0, y2 + 9, who, false, 1);
     if (cs.preview.len > 0) {
         var pb: [200]u8 = undefined;
         const flat = flatten(&pb, cs.preview);

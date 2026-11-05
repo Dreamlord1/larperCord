@@ -78,9 +78,14 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const tty = d.is(n, "variant", "tty", "discord");
     const fs: f32 = if (tty) ctx.th.font_size - 1 else 15;
     var x = r.x + 16;
+    // Conversa estreita: o título sai e as abas apertam, mas todas continuam lá.
+    const narrow = !tty and r.w < 520;
+    const pad: f32 = if (narrow) 12 else 20;
     if (tty) {
         d.text(dl, fam.get(.bold), fs, r.x + 6, d.centerY(r, fs), ctx.col(.accent), i18n.tr("─ amigos ─", "─ friends ─"));
         x = r.x + 6 + d.width(fam.get(.bold), fs, i18n.tr("─ amigos ─", "─ friends ─")) + 12;
+    } else if (narrow) {
+        x = r.x + 8;
     } else {
         icons.members(dl, x + 10, r.y + r.h / 2, ctx.col(.muted).u());
         d.text(dl, fam.get(.semibold), 16, x + 26, d.centerY(r, 16), ctx.col(.text), i18n.tr("Amigos", "Friends"));
@@ -96,7 +101,7 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         const font = fam.get(if (sel) .semibold else .medium);
         const tw = d.width(font, fs, label);
         const extra: f32 = if (t == .pending and pending > 0) 24 else 0;
-        const tr: d.Rect = .{ .x = x, .y = r.y + r.h / 2 - 14, .w = tw + 20 + extra, .h = 28 };
+        const tr: d.Rect = .{ .x = x, .y = r.y + r.h / 2 - 14, .w = tw + pad + extra, .h = 28 };
         if (tr.right() > r.right() - 8) break;
         const hb = d.hit(ctx, 40 + @as(usize, @intFromEnum(t)), tr);
         qa.mark(tr, "friends-tab:{s}", .{@tagName(t)});
@@ -106,16 +111,16 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
             if (sel) d.rect(dl, tr, ctx.col(.accent), 0);
         } else if (k > 0.01) d.rect(dl, tr, ctx.col(.selected).alpha(k), ctx.th.radius);
         const ink = if (tty and sel) ctx.col(.accent_text) else if (sel) ctx.col(.text) else ctx.col(.muted).mix(ctx.col(.text), k);
-        d.text(dl, font, fs, tr.x + 10, d.centerY(tr, fs), ink, label);
+        d.text(dl, font, fs, tr.x + pad / 2, d.centerY(tr, fs), ink, label);
         if (extra > 0) {
             var b: [8]u8 = undefined;
             const ct = std.fmt.bufPrint(&b, "{d}", .{pending}) catch "";
             const cw = d.width(fam.get(.bold), 11, ct);
-            const br: d.Rect = .{ .x = tr.x + 14 + tw, .y = tr.y + 5, .w = @max(18, cw + 10), .h = 18 };
+            const br: d.Rect = .{ .x = tr.x + pad / 2 + 4 + tw, .y = tr.y + 5, .w = @max(18, cw + 10), .h = 18 };
             d.rect(dl, br, ctx.col(.danger), 9);
             d.text(dl, fam.get(.bold), 11, br.x + (br.w - cw) / 2, d.centerY(br, 11), d.Rgba.white, ct);
         }
-        x = tr.right() + 6;
+        x = tr.right() + (if (narrow) @as(f32, 2) else 6);
     }
     if (d.pflag(n, "divider", true) and !tty) d.line(dl, r.x, r.bottom() - 0.5, r.right(), r.bottom() - 0.5, ctx.col(.border), 1);
 }
@@ -172,6 +177,7 @@ pub fn page(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         if (k > 0.01) d.rect(dl, rr.inset(0, 1), ctx.col(.hover).alpha(k), ctx.th.radius + 2);
         w.avatar(ctx, dl, rr.x + 30, rr.y + 31, 36, uid, .circle, if (k > 0.5) ctx.col(.hover).mix(ctx.col(.surface), 0.5) else ctx.col(.surface), 1);
         d.text(dl, fam.get(.semibold), 15, rr.x + 58, rr.y + 12, ctx.col(.text), u.name);
+        _ = w.botTag(ctx, dl, rr.x + 58 + d.width(fam.get(.semibold), 15, u.name), rr.y + 21, u, false, 1);
         var sb: [64]u8 = undefined;
         const sub: []const u8 = switch (kind) {
             .incoming => i18n.tr("Pedido de amizade recebido", "Incoming Friend Request"),
@@ -225,9 +231,7 @@ pub fn page(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
                 d.line(dl, cx - 6, cy, cx - 2, cy + 5, ink, 2.2);
                 d.line(dl, cx - 2, cy + 5, cx + 6, cy - 5, ink, 2.2);
             } else {
-                // Balão de conversa.
-                d.rect(dl, .{ .x = cx - 8, .y = cy - 6, .w = 16, .h = 11 }, ink, 4);
-                c.ImDrawList_AddTriangleFilled(dl, d.v(cx - 5, cy + 4), d.v(cx, cy + 4), d.v(cx - 6, cy + 9), ink.u());
+                icons.message(dl, cx, cy, ink.u());
             }
             if (bh.clicked) switch (b.act) {
                 .message => ctx.act(.{ .open_dm = uid }),

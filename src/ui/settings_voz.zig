@@ -299,7 +299,7 @@ fn micTest(p: anytype) void {
     const on = sh.test_on.load(.acquire);
     // O rótulo em português é a marca do QA.
     if (p.button(if (on) i18n.tr("Parar teste", "Stop test") else i18n.tr("Testar microfone", "Test microphone"), on)) sh.test_on.store(!on, .release);
-    p.y += 46;
+    p.y += 2;
     _ = d.textClipped(p.dl, p.font(.regular), 13, p.x, p.y, ctx.col(.faint), i18n.tr("Toca de volta o que você fala, com os filtros. Use fones para não dar microfonia.", "Plays back what you say, with the filters. Use headphones to avoid feedback."), p.w);
     p.y += 26;
 }

@@ -815,7 +815,7 @@ pub const demo_emojis = [_]struct { id: Id, guild: usize, name: []const u8, anim
 /// A conversa com emoji, figurinha e reações personalizadas: #geral do primeiro servidor.
 pub const emoji_channel: Id = 500_005;
 
-const UserSeed = struct { id: Id, name: []const u8, role: u8, status: types.Status, activity: ?[]const u8 = null, activity_en: ?[]const u8 = null, avatar: bool = false };
+const UserSeed = struct { id: Id, name: []const u8, role: u8, status: types.Status, activity: ?[]const u8 = null, activity_en: ?[]const u8 = null, avatar: bool = false, bot: bool = false, verified: bool = false };
 
 const users = [_]UserSeed{
     .{ .id = 1000, .name = "rsha", .role = 0, .status = .online, .activity = "Programando em Zig", .activity_en = "Coding in Zig", .avatar = true },
@@ -830,7 +830,18 @@ const users = [_]UserSeed{
     .{ .id = 1009, .name = "nanda", .role = 3, .status = .offline, .avatar = true },
     .{ .id = 1010, .name = "pedro", .role = 5, .status = .offline },
     .{ .id = 1011, .name = "joão vitor", .role = 1, .status = .offline },
+    // Bots: um verificado (que também tem uma DM com a gente) e um comum.
+    .{ .id = 1012, .name = "zigbot", .role = 4, .status = .online, .activity = "Usando /ajuda", .activity_en = "Using /help", .avatar = true, .bot = true, .verified = true },
+    .{ .id = 1013, .name = "radinho", .role = 6, .status = .online, .activity = "Tocando na call", .activity_en = "Playing in the call", .bot = true },
 };
+
+/// A DM com o bot verificado (canal 900_011 conversa com users[12]).
+pub const bot_dm: Id = 900_011;
+pub const bot_user: Id = 1012;
+pub const plain_bot_user: Id = 1013;
+/// O autor de uma mensagem de webhook, como o gateway de verdade monta (ver
+/// `authorId` em net/discord.zig).
+pub const webhook_user: Id = types.webhook_id_bit | 0x77;
 
 const GuildSeed = struct { name: []const u8, acronym: []const u8, color: u8, name_en: ?[]const u8 = null, acronym_en: ?[]const u8 = null, icon: bool = false };
 
@@ -1016,7 +1027,7 @@ fn demoFolders() ![]types.GuildFolder {
 }
 
 fn buildReady() !ev.Ready {
-    const us = try alloc.alloc(types.User, users.len);
+    const us = try alloc.alloc(types.User, users.len + 1);
     for (users, 0..) |u, i| us[i] = .{
         .id = u.id,
         .name = try alloc.dupe(u8, u.name),
@@ -1024,7 +1035,10 @@ fn buildReady() !ev.Ready {
         .status = u.status,
         .activity = if (u.activity) |a| try alloc.dupe(u8, pick(a, u.activity_en)) else null,
         .avatar = if (u.avatar) try std.fmt.allocPrint(alloc, "demo:av:{d}", .{u.id}) else null,
+        .bot = u.bot,
+        .verified_bot = u.verified,
     };
+    us[users.len] = .{ .id = webhook_user, .name = try alloc.dupe(u8, "Deploy"), .role = 3, .avatar = try alloc.dupe(u8, "demo:icon:5"), .bot = true, .webhook = true };
     const gs = try alloc.alloc(types.Guild, guilds.len);
     for (guilds, 0..) |g, i| gs[i] = .{
         .id = guildId(i),
@@ -1038,7 +1052,7 @@ fn buildReady() !ev.Ready {
         // O primeiro servidor é nosso (dá para mexer em cargos e mensagens).
         .owner = if (i == 0) me_id else 1001,
     };
-    const chs = try alloc.alloc(types.Channel, guilds.len * channel_tree.len + 7 + 3);
+    const chs = try alloc.alloc(types.Channel, guilds.len * channel_tree.len + 8 + 3);
     var n: usize = 0;
     for (0..guilds.len) |gi| {
         var parent: ?Id = null;
@@ -1103,6 +1117,15 @@ fn buildReady() !ev.Ready {
             n += 1;
         }
     }
+    chs[n] = .{
+        .id = bot_dm,
+        .guild = 0,
+        .name = try alloc.dupe(u8, "zigbot"),
+        .topic = try alloc.dupe(u8, ""),
+        .position = 7,
+        .recipient = bot_user,
+    };
+    n += 1;
     const voice = try alloc.alloc([2]Id, 4 * guilds.len);
     var vn: usize = 0;
     for (0..guilds.len) |gi| {
@@ -1489,9 +1512,23 @@ fn buildHistory(channel: Id, now_ms: i64) ![]types.Message {
         };
         m.embeds = e;
     }
+    // Quem escreve como bot: um aviso do bot verificado e um webhook, nos canais.
+    if (dmRecipient(channel) == null and channel != group_id and channel != emoji_channel) {
+        const bot = &msgs[n - 4];
+        alloc.free(bot.content);
+        bot.content = try alloc.dupe(u8, pick("✅ build #412 passou em 38 s", "✅ build #412 passed in 38 s"));
+        bot.author = bot_user;
+        bot.reply_to = 0;
+        const hook = &msgs[n - 10];
+        alloc.free(hook.content);
+        hook.content = try alloc.dupe(u8, pick("🚀 versão nova no ar", "🚀 new version is live"));
+        hook.author = webhook_user;
+        hook.reply_to = 0;
+    }
     // Mensagens de bot só com componentes (Components V2).
     {
         const m = &msgs[n - 22];
+        if (dmRecipient(channel) == null and channel != group_id) m.author = plain_bot_user;
         alloc.free(m.content);
         m.content = try alloc.dupe(u8, "");
         m.reply_to = 0;

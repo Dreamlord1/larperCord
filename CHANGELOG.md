@@ -22,7 +22,13 @@
 **Tray**
 - Closing and reopening no longer stacks up tray icons. On Linux the icon lives in a small separate process that only exists while the window is hidden, so GTK stays out of the app.
 
+**Layout**
+- Drag the edge of the channel list, the member list or the panes of a split view to resize them. A double-click goes back to the theme's width, and your choice is saved and follows you between themes.
+- A narrow conversation keeps working: the search box steps aside before the buttons do.
+
 **Messages**
+- A BOT tag next to the name of bots and webhooks, with a check mark for verified bots, in messages, the member list, DMs and profiles.
+- Webhook messages keep the name and picture each one was sent with.
 - Bot messages in the newer component format, which used to appear blank. Forwarded messages and polls appear as cards.
 - Text in embeds can be selected and copied.
 - Discord markdown: headings, small text, quotes, lists and `[text](url)` links. Line numbers in code blocks.
@@ -34,6 +40,8 @@
 - Edit a server (name, description, icon, banner) or a group DM (name, icon).
 - Delete threads.
 - Server banners at the top of the channel list and on invite cards.
+- Click a server banner to see it in full, and the same for a profile banner. Server and user menus can open the icon or picture too.
+- Friends, group and pin icons redrawn.
 
 **Lighter**
 - Smaller executable, faster opening and less memory.

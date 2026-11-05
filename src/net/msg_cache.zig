@@ -188,7 +188,7 @@ pub fn restore(store: *Store, cs: *ChannelState) void {
     for (dec.users) |u| if (store.user(u.id) == null) {
         const name = alloc.dupe(u8, u.name) catch continue;
         const avatar: ?[]const u8 = if (u.avatar.len > 0) alloc.dupe(u8, u.avatar) catch null else null;
-        store.apply(.{ .user_upsert = .{ .id = u.id, .name = name, .avatar = avatar } }, 0) catch {};
+        store.apply(.{ .user_upsert = .{ .id = u.id, .name = name, .avatar = avatar, .bot = u.bot, .verified_bot = u.verified_bot, .webhook = u.webhook } }, 0) catch {};
     };
     const msgs = alloc.alloc(types.Message, dec.entries.len) catch return;
     defer alloc.free(msgs);
@@ -276,7 +276,7 @@ pub fn save(store: *Store, cs: *ChannelState) void {
     }
     w.begin(cs.info.id, known) catch return;
     for (authors[0..n_auth]) |a| if (store.user(a)) |u| {
-        w.user(.{ .id = a, .name = u.name, .avatar = u.avatar orelse "" }) catch return;
+        w.user(.{ .id = a, .name = u.name, .avatar = u.avatar orelse "", .bot = u.bot, .verified_bot = u.verified_bot, .webhook = u.webhook }) catch return;
     };
     w.beginMessages(@intCast(n)) catch return;
     // `pick` está do fim para o começo; o arquivo vai na ordem da conversa.

@@ -495,6 +495,14 @@ pub const Store = struct {
         return .{ .msg = m, .spans = try markdown.parseRaw(s.gpa, m.content, m.raw), .embed_spans = try s.parseEmbeds(m.embeds) };
     }
 
+    /// Quem é bot não deixa de ser: nem todo objeto de usuário diz (a presença, por
+    /// exemplo, costuma trazer pouco).
+    fn takeBot(old: *types.User, u: types.User) void {
+        old.bot = old.bot or u.bot;
+        old.verified_bot = old.verified_bot or u.verified_bot;
+        old.webhook = old.webhook or u.webhook;
+    }
+
     /// READY pode chegar mais de uma vez (sessão nova depois de uma queda).
     /// Funde por ID em vez de duplicar servidores, canais e usuários.
     fn mergeUser(s: *Store, u: types.User) !void {
@@ -503,6 +511,7 @@ pub const Store = struct {
             if (u.activity) |a| ev_alloc.free(a);
             takeAvatar(old, u.avatar);
             takeOpt(&old.decoration, u.decoration);
+            takeBot(old, u);
             if (old.status == .offline and u.status != .offline) old.status = u.status;
             return;
         }
@@ -517,10 +526,12 @@ pub const Store = struct {
             const old_activity = old.activity;
             const old_avatar = old.avatar;
             const old_deco = old.decoration;
+            const was: types.User = old.*;
             ev_alloc.free(old.name);
             old.* = u;
             old.avatar = old_avatar;
             old.decoration = old_deco;
+            takeBot(old, was);
             takeAvatar(old, u.avatar);
             takeOpt(&old.decoration, u.decoration);
             if (u.status == .offline) old.status = old_status;
@@ -1042,6 +1053,7 @@ pub const Store = struct {
                     if (u.activity) |a| ev_alloc.free(a);
                     takeAvatar(old, u.avatar);
                     takeOpt(&old.decoration, u.decoration);
+                    takeBot(old, u);
                     return;
                 }
                 try s.users.put(s.gpa, u.id, u);

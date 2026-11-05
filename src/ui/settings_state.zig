@@ -42,6 +42,10 @@ pub const Text = struct {
     }
 };
 
+pub const split_two_default: i16 = 500;
+pub const split_three_a_default: i16 = 333;
+pub const split_three_b_default: i16 = 667;
+
 pub const Settings = struct {
     open: bool = false,
     page: Page = .aparencia,
@@ -74,6 +78,14 @@ pub const Settings = struct {
     md_preview: bool = true,
     /// Canal com não lidas abre na primeira delas, como no Discord (senão, no fim).
     open_at_unread: bool = true,
+
+    // Largura dos painéis (ui/resize.zig): quanto a pessoa alargou em relação ao
+    // que o tema pede, em pixels, e as divisas da tela dividida, em milésimos.
+    width_channels: i16 = 0,
+    width_members: i16 = 0,
+    split_two: i16 = split_two_default,
+    split_three_a: i16 = split_three_a_default,
+    split_three_b: i16 = split_three_b_default,
 
     /// Pergunta ao GitHub se há versão nova ao abrir o app.
     check_updates: bool = true,
@@ -161,6 +173,20 @@ pub const Settings = struct {
     /// 0 = escuro, 1 = claro, 2 = seguir o sistema.
     color_mode: u8 = 0,
 
+    /// Os painéis estão como o tema pede?
+    pub fn panelsAtDefault(s: *const Settings) bool {
+        return s.width_channels == 0 and s.width_members == 0 and s.split_two == split_two_default and
+            s.split_three_a == split_three_a_default and s.split_three_b == split_three_b_default;
+    }
+
+    pub fn resetPanels(s: *Settings) void {
+        s.width_channels = 0;
+        s.width_members = 0;
+        s.split_two = split_two_default;
+        s.split_three_a = split_three_a_default;
+        s.split_three_b = split_three_b_default;
+    }
+
     /// Muda quando algo que afeta o layout das mensagens muda.
     pub fn layoutKey(s: *const Settings) u32 {
         var h: u32 = @intFromFloat(s.font_scale * 100);
@@ -212,7 +238,7 @@ pub fn lspAnyOn(s: *const Settings) bool {
     return false;
 }
 
-pub const Field = struct { name: []const u8, kind: enum { boolean, float, byte, text }, offset: usize };
+pub const Field = struct { name: []const u8, kind: enum { boolean, float, byte, int, text }, offset: usize };
 
 /// Campos persistidos (todos menos `open` e `page`).
 pub fn fields() []const Field {
@@ -223,12 +249,12 @@ pub fn fields() []const Field {
             var n: usize = 0;
             for (info.field_names, info.field_types) |fname, ftype| {
                 if (std.mem.eql(u8, fname, "open") or std.mem.eql(u8, fname, "page")) continue;
-                // Só estes três tipos são salvos byte a byte; outro tipo aqui
+                // Só estes tipos são salvos byte a byte; outro tipo aqui
                 // corromperia o arquivo (ou a memória) ao ler.
-                if (ftype != bool and ftype != f32 and ftype != u8 and ftype != Text) @compileError("configuração com tipo não suportado: " ++ fname);
+                if (ftype != bool and ftype != f32 and ftype != u8 and ftype != i16 and ftype != Text) @compileError("configuração com tipo não suportado: " ++ fname);
                 out[n] = .{
                     .name = fname,
-                    .kind = if (ftype == bool) .boolean else if (ftype == f32) .float else if (ftype == Text) .text else .byte,
+                    .kind = if (ftype == bool) .boolean else if (ftype == f32) .float else if (ftype == Text) .text else if (ftype == i16) .int else .byte,
                     .offset = @offsetOf(Settings, fname),
                 };
                 n += 1;
@@ -241,10 +267,11 @@ pub fn fields() []const Field {
 }
 
 /// Lê um campo booleano ou de um byte pelo índice em `fields()` (para a
-/// paleta de comandos). Número quebrado não tem como ler assim: null.
+/// paleta de comandos). Número quebrado ou maior que um byte não tem como ler
+/// assim: null.
 pub fn getByte(s: *const Settings, index: usize) ?u8 {
     const fs = fields();
-    if (index >= fs.len or fs[index].kind == .float or fs[index].kind == .text) return null;
+    if (index >= fs.len or fs[index].kind == .float or fs[index].kind == .int or fs[index].kind == .text) return null;
     return (@as([*]const u8, @ptrCast(s)) + fs[index].offset)[0];
 }
 
@@ -256,7 +283,7 @@ pub fn setByte(s: *Settings, index: usize, value: u8) bool {
     switch (fs[index].kind) {
         .boolean => @as(*bool, @ptrCast(p)).* = value != 0,
         .byte => p[0] = value,
-        .float, .text => return false,
+        .float, .int, .text => return false,
     }
     return true;
 }
@@ -279,6 +306,7 @@ pub fn write(s: *const Settings, theme_name: []const u8, out: *std.ArrayList(u8)
             .boolean => try out.print(gpa, " {s}={s}", .{ f.name, if (@as(*const bool, @ptrCast(base + f.offset)).*) "#true" else "#false" }),
             .float => try out.print(gpa, " {s}={d:.3}", .{ f.name, @as(*const f32, @ptrCast(@alignCast(base + f.offset))).* }),
             .byte => try out.print(gpa, " {s}={d}", .{ f.name, (base + f.offset)[0] }),
+            .int => try out.print(gpa, " {s}={d}", .{ f.name, @as(*const i16, @ptrCast(@alignCast(base + f.offset))).* }),
             .text => {
                 // Comandos têm aspas, e caminhos do Windows têm barras.
                 try out.print(gpa, " {s}=\"", .{f.name});
@@ -305,6 +333,9 @@ pub fn apply(s: *Settings, node: anytype) void {
             },
             .byte => if (node.num(f.name)) |v| {
                 (base + f.offset)[0] = @intFromFloat(std.math.clamp(v, 0, 255));
+            },
+            .int => if (node.num(f.name)) |v| {
+                @as(*i16, @ptrCast(@alignCast(base + f.offset))).* = @intFromFloat(std.math.clamp(v, -32768, 32767));
             },
             .text => if (node.str(f.name)) |v| {
                 @as(*Text, @ptrCast(@alignCast(base + f.offset))).set(v);
@@ -403,6 +434,40 @@ test "volume dos vídeos e fechar para a bandeja vão e voltam" {
     apply(&fresh, &old[0]);
     try std.testing.expect(fresh.close_to_tray);
     try std.testing.expectEqual(@as(u8, 100), fresh.video_volume);
+}
+
+test "largura dos painéis vai e volta, e um arquivo editado à mão não estoura" {
+    const kdl = @import("../theme/kdl.zig");
+    var s: Settings = .{};
+    s.width_channels = 90;
+    s.width_members = -40;
+    s.split_two = 620;
+    s.split_three_a = 250;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try write(&s, "vidro", &out, std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const nodes = try kdl.parse(arena.allocator(), out.items, null);
+    var back: Settings = .{};
+    apply(&back, &nodes[0]);
+    try std.testing.expectEqual(@as(i16, 90), back.width_channels);
+    try std.testing.expectEqual(@as(i16, -40), back.width_members);
+    try std.testing.expectEqual(@as(i16, 620), back.split_two);
+    try std.testing.expectEqual(@as(i16, 250), back.split_three_a);
+    try std.testing.expectEqual(split_three_b_default, back.split_three_b);
+    // Número fora do que cabe vira o maior que cabe (a tela limita depois).
+    const big = try kdl.parse(arena.allocator(), "settings width_channels=999999 width_members=-999999\n", null);
+    var fresh: Settings = .{};
+    apply(&fresh, &big[0]);
+    try std.testing.expectEqual(@as(i16, 32767), fresh.width_channels);
+    try std.testing.expectEqual(@as(i16, -32768), fresh.width_members);
+    // Arquivo antigo: como o tema pede.
+    const old = try kdl.parse(arena.allocator(), "settings compact=#true\n", null);
+    var older: Settings = .{};
+    apply(&older, &old[0]);
+    try std.testing.expectEqual(@as(i16, 0), older.width_channels);
+    try std.testing.expectEqual(split_two_default, older.split_two);
 }
 
 test "ganho do vídeo: mudo em 0, cheio em 100, e um arquivo editado à mão não estoura" {

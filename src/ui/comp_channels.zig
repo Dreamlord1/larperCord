@@ -111,6 +111,9 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const dl = d.beginRegion(ctx, "##channels", r, c.ImGuiWindowFlags_NoScrollbar);
     banner_scroll = if (banner_img) c.ImGui_GetScrollY() else 0;
     const o = c.ImGui_GetCursorScreenPos();
+    // O banner embaixo do nome abre a imagem; o nome (fora daqui) continua com o
+    // menu do servidor. A região da lista fica por cima dele, e o clique é dela.
+    if (banner_img) bannerOpen(ctx, dl, g, .{ .x = r.x, .y = o.y, .w = r.w, .h = banner_h - 48 });
     // A lista começa embaixo do banner (o cabeçalho já tirou 48 dele).
     var y = o.y + (if (variant == .tree) @as(f32, 2) else 8) + (if (banner_img) banner_h - 48 else 0);
     const ids = ctx.store.channelsOf(g.id);
@@ -169,6 +172,29 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         list_h = y - y_top;
     }
     d.endRegion(ctx, y + 12, r.x);
+}
+
+fn bannerOpen(ctx: *d.Ctx, dl: *c.ImDrawList, g: *const types.Guild, br: d.Rect) void {
+    const hb = d.hit(ctx, 7, br);
+    qa.mark(br, "guild-banner-open", .{});
+    if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+    if (hb.clicked) viewBanner(ctx, g);
+    const k = anim.to(anim.id("gbanner", 0), if (hb.hovered) 1 else 0, 22);
+    if (k < 0.01) return;
+    d.rect(dl, br, d.Rgba.black.alpha(0.14 * k), 0);
+    // O canto mostra que dá para abrir.
+    const bx = br.right() - 22;
+    const by = br.bottom() - 22;
+    d.circle(dl, bx, by, 14, d.Rgba.black.alpha(0.55 * k));
+    icons.expand(dl, bx, by, d.Rgba.white.alpha(k).u());
+    d.tip(ctx, .{ .x = bx - 14, .y = by - 14, .w = 28, .h = 28 }, i18n.tr("Ver banner", "View banner"), hb.hovered);
+}
+
+/// O banner do servidor no visualizador, em tamanho cheio.
+pub fn viewBanner(ctx: *d.Ctx, g: *const types.Guild) void {
+    const hash = g.banner orelse return;
+    var ub: [192]u8 = undefined;
+    @import("attachments.zig").openOriginal(ctx, w.bannerFull(&ub, g.id, hash), g.name, 960, 540);
 }
 
 /// O que muda a altura da lista de canais.
@@ -326,7 +352,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             switch (variant) {
                 .tree => {
                     var buf: [80]u8 = undefined;
-                    const t = std.fmt.bufPrint(&buf, "{s}   {s} {s}{s}", .{ if (last) " " else "│", if (speaking) "◉" else "○", u.name, voiceFlagsTty(vf) }) catch u.name;
+                    const t = std.fmt.bufPrint(&buf, "{s}   {s} {s}{s}{s}", .{ if (last) " " else "│", if (speaking) "◉" else "○", u.name, w.botSuffix(u), voiceFlagsTty(vf) }) catch u.name;
                     d.text(dl, fam.get(.regular), fs - 2, rr.x + 4, y2 + 2, if (speaking) ctx.col(.online) else ctx.col(.muted), t);
                     y2 += 20;
                 },
@@ -336,7 +362,8 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
                     if (speaking) c.ImDrawList_AddCircleEx(dl, d.v(ax, acy), 12.5, ctx.col(.online).u(), 0, 2, 0);
                     w.avatar(ctx, dl, ax, acy, 21, uid, .circle, null, 1);
                     const icons_w = voiceFlagIcons(ctx, dl, vf, vr.right() - 6, acy);
-                    _ = d.textClipped(dl, fam.get(.medium), 14, ax + 18, acy - 9, if (speaking) ctx.col(.text) else ctx.col(.muted), u.name, vr.right() - (ax + 18) - icons_w - 6);
+                    const vn = d.textClipped(dl, fam.get(.medium), 14, ax + 18, acy - 9, if (speaking) ctx.col(.text) else ctx.col(.muted), u.name, vr.right() - (ax + 18) - icons_w - 6 - w.botTagSpace(ctx, u, false));
+                    _ = w.botTag(ctx, dl, ax + 18 + vn, acy, u, false, 1);
                     y2 += 28;
                 },
             }
@@ -773,7 +800,8 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
             const t = if (group)
                 std.fmt.bufPrint(&buf, "{s} ⁂ {s}", .{ branch, name }) catch name
             else
-                std.fmt.bufPrint(&buf, "{s} {s} @{s}", .{ branch, w.statusGlyph(u.?.status), name }) catch name;
+                std.fmt.bufPrint(&buf, "{s} {s} @{s}{s}", .{ branch, w.statusGlyph(u.?.status), name, w.botSuffix(u) }) catch name;
+            if (u != null and u.?.bot) qa.mark(rr, "bot-tag:{d}", .{u.?.id});
             d.text(dl, fam.get(if (cs.info.unread) .bold else .regular), fs - 1, rr.x + 4, d.centerY(rr, fs - 1), if (selected) ctx.col(.accent_text) else name_col, t);
         } else {
             const radius = if (variant == .pills) rr.h / 2 else ctx.th.radius;
@@ -786,10 +814,16 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
                 (if (cs.info.recipients.len == 0) i18n.tr("só você", "just you") else i18n.fmt(&sb, "{d} membros", "{d} members", .{cs.info.recipients.len + 1}))
             else
                 u.?.activity;
+            const tagged = if (group) null else u;
+            const name_room = rr.w - 60 - w.botTagSpace(ctx, tagged, false);
             if (sub) |a| {
-                _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, rr.y + 3, tc, name, rr.w - 60);
+                const nw = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, rr.y + 3, tc, name, name_room);
+                _ = w.botTag(ctx, dl, rr.x + 46 + nw, rr.y + 12, tagged, false, 1);
                 _ = d.textClipped(dl, fam.get(.regular), 12, rr.x + 46, rr.y + 22, if (on) tc.alpha(0.8) else ctx.col(.faint), a, rr.w - 60);
-            } else _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, d.centerY(rr, fs - 1), tc, name, rr.w - 60);
+            } else {
+                const nw = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, d.centerY(rr, fs - 1), tc, name, name_room);
+                _ = w.botTag(ctx, dl, rr.x + 46 + nw, rr.y + rr.h / 2, tagged, false, 1);
+            }
             const dm_pings = if (selected) 0 else ctx.st.filtros.count(id);
             if (dm_pings > 0) {
                 badgeAt(ctx, dl, fam, rr.right() - 6, rr.y + rr.h / 2, dm_pings);
@@ -800,15 +834,16 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
     d.endRegion(ctx, y + 12, r.x);
 }
 
-/// Ícone de um grupo: a imagem dele ou um círculo com duas pessoas.
+/// Ícone de um grupo: a imagem dele ou, sem ela, duas pessoas num círculo, na
+/// cor do grupo e do mesmo jeito do avatar de quem não tem foto.
 pub fn groupIcon(ctx: *d.Ctx, dl: *c.ImDrawList, ch: *const types.Channel, cx: f32, cy: f32, size: f32) void {
     const r: d.Rect = .{ .x = cx - size / 2, .y = cy - size / 2, .w = size, .h = size };
     if (ch.icon) |h| {
         var ub: [160]u8 = undefined;
         if (w.picture(ctx, dl, w.cdnUrl(&ub, .group, ch.id, h), r, size / 2, 1)) return;
     }
-    d.rect(dl, r, ctx.th.role(@intCast(ch.id % 8)).mix(ctx.col(.surface), 0.3), size / 2);
-    icons.members(dl, cx - 1, cy, d.Rgba.white.u());
+    d.rect(dl, r, ctx.th.role(@intCast(ch.id % 8)).mix(ctx.col(.surface), 0.28), size / 2);
+    icons.people(dl, cx, cy, size / 36, @max(1.7, size / 18), d.Rgba.white.alpha(0.92).u());
 }
 
 pub fn badgeAt(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, right: f32, cy: f32, count: u16) void {

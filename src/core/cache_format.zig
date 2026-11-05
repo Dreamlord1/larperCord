@@ -21,13 +21,15 @@ const Id = types.Id;
 
 /// LCM2: texto do Discord (`raw`) e emoji personalizado nas reações. Um arquivo
 /// antigo é só ignorado (a conversa vem da rede e ele é regravado).
-pub const magic = "LCM2";
+pub const magic = "LCM3";
+/// A versão de antes (sem as marcas de bot nos usuários) continua sendo lida.
+const magic_old = "LCM2";
 
 /// Tetos da leitura (bem acima do que o Discord manda).
 const max_str: u32 = 1 << 20;
 const max_count: u32 = 100_000;
 
-pub const User = struct { id: Id, name: []const u8, avatar: []const u8 = "" };
+pub const User = struct { id: Id, name: []const u8, avatar: []const u8 = "", bot: bool = false, verified_bot: bool = false, webhook: bool = false };
 
 pub const Entry = struct {
     msg: types.Message,
@@ -75,6 +77,7 @@ pub const Writer = struct {
         try w.int(u64, u.id);
         try w.str(u.name);
         try w.str(u.avatar);
+        try w.int(u8, @as(u8, @intFromBool(u.bot)) | @as(u8, @intFromBool(u.verified_bot)) << 1 | @as(u8, @intFromBool(u.webhook)) << 2);
     }
 
     pub fn beginMessages(w: Writer, n: u32) !void {
@@ -158,11 +161,21 @@ const Reader = struct {
 /// que for guardar e libera a arena de uma vez).
 pub fn decode(arena: std.mem.Allocator, bytes: []const u8) !Decoded {
     var r: Reader = .{ .b = bytes };
-    if (!std.mem.eql(u8, try r.need(4), magic)) return error.Corrupt;
+    const head = try r.need(4);
+    const has_flags = std.mem.eql(u8, head, magic);
+    if (!has_flags and !std.mem.eql(u8, head, magic_old)) return error.Corrupt;
     const channel = try r.int(u64);
     const n_users = try r.count();
     const users = try arena.alloc(User, n_users);
-    for (users) |*u| u.* = .{ .id = try r.int(u64), .name = try r.str(arena), .avatar = try r.str(arena) };
+    for (users) |*u| {
+        u.* = .{ .id = try r.int(u64), .name = try r.str(arena), .avatar = try r.str(arena) };
+        if (has_flags) {
+            const f = try r.byte();
+            u.bot = f & 1 != 0;
+            u.verified_bot = f & 2 != 0;
+            u.webhook = f & 4 != 0;
+        }
+    }
     const n_msgs = try r.count();
     const entries = try arena.alloc(Entry, n_msgs);
     for (entries) |*e| {
@@ -211,6 +224,37 @@ pub fn decode(arena: std.mem.Allocator, bytes: []const u8) !Decoded {
     }
     if (r.i != bytes.len) return error.Corrupt;
     return .{ .channel = channel, .users = users, .entries = entries };
+}
+
+test "os usuários guardam quem é bot; o formato anterior continua sendo lido" {
+    const gpa = std.testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    const w: Writer = .{ .out = &out, .gpa = gpa };
+    try w.begin(9, 2);
+    try w.user(.{ .id = 1, .name = "zigbot", .bot = true, .verified_bot = true });
+    try w.user(.{ .id = 2, .name = "Deploy", .avatar = "https://x/y.png", .bot = true, .webhook = true });
+    try w.beginMessages(0);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const dec = try decode(arena.allocator(), out.items);
+    try std.testing.expect(dec.users[0].bot and dec.users[0].verified_bot and !dec.users[0].webhook);
+    try std.testing.expect(dec.users[1].bot and !dec.users[1].verified_bot and dec.users[1].webhook);
+
+    // Um arquivo de antes, sem as marcas: ninguém é bot até o Discord dizer.
+    var old: std.ArrayList(u8) = .empty;
+    defer old.deinit(gpa);
+    const wo: Writer = .{ .out = &old, .gpa = gpa };
+    try old.appendSlice(gpa, magic_old);
+    try wo.int(u64, 9);
+    try wo.int(u32, 1);
+    try wo.int(u64, 1);
+    try wo.str("ana");
+    try wo.str("");
+    try wo.int(u32, 0);
+    const dec2 = try decode(arena.allocator(), old.items);
+    try std.testing.expectEqualStrings("ana", dec2.users[0].name);
+    try std.testing.expect(!dec2.users[0].bot);
 }
 
 test "cache de mensagens vai e volta pelo formato" {

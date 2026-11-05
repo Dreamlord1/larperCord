@@ -9,7 +9,7 @@ Abra as configurações com `Ctrl+,`. As mudanças valem na hora e são salvas e
 | **Minha conta** | Dados da conta e sair |
 | **Privacidade** | Indicador de digitação, animação do Tenor e do Giphy, modo streamer, registro de mensagens, guardar mensagens no disco, limpar o cache e o proxy de rede |
 | **Alertas e filtros** | Palavras de alerta, filtro de palavras, pessoas ignoradas e modo foco |
-| **Aparência** | Modo (escuro, claro, seguir o sistema), tema com miniaturas e as opções dele, escala da fonte, modo compacto, avatares, relógio de 24 horas, status em anel, cor de destaque, cantos, cores personalizadas do tema, lista de membros e barra de status |
+| **Aparência** | Modo (escuro, claro, seguir o sistema), tema com miniaturas e as opções dele, escala da fonte, modo compacto, avatares, relógio de 24 horas, status em anel, cor de destaque, cantos, cores personalizadas do tema, restaurar a largura dos painéis, lista de membros e barra de status |
 | **Acessibilidade** | Reduzir movimento, cores dos cargos, sublinhar links |
 | **Chat** | Reproduzir GIFs automaticamente, imagens de links, modo economia, sempre mostrar spoilers, prévia do markdown, abrir na primeira não lida |
 | **Voz** | Microfone e saída, volumes, detecção de voz ou aperte para falar, teste do microfone, filtros e sons da call. Veja [Chamadas de voz](page:voice) |

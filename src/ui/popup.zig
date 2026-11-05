@@ -244,15 +244,17 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         },
         .user => {
             add(&items, &n, .{ .label = "Perfil", .en = "Profile", .id = 20 });
+            if (ctx.store.user(id)) |pu| if (pu.avatar != null) add(&items, &n, .{ .label = "Ver foto de perfil", .en = "View Picture", .id = 27 });
             add(&items, &n, .{ .label = "Mencionar", .en = "Mention", .id = 21 });
-            if (id != ctx.store.me) add(&items, &n, .{ .label = "Mensagem", .en = "Message", .id = 22 });
+            const hook = if (ctx.store.user(id)) |u| u.webhook else false;
+            if (id != ctx.store.me and !hook) add(&items, &n, .{ .label = "Mensagem", .en = "Message", .id = 22 });
             // Ignorar não bloqueia: as mensagens só ficam recolhidas aqui.
             if (id != ctx.store.me) add(&items, &n, if (ctx.st.filtros.isIgnored(id))
                 .{ .label = "Deixar de ignorar", .en = "Unignore", .id = 26 }
             else
                 .{ .label = "Ignorar", .en = "Ignore", .id = 26 });
             add(&items, &n, .{ .label = "Copiar nome de usuário", .en = "Copy Username", .id = 24, .sep = true });
-            if (dev) add(&items, &n, .{ .label = "Copiar ID do usuário", .en = "Copy User ID", .id = 25 });
+            if (dev and !hook) add(&items, &n, .{ .label = "Copiar ID do usuário", .en = "Copy User ID", .id = 25 });
             if (movable(ctx, id) != null) {
                 var tb: [24]Id = undefined;
                 if (voiceTargets(ctx, id, &tb).len > 0) add(&items, &n, .{ .label = "Mover para…", .en = "Move To…", .id = 28, .sep = true });
@@ -280,7 +282,10 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
                 add(&items, &n, .{ .label = "Ver threads", .en = "View Threads", .id = 49, .sep = true });
                 add(&items, &n, .{ .label = "Threads arquivadas", .en = "Archived Threads", .id = 48 });
             };
-            if (ctx.store.channel(id)) |gcs| if (gcs.info.group) add(&items, &n, .{ .label = "Editar grupo…", .en = "Edit Group…", .id = 53, .sep = true });
+            if (ctx.store.channel(id)) |gcs| if (gcs.info.group) {
+                add(&items, &n, .{ .label = "Editar grupo…", .en = "Edit Group…", .id = 53, .sep = true });
+                if (gcs.info.icon != null) add(&items, &n, .{ .label = "Ver ícone", .en = "View Icon", .id = 54 });
+            };
             add(&items, &n, .{ .label = "Copiar link", .en = "Copy Link", .id = 43, .sep = true });
             // Canal de voz em que estamos (mesmo que o app tenha perdido a
             // conexão e o Discord ainda nos mostre lá).
@@ -324,6 +329,10 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         .guild => {
             add(&items, &n, .{ .label = "Marcar como lido", .en = "Mark As Read", .id = 60 });
             if (ctx.store.can(id, types.perm.manage_guild)) add(&items, &n, .{ .label = "Editar servidor…", .en = "Edit Server…", .id = 64 });
+            if (ctx.store.guild(id)) |vg| {
+                if (vg.icon != null) add(&items, &n, .{ .label = "Ver ícone", .en = "View Icon", .id = 65 });
+                if (vg.banner != null) add(&items, &n, .{ .label = "Ver banner", .en = "View Banner", .id = 66 });
+            }
             if (dev) add(&items, &n, .{ .label = "Copiar ID do servidor", .en = "Copy Server ID", .id = 63 });
         },
     }
@@ -468,6 +477,16 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
         52 => {},
         53 => @import("edit_place.zig").open(ctx, id, true),
         64 => @import("edit_place.zig").open(ctx, id, false),
+        27 => @import("profile.zig").viewAvatar(ctx, id),
+        54 => if (ctx.store.channel(id)) |cs| if (cs.info.icon) |h| {
+            var ub: [192]u8 = undefined;
+            att.openOriginal(ctx, w.cdnFull(&ub, .group, id, h), cs.info.name, 1024, 1024);
+        },
+        65 => if (ctx.store.guild(id)) |g| if (g.icon) |h| {
+            var ub: [192]u8 = undefined;
+            att.openOriginal(ctx, w.cdnFull(&ub, .guild, id, h), g.name, 1024, 1024);
+        },
+        66 => if (ctx.store.guild(id)) |g| @import("comp_channels.zig").viewBanner(ctx, g),
         48, 49 => if (ctx.store.channel(id)) |cs| {
             const parent = if (cs.info.thread != null) cs.info.parent orelse id else id;
             st.popup = .{ .threads = .{ .parent = parent, .archived = item == 48 } };

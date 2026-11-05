@@ -21,7 +21,18 @@ pub const User = struct {
     avatar: ?[]const u8 = null,
     /// Decoração do avatar (o "asset" da loja; animada em APNG).
     decoration: ?[]const u8 = null,
+    /// Conta de bot e, entre elas, as verificadas pelo Discord.
+    bot: bool = false,
+    verified_bot: bool = false,
+    /// Autor de uma mensagem de webhook: não é uma conta, então não tem perfil
+    /// nem DM (ver `webhook_id_bit`).
+    webhook: bool = false,
 };
+
+/// Cada webhook escreve com o nome e a foto que quiser, então cada combinação é
+/// uma "pessoa" aqui, com um ID inventado. Este bit os separa dos snowflakes,
+/// que só chegam nele em 2084.
+pub const webhook_id_bit: Id = 1 << 63;
 
 /// Perfil completo, buscado quando o cartão de alguém abre
 /// (GET /users/{id}/profile). Textos alocados; vazio = não tem.

@@ -69,7 +69,7 @@ pub fn buttonWidth(ctx: *const d.Ctx, label: []const u8) f32 {
 /// Texto quebrado por palavra em até `max_lines` linhas (a última corta com
 /// "…"). Com `dl` null só mede. Retorna a altura usada.
 pub fn wrapText(dl: ?*c.ImDrawList, font: *c.ImFont, size: f32, x: f32, y: f32, max_w: f32, text: []const u8, max_lines: usize, color: d.Rgba) f32 {
-    const lh = size * 1.38;
+    const lh = size * d.text_scale * 1.38;
     const space = d.width(font, size, " ");
     var lines: usize = 0;
     var start: ?usize = null;
@@ -165,11 +165,13 @@ fn messageRow(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, hit_id: usize, m: *cons
     if (mention) d.rect(dl, .{ .x = r.x, .y = r.y + 6, .w = 2, .h = r.h - 12 }, ctx.col(.mention), 1);
     const fam = ctx.ui;
     w.avatar(ctx, dl, r.x + 22, r.y + r.h / 2, 28, m.msg.author, .circle, null, 1);
-    const name = if (ctx.store.user(m.msg.author)) |u| u.name else "?";
+    const author = ctx.store.user(m.msg.author);
+    const name = if (author) |u| u.name else "?";
     const nx = r.x + 44;
     const nw = d.textClipped(dl, fam.get(.semibold), 14, nx, r.y + 5, w.nameColor(ctx, guild, m.msg.author), name, r.w * 0.5);
+    const tag_w = w.botTag(ctx, dl, nx + nw, r.y + 13, author, false, 1);
     var tb: [48]u8 = undefined;
-    d.text(dl, fam.get(.regular), 11.5, nx + nw + 8, r.y + 7.5, ctx.col(.faint), w.stamp(&tb, m.msg.timestamp, @divTrunc(ctx.now_ms, 1000)));
+    d.text(dl, fam.get(.regular), 11.5, nx + nw + tag_w + 8, r.y + 7.5, ctx.col(.faint), w.stamp(&tb, m.msg.timestamp, @divTrunc(ctx.now_ms, 1000)));
     var pb: [240]u8 = undefined;
     _ = d.textClipped(dl, fam.get(.regular), 13.5, nx, r.y + 24, ctx.col(.text).mix(ctx.col(.muted), 0.25), previewText(ctx, &pb, m), r.right() - nx - 10);
     return hb.clicked;

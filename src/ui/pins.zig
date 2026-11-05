@@ -113,10 +113,12 @@ fn card(ctx: *d.Ctx, dl: *c.ImDrawList, body: d.Rect, y0: f32, m: *const StoredM
     if (hb.hovered) d.rect(dl, r, ctx.col(.hover), @max(ctx.th.radius, 6));
     d.border(dl, r, ctx.col(.border), @max(ctx.th.radius, 6), 1);
     w.avatar(ctx, dl, inner + 13, y0 + 22, 26, m.msg.author, .circle, null, 1);
-    const name = if (ctx.store.user(m.msg.author)) |u| u.name else "?";
+    const author = ctx.store.user(m.msg.author);
+    const name = if (author) |u| u.name else "?";
     const nw = d.textClipped(dl, fam.get(.semibold), 14, tx, y0 + 9, w.nameColor(ctx, guild, m.msg.author), name, tw * 0.6);
+    const tag_w = w.botTag(ctx, dl, tx + nw, y0 + 17, author, false, 1);
     var tb: [48]u8 = undefined;
-    d.text(dl, fam.get(.regular), 11.5, tx + nw + 8, y0 + 11.5, ctx.col(.faint), w.stamp(&tb, m.msg.timestamp, @divTrunc(ctx.now_ms, 1000)));
+    d.text(dl, fam.get(.regular), 11.5, tx + nw + tag_w + 8, y0 + 11.5, ctx.col(.faint), w.stamp(&tb, m.msg.timestamp, @divTrunc(ctx.now_ms, 1000)));
     _ = inbox.wrapText(dl, fam.get(.regular), 14, tx, y0 + 30, tw, text, 4, ctx.col(.text).mix(ctx.col(.muted), 0.15));
     if (can_pin) {
         const xr: d.Rect = .{ .x = r.right() - 32, .y = y0 + 6, .w = 26, .h = 26 };

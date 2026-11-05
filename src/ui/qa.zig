@@ -97,6 +97,32 @@ pub fn keysWith(prefixes: []const []const u8, out: [][56]u8, lens: []u8) usize {
     return n;
 }
 
+/// Duas marcações, entre as que começam com algum dos prefixos, que estão uma em
+/// cima da outra (o texto de um botão sumindo embaixo do que veio depois).
+pub fn overlapping(prefixes: []const []const u8) ?[2]layout.Rect {
+    const has = struct {
+        fn f(m: *const Mark, ps: []const []const u8) bool {
+            for (ps) |p| if (std.mem.startsWith(u8, m.key[0..m.len], p)) return true;
+            return false;
+        }
+    }.f;
+    // Encostar não conta: bordas somadas com arredondamento.
+    const slack: f32 = 1;
+    for (prev[0..prev_count], 0..) |*a, i| {
+        if (!has(a, prefixes)) continue;
+        for (prev[i + 1..prev_count]) |*b| {
+            if (!has(b, prefixes)) continue;
+            const ra = a.rect;
+            const rb = b.rect;
+            if (ra.x + slack < rb.right() and rb.x + slack < ra.right() and ra.y + slack < rb.bottom() and rb.y + slack < ra.bottom()) {
+                if (@import("c").SDL_getenv("QA_DEBUG") != null) std.debug.print("[sobreposição] {s} × {s}\n", .{ a.key[0..a.len], b.key[0..b.len] });
+                return .{ ra, rb };
+            }
+        }
+    }
+    return null;
+}
+
 /// Lista as marcações que começam com `prefix` (para depurar um teste).
 pub fn dump(prefix: []const u8) void {
     for (prev[0..prev_count]) |m| {

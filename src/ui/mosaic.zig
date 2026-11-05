@@ -11,6 +11,9 @@ const d = @import("draw.zig");
 const qa = @import("qa.zig");
 const i18n = @import("i18n.zig");
 const msgs = @import("comp_messages.zig");
+const layout = @import("../theme/layout.zig");
+const resize = @import("resize.zig");
+const S = @import("settings_state.zig");
 const sigil = @import("comp_chat.zig").sigil;
 const Id = @import("../core/types.zig").Id;
 
@@ -115,18 +118,23 @@ pub fn draw(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         return msgs.history(ctx, n, r, ch, regions[0]);
     }
     const k: f32 = @floatFromInt(panes.count);
-    const pw = @floor((r.w - gap * (k - 1)) / k);
+    const avail = r.w - gap * (k - 1);
+    const s = &ctx.st.settings;
+    const widths = layout.paneWidths(avail, panes.count, if (panes.count == 2) s.split_two else s.split_three_a, s.split_three_b, resize.min_pane);
+    addHandles(ctx, r, avail, &widths);
     var close_i: ?usize = null;
+    var px = r.x;
     for (0..panes.count) |i| {
         const id = panes.ids[i];
         const focused = i == panes.focus;
-        const pr: d.Rect = .{ .x = r.x + @as(f32, @floatFromInt(i)) * (pw + gap), .y = r.y, .w = pw, .h = r.h };
+        const pr: d.Rect = .{ .x = px, .y = r.y, .w = widths[i], .h = r.h };
+        px = pr.right() + gap;
         if (i > 0) d.rect(ctx.dl, .{ .x = pr.x - gap, .y = r.y, .w = gap, .h = r.h }, ctx.col(.border), 0);
         qa.mark(pr, "pane:{d}", .{i});
         const cr: d.Rect = .{ .x = pr.right() - 28, .y = pr.y + 4, .w = 22, .h = 22 };
         // Clique (ou botão direito) num painel lateral foca ele antes: a
         // resposta, a edição e a caixa de texto vão para o canal certo.
-        if (!focused and ctx.st.popup == .none and ctx.hovering(pr) and !ctx.hovering(cr) and
+        if (!focused and ctx.st.popup == .none and ctx.hovering(pr) and !ctx.hovering(cr) and !resize.over(ctx) and
             (c.ImGui_IsMouseClicked(0) or c.ImGui_IsMouseClicked(1)) and
             c.ImGui_IsWindowHovered(c.ImGuiHoveredFlags_RootAndChildWindows)) focusPane(ctx, i);
         if (titleBar(ctx, pr, cr, i, id, focused)) close_i = i;
@@ -135,6 +143,28 @@ pub fn draw(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         msgs.history(ctx, n, .{ .x = pr.x, .y = pr.y + bar_h, .w = pr.w, .h = pr.h - bar_h }, id, regions[i]);
     }
     if (close_i) |i| close(ctx, i);
+}
+
+/// As alças entre os painéis. Sem espaço para o mínimo de cada um, não tem o
+/// que ajustar. Cada divisa só empurra os dois painéis vizinhos dela.
+fn addHandles(ctx: *d.Ctx, r: d.Rect, avail: f32, widths: *const [3]f32) void {
+    const s = &ctx.st.settings;
+    if (avail < resize.min_pane * @as(f32, @floatFromInt(panes.count))) return;
+    const permille = struct {
+        fn f(px: f32, total: f32) i16 {
+            return @intFromFloat(@round(px / total * 1000));
+        }
+    }.f;
+    const lo: i16 = @intFromFloat(@ceil(resize.min_pane / avail * 1000));
+    const per_px = 1000 / avail;
+    const first = permille(widths[0], avail);
+    if (panes.count == 2) {
+        resize.add(.{ .name = "##resize:pane2", .x = r.x + widths[0] + gap / 2, .y = r.y, .h = r.h, .value = &s.split_two, .shown = first, .default = S.split_two_default, .lo = lo, .hi = 1000 - lo, .per_px = per_px });
+        return;
+    }
+    const second = permille(widths[0] + widths[1], avail);
+    resize.add(.{ .name = "##resize:pane3a", .x = r.x + widths[0] + gap / 2, .y = r.y, .h = r.h, .value = &s.split_three_a, .shown = first, .default = S.split_three_a_default, .lo = lo, .hi = second - lo, .per_px = per_px, .peer = &s.split_three_b, .peer_default = S.split_three_b_default });
+    resize.add(.{ .name = "##resize:pane3b", .x = r.x + widths[0] + gap + widths[1] + gap / 2, .y = r.y, .h = r.h, .value = &s.split_three_b, .shown = second, .default = S.split_three_b_default, .lo = first + lo, .hi = 1000 - lo, .per_px = per_px, .peer = &s.split_three_a, .peer_default = S.split_three_a_default });
 }
 
 /// Título do painel: canal, servidor e o X. Retorna true se pediu para fechar.

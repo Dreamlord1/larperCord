@@ -20,6 +20,9 @@ const max_w: f32 = 520;
 const gap: f32 = 6;
 const pad: f32 = 12;
 const thumb_s: f32 = 80;
+/// Num cartão mais estreito que isto (um painel apertado da tela dividida), a
+/// miniatura sairia comendo o texto, que viraria uma coluna de uma letra.
+const thumb_min_w: f32 = 240;
 
 /// Seleção de texto passando pelos cartões. Para ela a mensagem é um texto
 /// só: o conteúdo e depois cada texto dos cartões, um atrás do outro
@@ -512,7 +515,7 @@ fn blocks(ctx: *d.Ctx, dl: ?*c.ImDrawList, e: *const types.Embed, spans: []const
         if (i > 0 and b.kind != .separator and e.blocks[i - 1].kind != .separator) y += 8;
         switch (b.kind) {
             .text => {
-                const thumb = b.media.len > 0;
+                const thumb = b.media.len > 0 and w >= thumb_min_w;
                 const tw = if (thumb) w - thumb_s - pad else w;
                 const sp: []const md.Span = if (first + i < spans.len) spans[first + i] else &.{};
                 const th = richText(ctx, dl, sp, b.text, x, y, tw, 14, sel);
@@ -547,7 +550,7 @@ fn card(ctx: *d.Ctx, dl: ?*c.ImDrawList, e: *const types.Embed, spans: []const [
         const bar = if (e.has_color and e.color != 0) d.Rgba.hex(e.color) else ctx.col(.border).mix(ctx.col(.text), 0.15);
         d.rectFlags(l, .{ .x = x, .y = y0, .w = 4, .h = h }, bar.alpha(alpha), 6, c.ImDrawFlags_RoundCornersLeft);
     }
-    const has_thumb = e.thumb.len > 0 and e.image.len == 0;
+    const has_thumb = e.thumb.len > 0 and e.image.len == 0 and w >= thumb_min_w;
     const ix = x + 4 + pad;
     const tw = w - 4 - pad * 2 - (if (has_thumb) thumb_s + pad else 0);
     var y = y0 + 10;

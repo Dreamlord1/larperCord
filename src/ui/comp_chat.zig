@@ -25,10 +25,13 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const ch = &cs.info;
     const variant = d.pstr(n, "variant", "discord");
     const dl = ctx.dl;
+    // Numa DM o nome do canal é o da pessoa: é ela quem pode ser um bot.
+    const dm_user = if (ch.guild == 0 and !ch.group) ctx.store.user(ch.recipient) else null;
 
     if (std.mem.eql(u8, variant, "tty")) {
         var buf: [160]u8 = undefined;
-        const t = std.fmt.bufPrint(&buf, "─ {s}{s} ─ {s} ", .{ sigil(ch), ch.name, ch.topic }) catch ch.name;
+        const t = std.fmt.bufPrint(&buf, "─ {s}{s}{s} ─ {s} ", .{ sigil(ch), ch.name, w.botSuffix(dm_user), ch.topic }) catch ch.name;
+        if (dm_user != null and dm_user.?.bot) qa.mark(r, "bot-tag:{d}", .{dm_user.?.id});
         const fs = ctx.th.font_size - 1;
         // O alfinete à direita, em texto como o resto da linha.
         const pl = "[pin]";
@@ -49,6 +52,7 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         var buf: [128]u8 = undefined;
         const t = std.fmt.bufPrint(&buf, "{s}", .{ch.name}) catch "";
         d.text(dl, fam.get(.bold), 22, r.x + 4, r.y + r.h / 2 - 22, ctx.col(.text), t);
+        _ = w.botTag(ctx, dl, r.x + 4 + d.width(fam.get(.bold), 22, t), r.y + r.h / 2 - 9, dm_user, false, 1);
         const sub = if (ch.guild == 0) i18n.tr("mensagem direta", "direct message") else d.printClip(&buf, "{s}  ·  {s}", .{ if (g) |x| x.name else "", ch.topic });
         _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - 120);
         inboxButtons(ctx, dl, r.right() - 32, r.y + r.h / 2 - 14);
@@ -57,12 +61,14 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     }
 
     d.text(dl, fam.get(.medium), 22, r.x + 17, d.centerY(r, 22), ctx.col(.faint), sigil(ch));
-    const search_w: f32 = 180;
-    const sx = r.right() - 16 - search_w;
+    // Conversa estreita (painéis alargados, tela dividida): a caixa de busca sai
+    // primeiro; os botões ficam, e Ctrl+K continua abrindo a paleta.
+    const search_w: f32 = if (r.w < 560) 0 else 180;
+    const sx = r.right() - (if (search_w > 0) 16 + search_w else 4);
     // Título longo (post de fórum) corta com "…": os botões e o canal pai ficam.
-    const name_room = @max(80, sx - (r.x + 42) - 14 - 214 - 110);
-    const name_w = d.textClipped(dl, fam.get(.semibold), 16, r.x + 42, d.centerY(r, 16), ctx.col(.text), ch.name, name_room);
-    const tx = r.x + 42 + name_w + 14;
+    const name_room = if (search_w > 0) @max(80, sx - (r.x + 42) - 14 - 214 - 110) else @max(sx - 192 - (r.x + 42), 40);
+    const name_w = d.textClipped(dl, fam.get(.semibold), 16, r.x + 42, d.centerY(r, 16), ctx.col(.text), ch.name, name_room - w.botTagSpace(ctx, dm_user, false));
+    const tx = r.x + 42 + name_w + w.botTag(ctx, dl, r.x + 42 + name_w, r.y + r.h / 2, dm_user, false, 1) + 14;
     // Da direita para a esquerda: busca, membros, buscar mensagens, salvas, caixa de entrada, fixadas.
     // Numa thread, no lugar do tópico: o canal pai, e clicar volta para ele.
     const parent_cs = if (ch.thread != null and ch.parent != null) ctx.store.channel(ch.parent.?) else null;
@@ -84,15 +90,17 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     }
     inboxButtons(ctx, dl, sx - 112, r.y + r.h / 2 - 14);
     pinsButton(ctx, dl, ch_id, sx - 184, r.y + r.h / 2 - 14);
-    const sr: d.Rect = .{ .x = sx, .y = r.y + r.h / 2 - 13, .w = search_w, .h = 26 };
-    const sh = d.hit(ctx, 1, sr);
-    qa.mark(sr, "header-search", .{});
-    if (sh.clicked) ctx.act(.open_palette);
-    d.tip(ctx, sr, i18n.tr("Buscar canais, servidores e ações", "Search channels, servers and actions"), sh.hovered);
-    const sk = anim.to(anim.id("search", @intFromPtr(n)), if (sh.hovered) 1 else 0, 20);
-    d.rect(dl, sr, ctx.col(.rail).mix(ctx.col(.sidebar), 0.3 + 0.3 * sk), ctx.th.radius);
-    d.text(dl, fam.get(.regular), 14, sr.x + 9, d.centerY(sr, 14), ctx.col(.faint).mix(ctx.col(.muted), sk), i18n.tr("Buscar  Ctrl+K", "Search  Ctrl+K"));
-    icons.search(dl, sr.right() - 15, sr.y + 13, ctx.col(.faint).mix(ctx.col(.muted), sk).u());
+    if (search_w > 0) {
+        const sr: d.Rect = .{ .x = sx, .y = r.y + r.h / 2 - 13, .w = search_w, .h = 26 };
+        const sh = d.hit(ctx, 1, sr);
+        qa.mark(sr, "header-search", .{});
+        if (sh.clicked) ctx.act(.open_palette);
+        d.tip(ctx, sr, i18n.tr("Buscar canais, servidores e ações", "Search channels, servers and actions"), sh.hovered);
+        const sk = anim.to(anim.id("search", @intFromPtr(n)), if (sh.hovered) 1 else 0, 20);
+        d.rect(dl, sr, ctx.col(.rail).mix(ctx.col(.sidebar), 0.3 + 0.3 * sk), ctx.th.radius);
+        d.text(dl, fam.get(.regular), 14, sr.x + 9, d.centerY(sr, 14), ctx.col(.faint).mix(ctx.col(.muted), sk), i18n.tr("Buscar  Ctrl+K", "Search  Ctrl+K"));
+        icons.search(dl, sr.right() - 15, sr.y + 13, ctx.col(.faint).mix(ctx.col(.muted), sk).u());
+    }
     // Busca nas mensagens (local, também offline): Ctrl+F.
     const fr: d.Rect = .{ .x = sx - 76, .y = r.y + r.h / 2 - 14, .w = 28, .h = 28 };
     const fh = d.hit(ctx, 5, fr);

@@ -102,6 +102,8 @@ Containers: `row` (horizontal), `column` (vertical), `stack` (one on top of anot
 | `font=mono` / `font=ui` / `font="Liberation Serif"` | the component's font: the mono one, the interface one or **any installed family** |
 | `c-<token>=color` | overrides a color token **on this node and its children** (e.g. `c-text="#fff"` on a dark sidebar) |
 
+The child of a `row` that has a fixed `width=` and holds `channel-list` or `member-list` is resizable: the app draws a drag handle on the side facing the row's `flex` sibling, and the width people choose is added to the one you set. Without a `flex` sibling there's no handle.
+
 ## Components
 
 | Component | Properties |

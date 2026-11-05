@@ -5,6 +5,7 @@ const d = @import("draw.zig");
 const anim = @import("anim.zig");
 const types = @import("../core/types.zig");
 const i18n = @import("i18n.zig");
+const qa = @import("qa.zig");
 
 pub const Shape = enum { circle, squircle, square };
 
@@ -34,14 +35,31 @@ pub fn statusColor(ctx: *const d.Ctx, s: types.Status) d.Rgba {
 pub const Cdn = enum { avatar, guild, group };
 
 pub fn cdnUrl(buf: []u8, kind: Cdn, id: types.Id, hash: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, hash, "demo:")) return hash;
+    return cdnSized(buf, kind, id, hash, 128);
+}
+
+/// A mesma imagem no tamanho que o visualizador mostra (o CDN dá o que tiver,
+/// até esse tamanho).
+pub fn cdnFull(buf: []u8, kind: Cdn, id: types.Id, hash: []const u8) []const u8 {
+    return cdnSized(buf, kind, id, hash, 1024);
+}
+
+fn cdnSized(buf: []u8, kind: Cdn, id: types.Id, hash: []const u8, size: u16) []const u8 {
+    // A demonstração e a foto de um webhook (que mora no ID dele) já são a URL.
+    if (std.mem.startsWith(u8, hash, "demo:") or std.mem.startsWith(u8, hash, "https://")) return hash;
     const dir = switch (kind) {
         .avatar => "avatars",
         .guild => "icons",
         .group => "channel-icons",
     };
     // PNG mesmo para os animados (a_…): o primeiro quadro basta aqui.
-    return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/{s}/{d}/{s}.png?size=128", .{ dir, id, hash }) catch "";
+    return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/{s}/{d}/{s}.png?size={d}", .{ dir, id, hash, size }) catch "";
+}
+
+/// Banner (de servidor ou de pessoa: ficam no mesmo lugar) em tamanho cheio.
+pub fn bannerFull(buf: []u8, id: types.Id, hash: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, hash, "demo:")) return hash;
+    return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/banners/{d}/{s}.png?size=4096", .{ id, hash }) catch "";
 }
 
 /// Banner (ou splash) de um servidor.
@@ -134,6 +152,83 @@ pub fn avatar(ctx: *d.Ctx, dl: *c.ImDrawList, cx: f32, cy: f32, size: f32, user_
         .offline => d.circle(dl, sx, sy, sr * 0.45, ring_col),
         .online => {},
     }
+}
+
+// --- Etiqueta de bot -------------------------------------------------------------
+
+const tag_gap: f32 = 6;
+const tag_size: f32 = 10;
+
+fn tagWidth(ctx: *const d.Ctx, u: *const types.User, tty: bool) f32 {
+    if (tty) return d.width(ctx.mono.get(.bold), ctx.th.font_size - 1, tagText(u));
+    return 10 + (if (u.verified_bot) @as(f32, 11) else 0) + d.width(ctx.ui.get(.bold), tag_size, "BOT");
+}
+
+/// Nos temas de terminal a etiqueta é texto, como o resto da tela.
+fn tagText(u: *const types.User) []const u8 {
+    return if (u.verified_bot) "[BOT ✓]" else "[BOT]";
+}
+
+/// O texto para quem monta uma linha inteira de terminal (" [BOT]"; "" para quem não é bot).
+pub fn botSuffix(u: ?*const types.User) []const u8 {
+    const x = u orelse return "";
+    if (!x.bot) return "";
+    return if (x.verified_bot) " [BOT ✓]" else " [BOT]";
+}
+
+/// Quanto a etiqueta ocupa depois de um nome (0 para quem não é bot).
+pub fn botTagSpace(ctx: *const d.Ctx, u: ?*const types.User, tty: bool) f32 {
+    const x = u orelse return 0;
+    if (!x.bot) return 0;
+    return tag_gap + tagWidth(ctx, x, tty);
+}
+
+/// A etiqueta de bot logo depois de um nome que termina em `x`, centrada em `cy`.
+/// Retorna o espaço que ocupou (0 para quem não é bot). Bot verificado leva o ✓.
+pub fn botTag(ctx: *d.Ctx, dl: *c.ImDrawList, x: f32, cy: f32, u: ?*const types.User, tty: bool, alpha: f32) f32 {
+    const who = u orelse return 0;
+    if (!who.bot) return 0;
+    const tw = tagWidth(ctx, who, tty);
+    const tx = @round(x + tag_gap);
+    if (tty) {
+        const fs = ctx.th.font_size - 1;
+        d.text(dl, ctx.mono.get(.bold), fs, tx, cy - fs * 0.6, ctx.col(.accent).alpha(alpha), tagText(who));
+        qa.mark(.{ .x = tx, .y = cy - 8, .w = tw, .h = 16 }, "bot-tag:{d}", .{who.id});
+        return tag_gap + tw;
+    }
+    const h = @round(@max(15, tag_size * d.text_scale * 1.2 + 3));
+    const r: d.Rect = .{ .x = tx, .y = @round(cy - h / 2), .w = tw, .h = h };
+    const ink = ctx.col(.accent_text).alpha(alpha);
+    d.rect(dl, r, ctx.col(.accent).alpha(alpha), 4);
+    var text_x = r.x + 5;
+    if (who.verified_bot) {
+        // O ✓ desenhado: em qualquer fonte, sem depender de ela ter o caractere.
+        const my = r.y + r.h / 2;
+        d.line(dl, text_x, my, text_x + 2.5, my + 2.5, ink, 1.5);
+        d.line(dl, text_x + 2.5, my + 2.5, text_x + 7.5, my - 3, ink, 1.5);
+        text_x += 11;
+        qa.mark(r, "bot-verified:{d}", .{who.id});
+    }
+    d.text(dl, ctx.ui.get(.bold), tag_size, text_x, d.centerY(r, tag_size), ink, "BOT");
+    qa.mark(r, "bot-tag:{d}", .{who.id});
+    return tag_gap + tw;
+}
+
+/// A coluna de nomes do modo IRC é estreita demais para a etiqueta: lá vai só um
+/// sinal antes do nome, e a dica diz o que é. Quanto ele ocupa (0 para quem não é bot).
+pub fn botMarkSpace(font: *c.ImFont, size: f32, u: ?*const types.User) f32 {
+    const x = u orelse return 0;
+    if (!x.bot) return 0;
+    return d.width(font, size, "⚙") + 3;
+}
+
+pub fn botMark(ctx: *d.Ctx, dl: *c.ImDrawList, font: *c.ImFont, size: f32, x: f32, y: f32, h: f32, u: ?*const types.User, alpha: f32) void {
+    const who = u orelse return;
+    if (!who.bot) return;
+    d.text(dl, font, size, x, y + (h - size * 1.2) / 2, ctx.col(.accent).alpha(alpha), "⚙");
+    const r: d.Rect = .{ .x = x, .y = y, .w = d.width(font, size, "⚙"), .h = h };
+    qa.mark(r, "bot-tag:{d}", .{who.id});
+    d.tip(ctx, r, if (who.verified_bot) i18n.tr("Bot verificado", "Verified bot") else "Bot", ctx.hovering(r));
 }
 
 pub fn statusGlyph(s: types.Status) []const u8 {

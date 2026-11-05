@@ -22,7 +22,13 @@
 **Bandeja**
 - Fechar e reabrir não empilha mais ícones na bandeja. No Linux o ícone fica num processo pequeno à parte, que só existe com a janela escondida, e o GTK fica fora do app.
 
+**Layout**
+- Arraste a borda da lista de canais, da lista de membros ou dos painéis da tela dividida para mudar a largura. Duplo clique volta à largura do tema, e a sua escolha fica salva e vale nos outros temas.
+- Conversa estreita continua funcionando: a caixa de busca sai antes dos botões.
+
 **Mensagens**
+- Etiqueta BOT ao lado do nome de bots e webhooks, com um ✓ nos bots verificados, nas mensagens, na lista de membros, nas DMs e nos perfis.
+- Mensagens de webhook ficam com o nome e a foto com que cada uma foi enviada.
 - Mensagens de bot no formato novo de componentes, que apareciam em branco. Encaminhadas e enquetes aparecem como cartões.
 - O texto de embeds pode ser selecionado e copiado.
 - Markdown do Discord: títulos, texto pequeno, citações, listas e links `[texto](url)`. Número de linha nos blocos de código.
@@ -34,6 +40,8 @@
 - Editar um servidor (nome, descrição, ícone, banner) ou um grupo de DM (nome, ícone).
 - Excluir threads.
 - Banner do servidor no topo da lista de canais e nos cartões de convite.
+- Clique no banner de um servidor para ver a imagem inteira, e o mesmo no banner de um perfil. Os menus do servidor e da pessoa também abrem o ícone ou a foto.
+- Ícones de amigos, de grupo e do alfinete redesenhados.
 
 **Mais leve**
 - Executável menor, abertura mais rápida e menos memória.

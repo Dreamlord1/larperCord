@@ -102,6 +102,8 @@ Contêineres: `row` (horizontal), `column` (vertical), `stack` (um sobre o outro
 | `font=mono` / `font=ui` / `font="Liberation Serif"` | fonte do componente: a mono, a da interface ou **qualquer família instalada** |
 | `c-<token>=cor` | sobrescreve um token de cor **neste nó e nos filhos** (ex.: `c-text="#fff"` numa barra lateral escura) |
 
+O filho de uma `row` que tem `width=` fixo e contém `channel-list` ou `member-list` é ajustável: o app desenha uma alça de arrastar do lado que dá para o vizinho `flex` da row, e a largura escolhida pela pessoa soma com a que você definiu. Sem vizinho `flex`, não tem alça.
+
 ## Componentes
 
 | Componente | Propriedades |

@@ -257,9 +257,18 @@ pub fn openImage(ctx: *d.Ctx, url: []const u8, name: []const u8, w: u16, h: u16)
     ctx.st.viewer = v;
 }
 
+/// Abre uma imagem de que só se sabe o endereço (banner, ícone, foto): `w` e `h`
+/// são um palpite do formato, até ela chegar, e ela vem no tamanho cheio.
+pub fn openOriginal(ctx: *d.Ctx, url: []const u8, name: []const u8, w: u16, h: u16) void {
+    openImage(ctx, url, name, w, h);
+    if (ctx.st.viewer) |*v| v.original = true;
+}
+
 // --- Visualizador ------------------------------------------------------------
 
 var viewer_shown = false;
+/// O maior tamanho que o cache de imagens guarda.
+const full_side: f32 = 4096;
 
 pub fn viewer(ctx: *d.Ctx) void {
     const open_now = ctx.st.viewer != null;
@@ -284,6 +293,15 @@ pub fn viewer(ctx: *d.Ctx) void {
     const dl = c.ImGui_GetWindowDrawList();
     d.rect(dl, win, d.Rgba.black.alpha(0.86 * k), 0);
 
+    // O tamanho de verdade chega com a imagem.
+    if (v.original) switch (ctx.images.get(v.url[0..v.url_len], full_side, full_side)) {
+        .ready => |t| {
+            v.w = @intCast(t.w);
+            v.h = @intCast(t.h);
+        },
+        else => {},
+    };
+
     // Cabe na janela, sem passar do tamanho original.
     const ow: f32 = @floatFromInt(v.w);
     const oh: f32 = @floatFromInt(v.h);
@@ -295,7 +313,7 @@ pub fn viewer(ctx: *d.Ctx) void {
     qa.mark(ir, "viewer", .{});
     const url = v.url[0..v.url_len];
     const scale = ctx.io.*.DisplayFramebufferScale.x;
-    switch (ctx.images.get(url, ow * s * scale, oh * s * scale)) {
+    switch (if (v.original) ctx.images.get(url, full_side, full_side) else ctx.images.get(url, ow * s * scale, oh * s * scale)) {
         .ready => |t| c.ImDrawList_AddImageRounded(dl, t.ref, d.v(ir.x, ir.y), d.v(ir.right(), ir.bottom()), d.v(0, 0), d.v(1, 1), d.Rgba.white.col(k), 6, 0),
         .loading => {
             d.rect(dl, ir, d.Rgba.white.alpha(0.04 * k), 6);

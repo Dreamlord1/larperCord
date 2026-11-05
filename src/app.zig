@@ -1532,6 +1532,7 @@ pub const App = struct {
                 st.focus_input = true;
                 app.saveSettings();
             },
+            .save_settings => app.saveSettings(),
             .pick_files => app.pickFiles(),
             .remove_upload => |i| if (i < st.uploads.items.len) {
                 dropUpload(st.uploads.items[i].path);

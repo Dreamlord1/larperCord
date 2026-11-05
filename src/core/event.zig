@@ -274,6 +274,8 @@ pub const Action = union(enum) {
     close_palette,
     open_settings,
     close_settings,
+    /// Grava as configurações (uma mudança que não passa pela tela delas).
+    save_settings,
     reply: Id,
     edit_message: Id,
     save_edit: []const u8,

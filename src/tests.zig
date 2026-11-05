@@ -10,6 +10,7 @@ test {
     _ = @import("core/version.zig");
     _ = @import("core/sort.zig");
     _ = @import("core/markdown.zig");
+    _ = @import("core/changelog.zig");
     _ = @import("core/store.zig");
     _ = @import("core/filtros.zig");
     _ = @import("core/leitura.zig");
@@ -44,6 +45,7 @@ test {
     _ = @import("net/proxy.zig");
     _ = @import("net/settings_proto.zig");
     _ = @import("net/thread_json.zig");
+    _ = @import("net/user_json.zig");
     _ = @import("ui/apng.zig");
     _ = @import("plugins/engine.zig");
 }
@@ -79,5 +81,20 @@ test "todos os temas embutidos carregam e montam o layout" {
         try layout.solve(std.testing.allocator, t.layout.?, .{ .x = 0, .y = 0, .w = 1280, .h = 800 }, 1280, &out);
         try std.testing.expect(out.items.len > 3);
         for (out.items) |p| try std.testing.expect(p.rect.w >= 0 and p.rect.h >= 0);
+    }
+}
+
+test "os dois CHANGELOGs têm as mesmas versões, com o mesmo tanto em cada seção" {
+    const log = @import("core/changelog.zig");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const en = try log.parse(arena.allocator(), @embedFile("changelog_en"));
+    const pt = try log.parse(arena.allocator(), @embedFile("changelog_pt"));
+    try std.testing.expect(en.len > 0);
+    try std.testing.expectEqual(en.len, pt.len);
+    for (en, pt) |a, b| {
+        try std.testing.expectEqualStrings(a.name, b.name);
+        try std.testing.expectEqual(a.sections.len, b.sections.len);
+        for (a.sections, b.sections) |sa, sb| try std.testing.expectEqual(sa.items.len, sb.items.len);
     }
 }
