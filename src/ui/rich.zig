@@ -170,7 +170,68 @@ pub fn label(store: *const Store, sp: *const md.Span, buf: []u8) []const u8 {
         .user => |id| std.fmt.bufPrint(buf, "@{s}", .{if (store.user(id)) |u| u.name else i18n.tr("desconhecido", "unknown-user")}) catch sp.text,
         .channel => |id| std.fmt.bufPrint(buf, "#{s}", .{if (store.channel(id)) |ch| ch.info.name else i18n.tr("canal", "unknown")}) catch sp.text,
         .role => |id| std.fmt.bufPrint(buf, "@{s}", .{if (store.roles.get(id)) |r| r.name else i18n.tr("cargo", "unknown-role")}) catch sp.text,
+        .stamp => |v| stampText(buf, v),
     };
+}
+
+const months_pt = [_][]const u8{ "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro" };
+const months_en = [_][]const u8{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
+const days_pt = [_][]const u8{ "domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado" };
+const days_en = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+
+/// `<t:…>` no fuso de quem lê, nos estilos do Discord.
+pub fn stampText(buf: []u8, value: u64) []const u8 {
+    const st = md.stampOf(value);
+    if (st.style == 'R') return relativeText(buf, st.unix);
+    var dt: c.SDL_DateTime = undefined;
+    if (!c.SDL_TimeToDateTime(st.unix * 1_000_000_000, &dt, true)) return "?";
+    const en = i18n.en();
+    const mon = (if (en) months_en else months_pt)[@intCast(std.math.clamp(dt.month, 1, 12) - 1)];
+    const wd = (if (en) days_en else days_pt)[@intCast(std.math.clamp(dt.day_of_week, 0, 6))];
+    // Sem sinal: com largura, o formato poria um "+" na frente de um número com sinal.
+    const hour: u32 = @intCast(dt.hour);
+    const minute: u32 = @intCast(dt.minute);
+    const second: u32 = @intCast(dt.second);
+    const month: u32 = @intCast(dt.month);
+    const day: u32 = @intCast(dt.day);
+    const year: u32 = @intCast(dt.year);
+    const f = std.fmt.bufPrint;
+    return switch (st.style) {
+        't' => f(buf, "{d:0>2}:{d:0>2}", .{ hour, minute }),
+        'T' => f(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second }),
+        'd' => if (en) f(buf, "{d:0>2}/{d:0>2}/{d}", .{ month, day, year }) else f(buf, "{d:0>2}/{d:0>2}/{d}", .{ day, month, year }),
+        'D' => if (en) f(buf, "{s} {d}, {d}", .{ mon, day, year }) else f(buf, "{d} de {s} de {d}", .{ day, mon, year }),
+        'F' => if (en) f(buf, "{s}, {s} {d}, {d} {d:0>2}:{d:0>2}", .{ wd, mon, day, year, hour, minute }) else f(buf, "{s}, {d} de {s} de {d} {d:0>2}:{d:0>2}", .{ wd, day, mon, year, hour, minute }),
+        else => if (en) f(buf, "{s} {d}, {d} {d:0>2}:{d:0>2}", .{ mon, day, year, hour, minute }) else f(buf, "{d} de {s} de {d} {d:0>2}:{d:0>2}", .{ day, mon, year, hour, minute }),
+    } catch "?";
+}
+
+/// "em 2 horas", "há 3 dias": refeito a cada desenho, sem nada guardado.
+fn relativeText(buf: []u8, unix: i64) []const u8 {
+    var ns: c.SDL_Time = 0;
+    _ = c.SDL_GetCurrentTime(&ns);
+    const delta = unix - @divTrunc(ns, 1_000_000_000);
+    const secs = @abs(delta);
+    const Unit = struct { size: u64, pt: []const u8, pts: []const u8, en: []const u8, ens: []const u8 };
+    const units = [_]Unit{
+        .{ .size = 365 * 86400, .pt = "ano", .pts = "anos", .en = "year", .ens = "years" },
+        .{ .size = 30 * 86400, .pt = "mês", .pts = "meses", .en = "month", .ens = "months" },
+        .{ .size = 86400, .pt = "dia", .pts = "dias", .en = "day", .ens = "days" },
+        .{ .size = 3600, .pt = "hora", .pts = "horas", .en = "hour", .ens = "hours" },
+        .{ .size = 60, .pt = "minuto", .pts = "minutos", .en = "minute", .ens = "minutes" },
+        .{ .size = 1, .pt = "segundo", .pts = "segundos", .en = "second", .ens = "seconds" },
+    };
+    const u = for (units) |x| {
+        if (secs >= x.size) break x;
+    } else units[units.len - 1];
+    const n = secs / u.size;
+    const f = std.fmt.bufPrint;
+    if (i18n.en()) {
+        const name = if (n == 1) u.en else u.ens;
+        return (if (delta < 0) f(buf, "{d} {s} ago", .{ n, name }) else f(buf, "in {d} {s}", .{ n, name })) catch "?";
+    }
+    const name = if (n == 1) u.pt else u.pts;
+    return (if (delta < 0) f(buf, "há {d} {s}", .{ n, name }) else f(buf, "em {d} {s}", .{ n, name })) catch "?";
 }
 
 /// Largura de uma palavra. Uma enorme ("kkkk…"): se o começo já não cabe na
@@ -389,6 +450,18 @@ fn drawWord(dl: *c.ImDrawList, th: anytype, sp: *const md.Span, font: *c.ImFont,
     if (sp.flags.code) {
         d.rect(dl, r, if (o.on_accent) d.Rgba.black.alpha(0.18) else th.c(.code_bg), 5);
         d.text(dl, font, size, x + pad, ty, if (o.on_accent) o.color else th.c(.text).mix(th.c(.accent), 0.25), s);
+        return;
+    }
+    if (sp.mention == .stamp) {
+        d.rect(dl, r, if (o.on_accent) d.Rgba.white.alpha(0.18) else th.c(.code_bg), 4);
+        d.text(dl, font, size, x + pad, ty, o.color, s);
+        const v = sp.mention.stamp;
+        qa.mark(r, "stamp:{d}", .{md.stampOf(v).unix});
+        // "em 2 horas": a hora certa fica a um passar de mouse.
+        if (o.ctx) |ctx| if (r.contains(mouse.x, mouse.y)) {
+            var tb: [96]u8 = undefined;
+            d.tip(ctx, r, stampText(&tb, (v >> 8) << 8 | 'F'), true);
+        };
         return;
     }
     if (sp.mention != .none) {

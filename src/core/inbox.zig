@@ -301,6 +301,7 @@ pub fn previewSpans(buf: []u8, store: *const Store, spans: []const @import("mark
             .user => |id| std.fmt.bufPrint(&tmp, "@{s}", .{if (store.user(id)) |u| u.name else "?"}) catch "@?",
             .channel => |id| std.fmt.bufPrint(&tmp, "#{s}", .{if (store.channel(id)) |cs| cs.info.name else "?"}) catch "#?",
             .role => |id| std.fmt.bufPrint(&tmp, "@{s}", .{if (store.roles.get(id)) |r| r.name else "?"}) catch "@?",
+            .stamp => "🕒",
         };
         for (piece) |ch| {
             if (n == buf.len) return trimUtf8(buf[0..n]);
