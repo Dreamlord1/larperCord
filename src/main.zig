@@ -88,6 +88,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
         } else if (@import("builtin").mode == .debug and !sys.windows and std.mem.eql(u8, arg, "--qa-lsp-server")) {
             // O servidor de linguagem de mentira do QA (src/qa_lsp_server.zig), só em debug.
             @import("qa_lsp_server.zig").run(it.next() orelse return fail("--qa-lsp-server precisa de um modo"));
+        } else if (!sys.windows and std.mem.eql(u8, arg, "--tray-helper")) {
+            // Só o próprio app chama (platform/tray.zig): é o processo do ícone da bandeja.
+            const open = it.next() orelse return fail("--tray-helper precisa de dois rótulos");
+            const quit = it.next() orelse return fail("--tray-helper precisa de dois rótulos");
+            @import("platform/tray.zig").helperMain(open.ptr, quit.ptr);
         } else if (std.mem.eql(u8, arg, "--list-themes")) {
             for (builtin_themes.list) |t| std.debug.print("{s}\n", .{t.name});
             return;

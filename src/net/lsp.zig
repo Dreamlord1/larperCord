@@ -11,6 +11,7 @@
 //! programa que roda como a pessoa, por isso só sobe depois que ela ligou.
 const std = @import("std");
 const builtin = @import("builtin");
+const sys = @import("../platform/sys.zig");
 const c = @import("c");
 const L = @import("../core/lsp.zig");
 
@@ -561,15 +562,9 @@ fn prepareScratch() ?[*:0]const u8 {
 }
 
 /// Soquete do Discord, arquivos abertos: nada disso atravessa o exec.
-fn closeOnExec() void {
-    if (builtin.os.tag != .linux) return;
-    var fd: c_int = 3;
-    while (fd < 1024) : (fd += 1) _ = c.fcntl(fd, c.F_SETFD, @as(c_int, c.FD_CLOEXEC));
-}
-
 fn spawn(s: *Server, slot: *?*Server, now: u64) void {
     const cwd = prepareScratch() orelse return giveUp(s, slot, .spawn, 0);
-    closeOnExec();
+    sys.closeOnExec();
     var args: [L.max_argv + 1:null]?[*:0]const u8 = @splat(null);
     var it = s.spec.cmd.iterator();
     var n: usize = 0;

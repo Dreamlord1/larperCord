@@ -212,6 +212,13 @@ pub fn allowForeground() void {
     if (windows) _ = c.AllowSetForegroundWindow(0xFFFFFFFF);
 }
 
+/// Filho nenhum herda os sockets e a trava do app.
+pub fn closeOnExec() void {
+    if (windows) return;
+    var fd: c_int = 3;
+    while (fd < 1024) : (fd += 1) _ = c.fcntl(fd, c.F_SETFD, @as(c_int, c.FD_CLOEXEC));
+}
+
 /// Tem quem mostre um ícone de bandeja? No Windows, a barra de tarefas. No Linux
 /// o SDL_CreateTray funciona mesmo sem painel nenhum (o ícone só não aparece),
 /// então a pergunta vai direto para o StatusNotifierWatcher, pelo D-Bus. Sem

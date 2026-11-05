@@ -58,6 +58,16 @@ class Watcher(dbus.service.Object):
         self.items = []
         self.name = dbus.service.BusName(WATCHER, bus)
         super().__init__(bus, "/StatusNotifierWatcher")
+        # Como um painel de verdade: o protocolo não tem como tirar um ícone do
+        # registro, ele só sai quando a conexão de quem o registrou fecha.
+        self.owner_match = bus.add_signal_receiver(self.owner_changed, "NameOwnerChanged", "org.freedesktop.DBus")
+
+    def owner_changed(self, name, old, new):
+        if new:
+            return
+        for item in [i for i in self.items if i[0] == str(name)]:
+            self.items.remove(item)
+            self.StatusNotifierItemUnregistered(f"{item[0]}{item[1]}")
 
     @dbus.service.method(WATCHER, in_signature="s", sender_keyword="sender")
     def RegisterStatusNotifierItem(self, service, sender=None):
@@ -71,6 +81,10 @@ class Watcher(dbus.service.Object):
 
     @dbus.service.signal(WATCHER, signature="s")
     def StatusNotifierItemRegistered(self, service):
+        pass
+
+    @dbus.service.signal(WATCHER, signature="s")
+    def StatusNotifierItemUnregistered(self, service):
         pass
 
     @dbus.service.signal(WATCHER, signature="")
@@ -135,6 +149,7 @@ class Panel:
     def down(self):
         def go():
             if self.watcher:
+                self.watcher.owner_match.remove()
                 self.watcher.remove_from_connection()
                 self.bus.release_name(WATCHER)
                 self.watcher = None
@@ -291,6 +306,29 @@ class App:
         self.p.wait()
 
 
+def helpers(a):
+    """Os processos do ícone: filhos do app."""
+    out = []
+    try:
+        kids = Path(f"/proc/{a.p.pid}/task/{a.p.pid}/children").read_text().split()
+    except OSError:
+        return out
+    for k in kids:
+        try:
+            if b"--tray-helper" in Path(f"/proc/{k}/cmdline").read_bytes():
+                out.append(int(k))
+        except OSError:
+            pass
+    return out
+
+
+def pss_of(pid):
+    for line in Path(f"/proc/{pid}/smaps_rollup").read_text().splitlines():
+        if line.startswith("Pss:"):
+            return int(line.split()[1])
+    return 0
+
+
 def no_windows():
     """Espera as janelas de quem foi morto sumirem do X."""
     wait_until(lambda: not windows(), 5)
@@ -414,16 +452,36 @@ def full_flow():
 
     section("idas e voltas")
     ok = True
+    icons = []
+    panel.clear()
     for _ in range(5):
-        panel.clear()
         ok = ok and close_window()
         ok = ok and bool(wait_until(panel.items, ICON_MAX_S))
         ok = ok and wait_until(lambda: not mapped(), 3) is True
+        icons.append(len(panel.items()))
         b = App(home)
         ok = ok and b.wait(8) == 0
         ok = ok and bool(wait_until(mapped, 5))
         time.sleep(0.3)
+        icons.append(len(panel.items()))
     check("5 vezes para a bandeja e de volta", ok and a.alive())
+    check("nunca sobra ícone: um na bandeja, nenhum com a janela aberta", icons == [1, 0] * 5, str(icons))
+
+    section("o processo do ícone")
+    close_window()
+    wait_until(panel.items, ICON_MAX_S)
+    wait_until(lambda: not mapped(), 3)
+    kids = helpers(a)
+    check("na bandeja: um processo só para o ícone", len(kids) == 1, str(kids))
+    gtk = "libgtk-3" in Path(f"/proc/{a.p.pid}/maps").read_text()
+    check("o GTK fica fora do app", not gtk)
+    if kids:
+        print(f"       RAM (PSS) do processo do ícone: {pss_of(kids[0])} KB")
+        os.kill(kids[0], signal.SIGKILL)
+    check("o processo do ícone morreu: a janela volta", bool(wait_until(mapped, 5)))
+    check("e o ícone sai do painel", wait_until(lambda: not panel.items(), 3) is True)
+    check("o app segue vivo", a.alive())
+    time.sleep(0.3)
 
     section("Sair no menu")
     panel.clear()
