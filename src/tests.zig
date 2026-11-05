@@ -53,6 +53,7 @@ test {
     _ = @import("plugins/manifest.zig");
     _ = @import("plugins/deco.zig");
     _ = @import("plugins/panel.zig");
+    _ = @import("plugins/rewrite.zig");
     _ = @import("plugins/json.zig");
 }
 

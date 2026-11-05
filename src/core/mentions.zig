@@ -181,6 +181,21 @@ fn wordChar(ch: u8) bool {
 
 /// Procura para trás, a partir do cursor, o `@`, `#`, `:` ou `/` em cujo trecho
 /// o cursor está. Pessoas e canais podem ter espaço no nome (até dois).
+/// Gatilho de um plugin (";nome"): no começo de uma palavra, sem espaço até o cursor.
+pub fn findWordTrigger(text: []const u8, cur: usize, set: []const u8) ?Trigger {
+    var i = cur;
+    while (i > 0 and cur - i <= 48) {
+        i -= 1;
+        const ch = text[i];
+        if (ch == ' ' or ch == '\n' or ch == '\t') return null;
+        if (std.mem.indexOfScalar(u8, set, ch) != null) {
+            if (i > 0 and text[i - 1] != ' ' and text[i - 1] != '\n' and text[i - 1] != '\t') return null;
+            return .{ .at = i, .ch = ch };
+        }
+    }
+    return null;
+}
+
 pub fn findTrigger(text: []const u8, cur: usize) ?Trigger {
     var i = cur;
     var spaces: usize = 0;

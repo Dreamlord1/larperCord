@@ -17,6 +17,7 @@ const runtime = @import("runtime.zig");
 const manifest = @import("manifest.zig");
 pub const panel = @import("panel.zig");
 pub const deco = @import("deco.zig");
+pub const rewrite = @import("rewrite.zig");
 const sync = @import("sync.zig");
 const kdl = @import("../theme/kdl.zig");
 
@@ -31,6 +32,8 @@ pub const Keybind = wire.Keybind;
 pub const LspServer = wire.LspServer;
 pub const MenuKind = wire.MenuKind;
 pub const MenuEntry = wire.MenuEntry;
+pub const FileRef = wire.FileRef;
+pub const CompletionSet = wire.CompletionSet;
 pub const MsgList = wire.MsgList;
 pub const HttpReq = wire.HttpReq;
 pub const HttpRes = wire.HttpRes;
@@ -67,12 +70,20 @@ pub const Plugin = struct {
     n_delete: u16 = 0,
     n_channel: u16 = 0,
     n_lang: u16 = 0,
+    n_edit: u16 = 0,
+    n_dismiss: u16 = 0,
     commands: std.ArrayList([]u8) = .empty,
     keys: std.ArrayList(Keybind) = .empty,
     lsp: std.ArrayList(LspServer) = .empty,
     menus: std.ArrayList(MenuEntry) = .empty,
     /// O painel que o plugin publicou.
     tree: ?*panel.Tree = null,
+    /// As opções que ele mostra no cartão da página de plugins.
+    settings: ?*panel.Tree = null,
+    /// Sugestões da caixa de mensagem (larper.completions).
+    completions: ?*wire.CompletionSet = null,
+    /// Regras para o texto que a pessoa envia (larper.rewrite).
+    rewrite: []rewrite.Rule = &.{},
     /// Pediu para abrir antes de a árvore chegar.
     want_open: bool = false,
     /// Gestos da pessoa neste plugin: só eles liberam enviar, inserir e pular.
@@ -97,6 +108,12 @@ pub const Plugin = struct {
     pub fn memBytes(p: *const Plugin) usize {
         const w = p.engine.worker orelse return 0;
         return w.mem[p.slot].load(.monotonic);
+    }
+
+    /// Mensagens que ele perdeu por estar lento demais com a fila atrasada.
+    pub fn shedCount(p: *const Plugin) u32 {
+        const w = p.engine.worker orelse return 0;
+        return w.shed[p.slot].load(.monotonic);
     }
 
     pub fn title(p: *const Plugin) []const u8 {
@@ -132,15 +149,24 @@ pub const Engine = struct {
     approvals: std.StringHashMapUnmanaged(void) = .empty,
     /// Muda a cada carga, troca ou erro (a página e o QA observam).
     generation: u32 = 0,
+    /// Muda quando as entradas de menu mudam: a segunda lista aberta deixa de valer.
+    menu_gen: u32 = 0,
     /// Somas dos plugins rodando: com zero, os ganchos nem entram.
     n_message: u32 = 0,
     n_ready: u32 = 0,
     n_delete: u32 = 0,
     n_channel: u32 = 0,
     n_lang: u32 = 0,
+    n_edit: u32 = 0,
     n_commands: u32 = 0,
     n_keys: u32 = 0,
     n_running: u32 = 0,
+    /// Botões na barra da mensagem, plugins com regras de envio, com sugestões e
+    /// com número na etiqueta do painel.
+    n_toolbar: u32 = 0,
+    n_rewrite: u32 = 0,
+    n_completions: u32 = 0,
+    n_badges: u32 = 0,
     /// O app já recebeu o READY (plugin ligado depois recebe "ready" na hora).
     ready: bool = false,
     /// Plugins só rodam com uma conta aberta: o armazenamento é por conta.
@@ -349,23 +375,30 @@ pub const Engine = struct {
     fn forgetRun(e: *Engine, p: *Plugin) void {
         if (p.run != 0) e.deco.clearRun(p.run);
         p.run = 0;
+        e.menu_gen +%= 1;
+        if (e.worker) |w| w.shed[p.slot].store(0, .monotonic);
         for (p.commands.items) |s| e.gpa.free(s);
         p.commands.clearRetainingCapacity();
         p.keys.clearRetainingCapacity();
         p.lsp.clearRetainingCapacity();
-        for (p.menus.items) |*m| {
-            e.gpa.free(m.pt);
-            e.gpa.free(m.en);
-        }
+        for (p.menus.items) |*m| m.free(e.gpa);
         p.menus.clearRetainingCapacity();
         p.n_message = 0;
         p.n_ready = 0;
         p.n_delete = 0;
         p.n_channel = 0;
         p.n_lang = 0;
+        p.n_edit = 0;
+        p.n_dismiss = 0;
         p.want_open = false;
         if (p.tree) |t| t.destroy();
         p.tree = null;
+        if (p.settings) |t| t.destroy();
+        p.settings = null;
+        if (p.completions) |set| set.free(e.gpa);
+        p.completions = null;
+        rewrite.freeList(e.gpa, p.rewrite);
+        p.rewrite = &.{};
         if (e.panel_open == p) e.panel_open = null;
         e.panel_gen +%= 1;
     }
@@ -387,9 +420,14 @@ pub const Engine = struct {
         e.n_delete = 0;
         e.n_channel = 0;
         e.n_lang = 0;
+        e.n_edit = 0;
         e.n_commands = 0;
         e.n_keys = 0;
         e.n_running = 0;
+        e.n_toolbar = 0;
+        e.n_rewrite = 0;
+        e.n_completions = 0;
+        e.n_badges = 0;
         for (e.list.items) |p| if (p.run != 0) {
             e.n_running += 1;
             e.n_message += p.n_message;
@@ -397,8 +435,17 @@ pub const Engine = struct {
             e.n_delete += p.n_delete;
             e.n_channel += p.n_channel;
             e.n_lang += p.n_lang;
+            e.n_edit += p.n_edit;
             e.n_commands += @intCast(p.commands.items.len);
             e.n_keys += @intCast(p.keys.items.len);
+            for (p.menus.items) |*m| if (m.toolbar.len > 0) {
+                e.n_toolbar += 1;
+            };
+            if (p.rewrite.len > 0) e.n_rewrite += 1;
+            if (p.completions != null) e.n_completions += 1;
+            if (p.tree) |t| if (t.badge.len > 0) {
+                e.n_badges += 1;
+            };
         };
     }
 
@@ -455,6 +502,22 @@ pub const Engine = struct {
         const w = e.worker orelse return;
         const own = wire.OwnedMsg.dup(e.gpa, m) orelse return;
         w.push(.{ .message = own });
+    }
+
+    /// Editaram uma mensagem: `m` já é o texto novo.
+    pub fn onEdit(e: *Engine, m: *const Message) void {
+        if (e.n_edit == 0) return;
+        const w = e.worker orelse return;
+        const own = wire.OwnedMsg.dup(e.gpa, m) orelse return;
+        w.push(.{ .edit = own });
+    }
+
+    /// A pessoa fechou a nota de um plugin (o × embaixo da mensagem).
+    pub fn dismissDeco(e: *Engine, run: u32, id: u64) void {
+        e.deco.remove(run, id);
+        const p = e.byRun(run) orelse return;
+        if (p.n_dismiss == 0) return;
+        if (e.worker) |w| w.push(.{ .dismiss = .{ .run = run, .id = id } });
     }
 
     pub fn onDelete(e: *Engine, channel: u64, id: u64) void {
@@ -539,17 +602,25 @@ pub const Engine = struct {
 
     // --- Menus e painel (a interface chama) -------------------------------------
 
-    /// Clicou numa entrada de menu num mensagem.
-    pub fn menuMessage(e: *Engine, p: *Plugin, entry: *const MenuEntry, m: *const Message) void {
+    /// Clicou numa entrada de menu num mensagem. `value`: a escolha da segunda lista.
+    pub fn menuMessage(e: *Engine, p: *Plugin, entry: *const MenuEntry, m: *const Message, value: ?[]const u8) void {
         if (p.run == 0) return;
-        const own = wire.OwnedMsg.dup(e.gpa, m) orelse return;
-        e.gesture(p, .{ .menu_message = .{ .slot = entry.slot, .msg = own } });
+        const v = if (value) |x| (e.gpa.dupe(u8, x) catch return) else null;
+        const own = wire.OwnedMsg.dup(e.gpa, m) orelse {
+            if (v) |x| e.gpa.free(x);
+            return;
+        };
+        e.gesture(p, .{ .menu_message = .{ .slot = entry.slot, .msg = own, .value = v } });
     }
 
-    pub fn menuUser(e: *Engine, p: *Plugin, entry: *const MenuEntry, id: u64, name: []const u8) void {
+    pub fn menuUser(e: *Engine, p: *Plugin, entry: *const MenuEntry, id: u64, name: []const u8, value: ?[]const u8) void {
         if (p.run == 0) return;
-        const own = e.gpa.dupe(u8, name) catch return;
-        e.gesture(p, .{ .menu_user = .{ .slot = entry.slot, .id = id, .name = own } });
+        const v = if (value) |x| (e.gpa.dupe(u8, x) catch return) else null;
+        const own = e.gpa.dupe(u8, name) catch {
+            if (v) |x| e.gpa.free(x);
+            return;
+        };
+        e.gesture(p, .{ .menu_user = .{ .slot = entry.slot, .id = id, .name = own, .value = v } });
     }
 
     /// Clicou num botão ou item do painel, ou enviou um campo com Enter: é gesto.
@@ -557,6 +628,13 @@ pub const Engine = struct {
         if (p.run == 0 or handle == 0) return;
         const v = if (value) |x| (e.gpa.dupe(u8, x) catch return) else null;
         e.gesture(p, .{ .panel = .{ .handle = handle, .value = v } });
+    }
+
+    /// Mudou um interruptor: é um clique, então é gesto.
+    pub fn panelToggle(e: *Engine, p: *Plugin, handle: u32, on: bool) void {
+        e.generation +%= 1;
+        if (p.run == 0 or handle == 0) return;
+        e.gesture(p, .{ .panel = .{ .handle = handle, .value = null, .toggled = on } });
     }
 
     /// O texto de um campo mudou. Não conta como gesto: digitar não libera enviar.
@@ -596,6 +674,47 @@ pub const Engine = struct {
             if (p.tree != null) n += 1;
         }
         return n;
+    }
+
+    // --- Sugestões e regras de envio (dados: nada aqui chama o plugin) ---------------
+
+    /// Os gatilhos em uso, sem repetir.
+    pub fn completionTriggers(e: *const Engine, buf: []u8) []const u8 {
+        var n: usize = 0;
+        for (e.list.items) |p| {
+            const set = p.completions orelse continue;
+            if (std.mem.indexOfScalar(u8, buf[0..n], set.trigger) != null or n == buf.len) continue;
+            buf[n] = set.trigger;
+            n += 1;
+        }
+        return buf[0..n];
+    }
+
+    /// O texto de uma sugestão: a lista pode ter mudado desde a busca.
+    pub fn completionText(e: *const Engine, run: u32, trigger: u8, name: []const u8) ?[]const u8 {
+        for (e.list.items) |p| {
+            if (p.run != run) continue;
+            const set = p.completions orelse return null;
+            if (set.trigger != trigger) return null;
+            for (set.items) |*it| if (std.mem.eql(u8, it.name, name)) return it.text;
+        }
+        return null;
+    }
+
+    /// O texto que a pessoa vai enviar, com as regras dos plugins aplicadas. null =
+    /// fica como está. Quem chama fica com o resultado.
+    pub fn rewriteOutgoing(e: *Engine, text: []const u8) ?[]u8 {
+        if (e.n_rewrite == 0) return null;
+        var cur: ?[]u8 = null;
+        for (e.list.items) |p| {
+            if (p.run == 0 or p.rewrite.len == 0) continue;
+            const next = rewrite.apply(e.gpa, cur orelse text, p.rewrite) catch continue;
+            if (next) |n| {
+                if (cur) |old| e.gpa.free(old);
+                cur = n;
+            }
+        }
+        return cur;
     }
 
     // --- O que os plugins pediram --------------------------------------------------
@@ -658,6 +777,31 @@ pub const Engine = struct {
                 e.gpa.free(s.text);
             },
             .jump => |j| if (p.validToken(j.token)) e.host.jump(e.host.ctx, j.channel, j.id),
+            .copy => |s| {
+                if (p.validToken(s.token)) e.host.copy(e.host.ctx, s.text);
+                e.gpa.free(s.text);
+            },
+            .open_url => |s| {
+                if (p.validToken(s.token)) e.host.open_url(e.host.ctx, s.url);
+                e.gpa.free(s.url);
+            },
+            .settings_tree => |t| {
+                if (p.settings) |old| old.destroy();
+                p.settings = t;
+                e.next_serial +%= 1;
+                t.serial = e.next_serial;
+                e.generation +%= 1;
+            },
+            .completions => |set| {
+                if (p.completions) |old| old.free(e.gpa);
+                p.completions = set;
+                e.recount();
+            },
+            .rewrite => |list| {
+                rewrite.freeList(e.gpa, p.rewrite);
+                p.rewrite = list;
+                e.recount();
+            },
             .panel_tree => |t| {
                 if (p.tree) |old| old.destroy();
                 p.tree = t;
@@ -665,6 +809,7 @@ pub const Engine = struct {
                 t.serial = e.next_serial;
                 e.panel_gen +%= 1;
                 e.generation +%= 1;
+                e.recount();
                 if (p.want_open or std.mem.eql(u8, e.panel_wanted[0..e.panel_wanted_len], p.name)) {
                     p.want_open = false;
                     e.openPanel(p);
@@ -692,7 +837,7 @@ pub const Engine = struct {
             .want_messages => |q| {
                 const w = e.worker orelse return;
                 const list = e.gpa.create(MsgList) catch return;
-                list.* = .{ .gpa = e.gpa };
+                list.* = .{ .gpa = e.gpa, .files = q.files };
                 e.host.messages(e.host.ctx, q.channel, q.limit, list);
                 w.push(.{ .messages = .{ .run = cmd.run, .req = q.req, .list = list } });
             },
@@ -708,17 +853,17 @@ pub const Engine = struct {
         p.keys = .fromOwnedSlice(reg.keys);
         p.lsp.deinit(a);
         p.lsp = .fromOwnedSlice(reg.lsp);
-        for (p.menus.items) |*m| {
-            a.free(m.pt);
-            a.free(m.en);
-        }
+        for (p.menus.items) |*m| m.free(a);
         p.menus.deinit(a);
+        e.menu_gen +%= 1;
         p.menus = .fromOwnedSlice(reg.menus);
         p.n_message = reg.n_message;
         p.n_ready = reg.n_ready;
         p.n_delete = reg.n_delete;
         p.n_channel = reg.n_channel;
         p.n_lang = reg.n_lang;
+        p.n_edit = reg.n_edit;
+        p.n_dismiss = reg.n_dismiss;
         a.destroy(reg);
     }
 
@@ -796,6 +941,10 @@ const T = struct {
     var inserted_len: usize = 0;
     var jumps: usize = 0;
     var jump_id: u64 = 0;
+    var copied: [256]u8 = undefined;
+    var copied_len: usize = 0;
+    var opened: [256]u8 = undefined;
+    var opened_len: usize = 0;
     var dummy: u8 = 0;
     var loaded: []const Message = &.{};
     // O "disco" do armazenamento, usado pela thread dos plugins.
@@ -818,6 +967,8 @@ const T = struct {
         n_failed = 0;
         inserted_len = 0;
         jumps = 0;
+        copied_len = 0;
+        opened_len = 0;
         loaded = &.{};
     }
     fn wipeDisk() void {
@@ -868,8 +1019,22 @@ const T = struct {
         jumps += 1;
         jump_id = id;
     }
+    fn copy(_: *anyopaque, text: []const u8) void {
+        const k = @min(text.len, copied.len);
+        @memcpy(copied[0..k], text[0..k]);
+        copied_len = k;
+    }
+    fn openUrl(_: *anyopaque, url: []const u8) void {
+        const k = @min(url.len, opened.len);
+        @memcpy(opened[0..k], url[0..k]);
+        opened_len = k;
+    }
     fn messages(_: *anyopaque, _: u64, limit: u32, out: *MsgList) void {
-        for (loaded[0..@min(loaded.len, limit)]) |*m| out.add(m);
+        for (loaded[0..@min(loaded.len, limit)]) |*m| {
+            var one = m.*;
+            if (!out.files) one.files = &.{};
+            out.add(&one);
+        }
     }
     fn readData(_: *anyopaque, gpa: std.mem.Allocator, _: u64, plugin: []const u8) ?[]u8 {
         const l = lock();
@@ -925,7 +1090,7 @@ const T = struct {
             break :blk http_reqs[http_n].?;
         };
         const res = req.gpa.create(HttpRes) catch unreachable;
-        res.* = .{ .run = req.run, .id = req.id, .status = status, .body = req.gpa.dupe(u8, body) catch unreachable };
+        res.* = .{ .run = req.run, .id = req.id, .token = req.token, .status = status, .body = req.gpa.dupe(u8, body) catch unreachable };
         req.done(req.done_ctx, res);
         req.free();
     }
@@ -942,6 +1107,8 @@ const T = struct {
             .failed = &failed,
             .insert = &insert,
             .jump = &jump,
+            .copy = &copy,
+            .open_url = &openUrl,
             .messages = &messages,
             .wake = &nop,
             .read_data = &readData,
@@ -1672,7 +1839,7 @@ test "plugins: menus e decoração, com o plugin parado levando tudo" {
     try std.testing.expectEqualStrings("Marcar", p.menus.items[0].pt);
     try std.testing.expectEqualStrings("Mark", p.menus.items[0].en);
     const m: Message = .{ .id = 10, .content = "oi", .author = 1, .author_name = "ana", .channel = 42, .channel_name = "geral" };
-    e.menuMessage(p, &p.menus.items[0], &m);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
     e.waitIdle();
     try std.testing.expectEqualStrings("ana:10", T.note(0));
     var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = 10, .channel = 42, .author = 2, .timestamp = 0, .content = "oi" }, .spans = &.{} };
@@ -1680,7 +1847,7 @@ test "plugins: menus e decoração, com o plugin parado levando tudo" {
     var v = e.deco.view(&sm, 1);
     try std.testing.expectEqualStrings("ok", v.slice()[0].badge);
     try std.testing.expectEqualStrings("oi", v.slice()[0].note);
-    e.menuUser(p, &p.menus.items[1], 77, "bia");
+    e.menuUser(p, &p.menus.items[1], 77, "bia", null);
     e.waitIdle();
     try std.testing.expectEqualStrings("77=bia", T.note(1));
     try cmdOk(&e, "/tira");
@@ -1924,10 +2091,8 @@ test "plugins: recarregar não fecha o painel, e a lista de hosts vale para o pr
 test "plugins: trocar de idioma redesenha o que o plugin pediu" {
     var e = T.engine();
     defer e.deinit();
-    const exemplos = @import("plugin_examples");
-    _ = exemplos;
     T.wipeDisk();
-    const p = testOne(&e, Bundled.src("bookmarks.lua"));
+    const p = testOne(&e, @embedFile("testdata/bookmarks.lua"));
     try std.testing.expectEqualStrings("Favoritos", p.tree.?.title);
     try std.testing.expectEqualStrings("Favoritos", p.title());
     const S = struct {
@@ -2017,13 +2182,13 @@ test "plugins incluídos: lembretes entendem o tempo e voltam depois de reinicia
     try std.testing.expectEqual(@as(usize, 2), titles);
 }
 
-test "plugins incluídos: favoritos sobrevive e não guarda o que foi apagado" {
+test "plugins: favoritos sobrevive e não guarda o que foi apagado" {
     T.wipeDisk();
     var e = T.engine();
     defer e.deinit();
-    const p = testOne(&e, Bundled.src("bookmarks.lua"));
+    const p = testOne(&e, @embedFile("testdata/bookmarks.lua"));
     const m: Message = .{ .id = 77, .content = "segredo <@123> com <:ok:5>", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .guild = 3, .guild_name = "S", .timestamp = 1000 };
-    e.menuMessage(p, &p.menus.items[0], &m);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
     e.waitIdle();
     var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = 77, .channel = 42, .author = 7, .timestamp = 0, .content = "x" }, .spans = &.{} };
     try std.testing.expectEqualStrings("🔖", e.deco.view(&sm, 1).slice()[0].badge);
@@ -2053,15 +2218,15 @@ test "plugins incluídos: favoritos sobrevive e não guarda o que foi apagado" {
     try std.testing.expect(std.mem.indexOf(u8, data, "segredo") == null);
 }
 
-test "plugins incluídos: filtro vira regras, e trechos só põem na caixa" {
+test "plugins: filtro vira regras, e trechos só põem na caixa" {
     T.wipeDisk();
     var e = T.engine();
     defer e.deinit();
-    const f = testOne(&e, Bundled.src("filter.lua"));
+    const f = testOne(&e, @embedFile("testdata/filter.lua"));
     const user_entry = for (f.menus.items) |*m| {
         if (m.kind == .user) break m;
     } else unreachable;
-    e.menuUser(f, user_entry, 9, "bia");
+    e.menuUser(f, user_entry, 9, "bia", null);
     e.waitIdle();
     var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = 5, .channel = 42, .author = 9, .timestamp = 0, .content = "oi" }, .spans = &.{} };
     try std.testing.expect(e.deco.collapses(&sm, 1));
@@ -2077,7 +2242,7 @@ test "plugins incluídos: filtro vira regras, e trechos só põem na caixa" {
     try cmdOk(&e, "/snip nada");
     try std.testing.expect(std.mem.indexOf(u8, T.note(T.n_notes - 1), "nada") != null);
     const m: Message = .{ .id = 5, .content = "texto", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
-    e.menuMessage(s, &s.menus.items[0], &m);
+    e.menuMessage(s, &s.menus.items[0], &m, null);
     e.waitIdle();
     try std.testing.expect(e.panel_open == s);
     try std.testing.expectEqual(@as(usize, 0), T.n_sent);
@@ -2092,13 +2257,13 @@ test "plugins incluídos: tradução não sai sem aprovar, e a nota vem da respo
     const p = e.list.items[0];
     try std.testing.expect(p.man.declares(host_name));
     const m: Message = .{ .id = 5, .content = "hello <@1> world", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
-    e.menuMessage(p, &p.menus.items[0], &m);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
     e.waitIdle();
     try std.testing.expectEqual(@as(usize, 0), T.http_n);
     try std.testing.expect(std.mem.indexOf(u8, T.note(0), host_name) != null);
     e.setApproved(p, host_name, true);
     e.waitIdle();
-    e.menuMessage(p, &p.menus.items[0], &m);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
     e.waitIdle();
     try std.testing.expectEqual(@as(usize, 1), T.http_n);
     const url = T.http_reqs[0].?.url;
@@ -2109,25 +2274,25 @@ test "plugins incluídos: tradução não sai sem aprovar, e a nota vem da respo
     var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = 5, .channel = 42, .author = 7, .timestamp = 0, .content = "x" }, .spans = &.{} };
     try std.testing.expect(std.mem.indexOf(u8, e.deco.view(&sm, 1).slice()[0].note, "olá") != null);
     // Clicar de novo tira.
-    e.menuMessage(p, &p.menus.items[0], &m);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
     e.waitIdle();
     try std.testing.expect(!e.deco.active());
 
     // O serviço responde 200 também quando recusa, com o aviso no lugar da tradução
     // (esta é a resposta real dele para uma mensagem já no idioma pedido).
-    e.menuMessage(p, &p.menus.items[0], &m);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
     e.waitIdle();
     T.respond(200, "{\"responseData\":{\"translatedText\":\"PLEASE SELECT TWO DISTINCT LANGUAGES\",\"match\":0},\"responseStatus\":403}");
     e.waitIdle();
     const same = e.deco.view(&sm, 1).slice()[0].note;
     try std.testing.expect(std.mem.indexOf(u8, same, "seu idioma") != null);
     try std.testing.expect(std.mem.indexOf(u8, same, "DISTINCT") == null);
-    e.menuMessage(p, &p.menus.items[0], &m);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
     e.waitIdle();
     try std.testing.expect(!e.deco.active());
 
     // Qualquer outra recusa vira "não consegui", e nunca o texto do aviso.
-    e.menuMessage(p, &p.menus.items[0], &m);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
     e.waitIdle();
     T.respond(200, "{\"responseData\":{\"translatedText\":\"MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS\",\"match\":0},\"responseStatus\":429}");
     e.waitIdle();
@@ -2154,7 +2319,857 @@ test "plugins incluídos: todos ligam, com cabeçalho completo e nos dois idioma
         try std.testing.expect(p.man.name.len > 0 and p.man.name_pt.len > 0);
         try std.testing.expect(p.man.description.len > 0 and p.man.description_pt.len > 0);
         try std.testing.expect(p.man.version.len > 0);
-        // Traduzir só aparece no menu; os outros têm painel.
-        try std.testing.expect(p.tree != null or std.mem.eql(u8, ex.name, "translate.lua"));
+        // Estes não precisam de painel: menu, regras ou comando.
+        const no_panel = std.mem.eql(u8, ex.name, "translate.lua") or std.mem.eql(u8, ex.name, "cleanlinks.lua") or std.mem.eql(u8, ex.name, "timestamps.lua");
+        try std.testing.expect(p.tree != null or no_panel);
     }
+}
+
+
+// --- Opções, escolhas de menu e as outras capacidades ----------------------------
+
+fn firstOf(t: *panel.Tree, kind: panel.Kind) *panel.Node {
+    for (t.nodes.items) |*n| if (n.kind == kind) return n;
+    unreachable;
+}
+
+fn nodeKey(t: *panel.Tree, key: []const u8) *panel.Node {
+    for (t.nodes.items) |*n| if (std.mem.eql(u8, n.key, key)) return n;
+    unreachable;
+}
+
+fn hasKey(t: *panel.Tree, key: []const u8) bool {
+    for (t.nodes.items) |*n| if (std.mem.eql(u8, n.key, key)) return true;
+    return false;
+}
+
+fn lastNote() []const u8 {
+    return if (T.n_notes > 0) T.note(T.n_notes - 1) else "";
+}
+
+fn noteHas(needle: []const u8) bool {
+    for (0..T.n_notes) |i| if (std.mem.indexOf(u8, T.note(i), needle) != null) return true;
+    return false;
+}
+
+test "plugins: larper.settings publica opções que respondem, e somem ao desligar" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e,
+        \\-- @capabilities settings, panel, notify
+        \\larper.settings.set({
+        \\  { type = "select", key = "lang", label = "Idioma", value = "b",
+        \\    options = { { value = "a", label = "A" }, { value = "b", label = "B" } },
+        \\    on_change = function(v) larper.notify("sel:" .. v) end },
+        \\  { type = "toggle", key = "on", label = "Ligado", hint = "dica", value = true,
+        \\    on_change = function(v) larper.notify("tog:" .. tostring(v)) end },
+        \\})
+        \\larper.command("/painel", function()
+        \\  larper.panel.set({ { type = "text", text = "oi" } })
+        \\end)
+    );
+    try std.testing.expect(p.err() == null);
+    const t = p.settings.?;
+    try std.testing.expect(t.settings);
+    const sel = nodeKey(t, "lang");
+    try std.testing.expectEqual(panel.Kind.select, sel.kind);
+    try std.testing.expectEqualStrings("b", sel.meta);
+    const first_opt = &t.nodes.items[sel.child];
+    try std.testing.expectEqual(panel.Kind.option, first_opt.kind);
+    try std.testing.expectEqualStrings("a", first_opt.meta);
+    try std.testing.expectEqualStrings("B", t.nodes.items[first_opt.next].text);
+    const tog = nodeKey(t, "on");
+    try std.testing.expectEqual(@as(f32, 1), tog.value);
+    e.panelGesture(p, sel.change, "a");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("sel:a", lastNote());
+    e.panelToggle(p, tog.change, false);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("tog:false", lastNote());
+    // Publicar o painel não tira as funções das opções.
+    const handle = sel.change;
+    try cmdOk(&e, "/painel");
+    try cmdOk(&e, "/painel");
+    try cmdOk(&e, "/painel");
+    try std.testing.expect(p.tree != null);
+    e.panelGesture(p, handle, "b");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("sel:b", lastNote());
+    e.setEnabled(p, false);
+    try std.testing.expect(p.settings == null);
+}
+
+test "plugins: um clique numa opção é gesto, e o select também vale no painel" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e,
+        \\-- @capabilities panel, composer
+        \\larper.panel.set({
+        \\  { type = "select", key = "k", label = "L", value = "a", options = { { value = "a", label = "A" } },
+        \\    on_change = function(v) larper.insert(v) end },
+        \\})
+    );
+    const sel = nodeKey(p.tree.?, "k");
+    e.panelGesture(p, sel.change, "a");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("a", T.inserted[0..T.inserted_len]);
+    try std.testing.expect(!p.tree.?.settings);
+}
+
+test "plugins: larper.settings recusa o que não faz sentido, e explica" {
+    const cases = [_]struct { src: []const u8, want: []const u8 }{
+        .{ .src = "-- @capabilities notify\nlarper.settings.set({})", .want = "settings" },
+        .{ .src = "-- @capabilities settings\nlarper.settings.set({ { type = \"select\", label = \"x\" } })", .want = "key" },
+        .{ .src = "-- @capabilities settings\nlarper.settings.set({ { type = \"select\", key = \"x\" } })", .want = "options" },
+        .{ .src = "-- @capabilities settings\nlarper.settings.set({ { type = \"toggle\", label = \"x\" } })", .want = "key" },
+        .{ .src = "-- @capabilities settings\nlarper.settings.set({ { type = \"option\", label = \"x\" } })", .want = "option" },
+        .{ .src = "-- @capabilities settings\nlarper.settings.set({ { type = \"voar\" } })", .want = "voar" },
+    };
+    for (cases) |k| {
+        var e = T.engine();
+        defer e.deinit();
+        const p = testOne(&e, k.src);
+        const msg = p.err() orelse return error.DeviaFalhar;
+        try std.testing.expect(std.mem.indexOf(u8, msg, k.want) != null);
+    }
+}
+
+test "plugins: escolhas de menu chegam como segundo argumento" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e,
+        \\-- @capabilities menu, notify, composer
+        \\larper.menu("message", "Sem lista", function(m, v) larper.notify("a:" .. tostring(v)) end)
+        \\larper.menu("message", { pt = "Para", en = "To" }, function(m, v)
+        \\  larper.notify("b:" .. m.id .. ":" .. tostring(v))
+        \\  larper.insert(v)
+        \\end, { choices = { { value = "es", pt = "Espanhol", en = "Spanish" }, { value = "fr", en = "French" } }, toolbar = "🌐" })
+        \\larper.menu("user", "Pessoa", function(u, v) larper.notify("c:" .. u.id .. ":" .. tostring(v)) end,
+        \\  { choices = { { value = "x", pt = "X" } } })
+    );
+    try std.testing.expect(p.err() == null);
+    const to = &p.menus.items[1];
+    try std.testing.expectEqual(@as(usize, 2), to.choices.len);
+    try std.testing.expectEqualStrings("es", to.choices[0].value);
+    // Rótulo em um idioma só vale para os dois.
+    try std.testing.expectEqualStrings("French", to.choices[1].pt);
+    try std.testing.expectEqualStrings("🌐", to.toolbar);
+    try std.testing.expectEqual(@as(u32, 1), e.n_toolbar);
+    const m: Message = .{ .id = 9, .content = "oi", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    e.menuMessage(p, &p.menus.items[0], &m, null);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("a:nil", lastNote());
+    e.menuMessage(p, to, &m, "fr");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("b:9:fr", lastNote());
+    // Escolher é gesto: libera o que pede um.
+    try std.testing.expectEqualStrings("fr", T.inserted[0..T.inserted_len]);
+    e.menuUser(p, &p.menus.items[2], 33, "bia", "x");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("c:33:x", lastNote());
+    e.setEnabled(p, false);
+    try std.testing.expectEqual(@as(u32, 0), e.n_toolbar);
+}
+
+test "plugins: larper.menu confere as escolhas e a barra" {
+    var list_src: std.ArrayList(u8) = .empty;
+    defer list_src.deinit(std.testing.allocator);
+    const a = std.testing.allocator;
+    try list_src.appendSlice(a, "-- @capabilities menu\nlarper.menu(\"message\", \"x\", function() end, { choices = {");
+    for (0..17) |_| try list_src.appendSlice(a, "{ value = \"a\", pt = \"A\" },");
+    try list_src.appendSlice(a, "} })");
+    const cases = [_][]const u8{
+        list_src.items,
+        "-- @capabilities menu\nlarper.menu(\"message\", \"x\", function() end, { choices = { { pt = \"A\" } } })",
+        "-- @capabilities menu\nlarper.menu(\"message\", \"x\", function() end, { choices = { 1 } })",
+        "-- @capabilities menu\nlarper.menu(\"user\", \"x\", function() end, { toolbar = \"🌐\" })",
+    };
+    for (cases) |src| {
+        var e = T.engine();
+        defer e.deinit();
+        const p = testOne(&e, src);
+        try std.testing.expect(p.err() != null);
+    }
+}
+
+test "plugins: copiar e abrir só num gesto, e abrir só http com a capacidade" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    _ = testOne(&e,
+        \\-- @capabilities links, timers, notify
+        \\larper.command("/ok", function()
+        \\  larper.copy("texto")
+        \\  larper.open("https://exemplo.com/a?b=1")
+        \\end)
+        \\larper.command("/ruim", function(a) larper.open(a) end)
+        \\larper.after(0.01, function()
+        \\  local ok1 = pcall(larper.copy, "x")
+        \\  local ok2 = pcall(larper.open, "https://exemplo.com")
+        \\  larper.notify("sozinho:" .. tostring(ok1) .. ":" .. tostring(ok2))
+        \\end)
+    );
+    var spins: usize = 0;
+    while (T.n_notes == 0 and spins < 4000) : (spins += 1) {
+        e.drain();
+        sync.sleepMs(1);
+    }
+    try std.testing.expectEqualStrings("sozinho:false:false", T.note(0));
+    try std.testing.expectEqual(@as(usize, 0), T.copied_len + T.opened_len);
+    try cmdOk(&e, "/ok");
+    try std.testing.expectEqualStrings("texto", T.copied[0..T.copied_len]);
+    try std.testing.expectEqualStrings("https://exemplo.com/a?b=1", T.opened[0..T.opened_len]);
+    for ([_][]const u8{ "/ruim file:///etc/passwd", "/ruim javascript:alert(1)", "/ruim https://a.com/com\tcontrole" }) |bad| {
+        T.opened_len = 0;
+        try cmdOk(&e, bad);
+        try std.testing.expectEqual(@as(usize, 0), T.opened_len);
+    }
+    try std.testing.expect(runtime.validOpenUrl("http://a.com") and !runtime.validOpenUrl("https://") and !runtime.validOpenUrl("HTTPS://a b"));
+
+    const q = testOne(&e, "-- @capabilities notify\nlarper.command(\"/x\", function() larper.open(\"https://a.com\") end)");
+    try cmdOk(&e, "/x");
+    try std.testing.expect(std.mem.indexOf(u8, q.err().?, "links") != null);
+}
+
+test "plugins: sugestões ficam com a interface, e o gatilho é conferido" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e,
+        \\-- @capabilities completions
+        \\larper.completions(";", { { name = "oi", text = "olá, tudo bem?", hint = "saudação" }, { name = "tchau", text = "até mais" } })
+        \\larper.command("/troca", function() larper.completions(";", { { name = "novo", text = "texto novo" } }) end)
+    );
+    try std.testing.expect(p.err() == null);
+    try std.testing.expectEqual(@as(u32, 1), e.n_completions);
+    var buf: [8]u8 = undefined;
+    try std.testing.expectEqualStrings(";", e.completionTriggers(&buf));
+    try std.testing.expectEqualStrings("olá, tudo bem?", e.completionText(p.run, ';', "oi").?);
+    try std.testing.expect(e.completionText(p.run, '!', "oi") == null);
+    try std.testing.expect(e.completionText(p.run, ';', "nada") == null);
+    try cmdOk(&e, "/troca");
+    try std.testing.expect(e.completionText(p.run, ';', "oi") == null);
+    try std.testing.expectEqualStrings("texto novo", e.completionText(p.run, ';', "novo").?);
+    e.setEnabled(p, false);
+    try std.testing.expectEqual(@as(u32, 0), e.n_completions);
+    e.setEnabled(p, true);
+    for ([_][]const u8{
+        "-- @capabilities notify\nlarper.completions(\";\", {})",
+        "-- @capabilities completions\nlarper.completions(\"@\", {})",
+        "-- @capabilities completions\nlarper.completions(\";;\", {})",
+        "-- @capabilities completions\nlarper.completions(\";\", { { name = \"x\" } })",
+    }) |src| {
+        const q = testOne(&e, src);
+        try std.testing.expect(q.err() != null);
+    }
+}
+
+test "plugins: regras de envio valem enquanto o plugin está ligado" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    try std.testing.expect(e.rewriteOutgoing("https://a.com/?utm_x=1") == null);
+    const p = testOne(&e, Bundled.src("cleanlinks.lua"));
+    try std.testing.expect(p.err() == null);
+    try std.testing.expectEqual(@as(u32, 1), e.n_rewrite);
+    const cases = [_][2][]const u8{
+        .{ "veja https://youtu.be/abc?si=xyz&t=30 aí", "veja https://youtu.be/abc?t=30 aí" },
+        .{ "https://www.youtube.com/watch?v=abc&si=xyz&pp=abc", "https://www.youtube.com/watch?v=abc" },
+        .{ "https://open.spotify.com/track/1?si=2", "https://open.spotify.com/track/1" },
+        .{ "https://site.com/a?utm_source=x&fbclid=y&id=3", "https://site.com/a?id=3" },
+        .{ "https://x.com/a/status/1?s=20&t=abc", "https://x.com/a/status/1" },
+    };
+    for (cases) |k| {
+        const got = e.rewriteOutgoing(k[0]) orelse return error.NadaMudou;
+        defer e.gpa.free(got);
+        try std.testing.expectEqualStrings(k[1], got);
+    }
+    // O `t` e o `s` só saem onde são rastreio.
+    try std.testing.expect(e.rewriteOutgoing("https://outro.com/a?s=20&t=abc") == null);
+    try std.testing.expect(e.rewriteOutgoing("sem link") == null);
+    try std.testing.expect(e.rewriteOutgoing("`https://a.com/?utm_x=1`") == null);
+    e.setEnabled(p, false);
+    try std.testing.expectEqual(@as(u32, 0), e.n_rewrite);
+    try std.testing.expect(e.rewriteOutgoing("https://a.com/?utm_x=1") == null);
+}
+
+test "plugins: larper.rewrite confere as regras, e dois plugins somam" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    for ([_][]const u8{
+        "-- @capabilities notify\nlarper.rewrite({})",
+        "-- @capabilities rewrite\nlarper.rewrite({ {} })",
+        "-- @capabilities rewrite\nlarper.rewrite({ { strip_params = { \"a b\" } } })",
+        "-- @capabilities rewrite\nlarper.rewrite({ { replace_host = \"a.com\", with = \"https://b.com\" } })",
+        "-- @capabilities rewrite\nlarper.rewrite({ { word = \"duas palavras\", with = \"x\" } })",
+        "-- @capabilities rewrite\nlarper.rewrite({ { word = \"x\" } })",
+        "-- @capabilities rewrite\nlarper.rewrite({ { word = \"x\", with = \"@everyone\" } })",
+        "-- @capabilities rewrite\nlarper.rewrite({ { word = \"x\", with = \"https://a.com\" } })",
+    }) |src| {
+        const q = testOne(&e, src);
+        try std.testing.expect(q.err() != null);
+    }
+    e.load(&.{
+        .{ .name = "a.lua", .src = "-- @capabilities rewrite\nlarper.rewrite({ { word = \"vc\", with = \"você\" } })" },
+        .{ .name = "b.lua", .src = "-- @capabilities rewrite\nlarper.rewrite({ { replace_host = \"a.com\", with = \"b.com\" } })" },
+    }, false);
+    e.waitIdle();
+    const got = e.rewriteOutgoing("vc viu https://a.com/x") orelse return error.NadaMudou;
+    defer e.gpa.free(got);
+    try std.testing.expectEqualStrings("você viu https://b.com/x", got);
+}
+
+test "plugins: larper.on(\"edit\") traz só o texto novo, e pede a capacidade" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, "-- @capabilities messages, notify\nlarper.on(\"edit\", function(m) larper.notify(m.id .. \":\" .. m.content) end)");
+    try std.testing.expectEqual(@as(u32, 1), e.n_edit);
+    const m: Message = .{ .id = 3, .content = "novo", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    e.onEdit(&m);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("3:novo", lastNote());
+    e.setEnabled(p, false);
+    try std.testing.expectEqual(@as(u32, 0), e.n_edit);
+    e.setEnabled(p, true);
+    const q = testOne(&e, "-- @capabilities notify\nlarper.on(\"edit\", function() end)");
+    try std.testing.expect(std.mem.indexOf(u8, q.err().?, "messages") != null);
+}
+
+test "plugins: com a fila atrasada, o lento perde mensagens e o rápido não" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    e.load(&.{
+        .{ .name = "lento.lua", .src =
+        \\-- @capabilities messages
+        \\larper.on("message", function()
+        \\  local x = 0
+        \\  for i = 1, 1000000 do x = x + i end
+        \\end)
+        },
+        .{ .name = "rapido.lua", .src =
+        \\-- @capabilities messages, notify
+        \\local n = 0
+        \\larper.on("message", function(m)
+        \\  n = n + 1
+        \\  if m.content == "fim" then larper.notify("total:" .. n) end
+        \\end)
+        },
+    }, false);
+    e.waitIdle();
+    const slow = e.list.items[0];
+    const quick = e.list.items[1];
+    try std.testing.expect(slow.err() == null and quick.err() == null);
+    const m: Message = .{ .id = 3, .content = "oi", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    // Algumas sozinhas, para saber quanto ele custa.
+    for (0..4) |_| {
+        e.onMessage(&m);
+        e.waitIdle();
+    }
+    for (0..400) |_| e.onMessage(&m);
+    const end: Message = .{ .id = 4, .content = "fim", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    e.onMessage(&end);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("total:405", lastNote());
+    try std.testing.expect(slow.shedCount() > 0);
+    try std.testing.expectEqual(@as(u32, 0), quick.shedCount());
+}
+
+test "plugins: a resposta de um pedido feito num gesto pode pôr texto na caixa, nunca enviar" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const host_name = "api.exemplo.com";
+    const p = testOne(&e,
+        \\-- @capabilities http, composer, send, notify, timers
+        \\-- @hosts api.exemplo.com
+        \\larper.command("/pede", function()
+        \\  larper.http.get("https://api.exemplo.com/a", function(res)
+        \\    larper.insert("veio:" .. res.body)
+        \\    local ok = pcall(larper.send, nil, "não pode")
+        \\    larper.notify("send:" .. tostring(ok))
+        \\  end)
+        \\end)
+        \\larper.command("/sozinho", function()
+        \\  larper.after(0.01, function()
+        \\    larper.http.get("https://api.exemplo.com/b", function(res)
+        \\      local ok = pcall(larper.insert, "x")
+        \\      larper.notify("insert:" .. tostring(ok))
+        \\    end)
+        \\  end)
+        \\end)
+    );
+    e.setApproved(p, host_name, true);
+    e.waitIdle();
+    try cmdOk(&e, "/pede");
+    try std.testing.expectEqual(@as(usize, 1), T.http_n);
+    T.respond(200, "ok");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("veio:ok", T.inserted[0..T.inserted_len]);
+    try std.testing.expectEqualStrings("send:false", lastNote());
+    try std.testing.expectEqual(@as(usize, 0), T.n_sent);
+    // Pedido que não veio de um gesto: nada na caixa.
+    T.inserted_len = 0;
+    try cmdOk(&e, "/sozinho");
+    var spins: usize = 0;
+    while (T.http_n == 0 and spins < 4000) : (spins += 1) {
+        e.drain();
+        sync.sleepMs(1);
+    }
+    T.respond(200, "ok");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("insert:false", lastNote());
+    try std.testing.expectEqual(@as(usize, 0), T.inserted_len);
+}
+
+test "plugins: arquivos das mensagens só para quem pede" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const files = [_]FileRef{.{ .name = "foto.png", .url = "https://cdn.exemplo.com/foto.png", .size = 2048 }};
+    const msgs = [_]Message{.{ .id = 3, .content = "oi", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .attachments = 1, .files = &files }};
+    T.loaded = &msgs;
+    _ = testOne(&e,
+        \\-- @capabilities messages, notify
+        \\larper.command("/com", function()
+        \\  larper.messages({ files = true }, function(list)
+        \\    local f = list[1].files[1]
+        \\    larper.notify(f.name .. ":" .. f.url .. ":" .. f.size)
+        \\  end)
+        \\end)
+        \\larper.command("/sem", function()
+        \\  larper.messages(function(list) larper.notify("files:" .. tostring(list[1].files)) end)
+        \\end)
+    );
+    try cmdOk(&e, "/com");
+    try std.testing.expectEqualStrings("foto.png:https://cdn.exemplo.com/foto.png:2048", lastNote());
+    sync.sleepMs(520);
+    try cmdOk(&e, "/sem");
+    try std.testing.expectEqualStrings("files:nil", lastNote());
+}
+
+test "plugins: número na etiqueta do painel" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e,
+        \\-- @capabilities panel
+        \\larper.panel.set({ badge = "3", { type = "text", text = "oi" } })
+        \\larper.command("/lido", function() larper.panel.set({ { type = "text", text = "oi" } }) end)
+    );
+    try std.testing.expectEqualStrings("3", p.tree.?.badge);
+    try std.testing.expectEqual(@as(u32, 1), e.n_badges);
+    try cmdOk(&e, "/lido");
+    try std.testing.expectEqual(@as(u32, 0), e.n_badges);
+}
+
+test "plugins incluídos: tradução escolhe os idiomas pela página e pelo menu" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const host_name = "api.mymemory.translated.net";
+    const p = testOne(&e, Bundled.src("translate.lua"));
+    try std.testing.expect(p.err() == null);
+    e.setApproved(p, host_name, true);
+    e.waitIdle();
+    const m: Message = .{ .id = 5, .content = "hello", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    var sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = 5, .channel = 42, .author = 7, .timestamp = 0, .content = "x" }, .spans = &.{} };
+    const urlHas = struct {
+        fn f(needle: []const u8) bool {
+            return std.mem.indexOf(u8, T.http_reqs[0].?.url, needle) != null;
+        }
+    }.f;
+    // A página: as duas listas, com "automático" e os 15 idiomas.
+    const target = nodeKey(p.settings.?, "target");
+    try std.testing.expectEqualStrings("auto", target.meta);
+    try std.testing.expectEqualStrings("auto", nodeKey(p.settings.?, "source").meta);
+    var rows: usize = 0;
+    var o = target.child;
+    while (o != panel.none) : (o = p.settings.?.nodes.items[o].next) rows += 1;
+    try std.testing.expectEqual(@as(usize, 16), rows);
+    e.panelGesture(p, target.change, "es");
+    e.waitIdle();
+    e.menuMessage(p, &p.menus.items[0], &m, null);
+    e.waitIdle();
+    try std.testing.expect(urlHas("langpair=Autodetect%7Ces"));
+    // O idioma aparece na nota, e as marcas do serviço saem.
+    T.respond(200, "{\"responseData\":{\"translatedText\":\"<g id=\\\"1\\\">hola</g> &#39;amigo&#39;\"},\"responseStatus\":200}");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("🌐 ES · hola 'amigo'", e.deco.view(&sm, 1).slice()[0].note);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
+    e.waitIdle();
+    try std.testing.expect(!e.deco.active());
+
+    // A origem muda a primeira metade do par.
+    e.panelGesture(p, nodeKey(p.settings.?, "source").change, "en");
+    e.waitIdle();
+    e.menuMessage(p, &p.menus.items[0], &m, null);
+    e.waitIdle();
+    try std.testing.expect(urlHas("langpair=en%7Ces"));
+    T.respond(200, "{\"responseData\":{\"translatedText\":\"PLEASE SELECT TWO DISTINCT LANGUAGES\"},\"responseStatus\":403}");
+    e.waitIdle();
+    try std.testing.expect(std.mem.indexOf(u8, e.deco.view(&sm, 1).slice()[0].note, "nesse idioma") != null);
+
+    // O menu: só esta mensagem, a página continua como está (e troca a nota que estava).
+    const to = &p.menus.items[1];
+    try std.testing.expectEqual(@as(usize, 15), to.choices.len);
+    e.menuMessage(p, to, &m, "zh-CN");
+    e.waitIdle();
+    try std.testing.expect(urlHas("langpair=en%7Czh-CN"));
+    T.respond(200, "{\"responseData\":{\"translatedText\":\"你好\"},\"responseStatus\":200}");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("🌐 ZH-CN · 你好", e.deco.view(&sm, 1).slice()[0].note);
+    e.menuMessage(p, &p.menus.items[0], &m, null);
+    e.waitIdle();
+    try std.testing.expect(!e.deco.active());
+    e.menuMessage(p, &p.menus.items[0], &m, null);
+    e.waitIdle();
+    try std.testing.expect(urlHas("langpair=en%7Ces"));
+    T.respond(200, "{\"responseData\":{\"translatedText\":\"hola\"},\"responseStatus\":200}");
+    e.waitIdle();
+
+    // Reiniciou: a escolha continua.
+    e.setEnabled(p, false);
+    e.waitIdle();
+    e.setEnabled(p, true);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("es", nodeKey(p.settings.?, "target").meta);
+    try std.testing.expectEqualStrings("en", nodeKey(p.settings.?, "source").meta);
+    try std.testing.expect(p.man.has(.settings) and p.man.has(.composer));
+}
+
+test "plugins incluídos: tradução com /tr vai para a caixa, e nunca é enviada" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const host_name = "api.mymemory.translated.net";
+    const p = testOne(&e, Bundled.src("translate.lua"));
+    // Sem aprovar: nada sai.
+    try cmdOk(&e, "/tr es bom dia");
+    try std.testing.expectEqual(@as(usize, 0), T.http_n);
+    try std.testing.expect(noteHas(host_name));
+    e.setApproved(p, host_name, true);
+    e.waitIdle();
+    try cmdOk(&e, "/tr ES bom dia");
+    try std.testing.expect(std.mem.indexOf(u8, T.http_reqs[0].?.url, "q=bom%20dia&langpair=Autodetect%7Ces") != null);
+    T.respond(200, "{\"responseData\":{\"translatedText\":\"buenos días\"},\"responseStatus\":200}");
+    e.waitIdle();
+    try std.testing.expectEqualStrings("buenos días", T.inserted[0..T.inserted_len]);
+    try std.testing.expectEqual(@as(usize, 0), T.n_sent);
+    // Sem código de idioma: o texto inteiro, para o idioma da página.
+    T.inserted_len = 0;
+    try cmdOk(&e, "/tr bom dia gente");
+    try std.testing.expect(std.mem.indexOf(u8, T.http_reqs[0].?.url, "q=bom%20dia%20gente&langpair=Autodetect%7Cpt") != null);
+    T.respond(200, "{\"responseData\":{\"translatedText\":\"MYMEMORY WARNING\"},\"responseStatus\":429}");
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 0), T.inserted_len);
+    try std.testing.expect(noteHas("Não consegui"));
+    try cmdOk(&e, "/tr");
+    try std.testing.expect(noteHas("/tr es"));
+}
+
+test "plugins incluídos: lembretes entendem horário, repetição e a segunda lista" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("reminders.lua"));
+    const items = struct {
+        fn count(t: *panel.Tree) usize {
+            var n: usize = 0;
+            for (t.nodes.items) |*x| if (x.kind == .item) {
+                n += 1;
+            };
+            return n;
+        }
+    }.count;
+    for ([_][]const u8{ "/remind 15:30 a", "/remind 15h30 b", "/remind às 15h c", "/remind amanhã 9h d", "/remind tomorrow 9am e", "/remind amanhã f", "/remind 9:30pm g" }) |cmd| {
+        const before = items(p.tree.?);
+        try cmdOk(&e, cmd);
+        try std.testing.expectEqual(before + 1, items(p.tree.?));
+    }
+    for ([_][]const u8{ "/remind 25:00 x", "/remind às x", "/remind hoje x", "/remind todo dia x" }) |cmd| {
+        const before = items(p.tree.?);
+        try cmdOk(&e, cmd);
+        try std.testing.expectEqual(before, items(p.tree.?));
+        try std.testing.expect(std.mem.indexOf(u8, lastNote(), "/remind 10m") != null);
+    }
+    // Todo dia: mostra o sinal de repetição, e continua lá depois de reiniciar.
+    try cmdOk(&e, "/remind todo dia 8:30 reunião");
+    const hasRepeat = struct {
+        fn f(t: *panel.Tree) bool {
+            for (t.nodes.items) |*x| if (std.mem.indexOf(u8, x.text, "🔁 reunião") != null) return true;
+            return false;
+        }
+    }.f;
+    try std.testing.expect(hasRepeat(p.tree.?));
+    e.setEnabled(p, false);
+    e.waitIdle();
+    e.setEnabled(p, true);
+    e.waitIdle();
+    try std.testing.expect(hasRepeat(p.tree.?));
+
+    // O menu: a segunda lista cria direto, e "Outro tempo…" abre o painel.
+    const entry = &p.menus.items[0];
+    try std.testing.expectEqual(@as(usize, 5), entry.choices.len);
+    const m: Message = .{ .id = 5, .content = "lembra disso", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    const before = items(p.tree.?);
+    e.menuMessage(p, entry, &m, "600");
+    e.waitIdle();
+    try std.testing.expectEqual(before + 1, items(p.tree.?));
+    try std.testing.expect(e.panel_open != p);
+    e.menuMessage(p, entry, &m, "custom");
+    e.waitIdle();
+    try std.testing.expect(e.panel_open == p);
+    try std.testing.expect(hasKey(p.tree.?, "in1h"));
+}
+
+test "plugins incluídos: lembrete que já avisou pode voltar daqui a 10 minutos" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("reminders.lua"));
+    try cmdOk(&e, "/remind 1s de novo");
+    var spins: usize = 0;
+    while (!noteHas("⏰") and spins < 4000) : (spins += 1) {
+        e.drain();
+        sync.sleepMs(1);
+    }
+    e.waitIdle();
+    const t = p.tree.?;
+    var snooze: ?*panel.Node = null;
+    for (t.nodes.items) |*n| if (std.mem.startsWith(u8, n.key, "snooze")) {
+        snooze = n;
+    };
+    e.panelGesture(p, snooze.?.click, null);
+    e.waitIdle();
+    var active: usize = 0;
+    for (p.tree.?.nodes.items) |*n| if (std.mem.startsWith(u8, n.key, "cancel")) {
+        active += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), active);
+}
+
+test "plugins incluídos: destaques silencia canal, conta o que não foi visto e acompanha edições" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("highlights.lua"));
+    try cmdOk(&e, "/highlights pizza");
+    e.openPanel(null);
+    e.waitIdle();
+    chega(&e, "quem quer pizza?");
+    try std.testing.expectEqualStrings("1", p.tree.?.badge);
+    try std.testing.expect(!T.notes_desktop[T.n_notes - 1]);
+    chega(&e, "mais pizza");
+    try std.testing.expectEqualStrings("2", p.tree.?.badge);
+    // Abriu o painel: viu.
+    e.openPanel(p);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("", p.tree.?.badge);
+    chega(&e, "pizza com o painel aberto");
+    try std.testing.expectEqualStrings("", p.tree.?.badge);
+    e.openPanel(null);
+    e.waitIdle();
+
+    // Editaram: o trecho é o novo; sem a palavra, sai da lista.
+    const edited: Message = .{ .id = 900, .content = "pizza aqui", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 };
+    e.onMessage(&edited);
+    e.waitIdle();
+    const again: Message = .{ .id = 900, .content = "agora pizza ali", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 };
+    e.onEdit(&again);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("agora pizza ali", nodeKey(p.tree.?, "900").sub);
+    const gone: Message = .{ .id = 900, .content = "mudei de ideia", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 };
+    e.onEdit(&gone);
+    e.waitIdle();
+    try std.testing.expect(!hasKey(p.tree.?, "900"));
+    // Uma edição que passa a ter a palavra conta.
+    const notes = T.n_notes;
+    e.onEdit(&again);
+    e.waitIdle();
+    try std.testing.expectEqual(notes + 1, T.n_notes);
+    try std.testing.expect(hasKey(p.tree.?, "900"));
+
+    // Silenciou o canal aberto: nada dele conta mais, e volta ao reativar.
+    e.panelGesture(p, nodeKey(p.tree.?, "mute").click, null);
+    e.waitIdle();
+    const n0 = T.n_notes;
+    chega(&e, "pizza no canal silenciado");
+    try std.testing.expectEqual(n0, T.n_notes);
+    e.panelGesture(p, nodeKey(p.tree.?, "unmute42").click, null);
+    e.waitIdle();
+    chega(&e, "pizza de novo");
+    try std.testing.expectEqual(n0 + 1, T.n_notes);
+
+    // A opção: notificação do sistema também com a janela em foco.
+    e.panelToggle(p, nodeKey(p.settings.?, "desktop").change, true);
+    e.waitIdle();
+    chega(&e, "pizza com aviso");
+    try std.testing.expect(T.notes_desktop[T.n_notes - 1]);
+    e.setEnabled(p, false);
+    e.waitIdle();
+    e.setEnabled(p, true);
+    e.waitIdle();
+    try std.testing.expectEqual(@as(f32, 1), nodeKey(p.settings.?, "desktop").value);
+}
+
+test "plugins incluídos: trechos viram sugestões da caixa" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    _ = T.writeData(&T.dummy, 1, "t.lua", "{\"items\":[{\"name\":\"oi\",\"text\":\"olá, tudo bem?\"}]}");
+    const p = testOne(&e, Bundled.src("snippets.lua"));
+    try std.testing.expect(p.err() == null);
+    try std.testing.expectEqualStrings("olá, tudo bem?", e.completionText(p.run, ';', "oi").?);
+    e.panelGesture(p, nodeKey(p.tree.?, "rmoi").click, null);
+    e.waitIdle();
+    try std.testing.expect(e.completionText(p.run, ';', "oi") == null);
+    try std.testing.expectEqual(@as(usize, 0), T.n_sent);
+}
+
+test "plugins incluídos: horários entendem o pedido e põem na caixa" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("timestamps.lua"));
+    try std.testing.expect(p.err() == null);
+    const ok = [_][]const u8{ "/ts", "/ts 15h", "/ts 15:30", "/ts amanhã 15h", "/ts tomorrow 3pm", "/ts sexta 20h", "/ts friday 20:00", "/ts 25/12 20h", "/ts 25/12/2030", "/ts em 2h", "/ts in 1h30m", "/ts +30m", "/ts hoje 23:59" };
+    for (ok) |cmd| {
+        T.inserted_len = 0;
+        try cmdOk(&e, cmd);
+        const got = T.inserted[0..T.inserted_len];
+        if (!std.mem.startsWith(u8, got, "<t:") or !std.mem.endsWith(u8, got, ":f>")) {
+            std.debug.print("{s}: {s}\n", .{ cmd, got });
+            return error.HorarioRuim;
+        }
+    }
+    T.inserted_len = 0;
+    try cmdOk(&e, "/ts batata");
+    try std.testing.expectEqual(@as(usize, 0), T.inserted_len);
+    try std.testing.expect(std.mem.indexOf(u8, lastNote(), "/ts") != null);
+    for ([_][]const u8{ "/ts 25:00", "/ts 13/13 10h", "/ts em batata", "/ts amanhã 15h e mais" }) |cmd| {
+        try cmdOk(&e, cmd);
+        try std.testing.expectEqual(@as(usize, 0), T.inserted_len);
+    }
+    // O formato vem da página.
+    e.panelGesture(p, nodeKey(p.settings.?, "style").change, "R");
+    e.waitIdle();
+    T.inserted_len = 0;
+    try cmdOk(&e, "/ts em 2h");
+    try std.testing.expect(std.mem.endsWith(u8, T.inserted[0..T.inserted_len], ":R>"));
+    try std.testing.expectEqual(@as(usize, 0), T.n_sent);
+}
+
+test "plugins incluídos: links e arquivos só olham com o painel aberto, e não guardam nada" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const files = [_]FileRef{.{ .name = "foto.png", .url = "https://cdn.exemplo.com/foto.png", .size = 2048 }};
+    const msgs = [_]Message{
+        .{ .id = 3, .content = "veja https://a.com/x.", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral", .timestamp = 1000 },
+        .{ .id = 4, .content = "(https://b.org/y) e de novo https://a.com/x", .author = 8, .author_name = "bia", .channel = 42, .channel_name = "geral", .timestamp = 2000 },
+        .{ .id = 5, .content = "", .author = 8, .author_name = "bia", .channel = 42, .channel_name = "geral", .timestamp = 3000, .attachments = 1, .files = &files },
+    };
+    T.loaded = &msgs;
+    const p = testOne(&e, Bundled.src("links.lua"));
+    try std.testing.expect(p.err() == null);
+    // Fechado: a lista nem existe.
+    try std.testing.expect(p.tree != null and !hasKey(p.tree.?, "i1"));
+    e.openPanel(p);
+    e.waitIdle();
+    const titles = struct {
+        fn count(t: *panel.Tree) usize {
+            var n: usize = 0;
+            for (t.nodes.items) |*x| if (x.kind == .item) {
+                n += 1;
+            };
+            return n;
+        }
+    }.count;
+    // O arquivo, b.org, e a.com uma vez só.
+    try std.testing.expectEqual(@as(usize, 3), titles(p.tree.?));
+    try std.testing.expectEqualStrings("foto.png", nodeKey(p.tree.?, "i1").text);
+    try std.testing.expectEqualStrings("https://b.org/y", nodeKey(p.tree.?, "i2").sub);
+    try std.testing.expectEqualStrings("https://a.com/x", nodeKey(p.tree.?, "i3").sub);
+    // Abrir, copiar e ir até a mensagem.
+    e.panelGesture(p, nodeKey(p.tree.?, "open2").click, null);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("https://b.org/y", T.opened[0..T.opened_len]);
+    e.panelGesture(p, nodeKey(p.tree.?, "copy1").click, null);
+    e.waitIdle();
+    try std.testing.expectEqualStrings("https://cdn.exemplo.com/foto.png", T.copied[0..T.copied_len]);
+    e.panelGesture(p, nodeKey(p.tree.?, "i2").click, null);
+    e.waitIdle();
+    try std.testing.expectEqual(@as(u64, 4), T.jump_id);
+    // A busca e o filtro.
+    e.panelChange(p, nodeKey(p.tree.?, "search").change, "B.ORG");
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 1), titles(p.tree.?));
+    e.panelChange(p, nodeKey(p.tree.?, "search").change, "");
+    e.waitIdle();
+    e.panelGesture(p, nodeKey(p.tree.?, "kind").change, "file");
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 1), titles(p.tree.?));
+    e.panelGesture(p, nodeKey(p.tree.?, "kind").change, "all");
+    e.waitIdle();
+    // Apagaram: sai na hora, com o que veio dela (a.com ficou com a mais recente).
+    e.onDelete(42, 4);
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 1), titles(p.tree.?));
+    // Fechou: some da memória.
+    e.openPanel(null);
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 0), titles(p.tree.?));
+    try std.testing.expect(!p.man.has(.storage));
+}
+
+test "plugins: fechar a nota avisa quem a pôs" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const host_name = "api.mymemory.translated.net";
+    const p = testOne(&e, Bundled.src("translate.lua"));
+    e.setApproved(p, host_name, true);
+    e.waitIdle();
+    const m: Message = .{ .id = 5, .content = "hello", .author = 7, .author_name = "ana", .channel = 42, .channel_name = "geral" };
+    e.menuMessage(p, &p.menus.items[0], &m, null);
+    e.waitIdle();
+    T.respond(200, "{\"responseData\":{\"translatedText\":\"olá\"},\"responseStatus\":200}");
+    e.waitIdle();
+    try std.testing.expect(e.deco.active());
+    e.dismissDeco(p.run, 5);
+    e.waitIdle();
+    try std.testing.expect(!e.deco.active());
+    // Depois do ×, "Traduzir" traduz de novo, em vez de só tirar uma nota que nem está lá.
+    e.menuMessage(p, &p.menus.items[0], &m, null);
+    e.waitIdle();
+    try std.testing.expectEqual(@as(usize, 1), T.http_n);
+    T.respond(200, "{\"responseData\":{\"translatedText\":\"olá\"},\"responseStatus\":200}");
+    e.waitIdle();
+    try std.testing.expect(e.deco.active());
+}
+
+test "plugins incluídos: destaques só escuta as mensagens quando tem palavra" {
+    T.wipeDisk();
+    var e = T.engine();
+    defer e.deinit();
+    const p = testOne(&e, Bundled.src("highlights.lua"));
+    try std.testing.expectEqual(@as(u32, 0), e.n_message);
+    try std.testing.expectEqual(@as(u32, 0), e.n_edit);
+    try cmdOk(&e, "/highlights pizza");
+    try std.testing.expectEqual(@as(u32, 1), e.n_message);
+    try std.testing.expectEqual(@as(u32, 1), e.n_edit);
+    // Reiniciou com palavra guardada: escuta desde o começo, sem repetir.
+    e.setEnabled(p, false);
+    e.waitIdle();
+    e.setEnabled(p, true);
+    e.waitIdle();
+    try std.testing.expectEqual(@as(u32, 1), e.n_message);
+    try cmdOk(&e, "/highlights batata");
+    try std.testing.expectEqual(@as(u32, 1), e.n_message);
 }

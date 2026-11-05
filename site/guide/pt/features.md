@@ -130,5 +130,5 @@ Voz de verdade com criptografia de ponta a ponta, mixer por pessoa, seletor de d
 ## Deixe do seu jeito
 
 - Os [temas](page:themes) reorganizam a interface inteira e recarregam ao salvar. Temas com `palette "wal"` acompanham o seu wallpaper pelo pywal, e o tema `vidro` tem fundo transparente que o seu compositor desfoca.
-- Os [plugins](page:plugins) em Lua somam painéis, entradas no botão direito, notas embaixo das mensagens, comandos e atalhos. Favoritos, lembretes, destaques, filtro local, trechos, tradução e estatísticas do canal vêm com o app.
+- Os [plugins](page:plugins) em Lua somam painéis, entradas no botão direito, notas embaixo das mensagens, comandos e atalhos. Tradução, lembretes, destaques, trechos, links limpos, horários, e links e arquivos vêm com o app.
 - **Navegação estilo vim opcional**: veja [Atalhos](page:shortcuts).

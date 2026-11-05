@@ -198,6 +198,24 @@ fn voiceTargets(ctx: *d.Ctx, uid: Id, buf: []Id) []Id {
     return buf[0..n];
 }
 
+/// De qual entrada é a segunda lista aberta.
+var choice_kind: engine.MenuKind = .message;
+var choice_index: usize = 0;
+var choice_gen: u32 = 0;
+
+/// Clicou numa entrada de plugin (no menu ou na barra da mensagem): com escolhas,
+/// abre a segunda lista; sem, roda direto.
+pub fn pluginEntry(ctx: *d.Ctx, kind: engine.MenuKind, index: usize, id: Id, x: f32, y: f32) void {
+    const host = @import("../plugins/host.zig");
+    const app = host.appOf();
+    const hit = host.menuEntry(app, kind, index) orelse return;
+    if (hit.entry.choices.len == 0) return host.menuClick(app, kind, index, id, null);
+    choice_kind = kind;
+    choice_index = index;
+    choice_gen = app.plugins.menu_gen;
+    ctx.st.popup = .{ .menu = .{ .kind = .plugin_choices, .id = id, .x = x, .y = y } };
+}
+
 /// Entradas dos plugins neste menu, depois das do app. O `id` a partir de 200 é a
 /// posição delas (a mesma ordem de `plugin_host.menuClick`).
 fn pluginItems(items: *[32]Item, n: *usize, kind: state.MenuKind) void {
@@ -352,6 +370,14 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             }
             if (n == 0) return close(ctx);
         },
+        .plugin_choices => {
+            const host = @import("../plugins/host.zig");
+            // O plugin recarregou com a lista aberta: as posições já não valem.
+            if (host.appOf().plugins.menu_gen != choice_gen) return close(ctx);
+            const hit = host.menuEntry(host.appOf(), choice_kind, choice_index) orelse return close(ctx);
+            for (hit.entry.choices, 0..) |ch, i| add(&items, &n, .{ .label = ch.pt, .en = ch.en, .id = @intCast(100 + i) });
+            if (n == 0) return close(ctx);
+        },
         .guild => {
             add(&items, &n, .{ .label = "Marcar como lido", .en = "Mark As Read", .id = 60 });
             if (ctx.store.can(id, types.perm.manage_guild)) add(&items, &n, .{ .label = "Editar servidor…", .en = "Edit Server…", .id = 64 });
@@ -467,7 +493,14 @@ fn guildPart(buf: []u8, guild: Id) []const u8 {
 fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
     const st = ctx.st;
     close(ctx);
-    if (item >= 200) return @import("../plugins/host.zig").menuClick(@import("../plugins/host.zig").appOf(), if (kind == .user) .user else .message, item - 200, id);
+    if (kind == .plugin_choices) {
+        const host = @import("../plugins/host.zig");
+        const hit = host.menuEntry(host.appOf(), choice_kind, choice_index) orelse return;
+        const i = item -| 100;
+        if (i < hit.entry.choices.len) host.menuClick(host.appOf(), choice_kind, choice_index, id, hit.entry.choices[i].value);
+        return;
+    }
+    if (item >= 200) return pluginEntry(ctx, if (kind == .user) .user else .message, item - 200, id, r.x + r.w - 8, r.y + r.h - 70);
     if (kind == .voice_move and item >= 100) {
         var tb: [20]Id = undefined;
         const list = voiceTargets(ctx, id, &tb);

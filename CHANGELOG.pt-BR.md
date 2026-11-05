@@ -1,5 +1,33 @@
 # O que mudou em cada versão
 
+## 0.6.0
+
+**Plugins**
+- A tradução agora tem opções: idioma de destino e de origem no cartão em Configurações → Plugins, e "Traduzir para…" no botão direito para uma mensagem só. Um 🌐 na barra da mensagem, e `/tr es olá` põe uma tradução na caixa de mensagem.
+- Plugins novos incluídos: Links limpos tira o rastreio dos links que você envia, Horários transforma `/ts amanhã 15h` num horário que cada pessoa vê no próprio fuso, e Links e arquivos lista o que foi compartilhado no canal.
+- Lembretes entendem hora e data (`/remind amanhã 9h`, `/remind todo dia 8:30`), têm uma segunda lista no botão direito, e o que já avisou pode voltar em 10 minutos.
+- Destaques mostra quantos você não viu, silencia um canal, acompanha edições e pode usar as notificações do sistema.
+- Trechos aparecem enquanto você digita `;nome`.
+- Favoritos, o filtro de palavras, estatísticas e os plugins de demonstração não vêm mais com o app: os dois primeiros viraram funções do próprio app. Quem tem continua usando, e um botão arquiva em `plugins/antigos/`. Nada é apagado.
+- Um plugin incluído com versão nova mostra um botão de atualizar no cartão, e guarda o seu arquivo como `.bak`.
+- Novo para quem faz plugins: opções no cartão (`larper.settings`, `select`, `toggle`), segunda lista e botão na barra nos menus, sugestões na caixa de mensagem (`larper.completions`), regras para o que você envia (`larper.rewrite`), `larper.copy`, `larper.open`, um número na etiqueta do painel, os eventos `edit` e `dismiss` e os anexos em `larper.messages`.
+- Um plugin atrasado perde mensagens em vez de segurar os outros, e o cartão dele diz isso. Cada plugin tem o próprio limite de notificações do sistema: um barulhento não come o aviso de um lembrete.
+- O cartão avisa quando um plugin lê mensagens e também consegue mandar algo para fora.
+- Fechar uma tradução com o × não faz mais o próximo "Traduzir" não fazer nada.
+
+**Mensagens**
+- Horários `<t:…>` aparecem como uma data ou "em 2 horas", no seu fuso, em vez do código.
+- Marcar como lida e como não lida agora sempre chega ao Discord. Com o status invisível, ficava só no seu computador e voltava na próxima conexão. O status não impede mais a confirmação de leitura; com a janela sem foco, ela continua não indo sozinha.
+
+**Mais leve**
+- Quadro que sai igual ao anterior não é desenhado de novo, então eventos da rede que não mudam nada na tela custam menos.
+- Mexer o mouse sem botão apertado pede menos quadros.
+- Depois de um minuto na bandeja ou minimizada, as imagens saem da memória, menos as pequenas que estavam na tela.
+- Configurações → Desempenho mostra para onde vai a memória: imagens, mensagens, pessoas, servidores, fontes, driver e bibliotecas.
+
+**Instalação**
+- O instalador do Linux dá ao atalho o ID da janela, para as barras que procuram o ícone desse jeito acharem. Rodar de novo troca o atalho antigo.
+
 ## 0.5.0
 
 **Windows**

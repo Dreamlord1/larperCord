@@ -1285,7 +1285,10 @@ pub const App = struct {
                 const chosen = mentions.expand(app.gpa, &app.store, app.guildOfChannel(ch), text, autocomplete.tokens()) catch return;
                 defer app.gpa.free(chosen);
                 autocomplete.clearTokens();
-                app.sendTo(ch, chosen, st.reply_to);
+                // Regras fixas dos plugins (tirar o rastreio dos links…). Sem nenhuma, nem entra.
+                const cleaned = app.plugins.rewriteOutgoing(chosen);
+                defer if (cleaned) |t| app.gpa.free(t);
+                app.sendTo(ch, cleaned orelse chosen, st.reply_to);
                 st.reply_to = 0;
                 st.drafts.remove(app.gpa, ch);
             },
@@ -1408,7 +1411,7 @@ pub const App = struct {
             },
             .mark_read => |id| app.markReadAction(id),
             .channel_seen => |id| app.readChannel(id, false),
-            .deco_dismiss => |dd| app.plugins.deco.remove(dd.run, dd.id),
+            .deco_dismiss => |dd| app.plugins.dismissDeco(dd.run, dd.id),
             .mark_unread => |id| app.markUnreadAction(id),
             .typing => |id| {
                 if (!st.settings.send_typing or app.store.demo) return;
@@ -1656,6 +1659,7 @@ pub const App = struct {
             const quiet: ?types.Id = if (e == .message_create and app.store.ready) app.incoming(e.message_create) else null;
             if (e == .message_create and app.store.ready) plugin_host.onMessage(app, e.message_create);
             if (e == .message_delete) plugin_host.onDelete(app, e.message_delete.channel, e.message_delete.id);
+            const edited: types.Id = if (e == .message_update and e.message_update.content != null) e.message_update.id else 0;
             if (app.opts.stats) switch (e) {
                 .status => |st| std.log.info("conexão: {t}", .{st}),
                 .notice => |n| std.log.info("aviso: {s}", .{n}),
@@ -1664,6 +1668,7 @@ pub const App = struct {
                 else => {},
             };
             app.store.apply(e, now()) catch {};
+            if (edited != 0) plugin_host.onEdit(app, edited);
             if (quiet) |ch| app.st.filtros.quiet(app.gpa, &app.store, ch);
             app.afterEvent(e);
             if (e == .thread_open) app.openChannel(e.thread_open, false);

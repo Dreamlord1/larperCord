@@ -155,6 +155,11 @@ fn panelsButton(ctx: *d.Ctx, dl: *c.ImDrawList, x: f32, y: f32) void {
     const box: d.Rect = .{ .x = pr.x + 6, .y = pr.y + 8, .w = 16, .h = 12 };
     d.border(dl, box, ink, 2, 1.4);
     d.rect(dl, .{ .x = box.right() - 6, .y = box.y, .w = 6, .h = box.h }, ink, 1);
+    // Algum painel tem novidade (o plugin pôs um número na etiqueta).
+    if (engine.current) |e| if (e.n_badges > 0) {
+        d.circle(dl, pr.right() - 5, pr.y + 7, 3.5, ctx.col(.danger));
+        qa.mark(pr, "header-plugins-badge", .{});
+    };
     d.tip(ctx, pr, i18n.tr("Painéis dos plugins", "Plugin panels"), ph.hovered);
 }
 

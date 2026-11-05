@@ -1,9 +1,9 @@
 -- @name Snippets
 -- @name:pt Trechos
--- @description Save texts you use often and put them in the message box with one click or /snip name. It never sends anything: you still press Enter.
--- @description:pt Guarde textos que você usa sempre e ponha na caixa de mensagem com um clique ou /snip nome. Nunca envia nada: quem aperta Enter é você.
--- @version 1.0.0
--- @capabilities panel, storage, composer, menu, notify
+-- @description Save texts you use often and put them in the message box as you type (;name), with one click or with /snip name. It never sends anything: you still press Enter.
+-- @description:pt Guarde textos que você usa sempre e ponha na caixa de mensagem enquanto digita (;nome), com um clique ou com /snip nome. Nunca envia nada: quem aperta Enter é você.
+-- @version 1.1.0
+-- @capabilities panel, storage, composer, menu, notify, completions
 
 local tr = larper.tr
 local items = larper.storage.get("items") or {}
@@ -18,6 +18,16 @@ local function find(name)
   for i, it in ipairs(items) do
     if it.name:lower() == low then return i end
   end
+end
+
+-- A lista fica com a interface: digitar ";" não chama este plugin.
+local function publish()
+  local list = {}
+  for _, it in ipairs(items) do
+    if #list == 256 then break end
+    list[#list + 1] = { name = it.name, text = it.text }
+  end
+  larper.completions(";", list)
 end
 
 local render
@@ -40,6 +50,7 @@ local function add(name, text)
     table.sort(items, function(a, b) return a.name:lower() < b.name:lower() end)
   end
   save()
+  publish()
   return true
 end
 
@@ -62,13 +73,14 @@ render = function()
         local i = find(it.name)
         if i then table.remove(items, i) end
         save()
+        publish()
         render()
       end } },
     }
   end
   larper.panel.set({
     title = tr("Trechos", "Snippets"),
-    { type = "text", text = tr("Clique para pôr na caixa de mensagem.", "Click to put it in the message box."), style = "muted" },
+    { type = "text", text = tr("Clique para pôr na caixa de mensagem, ou digite ;nome nela.", "Click to put it in the message box, or type ;name there."), style = "muted" },
     { type = "list", key = "items", items = list, empty = tr("Nenhum trecho ainda.", "No snippets yet.") },
     { type = "separator" },
     { type = "heading", text = tr("Novo trecho", "New snippet") },
@@ -106,4 +118,5 @@ larper.menu("message", { pt = "Guardar como trecho", en = "Save as snippet" }, f
 end)
 
 larper.on("lang", render)
+publish()
 render()

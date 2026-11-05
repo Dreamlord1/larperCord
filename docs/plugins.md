@@ -20,16 +20,24 @@ overwrites a file you've edited and never removes anything.
 
 | Plugin | What it does |
 |---|---|
-| [`bookmarks.lua`](plugins/bookmarks.lua) | Right-click a message to save it. The panel lists them, with search, and takes you back to the message. Stored on this computer |
-| [`reminders.lua`](plugins/reminders.lua) | `/remind 10m call back`, or "Remind me" on a message. Notifies you at the right time, also after a restart |
-| [`highlights.lua`](plugins/highlights.lua) | Words to watch across all channels: a notification, and a panel with the history that takes you to the message |
-| [`filter.lua`](plugins/filter.lua) | Collapses messages by word or by person, with a "show" button. Only on your screen |
-| [`snippets.lua`](plugins/snippets.lua) | Saved texts that go into the message box with one click or `/snip name`. It never sends anything |
-| [`translate.lua`](plugins/translate.lua) | Right-click a message to see the translation under it. Off until you approve the host: see [HTTP](#larperhttp) |
-| [`stats.lua`](plugins/stats.lua) | Top talkers and when people talk, from the messages already loaded in the channel |
+| [`translate.lua`](plugins/translate.lua) | Right-click a message, or the 🌐 on its toolbar, to see the translation under it. "Translate to…" picks another language for one message, its card sets the default target and source, and `/tr es hello` puts a translation in the message box. Off until you approve the host: see [HTTP](#larperhttp) |
+| [`reminders.lua`](plugins/reminders.lua) | `/remind 10m call back`, `/remind tomorrow 9am pay the bill`, `/remind every day 8:30 standup`, or "Remind me" on a message. Notifies you at the right time, also after a restart. What already fired can come back in 10 minutes |
+| [`highlights.lua`](plugins/highlights.lua) | Words to watch across all channels: a notification, a number on the panel for what you haven't seen, and a history that takes you to the message. You can mute a channel |
+| [`snippets.lua`](plugins/snippets.lua) | Saved texts that go into the message box as you type (`;name`), with one click or `/snip name`. It never sends anything |
+| [`cleanlinks.lua`](plugins/cleanlinks.lua) | Removes tracking from the links you send (`utm_*`, `fbclid`, YouTube's and Spotify's `si`…). The app applies the rules when you send: the plugin doesn't see what you write |
+| [`timestamps.lua`](plugins/timestamps.lua) | `/ts tomorrow 3pm` or `/ts friday 20:00` puts a time in the message box that each person sees in their own time zone |
+| [`links.lua`](plugins/links.lua) | Every link and file in the messages loaded in the open channel: search, open, copy, go to the message. It only looks while its panel is open and keeps nothing on disk |
 
-None of them keeps the text of a message after it's deleted: the plugin hears about the deletion
-and drops it. Highlights never writes other people's text to disk.
+None of them keeps the text of a message after it's deleted or edited: the plugin hears about it and
+drops the old text. Highlights never writes other people's text to disk.
+
+**New version of a bundled plugin:** when the app brings a newer `@version` of a file you have, its
+card shows **Update to vX**. It only changes on that click, and your file stays next to it as
+`name.lua.bak` (then `.bak2`, and so on): nothing is overwritten.
+
+**No longer bundled:** bookmarks and the word filter became the app's own Saved messages and Alerts
+and filters; stats and some demos (calc, shrug, dice…) left. If you have them they keep working, and
+**Archive to antigos/** moves them to `plugins/antigos/`, which isn't loaded. Nothing is deleted.
 
 ## How plugins run
 
@@ -43,8 +51,12 @@ can't make the app stutter. The interface and that thread only talk through two 
   sleep in the meantime).
 - Plugins start when you're logged in, and start again when you switch accounts: each account has
   its own data.
-- Everything a plugin sends to the screen is data (a tree, a rule, a note). The app draws it on its
-  own, without calling Lua per message or per frame.
+- Everything a plugin sends to the screen is data (a tree, a rule, a note, a list of suggestions).
+  The app draws and applies it on its own, without calling Lua per message, per frame or per key.
+- There's no event for presence, typing or voice: they fire so often that listening to them would be
+  a steady cost even with the plugin doing nothing.
+- If the queue falls behind, a plugin that takes too long on each message loses messages instead of
+  holding up the others. Its card says how many.
 
 ## An example
 
@@ -81,25 +93,31 @@ anything, so the settings page shows them even for a plugin that's off.
 
 | Capability | Gives access to |
 |---|---|
-| `messages` | `larper.on("message")`, `larper.on("delete")`, `larper.messages` |
+| `messages` | `larper.on("message")`, `larper.on("edit")`, `larper.on("delete")`, `larper.messages` |
 | `send` | `larper.send` |
 | `notify` | `larper.notify` |
 | `storage` | `larper.storage` |
 | `timers` | `larper.after`, `larper.every` |
 | `panel` | `larper.panel` |
 | `menu` | `larper.menu` |
-| `decorate` | `larper.decorate`, `larper.undecorate`, `larper.rules` |
+| `decorate` | `larper.decorate`, `larper.undecorate`, `larper.rules`, `larper.on("dismiss")` |
 | `composer` | `larper.insert` |
 | `http` | `larper.http` (needs `@hosts`) |
 | `lsp` | `larper.lsp` |
+| `settings` | `larper.settings` |
+| `completions` | `larper.completions` |
+| `rewrite` | `larper.rewrite` (its card says "Changes what you send") |
+| `links` | `larper.open` (its card says "Opens links") |
 
-Commands, keybinds, `larper.channel`, `larper.guild`, `larper.jump`, `larper.tr` and `larper.json`
-don't need any capability. Calling something the manifest doesn't ask for raises an error that says
+Commands, keybinds, `larper.channel`, `larper.guild`, `larper.jump`, `larper.copy`, `larper.tr` and
+`larper.json` don't need any capability. Calling something the manifest doesn't ask for raises an error that says
 what to add.
 
 **Files with no manifest** keep working: they are "old API" plugins, with `messages`, `send`,
 `notify` and `lsp`. To use anything newer, add a manifest. A manifest with a mistake (an unknown
-capability, a bad host) stops the plugin from starting, and the card says why.
+capability, a bad host) stops the plugin from starting, and the card says why. A plugin that reads
+messages and can also send something out (`messages` with `http` or `links`) gets a warning line on
+its card, on top of the labels.
 
 ## Limits
 
@@ -111,8 +129,10 @@ These are what make it safe to run other people's scripts next to your account.
   timer or in the answer to an HTTP request. Replying on its own would turn the account into a
   *self-bot*, which Discord forbids and usually punishes with a ban. There are no auto-replies,
   auto-reactions or anything else that writes to the account in the background.
-- `larper.insert`, `larper.jump` and `larper.panel.open` also need a gesture: a background plugin
-  can't type into your message box or move you around.
+- `larper.insert`, `larper.jump`, `larper.copy`, `larper.open` and `larper.panel.open` also need a
+  gesture: a background plugin can't type into your message box or move you around. The one
+  exception: the answer to an HTTP request made in a gesture can call `larper.insert`. It still can't
+  send.
 - **No files, programs or raw sockets.** Only `string`, `table`, `math`, `utf8` and the basic
   functions, plus `os.time`, `os.date`, `os.clock` and `os.difftime`. There is no `io`,
   `os.execute`/`os.remove`/`os.getenv`, `require`, `package`, `debug`, `coroutine`, `load`,
@@ -138,7 +158,9 @@ Everything lives in the global table `larper`. Discord IDs are strings (`"123456
 | event | when | argument |
 |---|---|---|
 | `"message"` | a new message arrives in any channel (including your own) | `msg` |
+| `"edit"` | someone edited a message | `msg`, with the new text |
 | `"delete"` | a message was deleted | `{ id, channel }` (IDs) |
+| `"dismiss"` | you closed this plugin's note with its × | `{ id }` |
 | `"ready"` | the app connected (or the plugin started while the app was already connected) | none |
 | `"channel"` | you opened another channel | `{ id, name }`, or `nil` |
 | `"lang"` | the app's language changed: draw your panel again | none |
@@ -157,6 +179,7 @@ Everything lives in the global table `larper`. Discord IDs are strings (`"123456
 | `msg.id` | `"1350000000000000000"` |
 | `msg.time` | seconds since 1970 |
 | `msg.attachments` | how many |
+| `msg.files` | only from `larper.messages({ files = true })`: a list of `{ name, url, size }` |
 
 The history loaded when you open a channel doesn't fire `"message"`, only what arrives live.
 System messages (someone joined, pinned…) don't either. A plugin never gets what was deleted, or a
@@ -192,8 +215,8 @@ The app's own shortcuts (`Ctrl+K`, `Ctrl+W`…) keep working alongside it: pick 
 Shows a notice at the top of the window. With the window unfocused (and "Desktop notifications"
 on), a system notification goes out too, except in focus mode. With `{ desktop = true }` the system
 notification goes out even with the window focused or in focus mode, for something the person
-explicitly asked for, like a reminder. At most 20 per 10 seconds and 6 system notifications a minute;
-the rest are dropped silently.
+explicitly asked for, like a reminder. At most 20 per 10 seconds and 6 system notifications a minute
+per plugin (20 a minute across all of them); the rest are dropped silently.
 
 ### `larper.send(channel, text)`
 
@@ -208,9 +231,10 @@ The open channel (`{ id, name }`) and its server (`{ id, name }`). `nil` when no
 
 ### `larper.messages([options], function(list))`
 
-The messages loaded in the open channel, oldest first, as a copy. Options: `channel` (an ID) and
-`limit` (200 by default, up to 500). The answer arrives in `function`, later. It returns `false`, and
-never calls the function, if you ask again within half a second.
+The messages loaded in the open channel, oldest first, as a copy. Options: `channel` (an ID), `limit`
+(200 by default, up to 500) and `files` (`true` also brings `msg.files`, so only who asks pays for
+it). The answer arrives in `function`, later. It returns `false`, and never calls the function, if
+you ask again within half a second.
 
 ### `larper.jump(channel, message)`
 
@@ -218,7 +242,45 @@ Opens the channel and goes to the message, fetching it if needed. Needs a gestur
 
 ### `larper.insert(text)`
 
-Puts text in the message box. It never sends. Needs a gesture.
+Puts text in the message box. It never sends. Needs a gesture, or the answer to an HTTP request made
+in one.
+
+### `larper.copy(text)` and `larper.open(url)`
+
+`larper.copy` puts text on the clipboard. `larper.open` opens an `http://` or `https://` address in the
+browser, and needs the `links` capability: an address can carry data, so the card warns when the
+plugin also reads messages. Both need a gesture.
+
+### `larper.completions(trigger, list)`
+
+Suggestions in the message box while someone types the trigger at the start of a word:
+
+```lua
+larper.completions(";", { { name = "hi", text = "Hello, how are you?", hint = "greeting" } })
+```
+
+Typing `;h` shows the list, and picking one puts `text` in the box, instead of `;h`. It never sends.
+The list stays with the app, so the search runs on every key without calling your plugin; call this
+again when it changes. The trigger is one of `;` `!` `$` `%` `&` `+` `=` `?` `^`. Up to 256 suggestions
+and 256 KB per plugin.
+
+### `larper.rewrite(list)`
+
+Fixed rules for the text the person sends:
+
+```lua
+larper.rewrite({
+  { strip_params = { "utm_*", "fbclid" } },                 -- in links, anywhere
+  { strip_params = { "si" }, host = "youtu.be" },           -- only there and on its subdomains
+  { replace_host = "old.example.com", with = "new.example.com" },
+  { word = "btw", with = "by the way" },                    -- whole words, ignoring case; no mention or link
+})
+```
+
+The app applies them when sending, after mentions are resolved. Your plugin doesn't see what was
+written and nothing runs while typing. Code blocks, mentions and emoji stay as they are. If the result
+wouldn't fit in a message, the text goes as written. Each call replaces the plugin's rules; up to 256,
+counting each parameter. It doesn't touch what `larper.send` sends, or edits.
 
 ### `larper.lang()` and `larper.tr(pt, en)`
 
@@ -267,6 +329,11 @@ local function draw()
       { type = "button", label = "Delete", style = "danger", on_click = function() end },
     },
     { type = "bar", label = "ana", value = 12, max = 30, text = "12" },
+    { type = "select", key = "kind", label = "Show", value = kind,
+      options = { { value = "all", label = "Everything" }, { value = "new", label = "New" } },
+      on_change = function(v) kind = v; draw() end },
+    { type = "toggle", key = "sound", label = "Sound", hint = "Optional text below", value = sound,
+      on_change = function(on) sound = on end },
     { type = "separator" },
     { type = "list", empty = "Nothing here yet.", items = {
       { title = "Title", subtitle = "Up to 4 lines", meta = "12:30",
@@ -286,18 +353,54 @@ end
 | `button` | `label`, `style`, `on_click` |
 | `input` | `key` (required), `placeholder`, `value`, `on_change(text)`, `on_submit(text)` (Enter), `clear` (empties on Enter) |
 | `bar` | `label`, `value`, `max`, `text`, `style` |
+| `select` | `key` (required), `label`, `value`, `options` (`{ value, label }`), `on_change(value)` |
+| `toggle` | `key` (required), `label`, `hint`, `value`, `on_change(true or false)` |
 | `list` | `items`, `empty` (the text when there are none) |
 | list item | `title`, `subtitle`, `meta`, `on_click`, `actions` (buttons) |
 
 Any of them takes a `key`. While someone is typing in an input, publishing doesn't overwrite what's
 there; with the focus elsewhere, `value` wins. `larper.panel.open()` (needs a gesture) and
-`larper.panel.close()` show and hide it. Up to 4000 items and 1 MB of text.
+`larper.panel.close()` show and hide it. Up to 4000 items and 1 MB of text. A click on an option or a
+toggle counts as a gesture. A `badge` next to `title` (a short text, like `"3"`) shows on the panel's
+tab and as a dot on the channel header button, which then opens that panel first. Publish without it to
+clear.
 
-### `larper.menu(where, label, function)`
+### `larper.settings.set(list)`
+
+Options on the plugin's card in **Settings → Plugins**, with the same types as a panel, usually `select`
+and `toggle`. They show while the plugin is on. Your plugin keeps the value, with `larper.storage`, and
+publishes again on `"lang"`:
+
+```lua
+-- @capabilities settings, storage
+local target = larper.storage.get("target") or "auto"
+local function options()
+  larper.settings.set({
+    { type = "select", key = "target", label = larper.tr("Traduzir para", "Translate to"), value = target,
+      options = { { value = "auto", label = "App language" }, { value = "es", label = "Spanish" } },
+      on_change = function(v) target = v; larper.storage.set("target", v) end },
+  })
+end
+larper.on("lang", options)
+options()
+```
+
+### `larper.menu(where, label, function, [options])`
 
 An entry on the right-click menu. `where` is `"message"` (the function receives `msg`, as in
 `larper.on`, for the message you clicked) or `"user"` (it receives `{ id, name }`). `label` is a string
-or `{ pt = "…", en = "…" }`. Up to 4 per plugin.
+or `{ pt = "…", en = "…" }`. Up to 4 per plugin. Options:
+
+| Option | What it does |
+|---|---|
+| `choices` | A second list, up to 16 `{ value, pt, en }`. Clicking the entry opens it, and the `value` picked is the function's second argument |
+| `toolbar` | An emoji: the entry also becomes a button on the toolbar of the hovered message, with the label as a tooltip. Only for `"message"`, and at most 3 across all plugins |
+
+```lua
+larper.menu("message", { pt = "Traduzir para…", en = "Translate to…" }, function(msg, lang)
+  translate(msg, lang)
+end, { choices = { { value = "es", pt = "Espanhol", en = "Spanish" } } })
+```
 
 ### `larper.decorate(message, options)` and `larper.undecorate(message)`
 
@@ -310,7 +413,8 @@ Marks a message, only on your screen. `message` is an ID or a `msg`.
 | `collapse` | `true` collapses it to one line, with "show" |
 | `label` | The text of that line |
 
-Up to 4096 per plugin. When a message is deleted, what was on it goes too.
+Up to 4096 per plugin. When a message is deleted, what was on it goes too. When the person closes a
+note with its ×, `larper.on("dismiss")` tells you.
 
 ### `larper.rules(list)`
 

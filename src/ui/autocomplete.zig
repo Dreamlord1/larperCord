@@ -23,7 +23,7 @@ const mentions = @import("../core/mentions.zig");
 const State = @import("state.zig").State;
 const Id = types.Id;
 
-const Kind = enum { user, role, everyone, here, channel, voice, emoji, custom, command };
+const Kind = enum { user, role, everyone, here, channel, voice, emoji, custom, command, suggestion };
 
 const Item = struct {
     kind: Kind,
@@ -347,6 +347,32 @@ fn searchCommands(q: []const u8) void {
     }
 }
 
+/// Sugestões dos plugins com este gatilho: uma lista pronta, sem chamar o plugin.
+fn searchSuggestions(q: []const u8, trigger: u8) void {
+    const e = engine.current orelse return;
+    for (e.list.items) |p| {
+        if (!p.isRunning()) continue;
+        const set = p.completions orelse continue;
+        if (set.trigger != trigger) continue;
+        for (set.items) |*s| {
+            const sc = nameScore(s.name, q);
+            if (sc == 0) continue;
+            var it: Item = .{ .kind = .suggestion, .score = sc, .id = p.run };
+            it.setName(s.name);
+            it.setHint(if (s.hint.len > 0) s.hint else p.title());
+            add(it);
+        }
+    }
+}
+
+/// ";nome": só com algum plugin usando um gatilho, e só quando o texto muda.
+fn pluginTrigger(text: []const u8, cur: usize) ?mentions.Trigger {
+    const e = engine.current orelse return null;
+    if (e.n_completions == 0) return null;
+    var buf: [16]u8 = undefined;
+    return mentions.findWordTrigger(text, cur, e.completionTriggers(&buf));
+}
+
 fn runSearch(ctx: *d.Ctx, ch_id: Id, q: []const u8, ch: u8) void {
     n_items = 0;
     const cs = ctx.store.channel(ch_id) orelse return;
@@ -355,7 +381,7 @@ fn runSearch(ctx: *d.Ctx, ch_id: Id, q: []const u8, ch: u8) void {
         '#' => searchChannels(ctx, &cs.info, q),
         ':' => searchEmoji(ctx, &cs.info, q),
         '/' => searchCommands(q),
-        else => {},
+        else => searchSuggestions(q, ch),
     }
 }
 
@@ -393,7 +419,7 @@ pub fn update(ctx: *d.Ctx, ch_id: Id, active: bool, box: d.Rect) void {
 }
 
 fn refresh(ctx: *d.Ctx, ch_id: Id, text: []const u8, cur: usize) void {
-    const found = mentions.findTrigger(text, cur);
+    const found = pluginTrigger(text, cur) orelse mentions.findTrigger(text, cur);
     const t = found orelse {
         dismissed_at = null;
         if (is_open) close();
@@ -501,12 +527,24 @@ fn choose(ctx: *d.Ctx, index: usize) void {
     var buf: [160]u8 = undefined;
     var rb: [48]u8 = undefined;
     const name = it.name();
+    if (it.kind == .suggestion) {
+        // Pelo nome: o plugin pode ter trocado a lista depois da busca.
+        const e = engine.current orelse return close();
+        const body = e.completionText(@intCast(it.id), trig_char, name) orelse return close();
+        const end = @min(cursor, std.mem.sliceTo(&st.input, 0).len);
+        if (!replaceRange(st, trig_at, end, body)) st.showToast(ctx.now_ms, true, "não cabe na caixa", "it doesn't fit in the box", .{});
+        dismissed_at = trig_at;
+        last_trig = 0;
+        close();
+        return;
+    }
     const shown: []const u8 = switch (it.kind) {
         .user, .role, .everyone, .here => std.fmt.bufPrint(&buf, "@{s}", .{name}) catch return,
         .channel, .voice => std.fmt.bufPrint(&buf, "#{s}", .{name}) catch return,
         .custom => std.fmt.bufPrint(&buf, ":{s}:", .{name}) catch return,
         .emoji => emoji_data.glyphOf(it.uni),
         .command => name,
+        .suggestion => unreachable,
     };
     const repl: ?[]const u8 = switch (it.kind) {
         .user => std.fmt.bufPrint(&rb, "<@{d}>", .{it.id}) catch null,
@@ -534,7 +572,8 @@ fn title() []const u8 {
         '@' => i18n.tr("PESSOAS E CARGOS", "PEOPLE AND ROLES"),
         '#' => i18n.tr("CANAIS", "CHANNELS"),
         ':' => i18n.tr("EMOJIS", "EMOJI"),
-        else => i18n.tr("COMANDOS DOS PLUGINS", "PLUGIN COMMANDS"),
+        '/' => i18n.tr("COMANDOS DOS PLUGINS", "PLUGIN COMMANDS"),
+        else => i18n.tr("SUGESTÕES DOS PLUGINS", "PLUGIN SUGGESTIONS"),
     };
 }
 
@@ -610,6 +649,11 @@ fn drawRow(ctx: *d.Ctx, dl: *c.ImDrawList, it: *const Item, row: d.Rect) void {
         .command => {
             const tw = d.width(fam.get(.bold), 17, "/");
             d.text(dl, fam.get(.bold), 17, ix - tw / 2, cy - 17 * 0.6, ctx.col(.accent), "/");
+        },
+        .suggestion => {
+            const glyph = [1]u8{trig_char};
+            const tw = d.width(fam.get(.bold), 17, &glyph);
+            d.text(dl, fam.get(.bold), 17, ix - tw / 2, cy - 17 * 0.6, ctx.col(.accent), &glyph);
         },
         .emoji => {
             const glyph = @import("emoji_picker.zig").drawable(emoji_data.glyphOf(it.uni));

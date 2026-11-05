@@ -2,7 +2,7 @@
 //! comparar versões, ler o SHA256SUMS e conferir a assinatura dele.
 const std = @import("std");
 
-pub const number = "0.5.0";
+pub const number = "0.6.0";
 
 /// Chave pública das versões publicadas. A privada não está no repositório:
 /// uma atualização que não foi assinada com ela não é instalada.

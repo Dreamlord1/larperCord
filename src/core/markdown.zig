@@ -34,7 +34,33 @@ pub const Mention = union(enum) {
     user: Id,
     channel: Id,
     role: Id,
+    /// `<t:123:R>`: a hora, mostrada no fuso de quem lê (`stampOf`).
+    stamp: u64,
 };
+
+/// O segundo e o estilo de um `<t:…>`, num número só (o trecho não cresce por isso).
+pub fn stampOf(v: u64) struct { unix: i64, style: u8 } {
+    return .{ .unix = @intCast(v >> 8), .style = @truncate(v) };
+}
+
+const Stamp = struct { len: usize, value: u64 };
+
+/// `<t:1730000000>` ou `<t:1730000000:R>`.
+fn stampAt(rest: []const u8) ?Stamp {
+    if (!std.mem.startsWith(u8, rest, "<t:")) return null;
+    const close = std.mem.indexOfScalar(u8, rest[0..@min(rest.len, 24)], '>') orelse return null;
+    var digits = rest[3..close];
+    var style: u8 = 'f';
+    if (digits.len >= 2 and digits[digits.len - 2] == ':') {
+        style = digits[digits.len - 1];
+        if (std.mem.indexOfScalar(u8, "tTdDfFR", style) == null) return null;
+        digits = digits[0 .. digits.len - 2];
+    }
+    const unix = std.fmt.parseInt(u64, digits, 10) catch return null;
+    // Até o ano 5138: o relógio do sistema conta em nanossegundos.
+    if (unix > 100_000_000_000) return null;
+    return .{ .len = close + 1, .value = unix << 8 | style };
+}
 
 /// Linguagem de um bloco de código (pela etiqueta: ```zig), para o realce.
 pub const Lang = enum(u8) {
@@ -401,6 +427,13 @@ pub fn parseRaw(gpa: std.mem.Allocator, s: []const u8, raw: []const u8) ![]Span 
             run_start = i;
             continue;
         };
+        if (rest[0] == '<') if (stampAt(rest)) |st| {
+            try Flush.run(&out, gpa, s, run_start, i, flags);
+            try out.append(gpa, .{ .text = rest[0..st.len], .flags = flags, .mention = .{ .stamp = st.value } });
+            i += st.len;
+            run_start = i;
+            continue;
+        };
         // Menções: <@123>, <@!123>, <@&123> (cargo), <#123>.
         if (rest[0] == '<' and rest.len > 3 and (rest[1] == '@' or rest[1] == '#')) {
             if (std.mem.indexOfScalar(u8, rest, '>')) |close| {
@@ -502,6 +535,16 @@ test "estilos, código, menção e link" {
 
 test "bloco de código e menção a cargo" {
     const a = std.testing.allocator;
+    const stamps = try parse(a, "às <t:1730000000:R>, <t:1730000000> e <t:abc> <t:5:x> `<t:9>`");
+    defer a.free(stamps);
+    try std.testing.expectEqual(@as(i64, 1730000000), stampOf(stamps[1].mention.stamp).unix);
+    try std.testing.expectEqual(@as(u8, 'R'), stampOf(stamps[1].mention.stamp).style);
+    try std.testing.expectEqual(@as(u8, 'f'), stampOf(stamps[3].mention.stamp).style);
+    var n_stamps: usize = 0;
+    for (stamps) |sp| {
+        if (sp.mention == .stamp) n_stamps += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), n_stamps);
     const spans = try parse(a, "regras:\n```md\n# um\n# dois\n```\n<@&7> **ok**");
     defer a.free(spans);
     try std.testing.expectEqualStrings("regras:\n", spans[0].text);
