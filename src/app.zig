@@ -2032,6 +2032,7 @@ pub const App = struct {
         if (!app.opts.qa and app.opts.shot == null and app.st.settings.check_updates) updater.check();
         const Runner = if (qa_mod.compiled) @import("qa_runner.zig").Runner else struct {
             fail: u32 = 0,
+            fn holdMouse(_: *@This(), _: *App) void {}
             fn tick(_: *@This(), _: *App) bool {
                 return false;
             }
@@ -2215,6 +2216,7 @@ pub const App = struct {
 
             c.cImGui_ImplSDLRenderer3_NewFrame();
             c.cImGui_ImplSDL3_NewFrame();
+            if (app.opts.qa) runner.holdMouse(app);
             // Janela em foco? (Confirmar leitura depende disso; o QA e os prints
             // rodam fora da tela, sem foco de verdade.)
             app.st.window_focused = if (app.opts.qa or app.opts.shot != null) !app.qa_blur else c.SDL_GetWindowFlags(app.win.window) & c.SDL_WINDOW_INPUT_FOCUS != 0;

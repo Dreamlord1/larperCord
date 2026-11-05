@@ -386,6 +386,10 @@ fn videoSeeked(_: *App) bool {
 fn videoResumed(_: *App) bool {
     return !hasFfmpeg() or video.info().playing;
 }
+/// O vídeo da demonstração tem 3 s e já passou de 75%: pode acabar antes da checagem.
+fn videoResumedOrEnded(_: *App) bool {
+    return !hasFfmpeg() or video.info().playing or video.info().ended;
+}
 fn videoMuted(_: *App) bool {
     const v = video.info();
     return !hasFfmpeg() or !v.has_audio or v.muted;
@@ -2216,7 +2220,7 @@ const ops = [_]Op{
     .{ .run = wakeShowWindow },
     .{ .run = trayFakeOff },
     .{ .click = .{ .dyn = tVideoPlay } },
-    .{ .expect = .{ .name = "voltou e continua", .check = videoResumed, .timeout_ms = 6000 } },
+    .{ .expect = .{ .name = "voltou e continua", .check = videoResumedOrEnded, .timeout_ms = 6000 } },
     .{ .click = .{ .dyn = tVideoMute } },
     expect("o botão de som silencia", videoMuted),
     .{ .expect = .{ .name = "o vídeo chega ao fim e para no último quadro", .check = videoEnded, .timeout_ms = 5000 } },
@@ -3003,6 +3007,7 @@ pub const Runner = struct {
     target_pos: [2]f32 = .{ 0, 0 },
     still_pos: [2]f32 = .{ -1, -1 },
     still_n: u8 = 0,
+    mouse_set: bool = false,
     settle: u32 = 0,
 
     fn now() i64 {
@@ -3025,7 +3030,7 @@ pub const Runner = struct {
     fn scrollTo(r: *Runner, app: *App, p: [2]f32) bool {
         const h = app.io.*.DisplaySize.y;
         if (p[1] > 2 and p[1] < h - 2) return false;
-        c.ImGuiIO_AddMousePosEvent(app.io, app.io.*.DisplaySize.x * 0.6, h * 0.5);
+        r.pos(app, .{ app.io.*.DisplaySize.x * 0.6, h * 0.5 });
         c.ImGuiIO_AddMouseWheelEvent(app.io, 0, if (p[1] >= h - 2) -2 else 2);
         r.sub = 0;
         // Espera a rolagem acontecer e as posições serem redesenhadas.
@@ -3286,7 +3291,15 @@ pub const Runner = struct {
         r.step_ms = now();
     }
 
+    /// Com a janela em foco e o cursor de verdade fora dela, o backend do SDL põe o
+    /// cursor do sistema no lugar do mouse a cada quadro. Aconteceu no Windows da
+    /// CI ao encolher a janela: o clique do roteiro ia parar em outro lugar.
+    pub fn holdMouse(r: *Runner, app: *App) void {
+        if (r.mouse_set) c.ImGuiIO_AddMousePosEvent(app.io, r.mouse[0], r.mouse[1]);
+    }
+
     fn pos(r: *Runner, app: *App, p: [2]f32) void {
+        r.mouse_set = true;
         r.mouse = p;
         c.ImGuiIO_AddMousePosEvent(app.io, p[0], p[1]);
     }
