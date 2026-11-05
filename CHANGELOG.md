@@ -32,6 +32,8 @@
 - When Discord refuses a token, the app forgets it instead of trying it again every time it opens. If the session ends with the app open, it goes back to the sign-in screen.
 
 **Install**
+- The Linux download runs on distros from about 2022 onward (glibc 2.34), and no longer needs a very recent one. SDL3, libcurl and OpenSSL now come inside it, so the file went from about 7 MB to about 15 MB.
+- GitHub Actions builds the Linux file, opens it on Ubuntu, Debian, Fedora, openSUSE and Arch, and publishes an attestation you can check with `gh attestation verify`.
 - The Linux installer names its shortcut after the window's app ID, so taskbars that look up the icon that way can find it. Running it again replaces the old shortcut.
 
 ## 0.5.0

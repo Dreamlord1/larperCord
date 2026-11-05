@@ -6,16 +6,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main, "portable/**"]
-    paths:
-      - ".github/workflows/linux-portable.yml"
-      - "build.zig"
-      - "build.zig.zon"
-      - "src/**"
-      - "third_party/**"
-      - "themes/**"
-      - "docs/plugins/**"
-      - "tools/linux_deps.sh"
-      - "CHANGELOG*.md"
 
 jobs:
   build:

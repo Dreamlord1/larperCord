@@ -45,7 +45,8 @@ Categories=Network;InstantMessaging;
 StartupWMClass=dev.larpercord
 DESK
 
-# Libraries come from the system: report what is missing and how to get it.
+# SDL3, curl and OpenSSL come inside the binary. The rest comes from the system:
+# report what is missing and how to get it.
 missing="$(ldd "$bin_dir/larpercord" 2>/dev/null | grep 'not found' || true)"
 glibc="$(ldd "$bin_dir/larpercord" 2>&1 | grep 'GLIBC_' || true)"
 "$bin_dir/larpercord" --help >/dev/null 2>"$tmp/err" || glibc="$(cat "$tmp/err")"
@@ -53,10 +54,10 @@ if [ -n "$missing" ]; then
     echo "Missing system libraries:"
     echo "$missing"
     cmd=""
-    if command -v pacman >/dev/null; then cmd="sudo pacman -S --needed sdl3 curl freetype2 fontconfig libwebp opus openssl"
-    elif command -v dnf >/dev/null; then cmd="sudo dnf install SDL3 libcurl freetype fontconfig libwebp opus openssl-libs"
-    elif command -v apt-get >/dev/null; then cmd="sudo apt-get install libsdl3-0 libcurl4 libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libssl3"
-    elif command -v zypper >/dev/null; then cmd="sudo zypper install libSDL3-0 libcurl4 libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libopenssl3"
+    if command -v pacman >/dev/null; then cmd="sudo pacman -S --needed freetype2 fontconfig libwebp opus"
+    elif command -v dnf >/dev/null; then cmd="sudo dnf install freetype fontconfig libwebp opus"
+    elif command -v apt-get >/dev/null; then cmd="sudo apt-get install libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0"
+    elif command -v zypper >/dev/null; then cmd="sudo zypper install libfreetype6 fontconfig libwebp7 libwebpdemux2 libopus0"
     fi
     if [ -n "$cmd" ]; then
         echo "To install them: $cmd"

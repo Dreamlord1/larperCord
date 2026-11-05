@@ -32,6 +32,8 @@
 - Quando o Discord recusa um token, o app esquece esse token em vez de tentar de novo a cada abertura. Se a sessão acabar com o app aberto, ele volta para a tela de login.
 
 **Instalação**
+- O download para Linux roda em distros de 2022 para cá (glibc 2.34), e não exige mais uma bem recente. SDL3, libcurl e OpenSSL agora vêm dentro dele, então o arquivo foi de cerca de 7 MB para cerca de 15 MB.
+- O GitHub Actions compila o arquivo para Linux, abre em Ubuntu, Debian, Fedora, openSUSE e Arch, e publica um atestado que dá para conferir com `gh attestation verify`.
 - O instalador do Linux dá ao atalho o ID da janela, para as barras que procuram o ícone desse jeito acharem. Rodar de novo troca o atalho antigo.
 
 ## 0.5.0

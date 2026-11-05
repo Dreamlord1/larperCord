@@ -46,11 +46,11 @@ The official client is a whole browser dressed up as an app. On the same PC:
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord**, real account | **~130 MB**³ | **0–0.4%** | **~6.8 MB** |
-| **larperCord**, demo | **44–47 MB**² | **0–0.4%** | **~6.8 MB** |
+| **larperCord**, real account | **~130 MB**³ | **0–0.4%** | **~15 MB** |
+| **larperCord**, demo | **44–47 MB**² | **0–0.4%** | **~15 MB** |
 
 <sub>¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, 1280×800 window, `ReleaseFast` build.
-² Demo data, a real window, GIF autoplay off, measured with `tools/membench.sh`. An animated GIF on screen costs about 2.5% CPU. About half of the total is the NVIDIA driver and system libraries (libcurl, OpenSSL).
+² Demo data, a real window, GIF autoplay off, measured with `tools/membench.sh`. An animated GIF on screen costs about 2.5% CPU. About half of the total is the NVIDIA driver and system libraries (libcurl, OpenSSL). Measured on a build that uses the system's libraries. The published Linux file carries SDL3, libcurl and OpenSSL inside: side by side in demo, it used about 2 MB more.
 ³ 125–140 MB in one account's normal use on the same PC, about 70 MB right after opening. Yours depends on your servers, members and images; Settings → Performance shows where it goes.</sub>
 
 ## What's in it
@@ -159,7 +159,9 @@ All of them have **light and dark modes** and **their own options** in Settings 
 
 **Download:** [Linux](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-linux-x86_64) · [Windows](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-windows-x86_64.zip) · [all versions](https://github.com/RshaCuDeVidro/larperCord/releases). On Linux, `chmod +x` the file and run it. On Windows, unzip it and open `larpercord.exe`; it isn't code-signed yet, so Windows may warn you the first time.
 
-For now, the Linux build needs a very recent distro: glibc 2.43 or newer and SDL3, as on Arch. Elsewhere, build it from source.
+The Linux build runs on distros from about 2022 onward (glibc 2.34 or newer). SDL3, libcurl and OpenSSL come inside it. FreeType, fontconfig, libwebp, Opus and zlib come from the system, and a desktop distro usually has them already. Before each release it's opened in Ubuntu 22.04 and 24.04, Debian 12 and 13, Fedora, openSUSE and Arch containers, in demo mode with no GPU.
+
+GitHub Actions builds that file from this repository's code. With the GitHub CLI you can check it: `gh attestation verify larpercord-linux-x86_64 --repo RshaCuDeVidro/larperCord`.
 
 Or use a script:
 
@@ -175,7 +177,7 @@ curl -fsSL https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/insta
 irm https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.ps1 | iex
 ```
 
-Both download the latest [release](https://github.com/RshaCuDeVidro/larperCord/releases) and check it against `SHA256SUMS`. On Linux the libraries come from your system, and the script lists what's missing. Some older distros don't package SDL3 yet; there, [build from source](#building). After that, the app updates itself: Settings → Updates.
+Both download the latest [release](https://github.com/RshaCuDeVidro/larperCord/releases) and check it against `SHA256SUMS`. On Linux the script lists any system library that's missing. On a distro older than 2022, [build from source](#building). After that, the app updates itself: Settings → Updates.
 
 ## Connecting your account
 
@@ -219,7 +221,7 @@ No magic, just many small decisions:
    minute in the tray or minimized, images leave memory too, except small ones that were on screen.
 8. **fontconfig gets freed** after fonts are resolved (`FcFini` + `malloc_trim`).
 9. **No blinking cursor**: a cursor blinking on its own would keep the CPU awake.
-10. **A lean binary**: a release build without debug symbols, about 6.8 MB.
+10. **A lean binary**: a release build without debug symbols. The Linux file is about 15 MB with SDL3, libcurl and OpenSSL inside, and about 7 MB built against the system's copies.
 
 ## Building
 

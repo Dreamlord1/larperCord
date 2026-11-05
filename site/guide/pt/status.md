@@ -22,7 +22,7 @@ O larperCord é um projeto jovem: versão 0.6.0, com o primeiro commit em 2 de n
 | Notificações | parcial | Por `notify-send` no Linux e pela bandeja no Windows. O clique não abre o canal |
 | Acessibilidade | parcial | Escala da fonte, reduzir movimento, paleta e navegação estilo vim. Sem foco visível e sem alto contraste |
 | Primeiro uso | parcial | Tela de login e modo demonstração, sem apresentação do app |
-| Plataformas | parcial | Linux e Windows. A versão para Linux exige glibc 2.43 ou mais nova e SDL3, e é testada no Arch com Hyprland. A versão para Windows só rodou no CI e num sandbox, em modo demonstração |
+| Plataformas | parcial | Linux e Windows. A versão para Linux exige glibc 2.34 ou mais nova. É usada todo dia no Arch com Hyprland, e aberta em contêineres de Ubuntu, Debian, Fedora, openSUSE e Arch, na demonstração, antes de cada versão. A versão para Windows só rodou no CI e num sandbox, em modo demonstração |
 | Entrar em servidor por convite | falta | Convites viram um cartão e abrem no navegador |
 | Compartilhar tela e câmera | falta | |
 

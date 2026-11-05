@@ -22,7 +22,7 @@ larperCord is a young project: version 0.6.0, with its first commit on November 
 | Notifications | partial | Through `notify-send` on Linux and the tray on Windows. Clicking doesn't open the channel |
 | Accessibility | partial | Font scale, reduced motion, palette and vim navigation. No visible focus and no high contrast |
 | First run | partial | Sign-in screen and demo mode, no introduction to the app |
-| Platforms | partial | Linux and Windows. The Linux build needs glibc 2.43 or newer and SDL3, and is tested on Arch with Hyprland. The Windows build has only been run in CI and in a sandbox, in demo mode |
+| Platforms | partial | Linux and Windows. The Linux build needs glibc 2.34 or newer. It's used daily on Arch with Hyprland, and opened in Ubuntu, Debian, Fedora, openSUSE and Arch containers, in demo mode, before each release. The Windows build has only been run in CI and in a sandbox, in demo mode |
 | Joining a server by invite | missing | Invites show as a card and open in the browser |
 | Screen sharing and camera | missing | |
 

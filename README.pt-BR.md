@@ -47,11 +47,11 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord**, conta real | **~130 MB**³ | **0–0,4%** | **~6,8 MB** |
-| **larperCord**, demonstração | **44–47 MB**² | **0–0,4%** | **~6,8 MB** |
+| **larperCord**, conta real | **~130 MB**³ | **0–0,4%** | **~15 MB** |
+| **larperCord**, demonstração | **44–47 MB**² | **0–0,4%** | **~15 MB** |
 
 <sub>¹ média desde a abertura, medida pelo `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
-² Dados de demonstração, janela de verdade, reprodução automática de GIFs desligada, medido com `tools/membench.sh`. Um GIF animado na tela custa cerca de 2,5% de CPU. Cerca de metade do total é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL).
+² Dados de demonstração, janela de verdade, reprodução automática de GIFs desligada, medido com `tools/membench.sh`. Um GIF animado na tela custa cerca de 2,5% de CPU. Cerca de metade do total é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL). Medido num build que usa as bibliotecas do sistema. O arquivo publicado para Linux traz SDL3, libcurl e OpenSSL dentro: lado a lado na demonstração, usou cerca de 2 MB a mais.
 ³ 125–140 MB no uso normal de uma conta, no mesmo PC, cerca de 70 MB logo depois de abrir. O seu depende dos seus servidores, membros e imagens; Configurações → Desempenho mostra para onde vai.</sub>
 
 ## O que tem
@@ -160,7 +160,9 @@ Todos têm **modo claro e escuro** e **opções próprias** em Configurações �
 
 **Baixar:** [Linux](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-linux-x86_64) · [Windows](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-windows-x86_64.zip) · [todas as versões](https://github.com/RshaCuDeVidro/larperCord/releases). No Linux, marque o arquivo com `chmod +x` e rode. No Windows, descompacte e abra o `larpercord.exe`; ele ainda não tem assinatura de código, então o Windows pode avisar na primeira vez.
 
-Por enquanto, a versão para Linux exige uma distro bem recente: glibc 2.43 ou mais nova e SDL3, como no Arch. Nas outras, compile do código-fonte.
+A versão para Linux roda em distros de 2022 para cá (glibc 2.34 ou mais nova). SDL3, libcurl e OpenSSL vêm dentro dela. FreeType, fontconfig, libwebp, Opus e zlib vêm do sistema, e uma distro de desktop costuma já ter. Antes de cada versão, ela é aberta em contêineres de Ubuntu 22.04 e 24.04, Debian 12 e 13, Fedora, openSUSE e Arch, na demonstração e sem GPU.
+
+O GitHub Actions compila esse arquivo a partir do código deste repositório. Com o GitHub CLI dá para conferir: `gh attestation verify larpercord-linux-x86_64 --repo RshaCuDeVidro/larperCord`.
 
 Ou use um script:
 
@@ -176,7 +178,7 @@ curl -fsSL https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/insta
 irm https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.ps1 | iex
 ```
 
-Os dois baixam a última [versão publicada](https://github.com/RshaCuDeVidro/larperCord/releases) e conferem com o `SHA256SUMS`. No Linux as bibliotecas vêm do sistema, e o script lista o que falta. Algumas distros mais antigas ainda não têm SDL3; nelas, [compile do código](#compilando). Depois disso, o app se atualiza sozinho: Configurações → Atualizações.
+Os dois baixam a última [versão publicada](https://github.com/RshaCuDeVidro/larperCord/releases) e conferem com o `SHA256SUMS`. No Linux o script lista as bibliotecas do sistema que faltam. Numa distro de antes de 2022, [compile do código](#compilando). Depois disso, o app se atualiza sozinho: Configurações → Atualizações.
 
 ## Conectando sua conta
 
@@ -220,7 +222,7 @@ Nada de mágica, só muitas decisões pequenas:
    de um minuto na bandeja ou minimizada, as imagens também saem da memória, menos as pequenas que estavam na tela.
 8. **fontconfig liberado** depois de resolver as fontes (`FcFini` + `malloc_trim`).
 9. **Sem cursor piscando**: o cursor piscando sozinho manteria a CPU acordada.
-10. **Binário enxuto**: build release sem símbolos de debug, cerca de 6,8 MB.
+10. **Binário enxuto**: build release sem símbolos de debug. O arquivo para Linux tem cerca de 15 MB com SDL3, libcurl e OpenSSL dentro, e cerca de 7 MB usando as cópias do sistema.
 
 ## Compilando
 

@@ -19,7 +19,9 @@ O larperCord é um cliente de Discord nativo para Linux e Windows, escrito em Zi
 
 **Baixar:** [Linux](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-linux-x86_64) · [Windows](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-windows-x86_64.zip) · [todas as versões](https://github.com/RshaCuDeVidro/larperCord/releases). No Linux, marque o arquivo com `chmod +x` e rode. No Windows, descompacte e abra o `larpercord.exe`; ele ainda não tem assinatura de código, então o Windows pode avisar na primeira vez.
 
-Por enquanto, a versão para Linux exige uma distro bem recente: glibc 2.43 ou mais nova e SDL3, como no Arch. Nas outras, compile do código-fonte.
+A versão para Linux roda em distros de 2022 para cá (glibc 2.34 ou mais nova). SDL3, libcurl e OpenSSL vêm dentro dela. FreeType, fontconfig, libwebp, Opus e zlib vêm do sistema, e uma distro de desktop costuma já ter. Antes de cada versão, ela é aberta em contêineres de Ubuntu 22.04 e 24.04, Debian 12 e 13, Fedora, openSUSE e Arch, na demonstração e sem GPU.
+
+O GitHub Actions compila esse arquivo a partir do código deste repositório. Com o GitHub CLI dá para conferir: `gh attestation verify larpercord-linux-x86_64 --repo RshaCuDeVidro/larperCord`.
 
 Ou use um script:
 
