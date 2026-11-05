@@ -111,7 +111,8 @@ The official client is a whole browser dressed up as an app. On the same PC:
   `has:image` and `has:file`; clicking a result jumps to the message. You can turn it off and
   erase it in Settings → Privacy.
 - **Multiple accounts.** Your own name's menu lists the saved accounts (name and picture) and switches
-  right away; "Add account" goes back to sign-in without forgetting the others.
+  right away; "Add account" goes back to sign-in without forgetting the others. The sign-in screen
+  lists them too, and a token Discord refuses is forgotten instead of being tried again.
 - **Discord-style settings** (`Ctrl+,`): 14 pages, theme switching with thumbnails,
   accent color and corners, **custom colors per theme and mode in hex**, font scale,
   compact mode, reduced motion, 12/24 h clock, spoilers…, saved in
@@ -157,6 +158,8 @@ All of them have **light and dark modes** and **their own options** in Settings 
 ## Install
 
 **Download:** [Linux](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-linux-x86_64) · [Windows](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-windows-x86_64.zip) · [all versions](https://github.com/RshaCuDeVidro/larperCord/releases). On Linux, `chmod +x` the file and run it. On Windows, unzip it and open `larpercord.exe`; it isn't code-signed yet, so Windows may warn you the first time.
+
+For now, the Linux build needs a very recent distro: glibc 2.43 or newer and SDL3, as on Arch. Elsewhere, build it from source.
 
 Or use a script:
 

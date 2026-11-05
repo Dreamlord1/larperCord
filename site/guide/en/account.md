@@ -22,6 +22,8 @@ Without a token, the app opens the sign-in screen (`--login` forces it). You can
 
 Click your own name to open the account menu. It lists saved accounts with name and avatar, and switching takes effect right away. **Add account** goes back to the sign-in screen without forgetting the others.
 
+The sign-in screen lists saved accounts too, so you can get into another one if a session ends. When Discord refuses a token, the app forgets it instead of trying it again every time it opens.
+
 | What | Where |
 |---|---|
 | Each remembered token | Its own keyring entry (`service larpercord-account account <ID>`). Without a keyring: `~/.config/larpercord/tokens/<ID>` with `chmod 600` |

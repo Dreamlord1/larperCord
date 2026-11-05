@@ -18,6 +18,7 @@
 **Messages**
 - `<t:…>` times appear as a date or "in 2 hours", in your time zone, instead of the raw code.
 - Over a link, the mouse cursor turns into a hand. Text selection was overriding it.
+- Dragging the message scrollbar no longer selects text, and the resize handle no longer covers the scrollbar.
 - Mark as read and mark as unread always reach Discord now. While invisible they stayed on your computer only and came back the next time you connected. Your status no longer stops read confirmations; an unfocused window still doesn't confirm on its own.
 
 **Lighter**

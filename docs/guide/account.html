@@ -53,6 +53,7 @@
 <p>Without a token, the app opens the sign-in screen (<code>--login</code> forces it). You can paste a token or choose <strong>Explore the demo</strong>, and the screen has its own help link. With <strong>Remember on this computer</strong> on, the token is only saved after Discord accepts it.</p>
 <h2 id="multiple-accounts"><a class="anchor" href="#multiple-accounts" aria-hidden="true">#</a>Multiple accounts</h2>
 <p>Click your own name to open the account menu. It lists saved accounts with name and avatar, and switching takes effect right away. <strong>Add account</strong> goes back to the sign-in screen without forgetting the others.</p>
+<p>The sign-in screen lists saved accounts too, so you can get into another one if a session ends. When Discord refuses a token, the app forgets it instead of trying it again every time it opens.</p>
 <div class="table-wrap"><table><thead><tr><th>What</th><th>Where</th></tr></thead><tbody><tr><td>Each remembered token</td><td>Its own keyring entry (<code>service larpercord-account account &lt;ID&gt;</code>). Without a keyring: <code>~/.config/larpercord/tokens/&lt;ID&gt;</code> with <code>chmod 600</code></td></tr><tr><td>The list of accounts (ID, name and avatar only)</td><td><code>~/.config/larpercord/accounts</code></td></tr></tbody></table></div>
 <p>The keyring entry from the first section still works for the account that was already in it.</p>
 <h2 id="sign-out"><a class="anchor" href="#sign-out" aria-hidden="true">#</a>Sign out</h2>

@@ -101,6 +101,14 @@ fn bigBack(app: *App) bool {
 
 // --- Página de Desempenho --------------------------------------------------------
 
+fn clearSelection(app: *App) void {
+    app.st.selection = .{};
+}
+
+fn scrollbarSelectsNothing(app: *App) bool {
+    return app.st.selection.empty() and !app.st.selection.dragging;
+}
+
 fn memoryShown(app: *App) bool {
     if (settings.mem_use.n_channels == 0 or settings.mem_use.n_people == 0 or settings.mem_use.places == 0) return false;
     if (app.stats.frames_built == 0) return false;
@@ -129,6 +137,14 @@ pub const ops = [_]Op{
     .{ .shot = "74-desempenho-memoria" },
     .{ .key = .{ .key = c.ImGuiKey_Escape } },
     .{ .wait = 350 },
+
+    s("arrastar a barra de rolagem não seleciona texto"),
+    click("guild:500000"),
+    click("channel:500005"),
+    .{ .wait = 800 },
+    .{ .run = clearSelection },
+    .{ .drag = .{ .from = .{ .mark = "msg-scrollbar" }, .to = .{ .mark = "msg-scrollbar-top" } } },
+    expect("subir a barra deixa as mensagens sem seleção", scrollbarSelectsNothing),
 
     s("janela escondida solta as imagens"),
     click("guild:500000"),

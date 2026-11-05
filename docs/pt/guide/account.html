@@ -53,6 +53,7 @@
 <p>Sem token, o app abre a tela de login (<code>--login</code> força). Você pode colar um token ou escolher <strong>Explorar o modo demonstração</strong>, e a tela tem o próprio link de ajuda. Com <strong>Lembrar neste computador</strong> ligado, o token só é salvo depois que o Discord o aceita.</p>
 <h2 id="varias-contas"><a class="anchor" href="#varias-contas" aria-hidden="true">#</a>Várias contas</h2>
 <p>Clique no seu próprio nome para abrir o menu de contas. Ele lista as contas guardadas com nome e foto, e a troca vale na hora. <strong>Adicionar conta</strong> volta à tela de login sem esquecer as outras.</p>
+<p>A tela de login também lista as contas guardadas, então dá para entrar em outra se uma sessão acabar. Quando o Discord recusa um token, o app esquece esse token em vez de tentar de novo a cada abertura.</p>
 <div class="table-wrap"><table><thead><tr><th>O quê</th><th>Onde</th></tr></thead><tbody><tr><td>Cada token lembrado</td><td>Uma entrada própria do chaveiro (<code>service larpercord-account account &lt;ID&gt;</code>). Sem chaveiro: <code>~/.config/larpercord/tokens/&lt;ID&gt;</code> com <code>chmod 600</code></td></tr><tr><td>A lista de contas (só ID, nome e foto)</td><td><code>~/.config/larpercord/accounts</code></td></tr></tbody></table></div>
 <p>A entrada do chaveiro da primeira seção continua valendo para a conta que já estava nela.</p>
 <h2 id="sair"><a class="anchor" href="#sair" aria-hidden="true">#</a>Sair</h2>

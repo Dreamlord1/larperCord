@@ -22,6 +22,8 @@ Sem token, o app abre a tela de login (`--login` força). Você pode colar um to
 
 Clique no seu próprio nome para abrir o menu de contas. Ele lista as contas guardadas com nome e foto, e a troca vale na hora. **Adicionar conta** volta à tela de login sem esquecer as outras.
 
+A tela de login também lista as contas guardadas, então dá para entrar em outra se uma sessão acabar. Quando o Discord recusa um token, o app esquece esse token em vez de tentar de novo a cada abertura.
+
 | O quê | Onde |
 |---|---|
 | Cada token lembrado | Uma entrada própria do chaveiro (`service larpercord-account account <ID>`). Sem chaveiro: `~/.config/larpercord/tokens/<ID>` com `chmod 600` |

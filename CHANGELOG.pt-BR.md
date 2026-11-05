@@ -18,6 +18,7 @@
 **Mensagens**
 - Horários `<t:…>` aparecem como uma data ou "em 2 horas", no seu fuso, em vez do código.
 - Em cima de um link, o cursor vira a mãozinha. A seleção de texto estava passando por cima dela.
+- Arrastar a barra de rolagem das mensagens não seleciona mais o texto, e a alça de redimensionar não cobre mais a barra.
 - Marcar como lida e como não lida agora sempre chega ao Discord. Com o status invisível, ficava só no seu computador e voltava na próxima conexão. O status não impede mais a confirmação de leitura; com a janela sem foco, ela continua não indo sozinha.
 
 **Mais leve**

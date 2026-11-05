@@ -336,6 +336,9 @@ pub fn messages(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     history(ctx, n, r, ch_id, "##messages");
 }
 
+/// A faixa da direita onde fica a barra de rolagem, por cima da lista.
+const scrollbar_zone: f32 = 14;
+
 /// O histórico de um canal, com rolagem própria. `region` é o nome da
 /// região do ImGui (um por painel: os IDs dos botões ficam separados).
 pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*:0]const u8) void {
@@ -521,7 +524,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     var s = c.ImGui_GetScrollY();
     // Arrastando a barra de rolagem (só a desta conversa: um clique nas
     // configurações ou num popup por cima não conta).
-    if (@abs(s - sc.pos) > 1 and c.ImGui_IsMouseDown(0) and ctx.mouse.x >= r.right() - 14 and c.ImGui_IsWindowHovered(0) and !st.settings.open) {
+    if (@abs(s - sc.pos) > 1 and c.ImGui_IsMouseDown(0) and ctx.mouse.x >= r.right() - scrollbar_zone and c.ImGui_IsWindowHovered(0) and !st.settings.open) {
         sc.pos = s;
         sc.target = s;
         sc.stick_bottom = s >= max_scroll - 1 and !cs.detached;
@@ -619,6 +622,9 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     if (cs.around == .loading) loadingPill(ctx, dl, g, r);
     if (cs.detached) presentBar(ctx, dl, g, r, ch_id, present_hit);
 
+    qa.mark(.{ .x = r.right() - 5, .y = r.y + r.h - 60, .w = 4, .h = 40 }, "msg-scrollbar", .{});
+    qa.mark(.{ .x = r.right() - 5, .y = r.y + 40, .w = 4, .h = 40 }, "msg-scrollbar-top", .{});
+
     // Seleção de texto e botão direito.
     if (probe_idx) |pi| {
         const m = &msgs[pi];
@@ -626,7 +632,8 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         if (!ctx.hot) {
             // Link no caminho: já pediu a mãozinha, e ela vale mais que o cursor de texto.
             if (probe.out != null and c.ImGui_GetMouseCursor() != c.ImGuiMouseCursor_Hand) c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_TextInput);
-            if (c.ImGui_IsMouseClicked(0)) {
+            // A barra de rolagem fica por cima da lista: quem a arrasta não está selecionando.
+            if (c.ImGui_IsMouseClicked(0) and ctx.mouse.x < r.right() - scrollbar_zone) {
                 st.selection = .{ .channel = ch_id, .a_id = m.msg.id, .a_off = off, .b_id = m.msg.id, .b_off = off, .dragging = true };
                 if (c.ImGui_IsMouseDoubleClicked(0)) selectWord(st, m, off);
             }

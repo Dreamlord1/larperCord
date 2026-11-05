@@ -102,6 +102,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
         } else return fail("opção desconhecida (veja --help)");
     }
 
+    // O QA nunca fala com o Discord, nem por um filho dele: quem herdou o ambiente
+    // de uma bateria entra na demonstração, nunca com a conta guardada.
+    if (!opts.qa and (c.SDL_getenv("QA_SUITE") != null or c.SDL_getenv("QA_SCENE") != null)) opts.demo = true;
+
     // Um por vez: a demonstração, os prints e o QA não têm conexão para repetir
     // e rodam ao lado do app de verdade (LARPER_INSTANCE=1 liga para testar).
     const single = (!opts.qa and opts.shot == null and !opts.demo) or c.SDL_getenv("LARPER_INSTANCE") != null;
@@ -123,7 +127,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
     _ = c.SDL_DetachThread(c.SDL_CreateThread(watchdog, "quit", null));
     const restart = app.restart_wanted;
     app.destroy();
-    if (restart) @import("net/updater.zig").spawnSelf();
+    // No QA, reiniciar só confere a saída: a cópia nova entraria na conta de quem roda.
+    if (restart and !opts.qa) @import("net/updater.zig").spawnSelf();
     if (!ok) std.process.exit(1);
 }
 

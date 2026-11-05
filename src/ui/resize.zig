@@ -130,7 +130,9 @@ pub fn submit(ctx: *d.Ctx) void {
 }
 
 fn one(ctx: *d.Ctx, h: Handle) void {
-    const r: d.Rect = .{ .x = @round(h.x) - hit_w / 2, .y = h.y, .w = hit_w, .h = h.h };
+    // Quase toda para dentro do painel da direita: na beira esquerda da divisa fica a
+    // barra de rolagem do outro painel, e a alça não pode tomar o clique dela.
+    const r: d.Rect = .{ .x = @round(h.x) - 1, .y = h.y, .w = hit_w, .h = h.h };
     last_rects[last_n] = r;
     last_n += 1;
     qa.mark(r, "{s}", .{h.name[2..]});
@@ -171,10 +173,9 @@ fn one(ctx: *d.Ctx, h: Handle) void {
     if (k > 0.3) qa.mark(r, "resize-lit:{s}", .{h.name["##resize:".len..]});
     if (k > 0.02) {
         const dl = c.ImGui_GetWindowDrawList();
-        const cx = r.x + r.w / 2;
         const col = ctx.col(.accent).alpha(k);
-        d.rect(dl, .{ .x = cx - 1, .y = r.y, .w = 2, .h = r.h }, col, 0);
-        d.rect(dl, .{ .x = cx - 3, .y = r.y + r.h / 2 - 16, .w = 6, .h = 32 }, col, 3);
+        d.rect(dl, .{ .x = r.x, .y = r.y, .w = 2, .h = r.h }, col, 0);
+        d.rect(dl, .{ .x = r.x, .y = r.y + r.h / 2 - 16, .w = 6, .h = 32 }, col, 3);
     }
 
     // A dica só aparece depois de um tempo parado: quem veio arrastar não a vê.

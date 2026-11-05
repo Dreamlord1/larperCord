@@ -112,7 +112,8 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
   `has:imagem` e `has:arquivo`; clicar no resultado pula até a mensagem. Dá para desligar e
   apagar em Configurações → Privacidade.
 - **Várias contas.** O menu do próprio nome lista as contas guardadas (nome e foto) e troca na
-  hora; "Adicionar conta" volta ao login sem esquecer as outras.
+  hora; "Adicionar conta" volta ao login sem esquecer as outras. A tela de login também lista
+  as contas, e um token recusado pelo Discord é esquecido em vez de ser tentado de novo.
 - **Configurações no estilo Discord** (`Ctrl+,`): 14 páginas, troca de tema com miniaturas,
   cor de destaque/cantos, **cores personalizadas por tema e modo em hex**, escala de fonte,
   modo compacto, reduzir movimento, relógio 12/24 h, spoilers…, salvas em
@@ -158,6 +159,8 @@ Todos têm **modo claro e escuro** e **opções próprias** em Configurações �
 ## Instalação
 
 **Baixar:** [Linux](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-linux-x86_64) · [Windows](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-windows-x86_64.zip) · [todas as versões](https://github.com/RshaCuDeVidro/larperCord/releases). No Linux, marque o arquivo com `chmod +x` e rode. No Windows, descompacte e abra o `larpercord.exe`; ele ainda não tem assinatura de código, então o Windows pode avisar na primeira vez.
+
+Por enquanto, a versão para Linux exige uma distro bem recente: glibc 2.43 ou mais nova e SDL3, como no Arch. Nas outras, compile do código-fonte.
 
 Ou use um script:
 

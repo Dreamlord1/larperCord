@@ -26,6 +26,10 @@ for suite in bandeja-sair bandeja-menu bandeja-reinicio; do
         echo "$suite: ok (saiu com código 0 em $ms ms no total)"
     fi
 done
+# Nenhuma bateria deixa um app de verdade para trás: ele entraria na conta de quem roda.
+if left=$(pgrep -f "^$bin( --restarted|\$)"); then
+    echo "FALHOU: o QA deixou um app aberto: $left"; kill $left; fail=1
+fi
 # XDG_CURRENT_DESKTOP e o WAYLAND_DISPLAY de quem roda não entram.
 env -u WAYLAND_DISPLAY -u XDG_CURRENT_DESKTOP -u DBUS_SESSION_BUS_ADDRESS -u LARPER_TOKEN \
     xvfb-run -a -s "-screen 0 1280x800x24" \
