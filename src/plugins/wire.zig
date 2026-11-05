@@ -36,7 +36,24 @@ pub const Message = struct {
     timestamp: i64 = 0,
     attachments: u16 = 0,
     files: []const FileRef = &.{},
+    /// A que mensagem esta responde (0 = nenhuma).
+    reply_to: u64 = 0,
+    /// Fala com a pessoa: menção, cargo dela, @everyone. Só em larper.messages.
+    mentions_me: bool = false,
 };
+
+/// Tem algum destes pedaços, sem ligar para maiúsculas? (`contains` de larper.on e larper.messages.)
+pub fn hasAny(text: []const u8, needles: []const []u8) bool {
+    for (needles) |n| {
+        if (std.ascii.findIgnoreCase(text, n) != null) return true;
+    }
+    return false;
+}
+
+pub fn freeNeedles(gpa: std.mem.Allocator, list: [][]u8) void {
+    for (list) |n| gpa.free(n);
+    gpa.free(list);
+}
 
 /// Texto de mensagem que uma cópia guarda, no máximo.
 const max_content = 4000;
@@ -303,8 +320,17 @@ pub const MsgList = struct {
     channel: u64 = 0,
     /// Copiar também a lista de anexos (só quem pede paga por ela).
     files: bool = false,
+    /// Só as que têm um destes pedaços (vazio = todas).
+    needles: [][]u8 = &.{},
+    /// Até onde a pessoa já tinha lido este canal (0 = nada novo, ou não se sabe).
+    last_read: u64 = 0,
+
+    pub fn wants(l: *const MsgList, text: []const u8) bool {
+        return l.needles.len == 0 or hasAny(text, l.needles);
+    }
 
     pub fn add(l: *MsgList, m: *const Message) void {
+        if (!l.wants(m.content)) return;
         const own = OwnedMsg.dup(l.gpa, m) orelse return;
         l.items.append(l.gpa, own) catch own.free(l.gpa);
     }
@@ -313,6 +339,7 @@ pub const MsgList = struct {
         const gpa = l.gpa;
         for (l.items.items) |o| o.free(gpa);
         l.items.deinit(gpa);
+        freeNeedles(gpa, l.needles);
         gpa.destroy(l);
     }
 };
@@ -379,10 +406,10 @@ pub const CmdWhat = union(enum) {
     completions: *CompletionSet,
     rewrite: []rewrite.Rule,
     panel_show: struct { open: bool, token: u32 },
-    deco_set: struct { id: u64, badge: []u8, note: []u8, label: []u8, collapse: bool },
+    deco_set: struct { id: u64, badge: []u8, note: []u8, label: []u8, collapse: bool, danger: bool = false },
     deco_remove: u64,
     deco_rules: []deco.Rule,
-    want_messages: struct { req: u32, channel: u64, limit: u32, files: bool = false },
+    want_messages: struct { req: u32, channel: u64, limit: u32, files: bool = false, needles: [][]u8 = &.{} },
 };
 
 pub const Cmd = struct { run: u32, what: CmdWhat };

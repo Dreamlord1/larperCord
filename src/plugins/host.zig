@@ -277,6 +277,7 @@ pub fn pluginMessage(app: *const App, store: *const Store, m: *const types.Messa
         .ignored = app.st.filtros.isIgnored(m.author),
         .timestamp = m.timestamp,
         .attachments = @intCast(@min(m.attachments.len, std.math.maxInt(u16))),
+        .reply_to = m.reply_to,
     };
 }
 
@@ -285,6 +286,8 @@ fn messages(ctx: *anyopaque, channel: u64, limit: u32, out: *engine.MsgList) voi
     const ch = if (channel != 0) channel else app.st.activeChannel() orelse return;
     const cs = app.store.channel(ch) orelse return;
     out.channel = ch;
+    // A linha "novas mensagens" guarda até onde estava lido antes de abrir o canal.
+    out.last_read = if (cs.divider_after > 1) cs.divider_after else if (cs.info.unread) cs.read_id else 0;
     const items = cs.messages.items;
     // As últimas `limit`, sem o que foi apagado, as pendentes e as de sistema.
     var first = items.len;
@@ -294,8 +297,9 @@ fn messages(ctx: *anyopaque, channel: u64, limit: u32, out: *engine.MsgList) voi
         if (visible(&items[first])) kept += 1;
     }
     for (items[first..]) |*m| {
-        if (!visible(m)) continue;
+        if (!visible(m) or !out.wants(m.msg.content)) continue;
         var pm = pluginMessage(app, &app.store, &m.msg);
+        pm.mentions_me = @import("../core/inbox.zig").mentionsMe(&app.store, cs.info.guild, m);
         var refs: [16]engine.FileRef = undefined;
         if (out.files) {
             var n: usize = 0;

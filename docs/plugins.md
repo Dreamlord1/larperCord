@@ -23,9 +23,11 @@ overwrites a file you've edited and never removes anything.
 | [`translate.lua`](plugins/translate.lua) | Right-click a message, or the 🌐 on its toolbar, to see the translation under it. "Translate to…" picks another language for one message, its card sets the default target and source, and `/tr es hello` puts a translation in the message box. Off until you approve the host: see [HTTP](#larperhttp) |
 | [`reminders.lua`](plugins/reminders.lua) | `/remind 10m call back`, `/remind tomorrow 9am pay the bill`, `/remind every day 8:30 standup`, or "Remind me" on a message. Notifies you at the right time, also after a restart. What already fired can come back in 10 minutes |
 | [`highlights.lua`](plugins/highlights.lua) | Words to watch across all channels: a notification, a number on the panel for what you haven't seen, and a history that takes you to the message. You can mute a channel |
-| [`snippets.lua`](plugins/snippets.lua) | Saved texts that go into the message box as you type (`;name`), with one click or `/snip name`. It never sends anything |
+| [`scamguard.lua`](plugins/scamguard.lua) | Marks in red the classic Discord scams in other people's messages: addresses that imitate Discord or Steam (swapped letters, another alphabet, a disguised subdomain), fake free Nitro and gifts with a link, shortened links with bait, links that show one address and open another. Official addresses and talk with no link are never marked. "Not a scam" on a message keeps that address on a list for your account. `/scam` opens the panel with the latest ones. No network |
+| [`cve.lua`](plugins/cve.lua) | Finds `CVE-2021-44228` and the like in messages and shows the severity, the CVSS score and a short summary under them, from the official CVE record. `/cve CVE-2021-44228` looks one up by hand, and the panel lists what was seen, worst first. Only the number goes out, once you approve the host; each answer is kept for days |
+| [`github.lua`](plugins/github.lua) | `owner/repo#123` and links to GitHub issues, pull requests and repositories get a note with the title, the state and the stars. Public repositories only, with no login: GitHub allows few requests per hour without one, so answers are kept for a while and at the limit the notes just wait. Off until you approve the host |
+| [`catchup.lua`](plugins/catchup.lua) | `/missed` or the panel sums up the unread messages in the open channel, or the last ones: how many from each person, mentions of you, questions left unanswered, links and files, each with a click to the message. It only looks when you ask |
 | [`cleanlinks.lua`](plugins/cleanlinks.lua) | Removes tracking from the links you send (`utm_*`, `fbclid`, YouTube's and Spotify's `si`…). The app applies the rules when you send: the plugin doesn't see what you write |
-| [`timestamps.lua`](plugins/timestamps.lua) | `/ts tomorrow 3pm` or `/ts friday 20:00` puts a time in the message box that each person sees in their own time zone |
 | [`links.lua`](plugins/links.lua) | Every link and file in the messages loaded in the open channel: search, open, copy, go to the message. It only looks while its panel is open and keeps nothing on disk |
 
 None of them keeps the text of a message after it's deleted or edited: the plugin hears about it and
@@ -36,8 +38,9 @@ card shows **Update to vX**. It only changes on that click, and your file stays 
 `name.lua.bak` (then `.bak2`, and so on): nothing is overwritten.
 
 **No longer bundled:** bookmarks and the word filter became the app's own Saved messages and Alerts
-and filters; stats and some demos (calc, shrug, dice…) left. If you have them they keep working, and
-**Archive to antigos/** moves them to `plugins/antigos/`, which isn't loaded. Nothing is deleted.
+and filters; snippets, timestamps, stats and some demos (calc, shrug, dice…) left. If you have them
+they keep working, and **Archive to antigos/** moves them to `plugins/antigos/`, which isn't loaded.
+Nothing is deleted. The app still shows `<t:…>` times as dates, with or without a plugin.
 
 ## How plugins run
 
@@ -165,6 +168,7 @@ Everything lives in the global table `larper`. Discord IDs are strings (`"123456
 | `"channel"` | you opened another channel | `{ id, name }`, or `nil` |
 | `"lang"` | the app's language changed: draw your panel again | none |
 | `"panel"` | your panel opened or closed on the screen | `true` or `false` |
+| `"hosts"` | you approved or removed a host on the plugin's card | none |
 
 `msg` has:
 
@@ -180,6 +184,12 @@ Everything lives in the global table `larper`. Discord IDs are strings (`"123456
 | `msg.time` | seconds since 1970 |
 | `msg.attachments` | how many |
 | `msg.files` | only from `larper.messages({ files = true })`: a list of `{ name, url, size }` |
+| `msg.reply_to` | the ID of the message it replies to, if any |
+| `msg.mentions_me` | only from `larper.messages`: `true` if it calls you (a mention, one of your roles, `@everyone`) |
+
+`"message"` and `"edit"` take a third argument, `{ contains = { "cve-", "://" } }` (up to 16 pieces of
+text, ignoring case): your function only runs for messages with one of them, and the others don't even
+reach Lua. Use it whenever you can, so a plugin that cares about few messages costs nothing on the rest.
 
 The history loaded when you open a channel doesn't fire `"message"`, only what arrives live.
 System messages (someone joined, pinned…) don't either. A plugin never gets what was deleted, or a
@@ -233,8 +243,9 @@ The open channel (`{ id, name }`) and its server (`{ id, name }`). `nil` when no
 
 The messages loaded in the open channel, oldest first, as a copy. Options: `channel` (an ID), `limit`
 (200 by default, up to 500) and `files` (`true` also brings `msg.files`, so only who asks pays for
-it). The answer arrives in `function`, later. It returns `false`, and never calls the function, if
-you ask again within half a second.
+it). `contains` works as in `larper.on`. The list also has `list.last_read`: the ID of the last message
+already read before you opened this channel, when there are unread ones. The answer arrives in
+`function`, later. It returns `false`, and never calls the function, if you ask again within half a second.
 
 ### `larper.jump(channel, message)`
 
@@ -412,6 +423,7 @@ Marks a message, only on your screen. `message` is an ID or a `msg`.
 | `note` | A line of text under the message, up to 2000 bytes, with an × to dismiss |
 | `collapse` | `true` collapses it to one line, with "show" |
 | `label` | The text of that line |
+| `style` | `"danger"` shows it in red, for a warning |
 
 Up to 4096 per plugin. When a message is deleted, what was on it goes too. When the person closes a
 note with its ×, `larper.on("dismiss")` tells you.

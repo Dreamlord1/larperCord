@@ -23,9 +23,11 @@ sobrescreve um arquivo que você editou e nunca apaga nada.
 | [`translate.lua`](plugins/translate.lua) | Botão direito numa mensagem, ou o 🌐 na barra dela, para ver a tradução embaixo. "Traduzir para…" escolhe outro idioma só para aquela mensagem, o cartão define o idioma de destino e o de origem, e `/tr es olá` põe uma tradução na caixa de mensagem. Desligado até você aprovar o host: veja [HTTP](#larperhttp) |
 | [`reminders.lua`](plugins/reminders.lua) | `/remind 10m ligar de volta`, `/remind amanhã 9h pagar a conta`, `/remind todo dia 8:30 reunião`, ou "Lembrar" numa mensagem. Avisa na hora certa, mesmo depois de reabrir o app. O que já avisou pode voltar em 10 minutos |
 | [`highlights.lua`](plugins/highlights.lua) | Palavras para acompanhar em todos os canais: um aviso, um número no painel para o que você não viu, e um histórico que leva à mensagem. Dá para silenciar um canal |
-| [`snippets.lua`](plugins/snippets.lua) | Textos guardados que vão para a caixa de mensagem enquanto você digita (`;nome`), com um clique ou `/snip nome`. Nunca envia nada |
+| [`scamguard.lua`](plugins/scamguard.lua) | Marca em vermelho os golpes clássicos de Discord nas mensagens dos outros: endereços que imitam o Discord ou a Steam (letras trocadas, outro alfabeto, subdomínio disfarçado), Nitro grátis e presentes falsos com link, links encurtados com isca, links que mostram um endereço e abrem outro. Endereços oficiais e conversa sem link nunca são marcados. "Não é golpe" numa mensagem guarda aquele endereço numa lista da sua conta. `/scam` abre o painel com os últimos. Sem rede |
+| [`cve.lua`](plugins/cve.lua) | Acha `CVE-2021-44228` e afins nas mensagens e mostra embaixo a severidade, a nota CVSS e um resumo curto, do registro oficial de CVEs. `/cve CVE-2021-44228` consulta um na mão, e o painel lista o que foi visto, o mais grave primeiro. Só o número sai daqui, depois de aprovar o host; cada resposta fica guardada por dias |
+| [`github.lua`](plugins/github.lua) | `dono/repo#123` e links para issues, pull requests e repositórios do GitHub ganham uma nota com o título, o estado e as estrelas. Só repositórios públicos, sem login: o GitHub deixa poucos pedidos por hora sem ele, então as respostas ficam guardadas por um tempo e, no limite, as notas só esperam. Desligado até você aprovar o host |
+| [`catchup.lua`](plugins/catchup.lua) | `/perdi` ou o painel resume as mensagens não lidas do canal aberto, ou as últimas: quantas de cada pessoa, menções a você, perguntas sem resposta, links e arquivos, cada um com um clique até a mensagem. Só olha quando você pede |
 | [`cleanlinks.lua`](plugins/cleanlinks.lua) | Tira o rastreio dos links que você envia (`utm_*`, `fbclid`, o `si` do YouTube e do Spotify…). O app aplica as regras ao enviar: o plugin não vê o que você escreve |
-| [`timestamps.lua`](plugins/timestamps.lua) | `/ts amanhã 15h` ou `/ts sexta 20h` põe na caixa de mensagem um horário que cada pessoa vê no próprio fuso |
 | [`links.lua`](plugins/links.lua) | Todos os links e arquivos das mensagens carregadas no canal aberto: busque, abra, copie, vá até a mensagem. Só olha com o painel aberto, e não guarda nada no disco |
 
 Nenhum deles guarda o texto de uma mensagem depois que ela é apagada ou editada: o plugin fica sabendo
@@ -36,9 +38,9 @@ cartão mostra **Atualizar para vX**. Só troca com esse clique, e o seu arquivo
 `nome.lua.bak` (depois `.bak2`, e assim por diante): nada é sobrescrito.
 
 **Não vêm mais com o app:** favoritos e o filtro de palavras viraram as Mensagens salvas e os Alertas e
-filtros do próprio app; estatísticas e algumas demonstrações (calc, shrug, dado…) saíram. Quem tem
-continua usando, e **Arquivar em antigos/** move para `plugins/antigos/`, que não é carregada. Nada é
-apagado.
+filtros do próprio app; trechos, horários, estatísticas e algumas demonstrações (calc, shrug, dado…)
+saíram. Quem tem continua usando, e **Arquivar em antigos/** move para `plugins/antigos/`, que não é
+carregada. Nada é apagado. O app continua mostrando horários `<t:…>` como data, com ou sem plugin.
 
 ## Como os plugins rodam
 
@@ -164,6 +166,7 @@ Tudo fica na tabela global `larper`. IDs do Discord são textos (`"1234567890"`)
 | `"channel"` | você abriu outro canal | `{ id, name }`, ou `nil` |
 | `"lang"` | o idioma do app mudou: desenhe o seu painel de novo | nenhum |
 | `"panel"` | o seu painel abriu ou fechou na tela | `true` ou `false` |
+| `"hosts"` | você aprovou ou tirou um host no cartão do plugin | nenhum |
 
 `msg` tem:
 
@@ -179,6 +182,13 @@ Tudo fica na tabela global `larper`. IDs do Discord são textos (`"1234567890"`)
 | `msg.time` | segundos desde 1970 |
 | `msg.attachments` | quantos |
 | `msg.files` | só em `larper.messages({ files = true })`: uma lista de `{ name, url, size }` |
+| `msg.reply_to` | o ID da mensagem a que ela responde, se responde |
+| `msg.mentions_me` | só em `larper.messages`: `true` se ela chama você (menção, um cargo seu, `@everyone`) |
+
+`"message"` e `"edit"` aceitam um terceiro argumento, `{ contains = { "cve-", "://" } }` (até 16 pedaços
+de texto, sem ligar para maiúsculas): a sua função só roda para as mensagens com um deles, e as outras
+nem chegam ao Lua. Use sempre que der: um plugin que só liga para poucas mensagens não custa nada nas
+outras.
 
 O histórico carregado ao abrir um canal não dispara `"message"`, só o que chega ao vivo. Mensagens de
 sistema (fulano entrou, fixou…) também não. Um plugin nunca recebe o que foi apagado nem o texto de uma
@@ -231,8 +241,9 @@ amigos) ou, em `guild()`, numa mensagem direta.
 
 As mensagens carregadas no canal aberto, da mais antiga para a mais nova, numa cópia. Opções: `channel`
 (um ID), `limit` (200 por padrão, até 500) e `files` (`true` também traz `msg.files`: só quem pede paga
-por isso). A resposta chega em `função`, depois. Devolve `false`, sem nunca chamar a função, se pedir de
-novo em menos de meio segundo.
+por isso). `contains` funciona como em `larper.on`. A lista também tem `list.last_read`: o ID da última
+mensagem já lida antes de abrir este canal, quando tem não lidas. A resposta chega em `função`, depois.
+Devolve `false`, sem nunca chamar a função, se pedir de novo em menos de meio segundo.
 
 ### `larper.jump(canal, mensagem)`
 
@@ -408,6 +419,7 @@ Marca uma mensagem, só na sua tela. `mensagem` é um ID ou uma `msg`.
 | `note` | Uma linha de texto embaixo da mensagem, até 2000 bytes, com um × para dispensar |
 | `collapse` | `true` recolhe numa linha, com "mostrar" |
 | `label` | O texto dessa linha |
+| `style` | `"danger"` mostra em vermelho, para um aviso |
 
 Até 4096 por plugin. Quando a mensagem é apagada, o que estava nela vai junto. Quando a pessoa fecha
 uma nota com o ×, `larper.on("dismiss")` avisa.

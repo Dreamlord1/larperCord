@@ -130,5 +130,5 @@ Real voice with end-to-end encryption, a per-person mixer, device picker, push-t
 ## Make it yours
 
 - [Themes](page:themes) rearrange the entire interface and reload on save. Themes with `palette "wal"` follow your wallpaper through pywal, and the `vidro` theme has a transparent background that your compositor blurs.
-- [Plugins](page:plugins) in Lua add panels, right-click entries, notes under messages, commands and keybinds. Translate, reminders, highlights, snippets, clean links, timestamps, and links and files come with the app.
+- [Plugins](page:plugins) in Lua add panels, right-click entries, notes under messages, commands and keybinds. Scam guard, CVE radar, GitHub cards, what did I miss, translate, reminders, highlights, clean links, and links and files come with the app.
 - **Optional vim navigation**: see [Shortcuts](page:shortcuts).
