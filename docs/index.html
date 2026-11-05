@@ -49,7 +49,8 @@
       <div class="hero-copy">
         <p>A native client that sits around <strong>50&nbsp;MB of RAM</strong> and <strong>0% CPU</strong> when idle. Its entire interface is <strong>one text file</strong> you can edit while it runs. Watch it rearrange.</p>
         <div class="cta">
-          <a class="btn primary" href="#install">Try the demo →</a>
+          <a class="btn primary" href="#download">Download →</a>
+          <a class="btn" href="#install">Try the demo</a>
           <a class="btn" href="guide/getting-started.html">Read the guide</a>
         </div>
         <p class="risk"><strong>Read this first:</strong> third-party clients break Discord's Terms of Service and your account can be banned. Demo mode needs no account at all.</p>
@@ -365,6 +366,50 @@
   <small>Your account can be banned, so use it at your own risk, ideally with a secondary account. larperCord has no affiliation with Discord Inc. With <code>--demo</code>, the app runs on fake data and connects to nothing.</small>
 </div>
 
+<section class="node" id="download" style="padding-top:clamp(40px,6vw,72px)">
+  <span class="tag reveal"><b>download</b> <i>variant=latest {</i></span>
+  <h2 class="h reveal">Get it. <em>Run it.</em></h2>
+  <p class="lead reveal">No account needed to look around: the demo mode connects to nothing. After that it updates itself, and every update is signed.</p>
+  <div class="dl-grid reveal">
+    <div class="dl-card" data-os="linux">
+      <h3>Linux <small>x86_64</small></h3>
+      <a class="btn" href="https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-linux-x86_64" data-asset="larpercord-linux-x86_64">Download for Linux ↓</a>
+      <p>A single file. The libraries come from your system. Make it executable with <code>chmod +x</code> and run it.</p>
+      <p>Or install it, listing any library that's missing:</p>
+      <code class="dl-cmd">curl -fsSL https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.sh | sh</code>
+    </div>
+    <div class="dl-card" data-os="windows">
+      <h3>Windows <small>10 / 11, x64</small></h3>
+      <a class="btn" href="https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-windows-x86_64.zip" data-asset="larpercord-windows-x86_64.zip">Download for Windows ↓</a>
+      <p>Unzip it and open <code>larpercord.exe</code>. The program isn't code-signed yet, so Windows may warn you the first time.</p>
+      <p>Or install it for your user, in PowerShell:</p>
+      <code class="dl-cmd">irm https://raw.githubusercontent.com/RshaCuDeVidro/larperCord/main/install.ps1 | iex</code>
+    </div>
+  </div>
+  <p class="foot reveal"><span id="dl-version"></span><a href="https://github.com/RshaCuDeVidro/larperCord/releases">All versions and checksums</a> · <a href="https://github.com/RshaCuDeVidro/larperCord/blob/main/CHANGELOG.md">What changed</a></p>
+  <span class="close">}</span>
+  <script>
+  (function () {
+    var ua = navigator.userAgent, os = /Windows/i.test(ua) ? 'windows' : /Linux|X11/i.test(ua) && !/Android/i.test(ua) ? 'linux' : '';
+    if (os) {
+      var card = document.querySelector('.dl-card[data-os="' + os + '"]');
+      card.classList.add('mine');
+      card.querySelector('.btn').classList.add('primary');
+      if (card.previousElementSibling) card.parentNode.insertBefore(card, card.previousElementSibling);
+    }
+    // Só enfeite: os botões funcionam sem isso, até com a API fora do ar.
+    fetch('https://api.github.com/repos/RshaCuDeVidro/larperCord/releases/latest').then(function (r) { return r.ok ? r.json() : null; }).then(function (rel) {
+      if (!rel) return;
+      document.getElementById('dl-version').textContent = rel.tag_name + ' · ';
+      (rel.assets || []).forEach(function (a) {
+        var b = document.querySelector('[data-asset="' + a.name + '"]');
+        if (b) b.insertAdjacentHTML('beforeend', ' <small>' + (a.size / 1048576).toFixed(1) + ' MB</small>');
+      });
+    }).catch(function () {});
+  })();
+  </script>
+</section>
+
 <section class="node" id="install" style="padding-top:clamp(40px,6vw,72px)">
   <span class="tag reveal"><b>composer</b> <i>variant=prompt {</i></span>
   <h2 class="h reveal">Three commands. <em>No account.</em></h2>
@@ -379,7 +424,7 @@
 
 <span class="t-c"># Demo mode: fake data, connects to nothing</span>
 <span class="t-k">./zig-out/bin/larpercord</span> <span class="t-p">--demo</span> <span class="t-p">--theme</span> subsolo</code></pre></div>
-      <p class="foot">Prefer not to build? <a href="https://github.com/RshaCuDeVidro/larperCord#install">One command installs it</a> on Linux and Windows.</p>
+      <p class="foot">Prefer not to build? <a href="#download">Download it</a> for Linux or Windows.</p>
       <div class="cta" style="margin-top:20px">
         <a class="btn primary" href="guide/getting-started.html">Getting started →</a>
         <a class="btn" href="https://github.com/RshaCuDeVidro/larperCord">Source on GitHub</a>

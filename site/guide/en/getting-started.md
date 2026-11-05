@@ -17,6 +17,10 @@ larperCord is a native Discord client for Linux and Windows, written in Zig. You
 
 ## Install
 
+**Download:** [Linux](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-linux-x86_64) · [Windows](https://github.com/RshaCuDeVidro/larperCord/releases/latest/download/larpercord-windows-x86_64.zip) · [all versions](https://github.com/RshaCuDeVidro/larperCord/releases). On Linux, `chmod +x` the file and run it. On Windows, unzip it and open `larpercord.exe`; it isn't code-signed yet, so Windows may warn you the first time.
+
+Or use a script:
+
 On Linux (into `~/.local`, no sudo):
 
 ```bash
