@@ -25,6 +25,7 @@ const extra = @import("comp_extra.zig");
 const fx = @import("fx.zig");
 const display = @import("display_text.zig");
 const backdrop = @import("backdrop.zig");
+const resize = @import("resize.zig");
 
 const Component = *const fn (*d.Ctx, *const kdl.Node, d.Rect) void;
 
@@ -129,7 +130,10 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
             hides[n_hides] = "status-bar";
             n_hides += 1;
         }
-        layout.solveWith(ctx.st.gpa, root, ctx.win, ctx.win.w, .{ .ctx = ctx.th, .get = Look.get, .hides = hides[0..n_hides] }, placed) catch {};
+        // Largura dos painéis: a da pessoa, com a conversa sempre usável.
+        var sizes = resize.sizes(&ctx.st.settings);
+        layout.solveSized(ctx.st.gpa, root, ctx.win, ctx.win.w, .{ .ctx = ctx.th, .get = Look.get, .hides = hides[0..n_hides] }, &sizes, "messages", resize.min_chat, placed) catch {};
+        resize.addPanels(ctx, placed.items, &sizes);
         const base_theme = ctx.th;
         defer ctx.th = base_theme;
         var local: theme_mod.Theme = undefined;
@@ -160,6 +164,8 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
             if (d.pflag(p.node, "autohide", false)) autohide(ctx, p, i);
         }
     }
+    // Por cima dos painéis, por baixo do que flutua (a lista do autocompletar).
+    resize.submit(ctx);
     @import("lsp_ui.zig").panel(ctx);
     @import("autocomplete.zig").draw(ctx);
     c.ImGui_End();

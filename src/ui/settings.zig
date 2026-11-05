@@ -256,7 +256,7 @@ const Page = struct {
         qa.mark(r, "button:{s}", .{label});
         const base = if (danger) ctx.col(.danger) else ctx.col(.accent);
         d.rect(p.dl, r, if (hb.hovered) base.mix(d.Rgba.black, 0.12) else base, ctx.th.radius);
-        d.text(p.dl, f, 14, r.x + 16, d.centerY(r, 14), if (danger) d.Rgba.white else ctx.col(.accent_text), label);
+        d.text(p.dl, p.font(.semibold), 14, r.x + 16, d.centerY(r, 14), if (danger) d.Rgba.white else ctx.col(.accent_text), label);
         return hb.clicked;
     }
 
@@ -541,7 +541,6 @@ fn colorEditor(p: *Page) void {
         ctx.act(.reset_theme_colors);
         color_sync = true;
     }
-    q.y += 44;
     dd.y = q.y;
 }
 

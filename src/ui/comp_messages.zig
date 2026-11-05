@@ -398,7 +398,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         }
     }
     // Com as configurações (ou um popup) por cima, a roda rola elas, não a conversa.
-    const hovered = ctx.hovering(r) and ctx.st.popup == .none and !st.settings.open and !autocomplete.over(ctx);
+    const hovered = ctx.hovering(r) and ctx.st.popup == .none and !st.settings.open and !autocomplete.over(ctx) and !@import("resize.zig").over(ctx);
     if (sc.pos < 0 or sc.stick_bottom) {
         sc.target = max_scroll;
         if (sc.pos < 0) sc.pos = max_scroll;

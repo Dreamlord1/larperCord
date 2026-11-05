@@ -43,7 +43,25 @@ pub const Placed = struct {
     rect: Rect,
     kind: Kind,
     depth: u8,
+    /// Painel que a pessoa pode alargar (ver `Options.sizes`).
+    handle: ?Handle = null,
 };
+
+/// Alça de um painel ajustável: qual deles (índice em `Options.sizes`), de que
+/// lado fica o espaço que ele troca com a conversa e o x da divisa (no meio do
+/// `gap`, se houver um).
+pub const Handle = struct {
+    size: u8,
+    side: Side,
+    x: f32,
+
+    pub const Side = enum { left, right };
+};
+
+/// Quanto a pessoa alargou (ou estreitou) um painel, em relação ao que o tema
+/// pediu. Vale para o filho de largura fixa de uma `row` que tem o componente
+/// `name` dentro: assim a escolha vai junto de um tema para outro.
+pub const Size = struct { name: []const u8, delta: f32 };
 
 const Axis = enum { row, column, stack };
 
@@ -66,6 +84,8 @@ pub const Options = struct {
     /// Componentes desligados pelo usuário (lista de membros, barra de
     /// status): não ocupam espaço. Coluna que só existia para eles some junto.
     hides: []const []const u8 = &.{},
+    /// Painéis com a largura ajustada pela pessoa.
+    sizes: []const Size = &.{},
 
     fn on(o: ?Options, name: []const u8) bool {
         const x = o orelse return true;
@@ -140,6 +160,91 @@ pub fn solveWith(gpa: std.mem.Allocator, root: *const kdl.Node, bounds: Rect, wi
     }
 }
 
+/// Largura do componente `name` no layout resolvido (a conversa).
+pub fn widthOf(placed: []const Placed, name: []const u8) ?f32 {
+    for (placed) |p| if (p.kind == .component and std.mem.eql(u8, p.node.name, name)) return p.rect.w;
+    return null;
+}
+
+/// Resolve com as larguras da pessoa e garante a conversa: o que ela deu a mais
+/// aos painéis volta enquanto `main` tiver menos de `min_main`. O pedido fica
+/// guardado (quem chama passa uma cópia em `sizes`, que sai com o que valeu):
+/// a janela crescendo de novo, os painéis voltam. O que o tema pediu não muda.
+pub fn solveSized(gpa: std.mem.Allocator, root: *const kdl.Node, bounds: Rect, win_w: f32, opts: Options, sizes: []Size, main: []const u8, min_main: f32, out: *std.ArrayList(Placed)) !void {
+    var o = opts;
+    o.sizes = sizes;
+    try solveWith(gpa, root, bounds, win_w, o, out);
+    var need = min_main - (widthOf(out.items, main) orelse return);
+    if (need <= 0) return;
+    // Da direita para a esquerda da lista: os membros cedem antes dos canais.
+    var changed = false;
+    var i = sizes.len;
+    while (i > 0 and need > 0) {
+        i -= 1;
+        // Painel escondido não devolve nada.
+        const shown = for (out.items) |p| {
+            if (p.handle) |h| if (h.size == i) break true;
+        } else false;
+        if (!shown) continue;
+        const give = @min(sizes[i].delta, need);
+        if (give <= 0) continue;
+        sizes[i].delta -= give;
+        need -= give;
+        changed = true;
+    }
+    if (changed) try solveWith(gpa, root, bounds, win_w, o, out);
+}
+
+/// Larguras da tela dividida: `a` e `b` são as divisas entre os painéis (em
+/// milésimos da largura; `b` só vale com três). Ninguém fica menor que `min_w`;
+/// sem espaço para isso, os painéis dividem igual. Em pixels inteiros que somam `total`.
+pub fn paneWidths(total: f32, count: usize, a: i16, b: i16, min_w: f32) [3]f32 {
+    var out: [3]f32 = @splat(0);
+    if (count == 0) return out;
+    const n: f32 = @floatFromInt(count);
+    if (count == 1) {
+        out[0] = total;
+        return out;
+    }
+    if (total < min_w * n) {
+        const each = @floor(total / n);
+        for (out[0..count]) |*w| w.* = each;
+        out[count - 1] = total - each * (n - 1);
+        return out;
+    }
+    const ka = @as(f32, @floatFromInt(a)) / 1000;
+    const kb = @as(f32, @floatFromInt(b)) / 1000;
+    out[0] = @floor(std.math.clamp(total * ka, min_w, total - min_w * (n - 1)));
+    if (count == 2) {
+        out[1] = total - out[0];
+        return out;
+    }
+    const second = @floor(std.math.clamp(total * kb, out[0] + min_w, total - min_w));
+    out[1] = second - out[0];
+    out[2] = total - second;
+    return out;
+}
+
+/// O componente `name` (visível) está dentro deste nó?
+fn holds(n: *const kdl.Node, name: []const u8, env: Env) bool {
+    if (axisOf(n.name) == null) return std.mem.eql(u8, n.name, name);
+    for (n.children) |*ch| if (visible(ch, env) and holds(ch, name, env)) return true;
+    return false;
+}
+
+/// Qual painel ajustável é este filho de uma `row` (só os de largura fixa).
+fn sizeIndex(ch: *const kdl.Node, env: Env) ?u8 {
+    const o = env.opts orelse return null;
+    if (o.sizes.len == 0 or num(ch, "width") == null) return null;
+    for (o.sizes, 0..) |sz, i| if (holds(ch, sz.name, env)) return @intCast(i);
+    return null;
+}
+
+fn sizeDelta(ch: *const kdl.Node, env: Env) f32 {
+    const i = sizeIndex(ch, env) orelse return 0;
+    return env.opts.?.sizes[i].delta;
+}
+
 fn place(gpa: std.mem.Allocator, n: *const kdl.Node, rect_in: Rect, env: Env, out: *std.ArrayList(Placed), depth: u8) !void {
     var rect = rect_in;
     if (num(n, "max-width")) |mw| if (rect.w > mw) {
@@ -167,24 +272,44 @@ fn place(gpa: std.mem.Allocator, n: *const kdl.Node, rect_in: Rect, env: Env, ou
     var count: usize = 0;
     var fixed: f32 = 0;
     var weights: f32 = 0;
-    for (n.children) |*ch| {
+    // Só numa `row` a pessoa muda a largura; e o painel precisa de um vizinho
+    // flexível de quem tirar o espaço.
+    var first_flex: ?usize = null;
+    var last_flex: ?usize = null;
+    for (n.children, 0..) |*ch, i| {
         if (!visible(ch, env)) continue;
         count += 1;
-        if (num(ch, size_key)) |s| fixed += s else weights += num(ch, "flex") orelse 1;
+        if (num(ch, size_key)) |s| {
+            fixed += @max(s + (if (axis == .row) sizeDelta(ch, env) else 0), 0);
+        } else {
+            weights += num(ch, "flex") orelse 1;
+            if (first_flex == null) first_flex = i;
+            last_flex = i;
+        }
     }
     if (count == 0) return;
     const gaps = gap * @as(f32, @floatFromInt(count - 1));
     const free = @max(0, main_total - fixed - gaps);
 
     var cursor = if (axis == .row) inner.x else inner.y;
-    for (n.children) |*ch| {
+    for (n.children, 0..) |*ch, i| {
         if (!visible(ch, env)) continue;
-        const size = num(ch, size_key) orelse free * (num(ch, "flex") orelse 1) / @max(weights, 0.0001);
+        const delta = if (axis == .row) sizeDelta(ch, env) else 0;
+        const size = if (num(ch, size_key)) |s| @max(s + delta, 0) else free * (num(ch, "flex") orelse 1) / @max(weights, 0.0001);
         const r: Rect = if (axis == .row)
             .{ .x = cursor, .y = inner.y, .w = size, .h = inner.h }
         else
             .{ .x = inner.x, .y = cursor, .w = inner.w, .h = size };
+        const at = out.items.len;
         try place(gpa, ch, r, env, out, depth + 1);
+        if (axis == .row) if (sizeIndex(ch, env)) |si| if (first_flex != null) {
+            const after = last_flex.? > i;
+            out.items[at].handle = .{
+                .size = si,
+                .side = if (after) .right else .left,
+                .x = if (after) r.right() + gap / 2 else r.x - gap / 2,
+            };
+        };
         cursor += size + gap;
     }
 }
@@ -241,6 +366,128 @@ test "when e unless seguem as opções" {
     try std.testing.expectEqual(@as(usize, 3), out.items.len); // row + a + c
     try std.testing.expectEqualStrings("a", out.items[1].node.name);
     try std.testing.expectEqualStrings("c", out.items[2].node.name);
+}
+
+const Noop = struct {
+    fn get(_: *const anyopaque, _: []const u8) ?bool {
+        return false;
+    }
+};
+
+fn sizedNodes(arena: std.mem.Allocator) ![]const kdl.Node {
+    return kdl.parse(arena,
+        \\layout {
+        \\  row gap=10 {
+        \\    guild-bar width=70
+        \\    column width=240 { channel-list; user-panel height=50 }
+        \\    column flex=1 { messages }
+        \\    member-list width=200 hide-below=1000
+        \\  }
+        \\}
+    , null);
+}
+
+test "a pessoa alarga os painéis, com a alça do lado da conversa" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const nodes = try sizedNodes(arena.allocator());
+    var out: std.ArrayList(Placed) = .empty;
+    defer out.deinit(std.testing.allocator);
+    const sizes = [_]Size{ .{ .name = "channel-list", .delta = 60 }, .{ .name = "member-list", .delta = -40 } };
+    try solveWith(std.testing.allocator, &nodes[0], .{ .x = 0, .y = 0, .w = 1200, .h = 800 }, 1200, .{ .ctx = &out, .get = Noop.get, .sizes = &sizes }, &out);
+    var channels: ?Placed = null;
+    var members: ?Placed = null;
+    for (out.items) |p| if (p.handle) |h| {
+        if (h.size == 0) channels = p else members = p;
+    };
+    // A coluna inteira alarga (com o painel do usuário junto).
+    try std.testing.expectEqual(@as(f32, 300), channels.?.rect.w);
+    try std.testing.expectEqual(Handle.Side.right, channels.?.handle.?.side);
+    try std.testing.expectEqual(@as(f32, 385), channels.?.handle.?.x); // 80 + 300 + gap/2
+    try std.testing.expectEqual(@as(f32, 160), members.?.rect.w);
+    try std.testing.expectEqual(Handle.Side.left, members.?.handle.?.side);
+    try std.testing.expectEqual(@as(f32, 1035), members.?.handle.?.x);
+    // A conversa fica com o que sobrou.
+    try std.testing.expectEqual(@as(f32, 1200 - 70 - 300 - 160 - 30), widthOf(out.items, "messages").?);
+}
+
+test "janela estreita: o que foi alargado volta, sem mexer no que o tema pediu" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const nodes = try sizedNodes(arena.allocator());
+    var out: std.ArrayList(Placed) = .empty;
+    defer out.deinit(std.testing.allocator);
+    const opts: Options = .{ .ctx = &out, .get = Noop.get };
+
+    // Sobra 1000-70-400-200-30 = 300; a conversa pede 360: os membros (sem
+    // nada a mais) não têm o que dar, e os canais devolvem 60.
+    var sizes = [_]Size{ .{ .name = "channel-list", .delta = 160 }, .{ .name = "member-list", .delta = 0 } };
+    try solveSized(std.testing.allocator, &nodes[0], .{ .x = 0, .y = 0, .w = 1000, .h = 800 }, 1000, opts, &sizes, "messages", 360, &out);
+    try std.testing.expectEqual(@as(f32, 100), sizes[0].delta);
+    try std.testing.expectEqual(@as(f32, 360), widthOf(out.items, "messages").?);
+
+    // Os membros, com largura a mais, cedem primeiro.
+    sizes = .{ .{ .name = "channel-list", .delta = 100 }, .{ .name = "member-list", .delta = 100 } };
+    try solveSized(std.testing.allocator, &nodes[0], .{ .x = 0, .y = 0, .w = 1000, .h = 800 }, 1000, opts, &sizes, "messages", 360, &out);
+    try std.testing.expectEqual(@as(f32, 100), sizes[0].delta);
+    try std.testing.expectEqual(@as(f32, 0), sizes[1].delta);
+    try std.testing.expectEqual(@as(f32, 360), widthOf(out.items, "messages").?);
+
+    // Sem membros na tela (hide-below): eles não devolvem o que não ocupam.
+    sizes = .{ .{ .name = "channel-list", .delta = 200 }, .{ .name = "member-list", .delta = 100 } };
+    try solveSized(std.testing.allocator, &nodes[0], .{ .x = 0, .y = 0, .w = 800, .h = 800 }, 800, opts, &sizes, "messages", 360, &out);
+    try std.testing.expectEqual(@as(f32, 100), sizes[1].delta);
+    try std.testing.expectEqual(@as(f32, 110), sizes[0].delta);
+    try std.testing.expectEqual(@as(f32, 360), widthOf(out.items, "messages").?);
+
+    // Sobrando pouco mesmo sem nada a mais: fica como o tema pediu, sem encolher.
+    sizes = .{ .{ .name = "channel-list", .delta = 0 }, .{ .name = "member-list", .delta = -20 } };
+    try solveSized(std.testing.allocator, &nodes[0], .{ .x = 0, .y = 0, .w = 500, .h = 800 }, 500, opts, &sizes, "messages", 360, &out);
+    try std.testing.expectEqual(@as(f32, 0), sizes[0].delta);
+    try std.testing.expectEqual(@as(f32, 170), widthOf(out.items, "messages").?);
+}
+
+test "layout sem painel ajustável não ganha alça" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Sem vizinho flexível, e num tema só de conversa.
+    const nodes = try kdl.parse(arena.allocator(), "layout { row { column width=200 { channel-list }; member-list width=200 } }", null);
+    var out: std.ArrayList(Placed) = .empty;
+    defer out.deinit(std.testing.allocator);
+    const sizes = [_]Size{ .{ .name = "channel-list", .delta = 50 }, .{ .name = "member-list", .delta = 0 } };
+    try solveWith(std.testing.allocator, &nodes[0], .{ .x = 0, .y = 0, .w = 600, .h = 100 }, 600, .{ .ctx = &out, .get = Noop.get, .sizes = &sizes }, &out);
+    for (out.items) |p| try std.testing.expect(p.handle == null);
+}
+
+test "tela dividida: divisas, mínimo de cada painel e janela sem espaço" {
+    const eq = std.testing.expectEqual;
+    // Dois painéis meio a meio somam o total.
+    var ws = paneWidths(1000, 2, 500, 0, 200);
+    try eq(@as(f32, 500), ws[0]);
+    try eq(@as(f32, 500), ws[1]);
+    ws = paneWidths(1000, 2, 700, 0, 200);
+    try eq(@as(f32, 700), ws[0]);
+    try eq(@as(f32, 300), ws[1]);
+    // Passou do mínimo: para nele.
+    ws = paneWidths(1000, 2, 950, 0, 200);
+    try eq(@as(f32, 800), ws[0]);
+    try eq(@as(f32, 200), ws[1]);
+    ws = paneWidths(1000, 2, 10, 0, 200);
+    try eq(@as(f32, 200), ws[0]);
+    // Três: cada divisa mexe só nos dois vizinhos dela.
+    ws = paneWidths(1200, 3, 600, 800, 200);
+    try eq(@as(f32, 720), ws[0]);
+    try eq(@as(f32, 240), ws[1]);
+    try eq(@as(f32, 240), ws[2]);
+    // Divisas trocadas ou coladas (arquivo editado à mão): o do meio não some.
+    ws = paneWidths(1200, 3, 600, 300, 200);
+    try eq(@as(f32, 720), ws[0]);
+    try eq(@as(f32, 200), ws[1]);
+    try eq(@as(f32, 280), ws[2]);
+    // Janela sem espaço para o mínimo: todos iguais, e ainda somam o total.
+    ws = paneWidths(301, 2, 900, 0, 200);
+    try eq(@as(f32, 150), ws[0]);
+    try eq(@as(f32, 151), ws[1]);
 }
 
 test "coluna só com enfeites em volta do que foi escondido some junto" {
