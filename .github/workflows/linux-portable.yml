@@ -45,7 +45,7 @@ jobs:
           max=$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9.]+' | sort -t. -k2 -n | uniq | tail -1)
           echo "glibc exigida: $max"
           [ "${max#GLIBC_2.}" -le 35 ]
-          if objdump -p "$bin" | grep -qE 'NEEDED +lib(SDL3|curl)'; then echo "SDL3 e curl deviam estar dentro"; exit 1; fi
+          if objdump -p "$bin" | grep -qE 'NEEDED +lib(SDL3|curl|ssl|crypto)'; then echo "SDL3, curl e OpenSSL deviam estar dentro"; exit 1; fi
       - uses: actions/upload-artifact@v4
         with:
           name: larpercord-linux-x86_64
@@ -61,12 +61,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { image: "ubuntu:22.04", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libssl3 zlib1g fonts-dejavu-core" }
-          - { image: "ubuntu:24.04", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libssl3t64 zlib1g fonts-dejavu-core" }
-          - { image: "debian:12", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libssl3 zlib1g fonts-dejavu-core" }
-          - { image: "debian:13", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libssl3t64 zlib1g fonts-dejavu-core" }
-          - { image: "fedora:latest", install: "dnf install -y ca-certificates freetype fontconfig libwebp opus openssl-libs zlib-ng-compat dejavu-sans-fonts" }
-          - { image: "archlinux:latest", install: "pacman -Syu --noconfirm --needed ca-certificates freetype2 fontconfig libwebp opus openssl zlib ttf-dejavu" }
+          - { image: "ubuntu:22.04", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 zlib1g fonts-dejavu-core" }
+          - { image: "ubuntu:24.04", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 zlib1g fonts-dejavu-core" }
+          - { image: "debian:12", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 zlib1g fonts-dejavu-core" }
+          - { image: "debian:13", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 zlib1g fonts-dejavu-core" }
+          - { image: "fedora:latest", install: "dnf install -y ca-certificates freetype fontconfig libwebp opus zlib-ng-compat dejavu-sans-fonts" }
+          - { image: "opensuse/tumbleweed", install: "zypper -n install ca-certificates ca-certificates-mozilla libfreetype6 fontconfig libwebp7 libwebpdemux2 libopus0 libz1 dejavu-fonts tar gzip" }
+          - { image: "archlinux:latest", install: "pacman -Syu --noconfirm --needed ca-certificates freetype2 fontconfig libwebp opus zlib ttf-dejavu" }
     steps:
       - name: Bibliotecas do sistema
         run: ${{ matrix.install }}

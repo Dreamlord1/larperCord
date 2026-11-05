@@ -485,9 +485,25 @@ pub fn credDelete(target: [*:0]const u8) void {
     if (windows) _ = c.CredDeleteA(target, c.CRED_TYPE_GENERIC, 0);
 }
 
-/// No Windows confia nos certificados do sistema (não há pacote de CAs junto).
+/// No Windows confia nos certificados do sistema (não há pacote de CAs junto). No
+/// Linux, cada família de distros guarda o pacote num lugar, e o caminho embutido no
+/// OpenSSL do binário portátil só valeria na distro onde ele foi compilado.
 pub fn curlTls(h: *c.CURL) void {
-    if (windows) _ = c.curl_easy_setopt(h, c.CURLOPT_SSL_OPTIONS, @as(c_long, c.CURLSSLOPT_NATIVE_CA));
+    if (windows) {
+        _ = c.curl_easy_setopt(h, c.CURLOPT_SSL_OPTIONS, @as(c_long, c.CURLSSLOPT_NATIVE_CA));
+    } else {
+        const bundles = [_][*:0]const u8{
+            "/etc/ssl/certs/ca-certificates.crt", // Debian, Ubuntu, Arch
+            "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // Fedora, RHEL
+            "/etc/pki/tls/certs/ca-bundle.crt", // Fedora e RHEL mais antigos
+            "/etc/ssl/ca-bundle.pem", // openSUSE
+            "/etc/ssl/cert.pem", // Alpine e outros
+        };
+        for (bundles) |path| if (c.access(path, c.R_OK) == 0) {
+            _ = c.curl_easy_setopt(h, c.CURLOPT_CAINFO, path);
+            return;
+        };
+    }
 }
 
 /// Troca um arquivo possivelmente em uso. O Windows não deixa sobrescrever o

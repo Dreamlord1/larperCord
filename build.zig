@@ -78,8 +78,8 @@ pub fn build(b: *std.Build) void {
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "debug, safe, fast ou small (padrão: fast)") orelse .fast;
     const strip = b.option(bool, "strip", "Remove símbolos de debug do executável") orelse (optimize != .debug);
     const release = optimize != .debug;
-    // Binário das releases: SDL3 e curl dentro dele (ver tools/linux_deps.sh).
-    const portable = b.option(bool, "portable", "Liga SDL3 e curl estáticos de .deps/linux") orelse false;
+    // Binário das releases: SDL3, curl e OpenSSL dentro dele (ver tools/linux_deps.sh).
+    const portable = b.option(bool, "portable", "Liga SDL3, curl e OpenSSL estáticos") orelse false;
     // O robô de QA (--qa) e suas marcações só entram onde são usados.
     const qa = b.option(bool, "qa", "Inclui o robô de QA (--qa); padrão: só no debug") orelse !release;
     const build_options = b.addOptions();
@@ -263,8 +263,8 @@ pub fn build(b: *std.Build) void {
         mod.linkSystemLibrary("libwebp", .{});
         mod.linkSystemLibrary("libwebpdemux", .{});
         mod.linkSystemLibrary("opus", .{});
-        mod.linkSystemLibrary("crypto", .{});
-        if (portable) mod.linkSystemLibrary("ssl", .{});
+        mod.linkSystemLibrary("crypto", .{ .preferred_link_mode = if (portable) .static else .dynamic });
+        if (portable) mod.linkSystemLibrary("ssl", .{ .preferred_link_mode = .static });
     }
 
     const exe = b.addExecutable(.{ .name = "larpercord", .root_module = mod });

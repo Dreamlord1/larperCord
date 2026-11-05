@@ -6,8 +6,10 @@
 #
 # SDL3: várias distros ainda não têm o pacote. Ela abre X11, Wayland e o áudio só ao
 # rodar, então nada disso vira dependência do binário.
-# curl: muitas distros trazem uma versão sem WebSocket. O TLS continua sendo o OpenSSL
-# do sistema, com os certificados no lugar que aquela distro usa.
+# curl: muitas distros trazem uma versão sem WebSocket.
+# OpenSSL: vem dos pacotes do Ubuntu e entra estático (zig build -Dportable=true), porque
+# as distros já estão trocando a versão da libssl. Os certificados continuam os da
+# distro de quem usa (sys.curlTls).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=$PWD/.deps/linux
