@@ -48,7 +48,7 @@ def check(name, ok, detail=""):
 
 class Xv:
     def __init__(self):
-        self.proc = subprocess.Popen(["Xvfb", DISP, "-screen", "0", f"{W}x{H}x24", "-nolisten", "tcp"], stderr=subprocess.DEVNULL)
+        self.proc = subprocess.Popen(["Xvfb", DISP, "-screen", "0", f"{W}x{H}x24", "-nolisten", "tcp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(1.5)
         self.d = X.XOpenDisplay(DISP.encode())
         assert self.d, "sem Xvfb"
@@ -97,7 +97,6 @@ open_apps = []
 
 class App:
     def __init__(self, binary, pics):
-        open_apps.append(self)
         self.tmp = tempfile.mkdtemp(prefix="larper-quadros.")
         keep = {k: v for k, v in os.environ.items() if k not in ("WAYLAND_DISPLAY", "LARPER_TOKEN", "DBUS_SESSION_BUS_ADDRESS")}
         keep.update(DISPLAY=DISP, SDL_VIDEO_DRIVER="x11", LARPER_RENDERER="software", SDL_AUDIODRIVER="dummy",
@@ -107,6 +106,7 @@ class App:
         self.log_path = self.tmp + "/log"
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen([binary, "--demo", "--no-live", "--stats"], env=keep, stdout=self.log, stderr=self.log)
+        open_apps.append(self)
         # O "digitando" da demonstração anima nos primeiros 10 s.
         time.sleep(12)
 

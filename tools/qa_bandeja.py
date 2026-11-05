@@ -21,6 +21,7 @@ import dbus.mainloop.glib
 import dbus.service
 from gi.repository import GLib
 from Xlib import X, display, protocol
+from Xlib.error import XError
 
 BIN = sys.argv[1]
 SLOW = "--slow" in sys.argv
@@ -239,8 +240,13 @@ def painted():
     ws = mapped()
     if not ws:
         return False
-    g = ws[0].get_geometry()
-    raw = ws[0].get_image(0, 0, g.width, g.height, X.ZPixmap, 0xFFFFFFFF).data
+    try:
+        g = ws[0].get_geometry()
+        raw = ws[0].get_image(0, 0, g.width, g.height, X.ZPixmap, 0xFFFFFFFF).data
+    except XError as e:
+        # A janela pode sumir entre olhar e copiar. Se ficar assim, a checagem seguinte falha.
+        print(f"  (a janela {ws[0].id:#x} recusou a cópia: {e.__class__.__name__}, geometria {g.width}x{g.height}+{g.x}+{g.y})" if "g" in locals() else "  (a janela sumiu)")
+        return False
     return len({bytes(raw[i : i + 4]) for i in range(0, len(raw), 4 * 97)}) > 8
 
 

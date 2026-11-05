@@ -403,8 +403,9 @@ fn invitesShown(app: *App) bool {
     const b = app.store.invites.get("zigbr") orelse return false;
     return a.state == .ok and b.state == .ok and qa.find("invite:larper") != null and qa.find("invite:zigbr") != null and qa.find("invite-go:larper") != null and qa.find("invite-go:zigbr") == null;
 }
-fn oneFetchEach(_: *App) bool {
-    return load(&gw.sent.invite_fetches) == 2;
+// Outras seções também mostram convites: o que vale é um pedido por código conhecido.
+fn oneFetchEach(app: *App) bool {
+    return load(&gw.sent.invite_fetches) == app.store.invites.count();
 }
 fn inviteBrowser(_: *App) bool {
     const att = @import("ui/attachments.zig");

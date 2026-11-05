@@ -164,17 +164,20 @@
   <div class="split reveal">
     <div>
       <p class="lede" style="margin-top:0">{{Drop a <code>.lua</code> file in <code>~/.config/larpercord/plugins/</code> to add panels, right-click entries, notes under messages, commands and keybinds, without recompiling anything. Scam guard, CVE radar, GitHub cards, what did I miss, translate, reminders, highlights, clean links, and links and files come with the app.||Coloque um <code>.lua</code> em <code>~/.config/larpercord/plugins/</code> para somar painéis, entradas no botão direito, notas embaixo das mensagens, comandos e atalhos, sem recompilar nada. Anti-golpe, radar de CVE, cartões do GitHub, o que perdi, tradução, lembretes, destaques, links limpos, e links e arquivos vêm com o app.}}</p>
-      <code-block lang="lua">larper.command("/shrug", function(args)
-  local text = "¯\\_(ツ)_/¯"
-  if args ~= "" then text = args .. " " .. text end
-  larper.send(larper.channel(), text)
-end)
-
+      <code-block lang="lua">-- @name CVE notes
+-- @capabilities messages, decorate, http
+-- @hosts cveawg.mitre.org
 larper.on("message", function(msg)
-  if not msg.mine and msg.content:lower():find("pizza", 1, true) then
-    larper.notify(msg.author.name .. " mentioned pizza")
-  end
-end)</code-block>
+  local id = msg.content:upper():match("CVE%-%d+%-%d+")
+  if not id then return end
+  larper.http.get("https://cveawg.mitre.org/api/cve/" .. id, function(res)
+    local cve = res.ok and larper.json.decode(res.body)
+    local cna = cve and cve.containers and cve.containers.cna
+    if cna and cna.title then
+      larper.decorate(msg.id, { note = id .. ": " .. cna.title })
+    end
+  end)
+end, { contains = { "cve-" } })</code-block>
     </div>
     <ul class="ticks">
       <li><strong>{{On a thread of their own.||Numa thread só deles.}}</strong> {{A slow plugin can't make the interface stutter. With no plugin on, the thread doesn't even exist.||Um plugin lento não engasga a interface. Sem plugin ligado, a thread nem existe.}}</li>
@@ -184,6 +187,14 @@ end)</code-block>
       <li><strong>{{<code>larper.send</code> only works from your own gesture.||<code>larper.send</code> só funciona a partir de um gesto seu.}}</strong> {{Automatic replies would make your account a self-bot, so they're blocked by design.||Responder sozinho transformaria a conta num self-bot, então isso é bloqueado de propósito.}} <a href="%GUIDE%plugins.html">{{Plugin API →||API de plugins →}}</a></li>
     </ul>
   </div>
+  <div class="window reveal" style="margin-top:28px"><div class="winbar" aria-hidden="true"><i></i><i></i><i></i><span>larperCord</span></div><img src="%ROOT%assets/shots/%LANG%/f-vitrine.webp" width="1280" height="800" loading="lazy" alt="{{larperCord in demo mode: a scam link marked in red, a CVE with its severity, a GitHub card, and a panel summing up the unread messages||larperCord na demonstração: um link de golpe marcado em vermelho, um CVE com a severidade, um cartão do GitHub e um painel resumindo as não lidas}}"></div>
+  <p class="foot reveal">{{Demo data, but the CVE and GitHub notes are real answers from those services. Nothing goes out until you approve the host on the plugin's card.||Os dados são da demonstração, mas as notas de CVE e do GitHub são respostas de verdade desses serviços. Nada sai antes de você aprovar o host no cartão do plugin.}}</p>
+  <ul class="ticks two reveal" style="margin-top:20px">
+    <li><strong>{{Scam guard.||Anti-golpe.}}</strong> {{Free Nitro links, <code>dlscord-nitro.ru</code>, addresses in another alphabet, a link that shows one site and opens another: marked in red. It runs on your computer, with no network.||Links de Nitro grátis, <code>dlscord-nitro.ru</code>, endereços em outro alfabeto, um link que mostra um site e abre outro: tudo em vermelho. Roda no seu computador, sem rede.}}</li>
+    <li><strong>{{CVE radar.||Radar de CVE.}}</strong> {{Someone writes <code>CVE-2021-44228</code>, and the severity, the CVSS score and a summary appear under the message, from the official record.||Alguém escreve <code>CVE-2021-44228</code>, e a severidade, a nota CVSS e um resumo aparecem embaixo da mensagem, vindos do registro oficial.}}</li>
+    <li><strong>{{GitHub cards.||Cartões do GitHub.}}</strong> {{<code>owner/repo#123</code> and GitHub links get the title, the state and the stars. A renamed repository shows its current name.||<code>dono/repo#123</code> e links do GitHub ganham título, estado e estrelas. Um repositório renomeado aparece com o nome atual.}}</li>
+    <li><strong>{{What did I miss.||O que perdi.}}</strong> {{<code>/missed</code> sums up the unread messages: who talked, who called you, which questions nobody answered, links and files, with a click to each one.||<code>/perdi</code> resume as não lidas: quem falou, quem chamou você, que perguntas ficaram sem resposta, links e arquivos, com um clique até cada um.}}</li>
+  </ul>
   <span class="close">}</span>
 </section>
 

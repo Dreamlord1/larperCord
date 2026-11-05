@@ -4,6 +4,7 @@
 //! o que recebeu: nada sai para a internet e nada fala com o Discord.
 const std = @import("std");
 const c = @import("c");
+const i18n = @import("ui/i18n.zig");
 const App = @import("app.zig").App;
 const R = @import("qa_runner.zig");
 const Op = R.Op;
@@ -2117,6 +2118,49 @@ fn realLoaded(app: *App) bool {
 fn approveGithub(app: *App) void {
     if (plugin(app, "github.lua")) |p| app.plugins.setApproved(p, "api.github.com", true);
 }
+// O exemplo da página inicial do site: precisa funcionar como está lá.
+const site_sample = @embedFile("plugins/testdata/site_cve.lua");
+var sample_id: Id = 0;
+fn writeSiteSample(app: *App) void {
+    _ = c.SDL_SaveFile("qa-out/plugins/site_cve.lua", site_sample.ptr, site_sample.len);
+    app.plugins.reload();
+}
+fn sampleOn(app: *App) bool {
+    const p = plugin(app, "site_cve.lua") orelse return false;
+    return p.isRunning();
+}
+fn sendSample(app: *App) void {
+    if (plugin(app, "site_cve.lua")) |p| app.plugins.setApproved(p, "cveawg.mitre.org", true);
+    sample_id = inject(app, geral, 1001, "o exemplo do site olha o cve-2021-44228");
+}
+fn hasNote(app: *App, id: Id, want: []const u8) bool {
+    const f = app.store.findAny(id) orelse return false;
+    const v = app.plugins.deco.view(f.m, app.store.me);
+    for (v.slice()) |*part| if (std.mem.indexOf(u8, part.note, want) != null) return true;
+    return false;
+}
+fn sampleNote(app: *App) bool {
+    return hasNote(app, sample_id, "CVE-2021-44228: Apache Log4j2");
+}
+fn approveTranslate(app: *App) void {
+    if (plugin(app, "translate.lua")) |p| app.plugins.setApproved(p, "api.mymemory.translated.net", true);
+}
+fn sendEnglish(app: *App) void {
+    msg_id = inject(app, geral, 1001, "The weather is nice today and I will go to the beach with my friends");
+}
+fn translatedForReal(app: *App) bool {
+    const v = viewOf(app) orelse return false;
+    for (v.slice()) |*part| {
+        // Enquanto espera a nota é "Traduzindo…"; depois, o erro ou "já está no seu idioma".
+        const not_yet = [_][]const u8{ "Traduzindo", "Não consegui", "já está" };
+        var skip = part.note.len == 0;
+        for (not_yet) |n| skip = skip or std.mem.indexOf(u8, part.note, n) != null;
+        if (skip) continue;
+        std.debug.print("tradução de verdade: {s}\n", .{part.note});
+        return true;
+    }
+    return false;
+}
 fn sendMovedRepo(app: *App) void {
     gh_issue_id = inject(app, geral, 1001, "lembra do curl/curl#1 lá de trás?");
     gh_repo_id = inject(app, geral, 1001, "o código está em https://github.com/docker/docker");
@@ -2132,11 +2176,24 @@ fn ghMissingStaysClean(app: *App) bool {
 /// Contra o serviço de verdade: só números de CVE públicos saem daqui. Não entra em
 /// tools/qa.sh, porque depende da internet (QA_SUITE=plugins-real).
 pub const ops_real = [_]Op{
-    s("plugins: o serviço de CVE de verdade"),
+    s("plugins: os serviços de verdade"),
     run(wipeAll),
     expectLong("os plugins incluídos ligam", realLoaded),
     run(toGeral),
     .{ .wait = 200 },
+    run(writeSiteSample),
+    expectLong("o exemplo do site liga", sampleOn),
+    run(sendSample),
+    expectLong("e põe a nota, com o registro de verdade", sampleNote),
+    expectLong("os plugins incluídos religam", realLoaded),
+    run(approveTranslate),
+    .{ .wait = 100 },
+    run(sendEnglish),
+    run(stickBottom),
+    .{ .wait = 400 },
+    rmsg,
+    click("menu:Traduzir"),
+    expectLong("uma mensagem em inglês volta traduzida do serviço", translatedForReal),
     run(approveCve),
     .{ .wait = 100 },
     run(sendCve),
@@ -2156,6 +2213,71 @@ pub const ops_real = [_]Op{
     .{ .wait = 800 },
     expect("o que não existe fica sem nota", ghMissingStaysClean),
     .{ .shot = "plugin-github-real" },
+};
+
+// --- A imagem dos plugins no site (tools/site_shots.sh) -------------------------------
+// Fala com os serviços de verdade, como ops_real, e serve para os dois idiomas: --lang.
+
+var shown_cve: Id = 0;
+var shown_repo: Id = 0;
+var shown_scam: Id = 0;
+
+// Só o que vem com o app: os plugins de teste apareceriam nas abas do painel.
+fn onlyShipped(app: *App) void {
+    wipeData(app);
+    removeAllPlugins(app);
+    _ = c.SDL_CreateDirectory("qa-out/plugins");
+    for (exemplos.list) |ex| {
+        var b: [96]u8 = undefined;
+        const to = std.fmt.bufPrintSentinel(&b, "qa-out/plugins/{s}", .{ex.name}, 0) catch continue;
+        _ = c.SDL_SaveFile(to.ptr, ex.source.ptr, ex.source.len);
+    }
+    app.plugins.reload();
+}
+fn vitrineLoaded(app: *App) bool {
+    for ([_][]const u8{ "scamguard.lua", "cve.lua", "github.lua", "catchup.lua" }) |name| {
+        const p = plugin(app, name) orelse return false;
+        if (!p.isRunning()) return false;
+    }
+    return app.store.ready;
+}
+fn sendVitrine(app: *App) void {
+    const tr = i18n.tr;
+    var b: [96]u8 = undefined;
+    const call = std.fmt.bufPrint(&b, "<@{d}> {s}", .{ app.store.me, tr("viu o deploy?", "did you see the deploy?") }) catch return;
+    _ = inject(app, geral, 1001, call);
+    shown_cve = inject(app, geral, 1002, tr("atualizem hoje: CVE-2021-44228 está sendo explorado", "patch today: CVE-2021-44228 is being exploited"));
+    shown_repo = inject(app, geral, 1001, tr("o código está em https://github.com/curl/curl", "the code is at https://github.com/curl/curl"));
+    shown_scam = inject(app, geral, 1002, tr("pessoal, ganhe nitro grátis por 3 meses https://dlscord-nitro.ru/gift/abc", "hey, get free nitro for 3 months https://dlscord-nitro.ru/gift/abc"));
+    _ = inject(app, geral, 1001, tr("alguém sabe onde fica o manual novo?", "does anyone know where the new manual is?"));
+}
+fn vitrineNotes(app: *App) bool {
+    return hasNote(app, shown_cve, "CVSS 10") and hasNote(app, shown_repo, "curl/curl") and hasNote(app, shown_scam, "dlscord-nitro.ru");
+}
+fn vitrinePanel(app: *App) bool {
+    return openIs(app, "catchup.lua") and qa.find("pp-item:mention1") != null and qa.find("pp-item:question1") != null;
+}
+
+pub const ops_vitrine = [_]Op{
+    s("a imagem dos plugins no site"),
+    run(onlyShipped),
+    expectLong("os plugins ligam", vitrineLoaded),
+    run(approveCve),
+    run(approveGithub),
+    .{ .wait = 200 },
+    run(toMemes),
+    .{ .wait = 300 },
+    run(sendVitrine),
+    expectLong("as notas chegam, com as respostas de verdade", vitrineNotes),
+    run(toGeral),
+    .{ .wait = 600 },
+    click("composer"),
+    .{ .text = "/missed" },
+    key(c.ImGuiKey_Enter),
+    key(c.ImGuiKey_Enter),
+    expectLong("o resumo abre", vitrinePanel),
+    .{ .wait = 800 },
+    .{ .shot = "vitrine" },
 };
 
 pub const ops_tls = [_]Op{

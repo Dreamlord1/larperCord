@@ -214,7 +214,7 @@ pub const App = struct {
         voz_audio.force_dummy = opts.qa or opts.shot != null;
         app.themes.mode = app.wantedMode();
         // Já aqui: os dados da demonstração saem no idioma da interface.
-        i18n.set(if (opts.qa) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language));
+        i18n.set(if (opts.qa and opts.lang == null) .pt else opts.lang orelse i18n.fromSetting(app.st.settings.language));
         app.st.settings.open = opts.settings;
         timeline.mark(.config);
         const name = opts.theme orelse saved_theme orelse "classico";
@@ -2317,10 +2317,10 @@ pub const App = struct {
                 if (app.themes.setMode(mode)) app.applyThemeStyle();
             }
             d.text_scale = std.math.clamp(set.font_scale, 0.5, 3);
-            // Idioma: o QA roda sempre em português (as marcações usam os rótulos).
+            // Idioma: o QA roda em português (as marcações usam os rótulos), salvo com --lang.
             if (set.language != lang_setting) {
                 lang_setting = set.language;
-                i18n.set(if (app.opts.qa) .pt else app.opts.lang orelse i18n.fromSetting(set.language));
+                i18n.set(if (app.opts.qa and app.opts.lang == null) .pt else app.opts.lang orelse i18n.fromSetting(set.language));
                 app.st.theme_gen +%= 1;
             }
             anim.instant = set.reduce_motion;

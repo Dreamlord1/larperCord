@@ -58,6 +58,8 @@ for lang in en pt; do
     # Um recorte que faltar fica com a versão anterior.
     (cd "$w/run" && "${qa_env[@]}" timeout 420 "$bin" --qa --lang "$lang" --theme classico >"$w/qa.log" 2>&1) || true
     (cd "$w/run" && "${qa_env[@]}" QA_SUITE=voz timeout 120 "$bin" --qa --lang "$lang" --theme classico >"$w/qa-voz.log" 2>&1) || true
+    # Os plugins funcionando: as notas de CVE e do GitHub são respostas de verdade desses serviços.
+    (cd "$w/run" && "${qa_env[@]}" QA_SUITE=vitrine timeout 60 "$bin" --qa --lang "$lang" --theme classico >"$w/qa-vitrine.log" 2>&1) || true
     crop() { [ -f "$w/run/qa-out/$1" ] || { echo "$lang: sem $1, $3 fica como estava"; return 0; }; magick "$w/run/qa-out/$1" -crop "$2" +repage -strip -quality 84 -define webp:method=6 "$out/$3"; }
     crop 01-inicio.png 1280x800+0+0 larper.webp
     crop 35-tela-dividida.png 1280x740+0+60 f-mosaico.webp
@@ -71,6 +73,7 @@ for lang in en pt; do
     crop 05-menu.png 760x560+310+230 f-menu.webp
     crop 43-alertas-pagina.png 800x725+400+55 f-alertas.webp
     crop 35-plugins.png 800x800+400+0 f-plugins.webp
+    crop vitrine.png 1280x800+0+0 f-vitrine.webp
     crop 62-thread-aberta.png 920x790+0+10 f-threads.webp
     crop 70-forum.png 1000x730+160+60 f-forum.webp
     crop 63-emoji-seletor.png 760x560+420+230 f-emoji.webp

@@ -1008,7 +1008,7 @@ fn demo(jb: Job, stop: *std.atomic.Value(bool)) Pixels {
     const spec = jb.url[5..];
     if (std.mem.startsWith(u8, spec, "av:")) return demoAvatar(std.fmt.parseInt(u64, spec[3..], 10) catch 0, jb, false);
     if (std.mem.startsWith(u8, spec, "icon:")) return demoAvatar(std.fmt.parseInt(u64, spec[5..], 10) catch 0, jb, true);
-    if (std.mem.eql(u8, spec, "gif")) return demoGif(jb);
+    if (std.mem.eql(u8, spec, "gif")) return demoGif(jb, stop);
     // "emoji:<id>:<0|1>" e "sticker:<id>:<0|1>": a carinha da demonstração.
     if (std.mem.startsWith(u8, spec, "emoji:") or std.mem.startsWith(u8, spec, "sticker:")) return demoEmoji(spec);
     // "GIF em MP4" da demonstração: o vídeo embutido, pelo FFmpeg.
@@ -1140,14 +1140,15 @@ fn demoEmoji(spec: []const u8) Pixels {
 }
 
 /// GIF da demonstração: uma bolinha dando a volta, 24 quadros.
-fn demoGif(jb: Job) Pixels {
+fn demoGif(jb: Job, stop: *std.atomic.Value(bool)) Pixels {
     const n = 24;
     const dims = fit(480, 270, jb.max_w, jb.max_h);
     const w = dims[0];
     const h = dims[1];
     const frames = alloc.alloc(PixFrame, n) catch return .{};
     for (0..n) |f| {
-        const out = alloc.alloc(u8, w * h * 4) catch {
+        // Fechar o app não espera os quadros que faltam.
+        const out = (if (stop.load(.acquire)) null else alloc.alloc(u8, w * h * 4) catch null) orelse {
             for (frames[0..f]) |fr| alloc.free(fr.data);
             alloc.free(frames);
             return .{};

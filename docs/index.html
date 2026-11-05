@@ -290,17 +290,20 @@
   <div class="split reveal">
     <div>
       <p class="lede" style="margin-top:0">Drop a <code>.lua</code> file in <code>~/.config/larpercord/plugins/</code> to add panels, right-click entries, notes under messages, commands and keybinds, without recompiling anything. Scam guard, CVE radar, GitHub cards, what did I miss, translate, reminders, highlights, clean links, and links and files come with the app.</p>
-      <div class="code" data-lang="lua"><span class="code-lang">lua</span><button class="copy" type="button" data-copy>copy</button><pre><code><span class="t-p">larper.command</span>(<span class="t-s">"/shrug"</span>, <span class="t-k">function</span>(args)
-  <span class="t-k">local</span> text = <span class="t-s">"¯\\_(ツ)_/¯"</span>
-  <span class="t-k">if</span> args ~= <span class="t-s">""</span> <span class="t-k">then</span> text = args .. <span class="t-s">" "</span> .. text <span class="t-k">end</span>
-  <span class="t-p">larper.send</span>(<span class="t-p">larper.channel</span>(), text)
-<span class="t-k">end</span>)
-
+      <div class="code" data-lang="lua"><span class="code-lang">lua</span><button class="copy" type="button" data-copy>copy</button><pre><code><span class="t-c">-- @name CVE notes</span>
+<span class="t-c">-- @capabilities messages, decorate, http</span>
+<span class="t-c">-- @hosts cveawg.mitre.org</span>
 <span class="t-p">larper.on</span>(<span class="t-s">"message"</span>, <span class="t-k">function</span>(msg)
-  <span class="t-k">if</span> <span class="t-k">not</span> msg.mine <span class="t-k">and</span> msg.content:lower():find(<span class="t-s">"pizza"</span>, <span class="t-n">1</span>, <span class="t-k">true</span>) <span class="t-k">then</span>
-    <span class="t-p">larper.notify</span>(msg.author.name .. <span class="t-s">" mentioned pizza"</span>)
-  <span class="t-k">end</span>
-<span class="t-k">end</span>)</code></pre></div>
+  <span class="t-k">local</span> id = msg.content:upper():match(<span class="t-s">"CVE%-%d+%-%d+"</span>)
+  <span class="t-k">if</span> <span class="t-k">not</span> id <span class="t-k">then</span> <span class="t-k">return</span> <span class="t-k">end</span>
+  <span class="t-p">larper.http</span>.get(<span class="t-s">"https://cveawg.mitre.org/api/cve/"</span> .. id, <span class="t-k">function</span>(res)
+    <span class="t-k">local</span> cve = res.ok <span class="t-k">and</span> <span class="t-p">larper.json</span>.decode(res.body)
+    <span class="t-k">local</span> cna = cve <span class="t-k">and</span> cve.containers <span class="t-k">and</span> cve.containers.cna
+    <span class="t-k">if</span> cna <span class="t-k">and</span> cna.title <span class="t-k">then</span>
+      <span class="t-p">larper.decorate</span>(msg.id, { note = id .. <span class="t-s">": "</span> .. cna.title })
+    <span class="t-k">end</span>
+  <span class="t-k">end</span>)
+<span class="t-k">end</span>, { contains = { <span class="t-s">"cve-"</span> } })</code></pre></div>
     </div>
     <ul class="ticks">
       <li><strong>On a thread of their own.</strong> A slow plugin can't make the interface stutter. With no plugin on, the thread doesn't even exist.</li>
@@ -310,6 +313,14 @@
       <li><strong><code>larper.send</code> only works from your own gesture.</strong> Automatic replies would make your account a self-bot, so they're blocked by design. <a href="guide/plugins.html">Plugin API →</a></li>
     </ul>
   </div>
+  <div class="window reveal" style="margin-top:28px"><div class="winbar" aria-hidden="true"><i></i><i></i><i></i><span>larperCord</span></div><img src="assets/shots/en/f-vitrine.webp" width="1280" height="800" loading="lazy" decoding="async" alt="larperCord in demo mode: a scam link marked in red, a CVE with its severity, a GitHub card, and a panel summing up the unread messages"></div>
+  <p class="foot reveal">Demo data, but the CVE and GitHub notes are real answers from those services. Nothing goes out until you approve the host on the plugin's card.</p>
+  <ul class="ticks two reveal" style="margin-top:20px">
+    <li><strong>Scam guard.</strong> Free Nitro links, <code>dlscord-nitro.ru</code>, addresses in another alphabet, a link that shows one site and opens another: marked in red. It runs on your computer, with no network.</li>
+    <li><strong>CVE radar.</strong> Someone writes <code>CVE-2021-44228</code>, and the severity, the CVSS score and a summary appear under the message, from the official record.</li>
+    <li><strong>GitHub cards.</strong> <code>owner/repo#123</code> and GitHub links get the title, the state and the stars. A renamed repository shows its current name.</li>
+    <li><strong>What did I miss.</strong> <code>/missed</code> sums up the unread messages: who talked, who called you, which questions nobody answered, links and files, with a click to each one.</li>
+  </ul>
   <span class="close">}</span>
 </section>
 
