@@ -417,10 +417,18 @@ pub fn synth(s: Sound, out: []i16) []i16 {
 /// ordem, atrasa e perde; a fila do SDL toca num ritmo fixo.
 pub const Jitter = struct {
     last_seq: u16 = 0,
+    /// O relógio RTP do último pacote: anda sem parar, mesmo sem nada para mandar.
+    last_ts: u32 = 0,
     /// Folga de áudio no começo de uma fala e sempre que a fila esvazia. Cresce
     /// quando a rede engasga e volta a encolher em falas sem engasgo.
     cushion_ms: u32 = cushion_min,
     starved: bool = false,
+    /// Quadros inventados desde o último pacote.
+    concealed: u16 = 0,
+    /// Quem fala avisou que parou (ou nunca falou): não há o que inventar.
+    ended: bool = true,
+    /// De quanto em quanto o dispositivo puxa áudio. Menos que isso na fila é buraco.
+    pull_ms: u32 = 22,
 
     pub const cushion_min: u32 = 60;
     pub const cushion_max: u32 = 140;
@@ -433,6 +441,9 @@ pub const Jitter = struct {
     const max_lost: u16 = 3;
     /// Mais atrasado que isso não é pacote fora de ordem: a sequência recomeçou.
     const late_window: i16 = 64;
+    /// Quadros inventados numa falta, o último termina em zero. O Opus já vai
+    /// baixando o volume sozinho; depois disso soaria como um robô.
+    const max_conceal: u16 = 3;
 
     pub const Plan = struct {
         /// Já passou o momento dele: nem decodifica.
@@ -445,30 +456,135 @@ pub const Jitter = struct {
         lost: u16 = 0,
         /// Decodifica (o Opus precisa ver), mas não toca: a fila está atrasada.
         skip: bool = false,
+        /// Quem fala parou de mandar um pouco (a porta de ruído dele): a rede não tem culpa.
+        paused: bool = false,
+        /// Este áudio não continua de onde o anterior parou.
+        gap: bool = false,
     };
 
-    pub fn plan(j: *Jitter, seq: u16, new_spurt: bool, queued_ms: u32) Plan {
+    /// A folga nunca pode ser menor que uma puxada do dispositivo mais um quadro.
+    fn floorMs(j: *const Jitter) u32 {
+        return @max(cushion_min, j.pull_ms + frame_ms);
+    }
+
+    fn roofMs(j: *const Jitter) u32 {
+        return @max(cushion_max, j.floorMs() + 4 * cushion_step);
+    }
+
+    pub fn plan(j: *Jitter, seq: u16, ts: u32, new_spurt: bool, queued_ms: u32) Plan {
+        const concealed = j.concealed;
         if (new_spurt) {
-            if (!j.starved) j.cushion_ms = @max(cushion_min, j.cushion_ms -| cushion_step);
+            if (!j.starved) j.cushion_ms -|= cushion_step;
+            j.cushion_ms = @max(j.floorMs(), j.cushion_ms);
             j.starved = false;
             j.last_seq = seq;
-            return .{ .pad_ms = j.cushion_ms -| queued_ms };
+            j.last_ts = ts;
+            j.concealed = 0;
+            j.ended = false;
+            return .{ .pad_ms = j.cushion_ms -| queued_ms, .gap = true };
         }
+        j.cushion_ms = @max(j.floorMs(), j.cushion_ms);
         const diff: i16 = @bitCast(seq -% j.last_seq);
         if (diff <= 0 and diff >= -late_window) return .{ .late = true };
         const lost: u16 = if (diff > 0) @intCast(diff - 1) else 0;
+        // A sequência só anda com pacote; o relógio anda sempre. Relógio à frente
+        // da sequência é tempo em que ele não mandou nada, e não atraso da rede.
+        const ticks: i32 = @bitCast(ts -% j.last_ts);
+        const paused = diff > 0 and @divTrunc(ticks, frame_samples) > diff;
         j.last_seq = seq;
+        j.last_ts = ts;
+        j.concealed = 0;
+        j.ended = false;
         if (queued_ms > j.cushion_ms + reset_ms) return .{ .clear = true, .pad_ms = j.cushion_ms };
         if (queued_ms > j.cushion_ms + behind_ms) return .{ .skip = true };
-        var out: Plan = .{ .lost = if (lost <= max_lost) lost else 0 };
-        if (queued_ms == 0) {
-            // Esvaziou no meio da fala: sem folga nova, cada atraso daqui em
-            // diante vira um buraco e a voz fica picotada até a fala acabar.
+        var out: Plan = .{ .lost = if (lost <= max_lost) lost -| concealed else 0, .paused = paused, .gap = paused or lost > max_lost };
+        if (paused) {
+            // Refaz a folga dentro da pausa dele, onde ninguém ouve.
+            out.pad_ms = j.cushion_ms -| queued_ms;
+            return out;
+        }
+        if (concealed > 0 or queued_ms == 0) {
+            // Faltou áudio no meio da fala: a próxima fala já começa com mais folga.
+            // Nesta, silêncio não entra: o buraco só ficaria maior. O que atrasou
+            // costuma chegar junto e refaz a fila, e `conceal` cobre o resto.
             j.starved = true;
-            j.cushion_ms = @min(cushion_max, j.cushion_ms + cushion_step);
-            out.pad_ms = j.cushion_ms -| @as(u32, out.lost) * frame_ms;
+            j.cushion_ms = @min(j.roofMs(), j.cushion_ms + cushion_step);
         }
         return out;
+    }
+
+    pub const Conceal = enum { none, frame, last };
+
+    /// A cada volta da thread: a fila seca antes da próxima volta? Melhor a voz do
+    /// Opus se apagando que um corte seco no meio da onda.
+    pub fn conceal(j: *Jitter, queued_ms: u32) Conceal {
+        if (j.ended or queued_ms >= j.pull_ms or j.concealed >= max_conceal) return .none;
+        j.concealed += 1;
+        return if (j.concealed == max_conceal) .last else .frame;
+    }
+
+    /// Quadro de silêncio: quem fala avisou que parou.
+    pub fn silenceFrame(j: *Jitter, seq: u16, ts: u32) void {
+        const diff: i16 = @bitCast(seq -% j.last_seq);
+        if (diff > 0) {
+            j.last_seq = seq;
+            j.last_ts = ts;
+        }
+        j.ended = true;
+    }
+};
+
+/// Emenda sem estalo. Quando o áudio não continua de onde parou (depois de silêncio
+/// ou de um quadro jogado fora), o começo do próximo parte do último valor tocado.
+pub const Seam = struct {
+    last: [channels]i16 = .{ 0, 0 },
+    broken: bool = false,
+
+    const ramp = rate * 3 / 1000;
+
+    /// Todo áudio passa por aqui antes de entrar na fila, em ordem.
+    pub fn apply(s: *Seam, pcm: []i16) void {
+        const frames = pcm.len / channels;
+        if (frames == 0) return;
+        if (s.broken) {
+            s.broken = false;
+            const n: i32 = @intCast(@min(ramp, frames));
+            for (0..channels) |ch| {
+                const gap = @as(i32, s.last[ch]) - pcm[ch];
+                var i: i32 = 0;
+                while (i < n) : (i += 1) {
+                    const at = @as(usize, @intCast(i)) * channels + ch;
+                    const v = @as(i32, pcm[at]) + @divTrunc(gap * (n - i), n);
+                    pcm[at] = @intCast(std.math.clamp(v, -32768, 32767));
+                }
+            }
+        }
+        s.last = pcm[pcm.len - channels ..][0..channels].*;
+    }
+
+    /// Entrou silêncio na fila.
+    pub fn silence(s: *Seam) void {
+        s.last = .{ 0, 0 };
+        s.broken = true;
+    }
+
+    /// Um quadro decodificado não entrou na fila.
+    pub fn dropped(s: *Seam) void {
+        s.broken = true;
+    }
+
+    /// O último quadro inventado: termina em zero, a fila pode acabar sem estalo.
+    pub fn fadeOut(s: *Seam, pcm: []i16) void {
+        s.apply(pcm);
+        const frames = pcm.len / channels;
+        for (0..frames) |i| {
+            const k: i32 = @intCast(frames - 1 - i);
+            for (0..channels) |ch| {
+                const at = i * channels + ch;
+                pcm[at] = @intCast(@divTrunc(@as(i32, pcm[at]) * k, @as(i32, @intCast(frames))));
+            }
+        }
+        s.silence();
     }
 };
 
@@ -690,71 +806,163 @@ test "detecção de voz: rabo de 400 ms" {
 
 test "fila de voz: ordem, perdas e folga" {
     var j: Jitter = .{};
+    const f = frame_samples;
     // Começo de fala: folga inteira, sem contar perda nenhuma.
-    var p = j.plan(1000, true, 0);
+    var p = j.plan(1000, 0, true, 0);
     try t_eq(@as(u32, 60), p.pad_ms);
     try t_eq(@as(u16, 0), p.lost);
     // Em ordem, com fila normal: nada a fazer.
-    p = j.plan(1001, false, 60);
+    p = j.plan(1001, f, false, 60);
     try t_eq(Jitter.Plan{}, p);
     // Um perdido: conta um.
-    p = j.plan(1003, false, 60);
+    p = j.plan(1003, 3 * f, false, 60);
     try t_eq(@as(u16, 1), p.lost);
-    try t_expect(!p.late);
+    try t_expect(!p.late and !p.paused);
     // O perdido chegou depois: não toca e não volta a sequência.
-    p = j.plan(1002, false, 60);
+    p = j.plan(1002, 2 * f, false, 60);
     try t_expect(p.late);
     // O próximo em ordem não vira perda inventada.
-    p = j.plan(1004, false, 60);
+    p = j.plan(1004, 4 * f, false, 60);
     try t_eq(@as(u16, 0), p.lost);
     // Repetido também é atrasado.
-    try t_expect(j.plan(1004, false, 60).late);
-    // Buraco grande: não inventa.
-    p = j.plan(1020, false, 60);
+    try t_expect(j.plan(1004, 4 * f, false, 60).late);
+    // Buraco grande: não inventa, e o que vem depois não continua de onde parou.
+    p = j.plan(1020, 20 * f, false, 60);
     try t_eq(@as(u16, 0), p.lost);
+    try t_expect(p.gap);
     // A sequência dá a volta sem contar como atraso.
     j.last_seq = 65535;
-    p = j.plan(0, false, 60);
+    j.last_ts = 0;
+    p = j.plan(0, f, false, 60);
     try t_expect(!p.late);
     try t_eq(@as(u16, 0), p.lost);
+    // O relógio também dá a volta sem parecer pausa.
+    j.last_seq = 10;
+    j.last_ts = 0xFFFF_FFFF - 100;
+    p = j.plan(11, f - 101, false, 60);
+    try t_expect(!p.paused);
     // Recomeçou lá atrás, sem pausa: aceita em vez de calar a pessoa.
     j.last_seq = 30000;
-    try t_expect(!j.plan(100, false, 60).late);
+    try t_expect(!j.plan(100, 0, false, 60).late);
 }
 
 test "fila de voz: esvaziar aumenta a folga, atraso descarta" {
-    var j: Jitter = .{ .last_seq = 1 };
-    // Esvaziou: folga nova e maior.
-    var p = j.plan(2, false, 0);
-    try t_eq(@as(u32, 80), p.pad_ms);
+    const f = frame_samples;
+    var j: Jitter = .{ .last_seq = 1, .last_ts = f };
+    // Esvaziou: a folga cresce para a próxima fala, e nesta não entra silêncio.
+    var p = j.plan(2, 2 * f, false, 0);
+    try t_eq(@as(u32, 0), p.pad_ms);
+    try t_eq(@as(u32, 80), j.cushion_ms);
     try t_expect(j.starved);
     // Até o teto.
-    for (3..20) |i| _ = j.plan(@intCast(i), false, 0);
+    for (3..20) |i| _ = j.plan(@intCast(i), @intCast(i * f), false, 0);
     try t_eq(Jitter.cushion_max, j.cushion_ms);
     // A próxima fala teve engasgo antes: mantém a folga.
-    p = j.plan(100, true, 0);
+    p = j.plan(100, 100 * f, true, 0);
     try t_eq(Jitter.cushion_max, p.pad_ms);
     // Uma fala sem engasgo encolhe aos poucos, até o piso.
-    p = j.plan(200, true, 0);
+    p = j.plan(200, 200 * f, true, 0);
     try t_eq(Jitter.cushion_max - 20, p.pad_ms);
     j = .{ .last_seq = 1 };
-    _ = j.plan(300, true, 0);
+    _ = j.plan(300, 300 * f, true, 0);
     try t_eq(Jitter.cushion_min, j.cushion_ms);
     // Fila ainda com áudio no começo da fala: só completa.
-    try t_eq(@as(u32, 20), j.plan(400, true, 40).pad_ms);
+    try t_eq(@as(u32, 20), j.plan(400, 400 * f, true, 40).pad_ms);
     // Passou da folga: descarta o quadro, sem cortar a fila.
-    j = .{ .last_seq = 1 };
-    p = j.plan(2, false, 200);
+    j = .{ .last_seq = 1, .last_ts = f };
+    p = j.plan(2, 2 * f, false, 200);
     try t_expect(p.skip and !p.clear);
     // Muito atrasada: recomeça.
-    p = j.plan(3, false, 700);
+    p = j.plan(3, 3 * f, false, 700);
     try t_expect(p.clear);
     try t_eq(Jitter.cushion_min, p.pad_ms);
-    // Perda com a fila vazia: o que foi reconstruído conta como folga.
-    j = .{ .last_seq = 1 };
-    p = j.plan(4, false, 0);
+    // Perda com a fila vazia: reconstrói o que perdeu, sem silêncio.
+    j = .{ .last_seq = 1, .last_ts = f };
+    p = j.plan(4, 4 * f, false, 0);
     try t_eq(@as(u16, 2), p.lost);
-    try t_eq(@as(u32, 40), p.pad_ms);
+    try t_eq(@as(u32, 0), p.pad_ms);
+}
+
+test "fila de voz: pausa de quem fala não é culpa da rede" {
+    const f = frame_samples;
+    var j: Jitter = .{ .last_seq = 1, .last_ts = f };
+    // A porta de ruído dele fechou por 100 ms: a sequência andou um, o relógio cinco.
+    var p = j.plan(2, 6 * f, false, 0);
+    try t_expect(p.paused and p.gap);
+    try t_eq(@as(u32, 60), p.pad_ms);
+    try t_expect(!j.starved);
+    try t_eq(Jitter.cushion_min, j.cushion_ms);
+    // Pausa curta, com áudio na fila: só completa a folga, dentro da pausa.
+    p = j.plan(3, 8 * f, false, 25);
+    try t_expect(p.paused);
+    try t_eq(@as(u32, 35), p.pad_ms);
+    // A mesma fila vazia com o relógio em dia é a rede engasgando.
+    p = j.plan(4, 9 * f, false, 0);
+    try t_expect(!p.paused);
+    try t_expect(j.starved);
+    try t_eq(@as(u32, 80), j.cushion_ms);
+}
+
+test "fila de voz: inventa antes de secar, e nunca depois do fim" {
+    const f = frame_samples;
+    var j: Jitter = .{};
+    // Ninguém falou ainda.
+    try t_eq(Jitter.Conceal.none, j.conceal(0));
+    _ = j.plan(1, f, true, 0);
+    // Com áudio de sobra, nada.
+    try t_eq(Jitter.Conceal.none, j.conceal(60));
+    // Vai secar: três quadros, o último termina em zero, e para.
+    try t_eq(Jitter.Conceal.frame, j.conceal(10));
+    try t_eq(Jitter.Conceal.frame, j.conceal(10));
+    try t_eq(Jitter.Conceal.last, j.conceal(10));
+    try t_eq(Jitter.Conceal.none, j.conceal(0));
+    // O pacote atrasado chegou: não conta de novo o que já foi inventado, e a folga cresce.
+    var p = j.plan(3, 3 * f, false, 30);
+    try t_eq(@as(u16, 0), p.lost);
+    try t_eq(@as(u32, 0), p.pad_ms);
+    try t_expect(j.starved);
+    try t_eq(@as(u32, 80), j.cushion_ms);
+    // Dois perdidos, um já inventado: falta um.
+    try t_eq(Jitter.Conceal.frame, j.conceal(0));
+    p = j.plan(6, 6 * f, false, 30);
+    try t_eq(@as(u16, 1), p.lost);
+    // Quadro de silêncio: quem fala parou, não inventa, e a sequência não vira perda.
+    j.silenceFrame(7, 7 * f);
+    try t_eq(Jitter.Conceal.none, j.conceal(0));
+    p = j.plan(8, 8 * f, false, 30);
+    try t_eq(@as(u16, 0), p.lost);
+}
+
+test "fila de voz: dispositivo que puxa muito de uma vez pede mais folga" {
+    var j: Jitter = .{ .pull_ms = 86 };
+    const p = j.plan(1, 0, true, 0);
+    try t_eq(@as(u32, 106), p.pad_ms);
+    try t_eq(Jitter.Conceal.frame, j.conceal(80));
+}
+
+test "emenda: sem degrau depois de silêncio ou quadro perdido" {
+    var s: Seam = .{};
+    var pcm: [960 * 2]i16 = @splat(8000);
+    // Em sequência, nada muda.
+    s.apply(&pcm);
+    try t_eq(@as(i16, 8000), pcm[0]);
+    // Depois de silêncio, parte de zero e chega no valor certo.
+    s.silence();
+    pcm = @splat(8000);
+    s.apply(&pcm);
+    try t_expect(pcm[0] < 200 and pcm[0] > -200);
+    try t_eq(@as(i16, 8000), pcm[1000]);
+    // Quadro jogado fora: parte de onde parou.
+    s.dropped();
+    pcm = @splat(-8000);
+    s.apply(&pcm);
+    try t_expect(pcm[0] > 7000);
+    try t_eq(@as(i16, -8000), pcm[1000]);
+    // O último inventado termina em zero, e o próximo parte de zero.
+    pcm = @splat(-8000);
+    s.fadeOut(&pcm);
+    try t_eq(@as(i16, 0), pcm[pcm.len - 1]);
+    try t_expect(s.broken);
 }
 
 test "aperte para falar: tecla manda, voz não; folga ao soltar" {

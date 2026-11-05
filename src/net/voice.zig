@@ -46,6 +46,10 @@ const frame_bytes = frame_samples * channels * @sizeOf(i16); // 3840
 const bytes_per_ms = opus_rate * channels * @sizeOf(i16) / 1000; // 192
 const silence = [_]u8{ 0xF8, 0xFF, 0xFE };
 
+fn queuedMs(st: *c.SDL_AudioStream) u32 {
+    return @intCast(@divTrunc(@max(c.SDL_GetAudioStreamQueued(st), 0), bytes_per_ms));
+}
+
 var debug_on = false;
 
 fn dbg(comptime fmt: []const u8, args: anytype) void {
@@ -211,6 +215,7 @@ const Worker = struct {
     hb_sent_ms: i64 = 0,
     next_frame: i64 = 0,
     next_keepalive: i64 = 0,
+    pull_ms: u32 = 22,
     last_seq: i64 = -1,
     connected: bool = false,
     resuming: bool = false,
@@ -453,6 +458,7 @@ const Worker = struct {
             w.rtp_ts +%= frame_samples;
             if (w.next_frame < now - 100) w.next_frame = now + frame_ms; // não acumula atraso
         }
+        w.conceal();
         w.expireSpeakers(now);
     }
 
@@ -883,7 +889,7 @@ const Worker = struct {
             .blocked = blocked or w.mic.stream == null,
         });
         if (debug_on and now - w.stats_ms >= 3000) {
-            dbg("recebido: {d} pacotes, fora de ordem {d}, perdidos refeitos {d}, fila vazia {d}, descartados {d}, recomeços {d}, sem decifrar {d}; thread: acordou atrasada até {d} ms, ocupada até {d} ms", .{ w.stats.packets, w.stats.late, w.stats.rebuilt, w.stats.starved, w.stats.skipped, w.stats.cleared, w.stats.undecrypted, w.stats.wake_late_ms, w.stats.busy_ms });
+            dbg("recebido: {d} pacotes de {d} pessoas, fora de ordem {d}, perdidos refeitos {d}, inventados {d}, fila vazia {d}, pausas de quem fala {d}, maior vão {d} ms, descartados {d}, recomeços {d}, sem decifrar {d}; thread: acordou atrasada até {d} ms, ocupada até {d} ms", .{ w.stats.packets, w.n_sources, w.stats.late, w.stats.rebuilt, w.stats.concealed, w.stats.starved, w.stats.paused, w.stats.gap_max_ms, w.stats.skipped, w.stats.cleared, w.stats.undecrypted, w.stats.wake_late_ms, w.stats.busy_ms });
             w.stats = .{};
             dbg("mic: {s}, rms máx {d:.0}, {d} quadros enviados, DAVE {s}", .{ if (w.mic.stream == null) "sem microfone" else if (blocked) "mudo" else "ligado", w.mic_peak_rms, w.sent_frames, if (w.dave) |dv| (if (dv.enabled) "cifrando" else "esperando") else "não" });
             w.stats_ms = now;
@@ -1000,7 +1006,12 @@ const Worker = struct {
         var frame: []const u8 = plain[ext_words * 4 .. cipher.len];
         if (frame.len == 0) return;
         const src = w.sourceFor(ssrc, 0) orelse return;
-        if (std.mem.eql(u8, frame, &silence)) return;
+        const seq = std.mem.readInt(u16, buf[2..4], .big);
+        const ts = std.mem.readInt(u32, buf[4..8], .big);
+        if (std.mem.eql(u8, frame, &silence)) {
+            src.jitter.silenceFrame(seq, ts);
+            return;
+        }
         // Quadro do DAVE (termina com o marcador 0xFAFA): decifra. Sem o
         // marcador é Opus puro (call sem E2EE ou no meio de uma transição).
         var dave_out: [2048]u8 = undefined;
@@ -1012,7 +1023,7 @@ const Worker = struct {
             };
             frame = dave_out[0..n];
         }
-        w.play(src, frame, std.mem.readInt(u16, buf[2..4], .big));
+        w.play(src, frame, seq, ts);
     }
 
     // --- Áudio ------------------------------------------------------------
@@ -1032,6 +1043,7 @@ const Worker = struct {
             w.audio_on = true;
             const now = nowMs();
             w.out.open(now);
+            w.updatePull();
             w.mic.paused = w.v.micBlocked();
             w.mic.open(now);
         }
@@ -1070,6 +1082,7 @@ const Worker = struct {
                 if (s.stream) |st| voz_audio.Output.rebind(dev, st);
             }
             w.out.adopt(dev);
+            w.updatePull();
             // Era um dispositivo novo, ainda sem a pausa do ensurdecer.
             if (w.deaf_applied) _ = c.SDL_PauseAudioDevice(dev);
         }
@@ -1103,6 +1116,7 @@ const Worker = struct {
             return null;
         }
         var src: Source = .{ .ssrc = ssrc, .user = user, .dec = dec };
+        src.jitter.pull_ms = w.pull_ms;
         if (w.out.dev != 0) {
             src.stream = c.SDL_CreateAudioStream(&spec, &spec);
             if (src.stream) |st| _ = c.SDL_BindAudioStream(w.out.dev, st);
@@ -1126,11 +1140,13 @@ const Worker = struct {
     }
 
     /// Opus -> PCM -> o stream da pessoa (o SDL mistura e toca).
-    fn play(w: *Worker, src: *Source, frame: []const u8, seq: u16) void {
+    fn play(w: *Worker, src: *Source, frame: []const u8, seq: u16, ts: u32) void {
         const now = nowMs();
         // Começo de uma fala (silêncio antes): a fila do SDL recomeça com
         // uma folga contra o jitter. No meio da fala nunca entra silêncio.
-        const spurt = now - src.last_ms > 250;
+        const since = now - src.last_ms;
+        const spurt = since > 250;
+        if (!spurt) w.stats.gap_max_ms = @max(w.stats.gap_max_ms, since);
         if (!src.speaking or now - src.last_emit_ms > 1000) {
             src.speaking = true;
             src.last_emit_ms = now;
@@ -1140,11 +1156,12 @@ const Worker = struct {
         w.stats.packets += 1;
         if (w.deaf_applied) {
             src.jitter.last_seq = seq;
+            src.jitter.last_ts = ts;
             return;
         }
         const st = src.stream orelse return;
-        const queued_ms: u32 = @intCast(@divTrunc(@max(c.SDL_GetAudioStreamQueued(st), 0), bytes_per_ms));
-        const plan = src.jitter.plan(seq, spurt, queued_ms);
+        const queued_ms = queuedMs(st);
+        const plan = src.jitter.plan(seq, ts, spurt, queued_ms);
         if (plan.late) {
             w.stats.late += 1;
             return;
@@ -1152,11 +1169,20 @@ const Worker = struct {
         if (plan.clear) {
             w.stats.cleared += 1;
             _ = c.SDL_ClearAudioStream(st);
+            src.seam.dropped();
         }
-        if (!spurt and !plan.clear and plan.pad_ms > 0) w.stats.starved += 1;
+        if (plan.gap) src.seam.dropped();
+        if (plan.paused) w.stats.paused += 1;
+        if (!spurt and !plan.clear and !plan.paused and queued_ms == 0) w.stats.starved += 1;
         if (plan.pad_ms > 0) {
             const silence_buf: [voz.Jitter.cushion_max * bytes_per_ms]u8 = @splat(0);
-            _ = c.SDL_PutAudioStreamData(st, &silence_buf, @intCast(@min(plan.pad_ms, voz.Jitter.cushion_max) * bytes_per_ms));
+            var left: usize = plan.pad_ms * bytes_per_ms;
+            while (left > 0) {
+                const n = @min(left, silence_buf.len);
+                _ = c.SDL_PutAudioStreamData(st, &silence_buf, @intCast(n));
+                left -= n;
+            }
+            src.seam.silence();
         }
         // O que se perdeu vem antes deste pacote, para o ouvido e para o Opus: o
         // decodificador continua de onde parou, e fora de ordem a emenda estala.
@@ -1168,7 +1194,7 @@ const Worker = struct {
                 // sem esses dados, ele faz o mesmo que os outros: inventa.
                 const fec = i + 1 == plan.lost;
                 const m = c.opus_decode(src.dec, if (fec) frame.ptr else null, if (fec) @intCast(frame.len) else 0, &fill, frame_samples, @intFromBool(fec));
-                if (m > 0) _ = c.SDL_PutAudioStreamData(st, &fill, @intCast(@as(usize, @intCast(m)) * channels * @sizeOf(i16)));
+                if (m > 0) src.put(st, fill[0..@as(usize, @intCast(m)) * channels]);
             }
         }
         var pcm: [5760 * channels]i16 = undefined;
@@ -1176,9 +1202,41 @@ const Worker = struct {
         if (n <= 0) return;
         if (plan.skip) {
             w.stats.skipped += 1;
+            src.seam.dropped();
             return;
         }
-        _ = c.SDL_PutAudioStreamData(st, &pcm, @intCast(@as(usize, @intCast(n)) * channels * @sizeOf(i16)));
+        src.put(st, pcm[0..@as(usize, @intCast(n)) * channels]);
+    }
+
+    /// A fila de alguém seca antes da próxima volta: em vez de um corte seco no
+    /// meio da onda, o Opus inventa e vai se apagando.
+    fn conceal(w: *Worker) void {
+        if (w.deaf_applied) return;
+        for (w.sources[0..w.n_sources]) |*s| {
+            if (s.jitter.ended) continue;
+            const st = s.stream orelse continue;
+            const what = s.jitter.conceal(queuedMs(st));
+            if (what == .none) continue;
+            var fill: [frame_samples * channels]i16 = undefined;
+            const m = c.opus_decode(s.dec, null, 0, &fill, frame_samples, 0);
+            if (m <= 0) continue;
+            w.stats.concealed += 1;
+            const pcm = fill[0..@as(usize, @intCast(m)) * channels];
+            if (what == .last) {
+                s.seam.fadeOut(pcm);
+                _ = c.SDL_PutAudioStreamData(st, pcm.ptr, @intCast(pcm.len * @sizeOf(i16)));
+            } else s.put(st, pcm);
+        }
+    }
+
+    /// De quanto em quanto o dispositivo puxa áudio de cada stream.
+    fn updatePull(w: *Worker) void {
+        var fmt: c.SDL_AudioSpec = undefined;
+        var frames: c_int = 0;
+        if (w.out.dev == 0 or !c.SDL_GetAudioDeviceFormat(w.out.dev, &fmt, &frames) or frames <= 0 or fmt.freq <= 0) return;
+        w.pull_ms = @intCast(@divTrunc(frames * 1000, fmt.freq) + 1);
+        dbg("saída: {d} Hz, {d} quadros de cada vez ({d} ms)", .{ fmt.freq, frames, w.pull_ms });
+        for (w.sources[0..w.n_sources]) |*s| s.jitter.pull_ms = w.pull_ms;
     }
 
     /// Quem parou de mandar áudio há 300 ms parou de falar (o anel apaga).
@@ -1196,6 +1254,12 @@ const Stats = struct {
     late: u32 = 0,
     rebuilt: u32 = 0,
     starved: u32 = 0,
+    /// Quem fala parou de mandar um pouco: não é culpa da rede.
+    paused: u32 = 0,
+    /// Quadros inventados porque a fila ia secar.
+    concealed: u32 = 0,
+    /// O maior tempo entre dois pacotes da mesma pessoa, dentro de uma fala.
+    gap_max_ms: i64 = 0,
     skipped: u32 = 0,
     cleared: u32 = 0,
     undecrypted: u32 = 0,
@@ -1213,6 +1277,13 @@ const Source = struct {
     last_ms: i64 = 0,
     last_emit_ms: i64 = 0,
     jitter: voz.Jitter = .{},
+    seam: voz.Seam = .{},
+
+    /// Entrega áudio ao stream, sem degrau onde ele não continua de onde parou.
+    fn put(s: *Source, st: *c.SDL_AudioStream, pcm: []i16) void {
+        s.seam.apply(pcm);
+        _ = c.SDL_PutAudioStreamData(st, pcm.ptr, @intCast(pcm.len * @sizeOf(i16)));
+    }
 
     fn deinit(s: *Source) void {
         c.opus_decoder_destroy(s.dec);

@@ -285,6 +285,18 @@ pub fn build(b: *std.Build) void {
     const custo = b.addExecutable(.{ .name = "ruido-custo", .root_module = custo_mod });
     b.step("ruido-custo", "Mede o custo do supressor de ruído").dependOn(&b.addRunArtifact(custo).step);
 
+    // Rede ruim simulada na recepção de voz (Opus de verdade, sem rede nem conta).
+    const rede_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/voz_rede.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+    });
+    addRnnoise(b, rede_mod);
+    rede_mod.linkSystemLibrary("opus", .{});
+    const rede = b.addExecutable(.{ .name = "voz-rede", .root_module = rede_mod });
+    b.step("voz-rede", "Simula rede ruim na recepção de voz").dependOn(&b.addRunArtifact(rede).step);
+
     // Um print de cada tema em docs/themes/ (usado no README).
     const snaps = b.step("snapshots", "Gera docs/themes/<tema>.png para cada tema embutido");
     for (theme_names) |name| {
