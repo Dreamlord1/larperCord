@@ -5,14 +5,14 @@
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | 1,279 MB | 12–47% ¹ | 287 MB |
-| **larperCord**, real account ³ | **~130 MB** | **0–0.4%** | **~6.7 MB** |
-| **larperCord**, demo ² | **44–47 MB** | **0–0.4%** | **~6.7 MB** |
+| **larperCord**, real account ³ | **~130 MB** | **0–0.4%** | **~6.8 MB** |
+| **larperCord**, demo ² | **44–47 MB** | **0–0.4%** | **~6.8 MB** |
 
 ¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, a 1280×800 window, `ReleaseFast` build.
 
 ² Demo data, all 11 themes, real GPU, a real window on a hidden Hyprland workspace, and GIF autoplay off. A window you're looking at can measure differently.
 
-³ 125–140 MB in one account's normal use on the same PC, with an i5-2400S. Yours depends on your servers, members and images. Settings → Performance shows where it goes.
+³ 125–140 MB in one account's normal use on the same PC, with an i5-2400S, and about 70 MB right after opening. Yours depends on your servers, members and images. Settings → Performance shows where it goes.
 
 Read these with the right caveats:
 
@@ -34,7 +34,7 @@ The Performance page in settings shows live numbers, including where the memory 
 
 ## Ten decisions
 
-1. **It sleeps when nothing happens.** The loop waits in `SDL_WaitEvent`. Network, inotify and the clock wake the app through events. No animation, no redraw. A frame that comes out the same as the last one never reaches the GPU, and a mouse just passing over things redraws at most 30 times a second.
+1. **It sleeps when nothing happens.** The loop waits in `SDL_WaitEvent`. Network, inotify and the clock wake the app through events. No animation, no redraw. A frame that comes out the same as the last one never reaches the GPU, and a mouse just moving asks for fewer frames.
 2. **No browser.** Everything is drawn with Dear ImGui's `ImDrawList` on SDL_Renderer.
 3. **Fonts are mapped, not copied.** Each font file is one `mmap` used by every weight and family, so only the pages read stay in RAM. Loading 4 weights of Inter plus emoji the naive way cost about 90 MB.
 4. **Only the video driver it needs.** On NVIDIA-only machines, glvnd also loaded Mesa and LLVM (about 23 MB) for nothing. The app detects that and avoids it.

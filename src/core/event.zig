@@ -138,7 +138,8 @@ pub const Event = union(enum) {
     thread_open: Id,
 };
 
-pub const Connection = enum { connecting, ready, reconnecting, failed, offline };
+/// `rejected`: o Discord recusou o token (4004). Vem logo antes de `failed`.
+pub const Connection = enum { connecting, ready, reconnecting, rejected, failed, offline };
 
 pub const VoiceStatus = enum { disconnected, connecting, connected };
 

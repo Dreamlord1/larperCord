@@ -20,6 +20,26 @@ Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 > projeto não tem relação com a Discord Inc. Sem token configurado, o app roda num **modo
 > demonstração** com dados falsos.
 
+### Se o Discord bloquear a sua conta
+
+O Discord desativa contas ou força a troca de senha quando acha que a conta é um bot de spam ou foi invadida. Isso pode acontecer em qualquer cliente, mas clientes de terceiros costumam disparar mais. Já aconteceu com quem desenvolve este projeto, depois de um dia de testes. **Use uma conta secundária.**
+
+Estes são os gatilhos que as pessoas costumam relatar, então faça isso pelo cliente oficial:
+
+- entrar ou sair de servidores, o mais comum
+- desconectar e reconectar com frequência, o que inclui reiniciar o app várias vezes
+- abrir DMs com pessoas novas
+- mexer na lista de amigos
+- editar o perfil enquanto estiver conectado aqui
+
+Se acontecer, redefina a senha pelo discord.com. Se a conta continuar bloqueada, [faça uma apelação aqui](https://support.discord.com/hc/en-us/requests/new?ticket_form_id=360000029731). O Discord não publica essas regras, então a lista vem da experiência de quem faz clientes de terceiros.
+
+### Se o seu antivírus reclamar
+
+A versão para Windows não é assinada, então o SmartScreen avisa. Um antivírus também pode chamá-la de ladrão de token do Discord, provavelmente porque um cliente de Discord está cheio das mesmas palavras que um ladrão tem, como "token" e "Authorization". Um sandbox deu essa nota à versão 0.5.0 por causa de uma regra de padrões, e o relatório de comportamento dele não mostrou acesso a credenciais e, no modo de demonstração, nenhuma conexão.
+
+O token só vai para o Discord e fica no chaveiro do sistema ou, sem chaveiro, num arquivo privado. O código é público, então dá para ler ou compilar você mesmo. Baixe o larperCord só deste repositório.
+
 ## Por quê
 
 O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
@@ -27,12 +47,12 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord**, conta real | **~130 MB**³ | **0–0,4%** | **~6,7 MB** |
-| **larperCord**, demonstração | **44–47 MB**² | **0–0,4%** | **~6,7 MB** |
+| **larperCord**, conta real | **~130 MB**³ | **0–0,4%** | **~6,8 MB** |
+| **larperCord**, demonstração | **44–47 MB**² | **0–0,4%** | **~6,8 MB** |
 
 <sub>¹ média desde a abertura, medida pelo `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
 ² Dados de demonstração, janela de verdade, reprodução automática de GIFs desligada, medido com `tools/membench.sh`. Um GIF animado na tela custa cerca de 2,5% de CPU. Cerca de metade do total é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL).
-³ 125–140 MB no uso normal de uma conta, no mesmo PC. O seu depende dos seus servidores, membros e imagens; Configurações → Desempenho mostra para onde vai.</sub>
+³ 125–140 MB no uso normal de uma conta, no mesmo PC, cerca de 70 MB logo depois de abrir. O seu depende dos seus servidores, membros e imagens; Configurações → Desempenho mostra para onde vai.</sub>
 
 ## O que tem
 
@@ -183,7 +203,7 @@ Nada de mágica, só muitas decisões pequenas:
 
 1. **Dorme quando nada acontece.** O laço fica em `SDL_WaitEvent`. Rede, inotify e o relógio
    acordam o app por eventos. Sem animação, sem redesenho. Quadro que sai igual ao anterior nem chega
-   à GPU, e o mouse só passando por cima redesenha no máximo 30 vezes por segundo.
+   à GPU, e o mouse só andando pede menos quadros.
 2. **Nada de navegador.** Tudo é desenhado com o `ImDrawList` do Dear ImGui sobre o SDL_Renderer.
 3. **Fontes mapeadas, não copiadas.** Cada arquivo de fonte vira um `mmap` compartilhado por
    todos os pesos e famílias. Só as páginas lidas ficam na RAM. (Carregar 4 pesos do Inter + emoji
@@ -197,7 +217,7 @@ Nada de mágica, só muitas decisões pequenas:
    de um minuto na bandeja ou minimizada, as imagens também saem da memória, menos as pequenas que estavam na tela.
 8. **fontconfig liberado** depois de resolver as fontes (`FcFini` + `malloc_trim`).
 9. **Sem cursor piscando**: o cursor piscando sozinho manteria a CPU acordada.
-10. **Binário enxuto**: build release sem símbolos de debug, cerca de 6,7 MB.
+10. **Binário enxuto**: build release sem símbolos de debug, cerca de 6,8 MB.
 
 ## Compilando
 

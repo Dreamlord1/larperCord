@@ -1610,6 +1610,19 @@ fn fakeAccounts(app: *App) void {
 fn accountsListed(_: *App) bool {
     return qa.find("account:7001") != null and qa.find("account:1000") != null and qa.find("menu:Adicionar conta") != null;
 }
+fn cursorIsHand(_: *App) bool {
+    return c.ImGui_GetMouseCursor() == c.ImGuiMouseCursor_Hand;
+}
+fn twoAccountsSaved(app: *App) void {
+    fakeAccounts(app);
+    @import("app_accounts.zig").token_source = .{ .saved = app.store.me };
+}
+fn refuseSession(app: *App) void {
+    @import("app_accounts.zig").sessionRefused(app, true, "token inválido (teste)");
+}
+fn refusedForm(app: *App) bool {
+    return app.login.phase == .form and acc_store.list.len == 1 and acc_store.list.find(7001) != null and qa.find("login:conta:7001") != null;
+}
 fn switchedB(app: *App) bool {
     return acc_store.session == 7001 and app.store.ready and acc_store.list.active == 7001 and app.login.phase != .form;
 }
@@ -2389,6 +2402,9 @@ const ops = [_]Op{
     .{ .run = jumpToZigLink },
     .{ .wait = 400 },
     // O primeiro da conversa: outra mensagem com o mesmo link fica mais abaixo.
+    .{ .hover = .{ .mark = "first:link:https://ziglang.org" } },
+    .{ .wait = 100 },
+    expect("em cima de um link, o cursor vira a mãozinha", cursorIsHand),
     click("first:link:https://ziglang.org"),
     expect("clicar num link abre o navegador", linkOpened),
     expect("ver mensagens antigas mostra o botão de ir ao fim", jumpBottomShown),
@@ -2693,6 +2709,13 @@ const ops = [_]Op{
     click("me"),
     click("menu:Remover conta"),
     .{ .expect = .{ .name = "Remover conta esquece a aberta e entra na outra", .check = removedB, .timeout_ms = 6000 } },
+    .{ .wait = 900 },
+    .{ .run = twoAccountsSaved },
+    .{ .run = refuseSession },
+    expect("token recusado: volta ao login, esquece esse token e oferece a outra conta", refusedForm),
+    .{ .shot = "47-login-contas" },
+    click("login:conta:7001"),
+    .{ .expect = .{ .name = "clicar na conta salva entra nela", .check = switchedB, .timeout_ms = 6000 } },
 };
 
 /// Cenários curtos para isolar um problema: QA_SCENE=ctrl|nome|card

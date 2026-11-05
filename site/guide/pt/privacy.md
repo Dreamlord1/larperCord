@@ -67,3 +67,23 @@ Esconde o seu e-mail e o seu nome de usuário nas configurações. Não esconde 
 ## Relatando um problema
 
 Abra uma issue no [GitHub](https://github.com/RshaCuDeVidro/larperCord/issues). Se o problema envolve vazamento de token ou qualquer coisa sensível, não inclua tokens reais no relato.
+
+## Se o Discord bloquear a sua conta
+
+O Discord desativa contas ou força a troca de senha quando acha que a conta é um bot de spam ou foi invadida. Isso pode acontecer em qualquer cliente, mas clientes de terceiros costumam disparar mais. Já aconteceu com quem desenvolve este projeto, depois de um dia de testes. **Use uma conta secundária.**
+
+Estes são os gatilhos que as pessoas costumam relatar, então faça isso pelo cliente oficial:
+
+- entrar ou sair de servidores, o mais comum
+- desconectar e reconectar com frequência, o que inclui reiniciar o app várias vezes
+- abrir DMs com pessoas novas
+- mexer na lista de amigos
+- editar o perfil enquanto estiver conectado aqui
+
+Se acontecer, redefina a senha pelo discord.com. Se a conta continuar bloqueada, [faça uma apelação aqui](https://support.discord.com/hc/en-us/requests/new?ticket_form_id=360000029731). O Discord não publica essas regras, então a lista vem da experiência de quem faz clientes de terceiros.
+
+## Se o seu antivírus reclamar
+
+A versão para Windows não é assinada, então o SmartScreen avisa. Um antivírus também pode chamá-la de ladrão de token do Discord, provavelmente porque um cliente de Discord está cheio das mesmas palavras que um ladrão tem, como "token" e "Authorization". Um sandbox deu essa nota à versão 0.5.0 por causa de uma regra de padrões, e o relatório de comportamento dele não mostrou acesso a credenciais e, no modo de demonstração, nenhuma conexão.
+
+O token só vai para o Discord e fica no chaveiro do sistema ou, sem chaveiro, num arquivo privado. O código é público, então dá para ler ou compilar você mesmo. Baixe o larperCord só deste repositório.

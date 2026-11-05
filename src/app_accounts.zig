@@ -21,7 +21,7 @@ const platform = @import("platform/window.zig");
 pub const TokenSource = union(enum) { none, env, legacy, saved: types.Id, typed };
 
 pub var token_source: TokenSource = .none;
-/// Conta oferecida no "Voltar"/"Entrar como" da tela de login.
+/// Conta do "Voltar" da tela de login.
 pub var prev_account: types.Id = 0;
 
 /// LARPER_TOKEN: não precisa perguntar a ninguém.
@@ -105,7 +105,6 @@ pub fn handle(app: *App, a: ev.Action) void {
             const sid = accounts_store.session;
             forget(sid);
             toLogin(app);
-            offerBack(app, sid);
         },
         .switch_account => |id| if (id != accounts_store.session) {
             _ = switchAccount(app, id);
@@ -177,7 +176,6 @@ pub fn switchAccount(app: *App, id: types.Id) bool {
         std.crypto.secureZero(u8, token);
         std.heap.c_allocator.free(token);
         app.login.fail(i18n.tr("Não consegui iniciar a conexão.", "Couldn't start the connection."));
-        offerBack(app, id);
     };
     return true;
 }
@@ -195,17 +193,37 @@ fn forget(id: types.Id) void {
     if (prev_account == id) prev_account = 0;
 }
 
-/// Tela de login com contas guardadas: "Entrar como fulano" no topo.
-pub fn offerBack(app: *App, exclude: types.Id) void {
-    app.login.back_len = 0;
-    const list = &accounts_store.list;
-    const pick: ?*accounts.Account = if (prev_account != exclude) list.find(prev_account) else null;
-    const a = pick orelse for (list.slice()) |*x| {
-        if (x.id != exclude) break x;
-    } else return;
-    prev_account = a.id;
-    var b: [96]u8 = undefined;
-    app.login.setBack(i18n.fmt(&b, "Entrar como {s}", "Sign in as {s}", .{a.name()}));
+/// As contas guardadas que a tela de login oferece: todas menos a aberta.
+pub fn others(buf: []*const accounts.Account) []const *const accounts.Account {
+    var n: usize = 0;
+    for (accounts_store.list.slice()) |*a| {
+        if (a.id == accounts_store.session or n == buf.len) continue;
+        buf[n] = a;
+        n += 1;
+    }
+    return buf[0..n];
+}
+
+/// O Discord encerrou a sessão de vez. `token_dead`: recusou o token, que não volta
+/// a valer. Guardado, o app só tentaria de novo a cada abertura: outro login recusado
+/// à toa para uma conta que acabou de chamar atenção.
+pub fn sessionRefused(app: *App, token_dead: bool, msg: []const u8) void {
+    app.stopNet();
+    app.resetSession();
+    if (token_dead) {
+        switch (token_source) {
+            .saved => |id| forget(id),
+            .legacy => {
+                discord.forgetToken();
+                forget(accounts_store.session);
+            },
+            .typed => forget(accounts_store.session),
+            .none, .env => {},
+        }
+        token_source = .none;
+    }
+    accounts_store.session = 0;
+    app.login.fail(msg);
 }
 
 /// READY: a conta entrou. Atualiza a lista de contas (nome e foto do

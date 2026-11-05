@@ -17,6 +17,7 @@
 
 **Messages**
 - `<t:…>` times appear as a date or "in 2 hours", in your time zone, instead of the raw code.
+- Over a link, the mouse cursor turns into a hand. Text selection was overriding it.
 - Mark as read and mark as unread always reach Discord now. While invisible they stayed on your computer only and came back the next time you connected. Your status no longer stops read confirmations; an unfocused window still doesn't confirm on its own.
 
 **Lighter**
@@ -24,6 +25,10 @@
 - Moving the mouse with no button pressed asks for fewer frames.
 - After a minute in the tray or minimized, images leave memory, except small ones that were on screen.
 - Settings → Performance shows where the memory goes: images, messages, people, servers, fonts, driver and libraries.
+
+**Accounts**
+- The sign-in screen lists every saved account as a button, however you got there, with a warning to use a secondary account before you paste a token.
+- When Discord refuses a token, the app forgets it instead of trying it again every time it opens. If the session ends with the app open, it goes back to the sign-in screen.
 
 **Install**
 - The Linux installer names its shortcut after the window's app ID, so taskbars that look up the icon that way can find it. Running it again replaces the old shortcut.

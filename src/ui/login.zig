@@ -11,6 +11,7 @@ const anim = @import("anim.zig");
 const logo = @import("logo.zig");
 const qa = @import("qa.zig");
 const i18n = @import("i18n.zig");
+const accounts_mod = @import("../core/accounts.zig");
 
 const Rgba = d.Rgba;
 const Rect = d.Rect;
@@ -18,7 +19,10 @@ const Rect = d.Rect;
 pub const Phase = enum { hidden, form, connecting, leaving };
 
 /// `back`: "Voltar" (adicionando outra conta, ou depois de sair de uma).
-pub const Result = enum { submit, demo, cancel, back };
+pub const Result = enum { submit, demo, cancel, back, pick };
+
+/// Contas guardadas que cabem no cartão.
+pub const max_accounts = 4;
 
 pub const Login = struct {
     phase: Phase = .hidden,
@@ -36,6 +40,9 @@ pub const Login = struct {
     /// Texto do "Voltar" no topo do cartão (vazio = sem). Ex.: "Voltar para ana".
     back_buf: [96]u8 = undefined,
     back_len: usize = 0,
+    /// Contas guardadas deste quadro e a escolhida (com `Result.pick`).
+    accounts: []const *const accounts_mod.Account = &.{},
+    picked: @import("../core/types.zig").Id = 0,
     /// Valores suavizados entre quadros.
     look: [2]f32 = .{ 0, 0 },
     card_h: f32 = 0,
@@ -94,6 +101,7 @@ pub const Env = struct {
     reduce: bool,
     /// Segundos desde o último quadro (fixo ao gravar a animação).
     dt: f32,
+    accounts: []const *const accounts_mod.Account = &.{},
 };
 
 // --- Cores ---------------------------------------------------------------------
@@ -218,6 +226,7 @@ const Frame = struct {
 
 pub fn draw(l: *Login, env: Env) ?Result {
     if (l.phase == .hidden) return null;
+    l.accounts = env.accounts;
     l.t += if (env.reduce) 10 else env.dt;
     if (env.reduce and l.phase == .leaving) l.phase_at = l.t - 10;
 
@@ -448,8 +457,35 @@ fn form(f: *Frame, x: f32, y0: f32, w: f32) ?Result {
 
     f.text(.semibold, 24, x, y, f.p.text, i18n.tr("Entrar", "Sign in"));
     y += 36;
-    f.text(.regular, 14.5, x, y, f.p.muted, i18n.tr("Cole o token da sua conta do Discord pra começar.", "Paste your Discord account token to get started."));
-    y += 34;
+    // Contas guardadas: um clique, sem token nenhum na tela.
+    for (l.accounts, 0..) |a, i| {
+        const row: Rect = .{ .x = x, .y = y, .w = w, .h = 44 };
+        const hr = hit(40 + i, row);
+        qa.mark(row, "login:conta:{d}", .{a.id});
+        if (hr.clicked) {
+            l.picked = a.id;
+            result = .pick;
+        }
+        d.rect(dl, row, f.p.text.alpha((if (hr.hovered) @as(f32, 0.08) else 0.04) * f.a), 8);
+        d.border(dl, row, f.p.field_border.alpha(f.a), 8, 1);
+        d.circle(dl, x + 22, y + 22, 13, f.p.primary.alpha(f.a));
+        const name = a.name();
+        const first = if (name.len > 0) name[0..@min(name.len, std.unicode.utf8ByteSequenceLength(name[0]) catch 1)] else "?";
+        f.centered(.bold, 13, x + 22, y + 22 - 8, f.p.on_primary, first);
+        var b: [96]u8 = undefined;
+        _ = d.textClipped(dl, f.font(.medium), 14, x + 44, d.centerY(row, 14), f.p.text.alpha(f.a), i18n.fmt(&b, "Entrar como {s}", "Sign in as {s}", .{name}), w - 56);
+        y += row.h + 8;
+    }
+    if (l.accounts.len > 0) y += 6;
+    f.text(.regular, 14.5, x, y, f.p.muted, if (l.accounts.len > 0) i18n.tr("Ou cole o token de outra conta.", "Or paste the token of another account.") else i18n.tr("Cole o token da sua conta do Discord pra começar.", "Paste your Discord account token to get started."));
+    y += 26;
+
+    // Antes de colar: quem corre o risco é a conta de quem usa.
+    d.circle(dl, x + 6, y + 8, 6, f.p.danger.alpha(f.a));
+    f.text(.bold, 10, x + 3.5, y + 1.5, f.p.card, "!");
+    f.text(.regular, 12.5, x + 18, y, f.p.muted, i18n.tr("Use uma conta secundária: o Discord pode", "Use a secondary account: Discord can"));
+    f.text(.regular, 12.5, x + 18, y + 17, f.p.muted, i18n.tr("desativar contas em clientes de terceiros.", "disable accounts on third-party clients."));
+    y += 46;
 
     // Campo do token.
     f.text(.medium, 13, x, y, f.p.text, "Token");

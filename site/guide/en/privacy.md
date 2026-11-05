@@ -67,3 +67,23 @@ Hides your email and username in settings. It doesn't hide anything else on scre
 ## Reporting a problem
 
 Open an issue on [GitHub](https://github.com/RshaCuDeVidro/larperCord/issues). If it involves leaking a token or anything sensitive, don't include real tokens in the report.
+
+## If Discord locks your account
+
+Discord disables accounts or forces a password reset when it thinks an account is a spam bot or was compromised. It can happen on any client, but third-party clients tend to trigger it more often. It already happened to this project's developer, after a day of testing. **Use a secondary account.**
+
+These are the usual triggers people report, so do them in the official client:
+
+- joining or leaving servers, the most common one
+- disconnecting and reconnecting often, which includes restarting the app over and over
+- opening DMs with new people
+- changing your friends list
+- editing your profile while connected here
+
+If it happens, reset your password from discord.com. If the account stays locked, [appeal here](https://support.discord.com/hc/en-us/requests/new?ticket_form_id=360000029731). Discord doesn't publish these rules, so this list comes from the experience of people who make third-party clients.
+
+## If your antivirus complains
+
+The Windows build isn't signed, so SmartScreen warns about it. A scanner may also call it a Discord token stealer, likely because a Discord client is full of the same words a stealer has, such as "token" and "Authorization". One sandbox scored version 0.5.0 that way from a pattern rule, while its behavior report showed no credential access and, in demo mode, no network at all.
+
+The token only goes to Discord, and it stays in the system keyring or, without one, in a private file. The code is public, so you can read it or build it yourself. Only download larperCord from this repository.

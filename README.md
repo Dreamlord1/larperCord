@@ -19,6 +19,26 @@ Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 > Use it at your own risk, ideally with a secondary account. This project has no affiliation
 > with Discord Inc. With no token configured, the app runs in a **demo mode** with fake data.
 
+### If Discord locks your account
+
+Discord disables accounts or forces a password reset when it thinks an account is a spam bot or was compromised. It can happen on any client, but third-party clients tend to trigger it more often. It already happened to this project's developer, after a day of testing. **Use a secondary account.**
+
+These are the usual triggers people report, so do them in the official client:
+
+- joining or leaving servers, the most common one
+- disconnecting and reconnecting often, which includes restarting the app over and over
+- opening DMs with new people
+- changing your friends list
+- editing your profile while connected here
+
+If it happens, reset your password from discord.com. If the account stays locked, [appeal here](https://support.discord.com/hc/en-us/requests/new?ticket_form_id=360000029731). Discord doesn't publish these rules, so this list comes from the experience of people who make third-party clients.
+
+### If your antivirus complains
+
+The Windows build isn't signed, so SmartScreen warns about it. A scanner may also call it a Discord token stealer, likely because a Discord client is full of the same words a stealer has, such as "token" and "Authorization". One sandbox scored version 0.5.0 that way from a pattern rule, while its behavior report showed no credential access and, in demo mode, no network at all.
+
+The token only goes to Discord, and it stays in the system keyring or, without one, in a private file. The code is public, so you can read it or build it yourself. Only download larperCord from this repository.
+
 ## Why
 
 The official client is a whole browser dressed up as an app. On the same PC:
@@ -26,12 +46,12 @@ The official client is a whole browser dressed up as an app. On the same PC:
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord**, real account | **~130 MB**³ | **0–0.4%** | **~6.7 MB** |
-| **larperCord**, demo | **44–47 MB**² | **0–0.4%** | **~6.7 MB** |
+| **larperCord**, real account | **~130 MB**³ | **0–0.4%** | **~6.8 MB** |
+| **larperCord**, demo | **44–47 MB**² | **0–0.4%** | **~6.8 MB** |
 
 <sub>¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, 1280×800 window, `ReleaseFast` build.
 ² Demo data, a real window, GIF autoplay off, measured with `tools/membench.sh`. An animated GIF on screen costs about 2.5% CPU. About half of the total is the NVIDIA driver and system libraries (libcurl, OpenSSL).
-³ 125–140 MB in one account's normal use on the same PC. Yours depends on your servers, members and images; Settings → Performance shows where it goes.</sub>
+³ 125–140 MB in one account's normal use on the same PC, about 70 MB right after opening. Yours depends on your servers, members and images; Settings → Performance shows where it goes.</sub>
 
 ## What's in it
 
@@ -182,7 +202,7 @@ No magic, just many small decisions:
 
 1. **It sleeps when nothing happens.** The loop waits in `SDL_WaitEvent`. Network, inotify and the clock
    wake the app with events. No animation, no redraw. A frame that comes out the same as the last one
-   never reaches the GPU, and a mouse just passing over things redraws at most 30 times a second.
+   never reaches the GPU, and a mouse just moving asks for fewer frames.
 2. **No browser.** Everything is drawn with Dear ImGui's `ImDrawList` on top of SDL_Renderer.
 3. **Fonts are mapped, not copied.** Each font file is one `mmap` shared by
    every weight and family. Only the pages read stay in RAM. (Loading 4 weights of Inter + emoji
@@ -196,7 +216,7 @@ No magic, just many small decisions:
    minute in the tray or minimized, images leave memory too, except small ones that were on screen.
 8. **fontconfig gets freed** after fonts are resolved (`FcFini` + `malloc_trim`).
 9. **No blinking cursor**: a cursor blinking on its own would keep the CPU awake.
-10. **A lean binary**: a release build without debug symbols, about 6.7 MB.
+10. **A lean binary**: a release build without debug symbols, about 6.8 MB.
 
 ## Building
 

@@ -5,14 +5,14 @@
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | 1.279 MB | 12–47% ¹ | 287 MB |
-| **larperCord**, conta real ³ | **~130 MB** | **0–0,4%** | **~6,7 MB** |
-| **larperCord**, demonstração ² | **44–47 MB** | **0–0,4%** | **~6,7 MB** |
+| **larperCord**, conta real ³ | **~130 MB** | **0–0,4%** | **~6,8 MB** |
+| **larperCord**, demonstração ² | **44–47 MB** | **0–0,4%** | **~6,8 MB** |
 
 ¹ Média desde a abertura, medida com `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
 
 ² Dados de demonstração, os 11 temas, GPU de verdade, janela de verdade num workspace escondido do Hyprland e reprodução automática de GIFs desligada. Uma janela à vista pode medir diferente.
 
-³ 125–140 MB no uso normal de uma conta, no mesmo PC, com um i5-2400S. O seu depende dos seus servidores, membros e imagens. Configurações → Desempenho mostra para onde vai.
+³ 125–140 MB no uso normal de uma conta, no mesmo PC, com um i5-2400S, e cerca de 70 MB logo depois de abrir. O seu depende dos seus servidores, membros e imagens. Configurações → Desempenho mostra para onde vai.
 
 Leia esses números com as ressalvas certas:
 
@@ -34,7 +34,7 @@ A página Desempenho nas configurações mostra números ao vivo, inclusive para
 
 ## Dez decisões
 
-1. **Dorme quando nada acontece.** O laço espera em `SDL_WaitEvent`. Rede, inotify e o relógio acordam o app por eventos. Sem animação, sem redesenho. Quadro que sai igual ao anterior nem chega à GPU, e o mouse só passando por cima redesenha no máximo 30 vezes por segundo.
+1. **Dorme quando nada acontece.** O laço espera em `SDL_WaitEvent`. Rede, inotify e o relógio acordam o app por eventos. Sem animação, sem redesenho. Quadro que sai igual ao anterior nem chega à GPU, e o mouse só andando pede menos quadros.
 2. **Nada de navegador.** Tudo é desenhado com o `ImDrawList` do Dear ImGui sobre o SDL_Renderer.
 3. **Fontes mapeadas, não copiadas.** Cada arquivo de fonte vira um `mmap` usado por todos os pesos e famílias, então só as páginas lidas ficam na RAM. Carregar 4 pesos do Inter mais emoji do jeito ingênuo custava cerca de 90 MB.
 4. **Só o driver de vídeo necessário.** Em máquinas só com NVIDIA, o glvnd também carregava o Mesa e o LLVM (cerca de 23 MB) à toa. O app detecta isso e evita.

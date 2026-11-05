@@ -520,6 +520,7 @@ pub const Gateway = struct {
     fn onClose(g: *Gateway, code: u16) End {
         switch (code) {
             4004 => {
+                g.emit(.{ .status = .rejected });
                 g.notice("token inválido ou expirado (4004). Atualize o token e reinicie.", "invalid or expired token (4004). Update the token and restart.", .{});
                 return .fatal;
             },

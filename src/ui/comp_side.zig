@@ -292,14 +292,14 @@ pub fn statusBar(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
                 const conn = ctx.store.connection;
                 color = switch (conn) {
                     .ready => ctx.col(.online),
-                    .failed, .offline => ctx.col(.danger),
+                    .rejected, .failed, .offline => ctx.col(.danger),
                     else => ctx.col(.idle),
                 };
                 break :blk switch (conn) {
                     .ready => if (ctx.store.demo) i18n.tr("● demonstração", "● demo") else i18n.tr("● conectado", "● connected"),
                     .connecting => i18n.tr("◌ conectando…", "◌ connecting…"),
                     .reconnecting => i18n.tr("◌ reconectando…", "◌ reconnecting…"),
-                    .failed => i18n.tr("✕ falhou", "✕ failed"),
+                    .rejected, .failed => i18n.tr("✕ falhou", "✕ failed"),
                     .offline => "○ offline",
                 };
             },

@@ -17,6 +17,7 @@
 
 **Mensagens**
 - Horários `<t:…>` aparecem como uma data ou "em 2 horas", no seu fuso, em vez do código.
+- Em cima de um link, o cursor vira a mãozinha. A seleção de texto estava passando por cima dela.
 - Marcar como lida e como não lida agora sempre chega ao Discord. Com o status invisível, ficava só no seu computador e voltava na próxima conexão. O status não impede mais a confirmação de leitura; com a janela sem foco, ela continua não indo sozinha.
 
 **Mais leve**
@@ -24,6 +25,10 @@
 - Mexer o mouse sem botão apertado pede menos quadros.
 - Depois de um minuto na bandeja ou minimizada, as imagens saem da memória, menos as pequenas que estavam na tela.
 - Configurações → Desempenho mostra para onde vai a memória: imagens, mensagens, pessoas, servidores, fontes, driver e bibliotecas.
+
+**Contas**
+- A tela de login mostra todas as contas salvas como botões, venha de onde vier, com um aviso para usar conta secundária antes de colar um token.
+- Quando o Discord recusa um token, o app esquece esse token em vez de tentar de novo a cada abertura. Se a sessão acabar com o app aberto, ele volta para a tela de login.
 
 **Instalação**
 - O instalador do Linux dá ao atalho o ID da janela, para as barras que procuram o ícone desse jeito acharem. Rodar de novo troca o atalho antigo.

@@ -7,6 +7,7 @@ const c = @import("c");
 const platform = @import("platform/window.zig");
 const timeline = @import("platform/timeline.zig");
 const store_mod = @import("core/store.zig");
+const accounts_mod = @import("core/accounts.zig");
 const Store = store_mod.Store;
 const ev = @import("core/event.zig");
 const types = @import("core/types.zig");
@@ -565,7 +566,10 @@ pub const App = struct {
                 app.stopNet();
                 app.resetSession();
                 lg.setPhase(.form);
-                app_accounts.offerBack(app, 0);
+            },
+            .pick => {
+                lg.clearToken();
+                if (!app_accounts.switchAccount(app, lg.picked)) lg.fail(i18n.tr("Não achei o token dessa conta no chaveiro.", "Couldn't find that account's token in the keyring."));
             },
             .back => {
                 lg.clearToken();
@@ -1611,6 +1615,7 @@ pub const App = struct {
         app.events.drain(&batch);
         const was_ready = app.store.ready;
         var failed = false;
+        var token_dead = false;
         var reconnected = false;
         var new_session = false;
         for (batch.items) |e| {
@@ -1655,6 +1660,7 @@ pub const App = struct {
             if (e == .voice_audio) app.voiceAudio(e.voice_audio.mic_ok, e.voice_audio.out_ok);
             if (e == .history) timeline.mark(.historico);
             if (e == .status and e.status == .failed) failed = true;
+            if (e == .status and e.status == .rejected) token_dead = true;
             // Antes de o Store ficar com a mensagem (se o canal não existe, ele a libera).
             const quiet: ?types.Id = if (e == .message_create and app.store.ready) app.incoming(e.message_create) else null;
             if (e == .message_create and app.store.ready) plugin_host.onMessage(app, e.message_create);
@@ -1713,15 +1719,9 @@ pub const App = struct {
                 }
             }
         }
-        if (failed and app.net == .real and !app.store.ready) {
-            // Token recusado (ou erro fatal) antes de entrar: volta ao login.
-            app.stopNet();
-            app.resetSession();
-            app.login.fail(if (app.last_notice_len > 0) app.last_notice[0..app.last_notice_len] else i18n.tr("Não deu pra entrar com esse token.", "Couldn't sign in with that token."));
-            app_accounts.offerBack(app, switch (app_accounts.token_source) {
-                .saved => |id| id,
-                else => 0,
-            });
+        if (failed and app.net == .real) {
+            // Token recusado (ou erro fatal), antes de entrar ou com a conversa aberta.
+            app_accounts.sessionRefused(app, token_dead, if (app.last_notice_len > 0) app.last_notice[0..app.last_notice_len] else i18n.tr("Não deu pra entrar com esse token.", "Couldn't sign in with that token."));
             return;
         }
         // GUILD_DELETE/CHANNEL_DELETE: não deixa a interface apontando para
@@ -2389,12 +2389,14 @@ pub const App = struct {
             }
             if (app.login.visible()) {
                 const th = app.themes.theme_();
+                var login_accounts: [login_mod.max_accounts]*const accounts_mod.Account = undefined;
                 const result = login_mod.draw(&app.login, .{
                     .ui = app.uiFamily("Inter"),
                     .io = app.io,
                     .light = app.themes.mode == .light,
                     .reduce = set.reduce_motion,
                     .dt = if (record_dir != null) 1.0 / 30.0 else anim.dt,
+                    .accounts = app_accounts.others(&login_accounts),
                 });
                 _ = th;
                 if (result) |r| login_result = r;

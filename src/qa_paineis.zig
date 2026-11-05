@@ -449,9 +449,18 @@ pub const ops_pages_theme = [_]Op{
 
 // --- Novidades --------------------------------------------------------------------
 
+/// A versão instalada, a mais nova da página: o teste não muda a cada release.
+fn tNewest(_: *App, b: []u8) []const u8 {
+    return std.fmt.bufPrint(b, "changelog-version:{s}", .{updater.current}) catch "";
+}
+fn newestItem() bool {
+    var b: [64]u8 = undefined;
+    const k = std.fmt.bufPrint(&b, "changelog-item:{s}:0", .{updater.current}) catch return false;
+    return qa.find(k) != null;
+}
 fn changelogReal(_: *App) bool {
     // O conteúdo de verdade do CHANGELOG, no idioma da interface, sem o título do arquivo.
-    return qa.find("changelog-section:Windows") != null and qa.find("changelog-section:Voz") != null and qa.find("changelog-item:0.5.0:0") != null;
+    return qa.find("changelog-section:Plugins") != null and qa.find("changelog-section:Mensagens") != null and newestItem();
 }
 fn currentMarked(_: *App) bool {
     var b: [64]u8 = undefined;
@@ -465,13 +474,15 @@ fn oldOpen(_: *App) bool {
     return qa.find("changelog-item:0.4.0:0") != null;
 }
 fn newClosed(_: *App) bool {
-    return qa.find("changelog-version:0.5.0") != null and qa.find("changelog-item:0.5.0:0") == null;
+    var b: [64]u8 = undefined;
+    return qa.find(tNewest(undefined, &b)) != null and !newestItem();
 }
 fn newOpen(_: *App) bool {
-    return qa.find("changelog-item:0.5.0:0") != null;
+    return newestItem();
 }
 fn linesOrdered(_: *App) bool {
-    const a = qa.find("changelog-version:0.5.0") orelse return false;
+    var k: [64]u8 = undefined;
+    const a = qa.find(tNewest(undefined, &k)) orelse return false;
     const b = qa.find("changelog-version:0.4.0") orelse return false;
     return b.y > a.bottom();
 }
@@ -488,7 +499,7 @@ pub const ops_changelog = [_]Op{
     expect("uma versão vem depois da outra", linesOrdered),
     check,
     .{ .shot = "74-novidades" },
-    click("changelog-version:0.5.0"),
+    .{ .click = .{ .dyn = tNewest } },
     expect("clicar fecha a versão", newClosed),
     click("changelog-version:0.4.0"),
     expect("clicar abre a versão", oldOpen),
@@ -496,7 +507,7 @@ pub const ops_changelog = [_]Op{
     check,
     .{ .shot = "74a-novidades-fechada" },
     click("changelog-version:0.4.0"),
-    click("changelog-version:0.5.0"),
+    .{ .click = .{ .dyn = tNewest } },
     expect("e volta como estava", newOpen),
     key(c.ImGuiKey_Escape),
     .{ .wait = 350 },

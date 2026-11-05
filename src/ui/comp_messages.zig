@@ -624,7 +624,8 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
         const m = &msgs[pi];
         const off = probe.out orelse (if (ctx.mouse.x < r.x + g.content_x) @as(u32, 0) else emb.textLen(m));
         if (!ctx.hot) {
-            if (probe.out != null) c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_TextInput);
+            // Link no caminho: já pediu a mãozinha, e ela vale mais que o cursor de texto.
+            if (probe.out != null and c.ImGui_GetMouseCursor() != c.ImGuiMouseCursor_Hand) c.ImGui_SetMouseCursor(c.ImGuiMouseCursor_TextInput);
             if (c.ImGui_IsMouseClicked(0)) {
                 st.selection = .{ .channel = ch_id, .a_id = m.msg.id, .a_off = off, .b_id = m.msg.id, .b_off = off, .dragging = true };
                 if (c.ImGui_IsMouseDoubleClicked(0)) selectWord(st, m, off);
