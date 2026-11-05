@@ -18,7 +18,7 @@ Abra as configurações com `Ctrl+,`. As mudanças valem na hora e são salvas e
 | **Idioma** | Seguir o sistema, Português (Brasil) ou English (US) |
 | **Avançado** | Modo desenvolvedor (IDs das mensagens, "Copiar ID") e recarregar temas ao salvar |
 | **Desempenho** | RAM, CPU por quadro, CPU parado e mensagens por canal |
-| **Plugins** | A lista de plugins, ligar e desligar, erros, Recarregar e Instalar exemplos |
+| **Plugins** | Um cartão para cada plugin (o que ele é e o que pede), ligar e desligar, erros, aprovação de hosts, o painel dele, Recarregar e Instalar os incluídos |
 | **Sobre** | Versão e com o que foi feito |
 
 ## Escolhas de privacidade que valem conhecer
@@ -40,7 +40,8 @@ Abra as configurações com `Ctrl+,`. As mudanças valem na hora e são salvas e
 | `~/.config/larpercord/settings.kdl` | Configurações, incluindo as opções e cores de cada tema |
 | `~/.config/larpercord/themes/*.kdl` | Seus temas |
 | `~/.config/larpercord/plugins/*.lua` | Seus plugins |
-| `~/.config/larpercord/plugins.kdl` | Quais plugins estão ligados ou desligados |
+| `~/.config/larpercord/plugins.kdl` | Quais plugins estão desligados, os hosts aprovados e o painel lateral |
+| `~/.config/larpercord/plugin-data/` | O que cada plugin guarda, por conta |
 | `~/.config/larpercord/drafts.kdl` | Rascunhos não enviados por canal (`chmod 600`) |
 | `~/.config/larpercord/saved-<conta>.json` | Mensagens salvas e anotações |
 | `~/.config/larpercord/accounts` | Contas guardadas: só ID, nome e foto |

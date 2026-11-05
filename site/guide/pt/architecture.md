@@ -33,7 +33,8 @@ tools/        QA, benchmark de memória, capturas de tela, geradores de logo e d
 
 | Thread | Quando existe | O que faz |
 |---|---|---|
-| Interface | Sempre | O laço principal, dormindo em `SDL_WaitEvent` quando nada acontece. Os plugins Lua também rodam aqui |
+| Interface | Sempre | O laço principal, dormindo em `SDL_WaitEvent` quando nada acontece |
+| Plugins | Com um plugin ligado | Todo o Lua roda aqui. Conversa com a interface por duas filas e dorme quando nada acontece |
 | Gateway | Com token | WebSocket com heartbeat, RESUME, zlib-stream e reconexão, mais o REST, uma requisição por vez |
 | Gateway de demonstração | Sem token | Servidores, pessoas e mensagens falsos |
 | Mídia | Sempre, quase sempre dormindo | Baixa e decodifica imagens com baixa prioridade, no máximo 2 decodificações por vez |

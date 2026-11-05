@@ -57,9 +57,10 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 - **Abas de canal**, paleta de comandos com busca aproximada (`Ctrl+K` / `Ctrl+Shift+P`: canais, DMs,
   servidores, temas, status, marcar como lido e as opções liga/desliga), atalhos de teclado e
   navegação estilo vim opcional (`j`/`k`, `gg`/`G`, `J`/`K` troca de canal, `/` busca).
-- **Plugins em Lua**: arquivos `.lua` em `~/.config/larpercord/plugins/` que reagem a mensagens e
-  criam comandos locais (`/shrug`) e atalhos, num sandbox com limite de instruções; liga/desliga,
-  erros e plugins de exemplo em Configurações → Plugins. [Guia e API →](docs/plugins.pt-BR.md)
+- **Plugins em Lua**: arquivos `.lua` em `~/.config/larpercord/plugins/` que somam painéis, entradas no
+  botão direito, notas embaixo das mensagens, comandos e lembretes, numa thread só deles, com limite de
+  instruções e de memória: não seguram a interface. Favoritos, lembretes, destaques, filtro local,
+  trechos, tradução e estatísticas do canal vêm com o app. [Guia e API →](docs/plugins.pt-BR.md)
 - **Voz:** em Configurações → Voz você escolhe microfone e saída (lembrados pelo nome, voltam ao padrão se sumirem, trocam em plena call), ajusta os volumes, vê o nível do microfone ao vivo e usa "Testar microfone" para ouvir a si mesmo. A detecção de voz tem limiar ajustável sobre a barra ou modo automático que aprende o ruído de fundo. O modo "aperte para falar" aceita tecla ou botão do mouse e funciona com a janela em foco (atalho global não é portável pelo SDL). Há passa-altas contra ronco, porta de ruído e bipes de entrar, sair, mutar e desmutar, tudo desligável. O painel de voz mostra ping, qualidade por cor, quando você está transmitindo e avisa se o microfone não abrir ou se o servidor te mutou ou ensurdeceu; mudo e surdo dos outros aparecem na lista da call.
 - **Roda no Linux e no Windows.** O Windows 10/11 sai do mesmo código; os tokens ficam no Gerenciador de Credenciais.
 - **Fica na bandeja.** Fechar mantém a conexão na bandeja do sistema, com Abrir e Sair no menu dela; "Fechar para a bandeja" em Configurações → Avançado desliga isso. Sem bandeja, fechar encerra. Abrir de novo traz a janela que já está rodando. No Linux a bandeja precisa de um painel StatusNotifier e de libappindicator ou ayatana.
