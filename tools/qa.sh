@@ -22,6 +22,10 @@ run() {
     fi
 }
 run "geral (classico)" $bin --qa --theme classico
+# Plugins: o que fica gravado ao fechar continua lá ao abrir de novo (outro processo).
+QA_SUITE=plugins-a run "plugins (antes)" $bin --qa
+sleep 2.5
+QA_SUITE=plugins-b run "plugins (depois)" $bin --qa
 for m in escuro claro; do
     QA_SUITE=login QA_PREFIX="$m-" run "login ($m)" $bin --qa --mode "$m"
 done

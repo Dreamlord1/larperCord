@@ -972,8 +972,13 @@ fn mentionResolved(app: *App) bool {
 fn popupClosed(app: *App) bool {
     return app.st.popup == .none;
 }
-// Plugins: os dois exemplos de docs/plugins e três de teste.
+// Plugins: quatro arquivos antigos, sem cabeçalho (têm que continuar funcionando),
+// e três de teste.
 const qa_plugins = [_]struct { name: []const u8, src: []const u8 }{
+    .{ .name = "shrug.lua", .src = @embedFile("plugins/testdata/shrug.lua") },
+    .{ .name = "alerta.lua", .src = @embedFile("plugins/testdata/alerta.lua") },
+    .{ .name = "calc.lua", .src = @embedFile("plugins/testdata/calc.lua") },
+    .{ .name = "zoeira.lua", .src = @embedFile("plugins/testdata/zoeira.lua") },
     .{ .name = "qa.lua", .src =
     \\larper.on("message", function(msg)
     \\  if msg.content == "ping-plugin" then larper.notify("pong-plugin de " .. msg.author.name) end
@@ -985,20 +990,11 @@ const qa_plugins = [_]struct { name: []const u8, src: []const u8 }{
     .{ .name = "quebrado.lua", .src = "larper.on('message', function( end" },
 };
 
-fn writePlugins(_: *App) void {
+fn writePlugins(app: *App) void {
+    @import("qa_plugins.zig").wipeDataPub(app);
     _ = c.SDL_CreateDirectory("qa-out/plugins");
-    // Sem as sobras de outra rodada (o "Instalar exemplos" grava aqui).
-    for ([_][:0]const u8{ "qa-out/plugins/calc.lua", "qa-out/plugins/dado.lua", "qa-out/plugins/relogio.lua", "qa-out/plugins/resumo.lua", "qa-out/plugins/zoeira.lua" }) |n| _ = c.SDL_RemovePath(n.ptr);
-    for ([_][]const u8{ "shrug.lua", "alerta.lua" }) |n| {
-        var a: [96]u8 = undefined;
-        var b: [96]u8 = undefined;
-        const from = std.fmt.bufPrintSentinel(&a, "docs/plugins/{s}", .{n}, 0) catch continue;
-        const to = std.fmt.bufPrintSentinel(&b, "qa-out/plugins/{s}", .{n}, 0) catch continue;
-        var size: usize = 0;
-        const data = c.SDL_LoadFile(from.ptr, &size) orelse continue;
-        defer c.SDL_free(data);
-        _ = c.SDL_SaveFile(to.ptr, data, size);
-    }
+    // Sem as sobras de outra rodada (o "Instalar" grava aqui).
+    @import("qa_plugins.zig").removeAllPlugins(app);
     for (qa_plugins) |p| {
         var b: [96]u8 = undefined;
         const to = std.fmt.bufPrintSentinel(&b, "qa-out/plugins/{s}", .{p.name}, 0) catch continue;
@@ -1018,17 +1014,18 @@ fn lastIs(app: *App, text: []const u8) bool {
     return m.msg.author == app.store.me and std.mem.eql(u8, m.msg.content, text);
 }
 fn noPlugins(app: *App) bool {
-    return app.plugins.list.items.len == 0 and qa.find("button:Recarregar") != null;
+    // Sem plugin ligado não há thread nem estado de Lua.
+    return app.plugins.list.items.len == 0 and qa.find("button:Recarregar") != null and !app.plugins.threadRunning();
 }
 fn pluginsLoaded(app: *App) bool {
-    return app.plugins.list.items.len == 5 and qa.find("toggle:shrug.lua") != null;
+    return app.plugins.list.items.len == 7 and qa.find("toggle:shrug.lua") != null;
 }
 fn examplesLoaded(app: *App) bool {
-    for ([_][]const u8{ "calc.lua", "dado.lua", "relogio.lua", "resumo.lua", "zoeira.lua" }) |n| {
-        const p = plugin(app, n) orelse return false;
+    for (@import("plugin_examples").list) |ex| {
+        const p = plugin(app, ex.name) orelse return false;
         if (p.status() != .running) return false;
     }
-    return app.plugins.list.items.len == 10 and qa.find("button:Instalar exemplos") == null;
+    return app.plugins.list.items.len == 14 and qa.find("button:Instalar os incluídos") == null;
 }
 fn contaSent(app: *App) bool {
     const m = lastMsg(app, 0) orelse return false;
@@ -1780,6 +1777,77 @@ fn savedEmptyOnDisk(app: *App) bool {
     return disk.items.items.len == 0;
 }
 
+/// Os plugins (também sozinhos: QA_SUITE=plugins).
+const ops_plugin_section = [_]Op{
+    s("plugins"),
+    .{ .run = writePlugins },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    expect("sem plugins carregados, a página diz como começar", noPlugins),
+    click("button:Recarregar"),
+    expect("Recarregar lê os .lua da pasta", pluginsLoaded),
+    expect("erro de sintaxe aparece na página", syntaxShown),
+    .{ .shot = "35-plugins" },
+    key(c.ImGuiKey_Escape),
+    expect("fecha as configurações", settingsClosed),
+    click("composer"),
+    .{ .text = "/shrug sei lá" },
+    key(c.ImGuiKey_Enter),
+    expect("/shrug (docs/plugins/shrug.lua) manda o texto com ¯\\_(ツ)_/¯", shrugSent),
+    click("composer"),
+    .{ .text = "/trava" },
+    // A primeira escolhe na lista do autocompletar; a segunda envia.
+    key(c.ImGuiKey_Enter),
+    key(c.ImGuiKey_Enter),
+    expect("plugin em laço infinito é parado pelo limite de instruções", travaStopped),
+    .{ .key = .{ .key = c.ImGuiKey_Y, .ctrl = true, .shift = true } },
+    expect("atalho Ctrl+Shift+Y do plugin manda mensagem", keySent),
+    click("composer"),
+    .{ .text = "ping-plugin" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "evento message chega ao plugin e larper.notify avisa", .check = pongToast, .timeout_ms = 3000 } },
+    .{ .run = clearToast },
+    .{ .run = fakeUrgent },
+    expect("alerta.lua (docs/plugins) avisa a palavra de outra pessoa", alertToast),
+    click("composer"),
+    .{ .text = "spam-plugin" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "larper.send em resposta a mensagem é bloqueado", .check = spamBlocked, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("toggle:shrug.lua"),
+    expect("desligar um plugin", shrugOff),
+    key(c.ImGuiKey_Escape),
+    click("composer"),
+    .{ .text = "/shrug sei lá" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "desligado, /shrug vai como texto normal", .check = shrugLiteral, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("toggle:shrug.lua"),
+    expect("religar o plugin", shrugOn),
+    click("button:Instalar os incluídos"),
+    expect("Instalar põe os 7 plugins incluídos na pasta", examplesLoaded),
+    key(c.ImGuiKey_Escape),
+    click("composer"),
+    .{ .text = "/conta 2+3*4" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "/conta (calc.lua) manda a conta no canal", .check = contaSent, .timeout_ms = 3000 } },
+    click("composer"),
+    .{ .text = "/mock isso" },
+    key(c.ImGuiKey_Enter),
+    .{ .expect = .{ .name = "/mock (zoeira.lua) reescreve o texto", .check = mockSent, .timeout_ms = 3000 } },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+} ++ @import("qa_plugins.zig").ops ++ [_]Op{
+    .{ .sweep = &.{ "toggle:", "button:", "plugin-open:", "host:" } },
+    key(c.ImGuiKey_Escape),
+    // O resto da bateria começa sem plugins e sem painel (o layout volta ao normal).
+    .{ .run = @import("qa_plugins.zig").endSection },
+    expect("sem plugins, a thread dos plugins sai", @import("qa_plugins.zig").threadGone),
+
+};
+
 const ops = [_]Op{
     s("início"),
     expect("app conecta e carrega o histórico", ready),
@@ -2345,70 +2413,7 @@ const ops = [_]Op{
     expect("Apagar cache apaga os arquivos", cacheEmpty),
     key(c.ImGuiKey_Escape),
 
-    s("plugins"),
-    .{ .run = writePlugins },
-    ctrl(c.ImGuiKey_Comma),
-    click("settings:Plugins"),
-    expect("sem plugins carregados, a página diz como começar", noPlugins),
-    click("button:Recarregar"),
-    expect("Recarregar lê os .lua da pasta", pluginsLoaded),
-    expect("erro de sintaxe aparece na página", syntaxShown),
-    .{ .shot = "35-plugins" },
-    key(c.ImGuiKey_Escape),
-    expect("fecha as configurações", settingsClosed),
-    click("composer"),
-    .{ .text = "/shrug sei lá" },
-    key(c.ImGuiKey_Enter),
-    expect("/shrug (docs/plugins/shrug.lua) manda o texto com ¯\\_(ツ)_/¯", shrugSent),
-    click("composer"),
-    .{ .text = "/trava" },
-    // A primeira escolhe na lista do autocompletar; a segunda envia.
-    key(c.ImGuiKey_Enter),
-    key(c.ImGuiKey_Enter),
-    expect("plugin em laço infinito é parado pelo limite de instruções", travaStopped),
-    .{ .key = .{ .key = c.ImGuiKey_Y, .ctrl = true, .shift = true } },
-    expect("atalho Ctrl+Shift+Y do plugin manda mensagem", keySent),
-    click("composer"),
-    .{ .text = "ping-plugin" },
-    key(c.ImGuiKey_Enter),
-    .{ .expect = .{ .name = "evento message chega ao plugin e larper.notify avisa", .check = pongToast, .timeout_ms = 3000 } },
-    .{ .run = clearToast },
-    .{ .run = fakeUrgent },
-    expect("alerta.lua (docs/plugins) avisa a palavra de outra pessoa", alertToast),
-    click("composer"),
-    .{ .text = "spam-plugin" },
-    key(c.ImGuiKey_Enter),
-    .{ .expect = .{ .name = "larper.send em resposta a mensagem é bloqueado", .check = spamBlocked, .timeout_ms = 3000 } },
-    ctrl(c.ImGuiKey_Comma),
-    click("settings:Plugins"),
-    click("toggle:shrug.lua"),
-    expect("desligar um plugin", shrugOff),
-    key(c.ImGuiKey_Escape),
-    click("composer"),
-    .{ .text = "/shrug sei lá" },
-    key(c.ImGuiKey_Enter),
-    .{ .expect = .{ .name = "desligado, /shrug vai como texto normal", .check = shrugLiteral, .timeout_ms = 3000 } },
-    ctrl(c.ImGuiKey_Comma),
-    click("settings:Plugins"),
-    click("toggle:shrug.lua"),
-    expect("religar o plugin", shrugOn),
-    click("button:Instalar exemplos"),
-    expect("Instalar exemplos põe os 5 plugins novos na pasta", examplesLoaded),
-    key(c.ImGuiKey_Escape),
-    click("composer"),
-    .{ .text = "/conta 2+3*4" },
-    key(c.ImGuiKey_Enter),
-    .{ .expect = .{ .name = "/conta (calc.lua) manda a conta no canal", .check = contaSent, .timeout_ms = 3000 } },
-    click("composer"),
-    .{ .text = "/mock isso" },
-    key(c.ImGuiKey_Enter),
-    .{ .expect = .{ .name = "/mock (zoeira.lua) reescreve o texto", .check = mockSent, .timeout_ms = 3000 } },
-    ctrl(c.ImGuiKey_Comma),
-    click("settings:Plugins"),
-    .{ .sweep = &.{ "toggle:", "button:" } },
-    key(c.ImGuiKey_Escape),
-
-} ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ @import("qa_bandeja.zig").ops ++ lsp_ops ++ [_]Op{
+} ++ ops_plugin_section ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ @import("qa_bandeja.zig").ops ++ lsp_ops ++ [_]Op{
     s("caixa de entrada"),
     click("guild:500000"),
     click("channel:500005"),
@@ -2881,7 +2886,7 @@ const ops_theme = [_]Op{
     .{ .shot = "tema-pequena" },
     .{ .resize = .{ 1280, 800 } },
     .{ .wait = 200 },
-};
+} ++ @import("qa_plugins.zig").ops_theme;
 
 // --- Tela de login -------------------------------------------------------------
 
@@ -2970,6 +2975,11 @@ const ops_login = [_]Op{
     .{ .expect = .{ .name = "entrar de novo depois de sair", .check = loginGone, .timeout_ms = 5000 } },
 };
 
+const ops_plugins_only = [_]Op{expect("carrega e mostra a conversa", ready)} ++ ops_plugin_section;
+const ops_plugins_tls = [_]Op{expect("carrega e mostra a conversa", ready)} ++ @import("qa_plugins.zig").ops_tls;
+const ops_plugins_a = [_]Op{expect("carrega e mostra a conversa", ready)} ++ @import("qa_plugins.zig").ops_persist_a;
+const ops_plugins_b = [_]Op{expect("carrega e mostra a conversa", ready)} ++ @import("qa_plugins.zig").ops_persist_b;
+
 fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "tema")) return &ops_theme;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "login")) return &ops_login;
@@ -2983,6 +2993,10 @@ fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "bandeja-menu")) return &ops_bandeja_menu;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "bandeja-reinicio")) return &ops_bandeja_reinicio;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp-real")) return &ops_lsp_real;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins")) return &ops_plugins_only;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins-tls")) return &ops_plugins_tls;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins-a")) return &ops_plugins_a;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins-b")) return &ops_plugins_b;
     const scene = std.mem.span(c.SDL_getenv("QA_SCENE") orelse return &ops);
     if (std.mem.eql(u8, scene, "ctrl")) return &ops_ctrl;
     if (std.mem.eql(u8, scene, "nome")) return &ops_nome;
@@ -3161,6 +3175,7 @@ pub const Runner = struct {
         h.update(std.mem.asBytes(&st.jump));
         h.update(std.mem.asBytes(&app.themes.current));
         h.update(std.mem.asBytes(&app.plugins.generation));
+        h.update(std.mem.asBytes(&@import("ui/plugin_panel.zig").qaState()));
         h.update(&.{@intFromBool(video.info().active)});
         h.update(std.mem.asBytes(&mosaic.panes));
         h.update(std.mem.asBytes(&@as(u32, st.open_folders.count())));

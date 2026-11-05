@@ -53,8 +53,6 @@ for lang in en pt; do
     # tamanho real e deixam de fora os avisos de teste.
     printf '%s\n' '#0A050F' '#EF4444' '#22C55E' '#F59E0B' '#D946EF' '#9333EA' '#06B6D4' '#E5E7EB' \
         '#6B7280' '#F87171' '#4ADE80' '#FBBF24' '#E879F9' '#A855F7' '#22D3EE' '#E5E7EB' >"$w/rosa/.cache/wal/colors"
-    # O QA instala os plugins de exemplo a partir de docs/plugins, relativo à pasta atual.
-    ln -s "$PWD/docs" "$w/run/docs"
     qa_env=(env QA_LANG="$lang" XDG_CONFIG_HOME="$w/cfg" XDG_CACHE_HOME="$w/cache" HOME="$w/rosa" SDL_VIDEO_DRIVER=offscreen)
     # Em inglês alguns testes falham (comparam textos em português), mas a bateria vai até o fim.
     # Um recorte que faltar fica com a versão anterior.
