@@ -848,7 +848,9 @@ fn replyLine(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *const StoredMessage, x:
         const nc = if (on_accent) ctx.col(.bubble_self_text) else w.nameColor(ctx, guildOf(ctx, f.m.msg.channel), f.m.msg.author);
         const nm = std.fmt.bufPrint(buf[0..40], "@{s}", .{name}) catch name;
         d.text(dl, fam.get(.semibold), 13, xx, y + 1, nc, nm);
-        xx += d.width(fam.get(.semibold), 13, nm) + 6;
+        xx += d.width(fam.get(.semibold), 13, nm);
+        if (!on_accent) xx += w.botTag(ctx, dl, xx, y + 9, u, false, 1);
+        xx += 6;
         _ = d.textClipped(dl, fam.get(.regular), 13, xx, y + 1, if (hb.hovered) ctx.col(.text) else muted, snippet(buf[40..], quotedText(ctx, f.m)), max_w - (xx - x));
     } else {
         d.text(dl, fam.get(.italic), 13, x, y + 1, muted, i18n.tr("mensagem original não carregada", "Original message could not be loaded"));
@@ -1072,9 +1074,10 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                 nameHit(ctx, m.msg.author, m.msg.id, nr, 2);
                 d.text(dl, fam.get(.semibold), g.size, tx, y + (g.line_h - g.size * 1.2) / 2, role_col.alpha(alpha), name);
                 if (ctx.hovering(nr)) d.line(dl, tx, nr.bottom() - 2, tx + nw, nr.bottom() - 2, role_col, 1);
+                const tag_w = w.botTag(ctx, dl, tx + nw, y + g.line_h / 2, u, false, alpha);
                 const stp = w.stamp(&buf, m.msg.timestamp, @divTrunc(ctx.now_ms, 1000));
-                d.text(dl, fam.get(.medium), 12, tx + nw + 8, y + (g.line_h - 12 * 1.2) / 2 + 1, ctx.col(.faint), stp);
-                stampTip(ctx, under, m, .{ .x = tx + nw + 8, .y = y, .w = d.width(fam.get(.medium), 12, stp), .h = g.line_h });
+                d.text(dl, fam.get(.medium), 12, tx + nw + tag_w + 8, y + (g.line_h - 12 * 1.2) / 2 + 1, ctx.col(.faint), stp);
+                stampTip(ctx, under, m, .{ .x = tx + nw + tag_w + 8, .y = y, .w = d.width(fam.get(.medium), 12, stp), .h = g.line_h });
                 y += g.line_h;
             } else {
                 y += 1;
@@ -1135,10 +1138,14 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             stampTip(ctx, under, m, .{ .x = x, .y = y, .w = d.width(fam.get(.regular), g.size, ts), .h = g.line_h });
             x += d.width(fam.get(.regular), g.size, ts);
             const col_w = g.prefix_w - d.width(fam.get(.regular), g.size, "[00:00] ") - d.width(fam.get(.regular), g.size, " │ ");
-            const nw = @min(d.width(fam.get(.bold), g.size, name), col_w);
+            // A coluna do nome é justificada à direita: o sinal de bot fica antes dele.
+            const mark_w = w.botMarkSpace(fam.get(.bold), g.size, u);
+            const name_col_w = @max(col_w - mark_w, 24);
+            const nw = @min(d.width(fam.get(.bold), g.size, name), name_col_w);
             const nick_col = if (group) role_col else role_col.alpha(0.35);
             nameHit(ctx, m.msg.author, m.msg.id, .{ .x = x + col_w - nw, .y = y, .w = nw, .h = g.line_h }, 3);
-            _ = d.textClipped(dl, fam.get(.bold), g.size, x + col_w - nw, ty, nick_col.alpha(alpha), name, col_w);
+            _ = d.textClipped(dl, fam.get(.bold), g.size, x + col_w - nw, ty, nick_col.alpha(alpha), name, name_col_w);
+            w.botMark(ctx, dl, fam.get(.bold), g.size, x + col_w - nw - mark_w, y, g.line_h, u, (if (group) @as(f32, 1) else 0.35) * alpha);
             x += col_w;
             d.text(dl, fam.get(.regular), g.size, x, ty, ctx.col(.border).mix(ctx.col(.faint), 0.6), " │ ");
             const t = rich.layout(dl, ctx.store, ctx.th, m.spans, r.x + g.content_x, y, g.wrap, o, ctx.mouse);
@@ -1165,6 +1172,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
                     const nw = d.width(fam.get(.semibold), 13, name);
                     nameHit(ctx, m.msg.author, m.msg.id, .{ .x = r.x + left_pad + 6, .y = y, .w = nw, .h = 16 }, 4);
                     d.text(dl, fam.get(.semibold), 13, r.x + left_pad + 6, y, role_col, name);
+                    _ = w.botTag(ctx, dl, r.x + left_pad + 6 + nw, y + 8, u, false, 1);
                     y += 18;
                 }
             } else y += 3;

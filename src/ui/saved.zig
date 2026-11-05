@@ -178,7 +178,8 @@ fn item(ctx: *d.Ctx, dl: *c.ImDrawList, body: d.Rect, y0: f32, it: *const saved.
     // Autor e texto.
     const gid = it.guild;
     w.avatar(ctx, dl, inner + 12, y + 12, 24, it.author, .circle, null, 1);
-    _ = d.textClipped(dl, fam.get(.semibold), 14, inner + 32, y + 2, w.nameColor(ctx, gid, it.author), it.author_name, iw - 32);
+    const saved_nw = d.textClipped(dl, fam.get(.semibold), 14, inner + 32, y + 2, w.nameColor(ctx, gid, it.author), it.author_name, iw - 32 - w.botTagSpace(ctx, ctx.store.user(it.author), false));
+    _ = w.botTag(ctx, dl, inner + 32 + saved_nw, y + 10, ctx.store.user(it.author), false, 1);
     y += 24;
     var pb: [600]u8 = undefined;
     const sm: @import("../core/store.zig").StoredMessage = .{ .msg = .{ .id = it.id, .channel = it.channel, .author = it.author, .timestamp = it.timestamp, .content = it.content }, .spans = it.spans };

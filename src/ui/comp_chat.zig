@@ -25,10 +25,13 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     const ch = &cs.info;
     const variant = d.pstr(n, "variant", "discord");
     const dl = ctx.dl;
+    // Numa DM o nome do canal é o da pessoa: é ela quem pode ser um bot.
+    const dm_user = if (ch.guild == 0 and !ch.group) ctx.store.user(ch.recipient) else null;
 
     if (std.mem.eql(u8, variant, "tty")) {
         var buf: [160]u8 = undefined;
-        const t = std.fmt.bufPrint(&buf, "─ {s}{s} ─ {s} ", .{ sigil(ch), ch.name, ch.topic }) catch ch.name;
+        const t = std.fmt.bufPrint(&buf, "─ {s}{s}{s} ─ {s} ", .{ sigil(ch), ch.name, w.botSuffix(dm_user), ch.topic }) catch ch.name;
+        if (dm_user != null and dm_user.?.bot) qa.mark(r, "bot-tag:{d}", .{dm_user.?.id});
         const fs = ctx.th.font_size - 1;
         // O alfinete à direita, em texto como o resto da linha.
         const pl = "[pin]";
@@ -49,6 +52,7 @@ pub fn header(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         var buf: [128]u8 = undefined;
         const t = std.fmt.bufPrint(&buf, "{s}", .{ch.name}) catch "";
         d.text(dl, fam.get(.bold), 22, r.x + 4, r.y + r.h / 2 - 22, ctx.col(.text), t);
+        _ = w.botTag(ctx, dl, r.x + 4 + d.width(fam.get(.bold), 22, t), r.y + r.h / 2 - 9, dm_user, false, 1);
         const sub = if (ch.guild == 0) i18n.tr("mensagem direta", "direct message") else d.printClip(&buf, "{s}  ·  {s}", .{ if (g) |x| x.name else "", ch.topic });
         _ = d.textClipped(dl, fam.get(.regular), 13, r.x + 4, r.y + r.h / 2 + 5, ctx.col(.faint), sub, r.w - 120);
         inboxButtons(ctx, dl, r.right() - 32, r.y + r.h / 2 - 14);

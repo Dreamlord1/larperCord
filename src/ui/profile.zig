@@ -50,6 +50,10 @@ const Col = struct {
     }
 };
 
+fn isWebhook(ctx: *const d.Ctx, uid: Id) bool {
+    return if (ctx.store.user(uid)) |u| u.webhook else false;
+}
+
 fn bannerUrl(buf: []u8, uid: Id, hash: []const u8) []const u8 {
     if (std.mem.startsWith(u8, hash, "demo:")) return hash;
     return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/banners/{d}/{s}.png?size=600", .{ uid, hash }) catch "";
@@ -96,8 +100,12 @@ fn names(col: *Col, uid: Id, pf: ?types.Profile, big: bool) void {
     const ctx = col.ctx;
     const u = ctx.store.user(uid) orelse return;
     const ns: f32 = if (big) 24 else 20;
-    const nr: d.Rect = .{ .x = col.x, .y = col.y, .w = @min(d.width(ctx.ui.get(.bold), ns, u.name), col.w), .h = ns + 4 };
-    if (col.dl) |dl| _ = d.textClipped(dl, ctx.ui.get(.bold), ns, col.x, col.y, ctx.col(.text), u.name, col.w);
+    const name_room = col.w - w.botTagSpace(ctx, u, false);
+    const nr: d.Rect = .{ .x = col.x, .y = col.y, .w = @min(d.width(ctx.ui.get(.bold), ns, u.name), name_room), .h = ns + 4 };
+    if (col.dl) |dl| {
+        const nw = d.textClipped(dl, ctx.ui.get(.bold), ns, col.x, col.y, ctx.col(.text), u.name, name_room);
+        _ = w.botTag(ctx, dl, col.x + nw, col.y + ns * 0.62, u, false, 1);
+    }
     if (!big) {
         // No cartão, o nome abre o perfil grande.
         const hb = col.hit(1, nr);
@@ -321,6 +329,8 @@ fn voice(col: *Col, uid: Id) void {
 /// Desde quando está no Discord e no servidor aberto (e amigos desde).
 fn since(col: *Col, uid: Id, pf: ?types.Profile, gid: Id, friends: bool) void {
     const ctx = col.ctx;
+    // Webhook não é uma conta: não tem desde quando.
+    if (isWebhook(ctx, uid)) return;
     col.label(i18n.tr("MEMBRO DESDE", "MEMBER SINCE"));
     var x = col.x;
     var db: [48]u8 = undefined;
@@ -513,7 +523,7 @@ var note_focus = false;
 
 fn note(col: *Col, uid: Id) void {
     const ctx = col.ctx;
-    if (uid == ctx.store.me) return;
+    if (uid == ctx.store.me or isWebhook(ctx, uid)) return;
     col.label(i18n.tr("NOTA (SÓ VOCÊ VÊ)", "NOTE (ONLY VISIBLE TO YOU)"));
     const cur = ctx.store.notes.get(uid) orelse "";
     const r: d.Rect = .{ .x = col.x - 4, .y = col.y, .w = col.w + 8, .h = 30 };
@@ -633,7 +643,8 @@ fn cornerButton(ctx: *d.Ctx, dl: *c.ImDrawList, id: usize, r: d.Rect, tipText: [
 
 pub fn card(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
     if (ctx.store.user(uid) == null) return popup.close(ctx);
-    ctx.act(.{ .want_profile = uid });
+    const hook = isWebhook(ctx, uid);
+    if (!hook) ctx.act(.{ .want_profile = uid });
     const pf = ctx.store.profiles.get(uid);
     const width: f32 = 340;
     const banner_h: f32 = if (pf != null and pf.?.banner.len > 0) 120 else 92;
@@ -643,7 +654,7 @@ pub fn card(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
     // Mede as seções antes de abrir a janela.
     var m: Col = .{ .ctx = ctx, .dl = null, .x = 0, .w = width - 32, .y = 0, .ids = 0 };
     body(&m, uid, pf, gid);
-    const msg_h: f32 = if (uid != ctx.store.me) 52 else 8;
+    const msg_h: f32 = if (uid != ctx.store.me and !hook) 52 else 8;
     const total_h = banner_h + av / 2 + 14 + m.y + msg_h + 6;
 
     const r = popup.fit(ctx, x + 6, y - 40, width, total_h);
@@ -668,7 +679,7 @@ pub fn card(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
     body(&col, uid, pf, gid);
 
     // "Mensagem @fulano"
-    if (uid != ctx.store.me) {
+    if (uid != ctx.store.me and !hook) {
         const u = ctx.store.user(uid).?;
         const ir: d.Rect = .{ .x = r.x + 12, .y = r.bottom() - 50, .w = r.w - 24, .h = 38 };
         d.rect(dl, ir, ctx.col(.elevated), @max(ctx.th.radius, 4));
@@ -709,7 +720,7 @@ var tab_t0: i64 = 0;
 
 pub fn full(ctx: *d.Ctx, uid: Id) void {
     if (ctx.store.user(uid) == null) return popup.close(ctx);
-    ctx.act(.{ .want_profile = uid });
+    if (!isWebhook(ctx, uid)) ctx.act(.{ .want_profile = uid });
     const pf = ctx.store.profiles.get(uid);
     const gid = ctx.st.guild;
     const mw = @min(ctx.win.w - 48, 960);
@@ -758,7 +769,8 @@ pub fn full(ctx: *d.Ctx, uid: Id) void {
         if (nf == 1) i18n.tr("1 amigo em comum", "1 Mutual Friend") else i18n.fmt(&tb[0], "{d} amigos em comum", "{d} Mutual Friends", .{nf}),
         if (ng == 1) i18n.tr("1 servidor em comum", "1 Mutual Server") else i18n.fmt(&tb[1], "{d} servidores em comum", "{d} Mutual Servers", .{ng}),
     };
-    const own = uid == ctx.store.me;
+    // Webhook não tem amigos nem servidores em comum.
+    const own = uid == ctx.store.me or isWebhook(ctx, uid);
     var tx = right.x;
     const tf = ctx.ui.get(.semibold);
     var sel_x: f32 = right.x;
@@ -832,7 +844,7 @@ pub fn full(ctx: *d.Ctx, uid: Id) void {
 /// Mensagem / aceitar pedido, no perfil grande.
 fn buttons(col: *Col, uid: Id) void {
     const ctx = col.ctx;
-    if (uid == ctx.store.me) return;
+    if (uid == ctx.store.me or isWebhook(ctx, uid)) return;
     const rel = ctx.store.relationship(uid);
     const Btn = struct { label: []const u8, mark: []const u8, accent: bool };
     var list: [2]Btn = undefined;

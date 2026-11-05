@@ -177,6 +177,7 @@ pub fn page(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
         if (k > 0.01) d.rect(dl, rr.inset(0, 1), ctx.col(.hover).alpha(k), ctx.th.radius + 2);
         w.avatar(ctx, dl, rr.x + 30, rr.y + 31, 36, uid, .circle, if (k > 0.5) ctx.col(.hover).mix(ctx.col(.surface), 0.5) else ctx.col(.surface), 1);
         d.text(dl, fam.get(.semibold), 15, rr.x + 58, rr.y + 12, ctx.col(.text), u.name);
+        _ = w.botTag(ctx, dl, rr.x + 58 + d.width(fam.get(.semibold), 15, u.name), rr.y + 21, u, false, 1);
         var sb: [64]u8 = undefined;
         const sub: []const u8 = switch (kind) {
             .incoming => i18n.tr("Pedido de amizade recebido", "Incoming Friend Request"),

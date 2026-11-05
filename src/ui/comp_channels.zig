@@ -326,7 +326,7 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
             switch (variant) {
                 .tree => {
                     var buf: [80]u8 = undefined;
-                    const t = std.fmt.bufPrint(&buf, "{s}   {s} {s}{s}", .{ if (last) " " else "│", if (speaking) "◉" else "○", u.name, voiceFlagsTty(vf) }) catch u.name;
+                    const t = std.fmt.bufPrint(&buf, "{s}   {s} {s}{s}{s}", .{ if (last) " " else "│", if (speaking) "◉" else "○", u.name, w.botSuffix(u), voiceFlagsTty(vf) }) catch u.name;
                     d.text(dl, fam.get(.regular), fs - 2, rr.x + 4, y2 + 2, if (speaking) ctx.col(.online) else ctx.col(.muted), t);
                     y2 += 20;
                 },
@@ -336,7 +336,8 @@ fn row(ctx: *d.Ctx, dl: *c.ImDrawList, fam: *d.Family, variant: Variant, cs: any
                     if (speaking) c.ImDrawList_AddCircleEx(dl, d.v(ax, acy), 12.5, ctx.col(.online).u(), 0, 2, 0);
                     w.avatar(ctx, dl, ax, acy, 21, uid, .circle, null, 1);
                     const icons_w = voiceFlagIcons(ctx, dl, vf, vr.right() - 6, acy);
-                    _ = d.textClipped(dl, fam.get(.medium), 14, ax + 18, acy - 9, if (speaking) ctx.col(.text) else ctx.col(.muted), u.name, vr.right() - (ax + 18) - icons_w - 6);
+                    const vn = d.textClipped(dl, fam.get(.medium), 14, ax + 18, acy - 9, if (speaking) ctx.col(.text) else ctx.col(.muted), u.name, vr.right() - (ax + 18) - icons_w - 6 - w.botTagSpace(ctx, u, false));
+                    _ = w.botTag(ctx, dl, ax + 18 + vn, acy, u, false, 1);
                     y2 += 28;
                 },
             }
@@ -773,7 +774,8 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
             const t = if (group)
                 std.fmt.bufPrint(&buf, "{s} ⁂ {s}", .{ branch, name }) catch name
             else
-                std.fmt.bufPrint(&buf, "{s} {s} @{s}", .{ branch, w.statusGlyph(u.?.status), name }) catch name;
+                std.fmt.bufPrint(&buf, "{s} {s} @{s}{s}", .{ branch, w.statusGlyph(u.?.status), name, w.botSuffix(u) }) catch name;
+            if (u != null and u.?.bot) qa.mark(rr, "bot-tag:{d}", .{u.?.id});
             d.text(dl, fam.get(if (cs.info.unread) .bold else .regular), fs - 1, rr.x + 4, d.centerY(rr, fs - 1), if (selected) ctx.col(.accent_text) else name_col, t);
         } else {
             const radius = if (variant == .pills) rr.h / 2 else ctx.th.radius;
@@ -786,10 +788,16 @@ fn dmList(ctx: *d.Ctx, n: *const kdl.Node, fam: *d.Family, variant: Variant, r_i
                 (if (cs.info.recipients.len == 0) i18n.tr("só você", "just you") else i18n.fmt(&sb, "{d} membros", "{d} members", .{cs.info.recipients.len + 1}))
             else
                 u.?.activity;
+            const tagged = if (group) null else u;
+            const name_room = rr.w - 60 - w.botTagSpace(ctx, tagged, false);
             if (sub) |a| {
-                _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, rr.y + 3, tc, name, rr.w - 60);
+                const nw = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, rr.y + 3, tc, name, name_room);
+                _ = w.botTag(ctx, dl, rr.x + 46 + nw, rr.y + 12, tagged, false, 1);
                 _ = d.textClipped(dl, fam.get(.regular), 12, rr.x + 46, rr.y + 22, if (on) tc.alpha(0.8) else ctx.col(.faint), a, rr.w - 60);
-            } else _ = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, d.centerY(rr, fs - 1), tc, name, rr.w - 60);
+            } else {
+                const nw = d.textClipped(dl, fam.get(if (cs.info.unread) .semibold else .medium), fs - 1, rr.x + 46, d.centerY(rr, fs - 1), tc, name, name_room);
+                _ = w.botTag(ctx, dl, rr.x + 46 + nw, rr.y + rr.h / 2, tagged, false, 1);
+            }
             const dm_pings = if (selected) 0 else ctx.st.filtros.count(id);
             if (dm_pings > 0) {
                 badgeAt(ctx, dl, fam, rr.right() - 6, rr.y + rr.h / 2, dm_pings);

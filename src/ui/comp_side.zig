@@ -130,7 +130,8 @@ const Rows = struct {
             if (hb.hovered) d.rect(dl, rr, ctx.col(.hover), 0);
             const fs = ctx.th.font_size;
             d.text(dl, fam.get(.regular), fs - 1, rr.x + 6, d.centerY(rr, fs - 1), w.statusColor(ctx, if (online) u.status else .offline), w.statusGlyph(if (online) u.status else .offline));
-            _ = d.textClipped(dl, fam.get(if (online) .bold else .regular), fs - 1, rr.x + 24, d.centerY(rr, fs - 1), if (online) name_col else ctx.col(.faint), u.name, rr.w - 30);
+            const nw_t = d.textClipped(dl, fam.get(if (online) .bold else .regular), fs - 1, rr.x + 24, d.centerY(rr, fs - 1), if (online) name_col else ctx.col(.faint), u.name, rr.w - 30 - w.botTagSpace(ctx, u, true));
+            _ = w.botTag(ctx, dl, rr.x + 24 + nw_t, rr.y + rr.h / 2, u, true, if (online) 1 else 0.5);
             rw.y += 20;
             return;
         }
@@ -142,11 +143,14 @@ const Rows = struct {
         d.rect(dl, rr, ctx.col(.hover).alpha(k * 1.4), ctx.th.radius);
         const alpha: f32 = if (online) 1 else 0.38 + 0.4 * k;
         w.avatar(ctx, dl, rr.x + 24, rr.y + 21, 32, uid, .circle, if (online) ctx.col(.sidebar) else null, alpha);
+        const name_room = rr.w - 56 - w.botTagSpace(ctx, u, false);
         if (u.activity != null and online) {
-            _ = d.textClipped(dl, fam.get(.medium), 15, rr.x + 48, rr.y + 3, name_col.alpha(alpha), u.name, rr.w - 56);
+            const nw = d.textClipped(dl, fam.get(.medium), 15, rr.x + 48, rr.y + 3, name_col.alpha(alpha), u.name, name_room);
+            _ = w.botTag(ctx, dl, rr.x + 48 + nw, rr.y + 12, u, false, alpha);
             _ = d.textClipped(dl, fam.get(.regular), 12, rr.x + 48, rr.y + 22, ctx.col(.muted).alpha(alpha), u.activity.?, rr.w - 56);
         } else {
-            _ = d.textClipped(dl, fam.get(.medium), 15, rr.x + 48, d.centerY(rr, 15), name_col.alpha(alpha), u.name, rr.w - 56);
+            const nw = d.textClipped(dl, fam.get(.medium), 15, rr.x + 48, d.centerY(rr, 15), name_col.alpha(alpha), u.name, name_room);
+            _ = w.botTag(ctx, dl, rr.x + 48 + nw, rr.y + rr.h / 2, u, false, alpha);
         }
         rw.y += 44;
     }
@@ -193,8 +197,9 @@ fn dmProfile(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, uid: types.Id, tty: boo
     if (tty) {
         var y = o.y + 6;
         const fs = ctx.th.font_size - 1;
+        if (u.bot) qa.mark(.{ .x = r.x + 10, .y = y, .w = r.w - 20, .h = 18 }, "bot-tag:{d}", .{uid});
         for ([_][]const u8{
-            std.fmt.bufPrint(buf[0..48], "@{s}", .{u.name}) catch "",
+            std.fmt.bufPrint(buf[0..48], "@{s}{s}", .{ u.name, w.botSuffix(u) }) catch "",
             std.fmt.bufPrint(buf[48..], "{s} {s}", .{ w.statusGlyph(u.status), @tagName(u.status) }) catch "",
         }) |t| {
             d.text(dl, fam.get(.bold), fs, r.x + 10, y, ctx.col(.text), t);
@@ -209,8 +214,22 @@ fn dmProfile(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, uid: types.Id, tty: boo
     c.ImDrawList_AddRectFilledMultiColor(dl, d.v(band.x, band.y), d.v(band.right(), band.bottom()), col.u(), col.mix(ctx.col(.accent), 0.5).u(), col.mix(ctx.col(.sidebar), 0.4).u(), col.mix(ctx.col(.sidebar), 0.4).u());
     d.circle(dl, r.x + 56, band.bottom(), 46, ctx.col(.sidebar));
     w.avatar(ctx, dl, r.x + 56, band.bottom(), 80, uid, .circle, ctx.col(.sidebar), 1);
+    // A foto abre grande, e o nome abre o perfil completo.
+    if (u.avatar != null) {
+        const ar: d.Rect = .{ .x = r.x + 16, .y = band.bottom() - 40, .w = 80, .h = 80 };
+        const ah = d.hit(ctx, 2, ar);
+        qa.mark(ar, "dm-profile-avatar", .{});
+        d.tip(ctx, ar, i18n.tr("Ver foto", "View picture"), ah.hovered);
+        if (ah.clicked) @import("profile.zig").viewAvatar(ctx, uid);
+    }
     var y = band.bottom() + 54;
-    _ = d.textClipped(dl, fam.get(.bold), 20, r.x + 16, y, ctx.col(.text), u.name, r.w - 32);
+    const name_w = d.textClipped(dl, fam.get(.bold), 20, r.x + 16, y, ctx.col(.text), u.name, r.w - 32 - w.botTagSpace(ctx, u, false));
+    const nr: d.Rect = .{ .x = r.x + 16, .y = y, .w = name_w, .h = 26 };
+    const nh = d.hit(ctx, 3, nr);
+    qa.mark(nr, "dm-profile-name", .{});
+    if (nh.hovered) d.line(dl, nr.x, nr.bottom() - 1, nr.right(), nr.bottom() - 1, ctx.col(.text).alpha(0.6), 1);
+    if (nh.clicked) ctx.act(.{ .open_full_profile = .{ .user = uid } });
+    _ = w.botTag(ctx, dl, r.x + 16 + name_w, y + 12, u, false, 1);
     y += 30;
     d.circle(dl, r.x + 21, y + 8, 5, w.statusColor(ctx, u.status));
     d.text(dl, fam.get(.medium), 13, r.x + 32, y, ctx.col(.muted), switch (u.status) {

@@ -31,6 +31,7 @@ const leitura = @import("../core/leitura.zig");
 const read_json = @import("read_state_json.zig");
 const voice_mod = @import("voice.zig");
 const thread_json = @import("thread_json.zig");
+const user_json = @import("user_json.zig");
 const Id = types.Id;
 const Value = std.json.Value;
 
@@ -1076,7 +1077,7 @@ pub const Gateway = struct {
             const u = j.get(d, "user") orelse d;
             const uid = j.id(j.get(u, "id")) orelse return;
             if (uid == g.me and std.mem.eql(u8, t, "USER_UPDATE")) if (j.int(j.get(u, "premium_type"))) |p| g.emit(.{ .premium = @intCast(std.math.clamp(p, 0, 255)) });
-            g.emit(.{ .user_update = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u), .decoration = decorationOf(u) } });
+            g.emit(.{ .user_update = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u), .decoration = decorationOf(u), .bot = user_json.isBot(u), .verified_bot = user_json.isVerifiedBot(u) } });
             if (j.id(j.get(d, "guild_id"))) |gid| g.memberColor(gid, uid, d);
             return;
         }
@@ -1266,11 +1267,19 @@ pub const Gateway = struct {
 
     fn upsert(g: *Gateway, u: Value) void {
         const uid = j.id(j.get(u, "id")) orelse return;
-        g.emit(.{ .user_upsert = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u), .decoration = decorationOf(u) } });
+        g.emit(.{ .user_upsert = .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = .offline, .avatar = avatarOf(u), .decoration = decorationOf(u), .bot = user_json.isBot(u), .verified_bot = user_json.isVerifiedBot(u) } });
     }
 
     fn upsertUsers(g: *Gateway, m: Value) void {
-        if (j.get(m, "author")) |a| g.upsert(a);
+        if (j.get(m, "author")) |a| {
+            const id = user_json.authorId(m);
+            if (id & types.webhook_id_bit == 0) {
+                g.upsert(a);
+            } else {
+                var ub: [160]u8 = undefined;
+                g.emit(.{ .user_upsert = .{ .id = id, .name = dupe(userName(a)), .role = roleFor(id), .status = .offline, .avatar = optDupe(user_json.webhookAvatar(&ub, a)), .bot = true, .webhook = true } });
+            }
+        }
         for (j.array(j.get(m, "mentions"))) |u| g.upsert(u);
     }
 
@@ -1531,9 +1540,9 @@ pub const Gateway = struct {
         var previews: std.ArrayList(types.ThreadPreview) = .empty;
         for (j.array(j.get(root, "first_messages"))) |m| {
             g.upsertUsers(m);
-            const author = j.get(m, "author") orelse continue;
+            if (j.get(m, "author") == null) continue;
             const text = try j.simplifyContent(alloc, j.str(j.get(m, "content")) orelse "");
-            try previews.append(alloc, .{ .thread = j.id(j.get(m, "channel_id")) orelse j.id(j.get(m, "id")) orelse 0, .author = j.id(j.get(author, "id")) orelse 0, .text = text });
+            try previews.append(alloc, .{ .thread = j.id(j.get(m, "channel_id")) orelse j.id(j.get(m, "id")) orelse 0, .author = user_json.authorId(m), .text = text });
         }
         const more = if (j.get(root, "has_more")) |v| v == .bool and v.bool else false;
         g.emit(.{ .threads_page = .{
@@ -1677,7 +1686,7 @@ pub const Gateway = struct {
         return .{
             .id = msg_id,
             .channel = j.id(j.get(m, "channel_id")) orelse 0,
-            .author = j.id(j.get(author, "id")) orelse 0,
+            .author = user_json.authorId(m),
             .timestamp = j.isoTime(j.str(j.get(m, "timestamp")) orelse ""),
             .content = content,
             .raw = raw,
@@ -2165,7 +2174,7 @@ pub const Gateway = struct {
                 const uid = j.id(j.get(u, "id")) orelse return;
                 if (set.contains(uid)) return;
                 set.put(alloc, uid, {}) catch return;
-                list.append(alloc, .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = status, .avatar = avatarOf(u), .decoration = decorationOf(u) }) catch {};
+                list.append(alloc, .{ .id = uid, .name = dupe(userName(u)), .role = roleFor(uid), .status = status, .avatar = avatarOf(u), .decoration = decorationOf(u), .bot = user_json.isBot(u), .verified_bot = user_json.isVerifiedBot(u) }) catch {};
             }
         }.f;
         addUser(&users, &seen, me, .online);

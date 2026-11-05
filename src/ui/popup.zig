@@ -244,15 +244,17 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         },
         .user => {
             add(&items, &n, .{ .label = "Perfil", .en = "Profile", .id = 20 });
+            if (ctx.store.user(id)) |pu| if (pu.avatar != null) add(&items, &n, .{ .label = "Ver foto de perfil", .en = "View Picture", .id = 27 });
             add(&items, &n, .{ .label = "Mencionar", .en = "Mention", .id = 21 });
-            if (id != ctx.store.me) add(&items, &n, .{ .label = "Mensagem", .en = "Message", .id = 22 });
+            const hook = if (ctx.store.user(id)) |u| u.webhook else false;
+            if (id != ctx.store.me and !hook) add(&items, &n, .{ .label = "Mensagem", .en = "Message", .id = 22 });
             // Ignorar não bloqueia: as mensagens só ficam recolhidas aqui.
             if (id != ctx.store.me) add(&items, &n, if (ctx.st.filtros.isIgnored(id))
                 .{ .label = "Deixar de ignorar", .en = "Unignore", .id = 26 }
             else
                 .{ .label = "Ignorar", .en = "Ignore", .id = 26 });
             add(&items, &n, .{ .label = "Copiar nome de usuário", .en = "Copy Username", .id = 24, .sep = true });
-            if (dev) add(&items, &n, .{ .label = "Copiar ID do usuário", .en = "Copy User ID", .id = 25 });
+            if (dev and !hook) add(&items, &n, .{ .label = "Copiar ID do usuário", .en = "Copy User ID", .id = 25 });
             if (movable(ctx, id) != null) {
                 var tb: [24]Id = undefined;
                 if (voiceTargets(ctx, id, &tb).len > 0) add(&items, &n, .{ .label = "Mover para…", .en = "Move To…", .id = 28, .sep = true });
