@@ -14,7 +14,13 @@
 **Voice**
 - Microphone noise suppression with RNNoise, on by default and switchable mid-call. It doesn't run with the push-to-talk key released.
 - Less stutter and no more clicks when packets are lost or arrive out of order; the audio buffer grows when the network hiccups.
+- When the network stalls, the voice fades out instead of cutting off mid-word, and comes back without a pop.
+- A pause from someone's noise gate is no longer treated as a bad network, which kept the audio delay low.
+- Noise suppression uses less CPU in the published builds: it picks the faster path for your processor when it runs.
 - People no longer cut out for a moment when someone joins or leaves the call.
+
+**Tray**
+- Closing and reopening no longer stacks up tray icons. On Linux the icon lives in a small separate process that only exists while the window is hidden, so GTK stays out of the app.
 
 **Messages**
 - Bot messages in the newer component format, which used to appear blank. Forwarded messages and polls appear as cards.

@@ -21,7 +21,7 @@ Channels where you lack the permission to connect are shown with a padlock, and 
 - **Voice activity**: an adjustable threshold on the meter, or **Automatic sensitivity**, which learns your background noise.
 - **Push to talk**: a key or mouse button. It only works while the window is focused, and sending continues for a moment after you release, so the last word isn't cut.
 - **Filters**: a high-pass that removes rumble below 90 Hz and a noise gate. Each one can be turned off.
-- **Noise suppression**: Off or RNNoise, on by default and switchable mid-call. It runs on your computer, delays your mic by 20 ms and costs 2% to 5% of a core while the mic is open. Off, muted or with the push-to-talk key released, it costs nothing.
+- **Noise suppression**: Off or RNNoise, on by default and switchable mid-call. It runs on your computer, delays your mic by 20 ms and costs about 2% to 3.5% of a core on a 2011 Core i5 while the mic is open, and less on newer processors. Off, muted or with the push-to-talk key released, it costs nothing.
 - **Call sounds**: short beeps when you join, leave, mute and unmute, which can be turned off.
 
 ![The voice settings page](shot:f-vozcfg)
@@ -41,7 +41,10 @@ A few details that took work to get right:
 
 - The "speaking" opcode (op 5) goes out once when the session opens, and again on resume. It doesn't toggle on every sentence, since the server dropped the start of each one that way.
 - The RTP clock keeps moving with real time while you're silent, so receivers don't drop your packets after a pause.
-- Jitter margin applies only at the start of each talk spurt. Applying it whenever the queue emptied caused audible gaps.
+- Jitter margin applies only at the start of each talk spurt and inside a speaker's own pauses. Applying it whenever the queue emptied caused audible gaps.
+- The RTP clock tells a speaker's pause from a late packet: the sequence number only moves with a packet, the clock always moves. A noise gate closing isn't a bad network.
+- When a queue is about to run dry, Opus concealment fills in and fades to zero, so a stall never cuts mid-wave. Audio that doesn't continue from where it stopped starts from the last value played.
+- `zig build voz-rede` runs real Opus through simulated bad networks and compares the playback logic, counting gaps and clicks. `LARPER_VOZ_FALA` picks a speech file and `LARPER_VOZ_WAV` saves the output to listen to.
 - People already in a call can arrive before DAVE exists, so they're kept and added when it starts.
 
 ## Limits today

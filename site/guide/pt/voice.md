@@ -21,7 +21,7 @@ Os canais em que você não tem permissão para conectar aparecem com cadeado, e
 - **Detecção de voz**: limiar ajustável sobre o medidor, ou **Sensibilidade automática**, que aprende o ruído de fundo.
 - **Aperte para falar**: uma tecla ou um botão do mouse. Só funciona com a janela em foco, e o envio segue por um instante depois de soltar, para não cortar a última palavra.
 - **Filtros**: um passa-altas que tira o ronco abaixo de 90 Hz e uma porta de ruído. Cada um pode ser desligado.
-- **Supressão de ruído**: Desligada ou RNNoise, ligada por padrão e trocável em plena call. Roda no seu computador, atrasa o microfone em 20 ms e custa de 2% a 5% de um núcleo com o microfone aberto. Desligada, no mudo ou com a tecla do aperte para falar solta, não custa nada.
+- **Supressão de ruído**: Desligada ou RNNoise, ligada por padrão e trocável em plena call. Roda no seu computador, atrasa o microfone em 20 ms e custa de 2% a 3,5% de um núcleo num Core i5 de 2011 com o microfone aberto, e menos em processadores mais novos. Desligada, no mudo ou com a tecla do aperte para falar solta, não custa nada.
 - **Sons da call**: bipes curtos ao entrar, sair, mutar e desmutar, que podem ser desligados.
 
 ![A página de configurações de voz](shot:f-vozcfg)
@@ -41,7 +41,10 @@ Alguns detalhes que deram trabalho para acertar:
 
 - O opcode de "falando" (op 5) sai uma vez quando a sessão abre, e de novo ao retomar. Ele não liga e desliga a cada frase, porque assim o servidor descartava o começo de cada uma.
 - O relógio do RTP continua andando com o tempo real enquanto você está calado, para quem recebe não descartar os seus pacotes depois de uma pausa.
-- A margem de jitter vale só no começo de cada trecho de fala. Aplicá-la sempre que a fila esvaziava causava falhas audíveis.
+- A folga contra o jitter só entra no começo de cada fala e dentro das pausas de quem fala. Aplicá-la sempre que a fila esvaziava causava buracos audíveis.
+- O relógio RTP separa a pausa de quem fala de um pacote atrasado: o número de sequência só anda com pacote, o relógio anda sempre. A porta de ruído fechando não é rede ruim.
+- Quando uma fila vai secar, a ocultação do Opus preenche e vai a zero, então uma parada nunca corta no meio da onda. Áudio que não continua de onde parou começa do último valor tocado.
+- `zig build voz-rede` passa Opus de verdade por redes ruins simuladas e compara a lógica de reprodução, contando buracos e estalos. `LARPER_VOZ_FALA` escolhe um arquivo de fala e `LARPER_VOZ_WAV` grava a saída para ouvir.
 - Quem já está numa call pode chegar antes de o DAVE existir, então essas pessoas são guardadas e adicionadas quando ele começa.
 
 ## Limites hoje
