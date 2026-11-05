@@ -57,9 +57,10 @@ The official client is a whole browser dressed up as an app. On the same PC:
   servers, themes, status, mark as read and the toggles), keyboard shortcuts and optional
   vim-style navigation (`j`/`k`, `gg`/`G`, `J`/`K` switches channel, `/` searches).
 - **Panels your size**: drag the edge of the channel list, the member list or the panes of a split view; a double-click goes back to the theme's width. Your choice is saved and follows you between themes, and the conversation always keeps enough room.
-- **Lua plugins**: `.lua` files in `~/.config/larpercord/plugins/` that react to messages and
-  create local commands (`/shrug`) and shortcuts, in a sandbox with an instruction limit; on/off,
-  errors and example plugins in Settings → Plugins. [Guide and API →](docs/plugins.md)
+- **Lua plugins**: `.lua` files in `~/.config/larpercord/plugins/` that add panels, right-click
+  entries, notes under messages, commands and reminders, on a thread of their own with an instruction
+  and a memory limit, so they can't hold up the interface. Bookmarks, reminders, highlights, a local
+  filter, snippets, translate and channel stats come with the app. [Guide and API →](docs/plugins.md)
 - **Voice settings.** In Settings → Voice you pick the microphone and output (remembered by name, back to the default if they disappear, switchable mid-call), adjust volumes, see the mic level live and use "Test microphone" to hear yourself. Voice activity has an adjustable threshold on the meter or an automatic mode that learns your background noise. "Push to talk" takes a key or mouse button and works while the window is focused (SDL has no portable global shortcut). There's a high-pass against rumble, a noise gate and beeps for joining, leaving, muting and unmuting, all of which can be turned off. The voice panel shows ping, quality by color and when you're transmitting, and warns you if the mic doesn't open or if the server muted or deafened you. Other people's mute and deafen show in the call list.
 - **Runs on Linux and Windows.** Windows 10/11 builds come from the same code; tokens stay in Credential Manager.
 - **Stays in the tray.** Closing keeps it connected in the system tray, with Open and Quit in the tray menu; "Close to tray" in Settings → Advanced turns it off. Without a tray, closing quits. Opening it a second time brings up the running window. On Linux the tray needs a StatusNotifier panel and libappindicator or ayatana.

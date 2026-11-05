@@ -296,6 +296,8 @@ pub const Action = union(enum) {
     mark_read: Id,
     /// A conversa está no fim e a janela em foco: lida de verdade.
     channel_seen: Id,
+    /// O "×" numa nota de plugin embaixo da mensagem.
+    deco_dismiss: struct { run: u32, id: Id },
     /// "Marcar como não lida" a partir desta mensagem.
     mark_unread: Id,
     /// Busca em volta da mensagem (a conversa carregada não chega nela).

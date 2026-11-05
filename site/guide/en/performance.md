@@ -40,7 +40,7 @@ The Performance page in settings shows live numbers, and `--stats` shows the tim
 7. **Memory has ceilings.** 1,500 messages per channel and 3,000 in total, after which the least recently seen conversation is unloaded. Images have a fixed 64 MB budget, and any single download stops at 32 MB.
 8. **fontconfig gets freed** after fonts are resolved (`FcFini` and `malloc_trim`).
 9. **No blinking cursor.** It would keep the CPU awake for nothing.
-10. **Things start when you ask.** The voice thread on the first call and FFmpeg on the first video. Off-screen video is released after 30 seconds, and without plugins there's no extra work per message, key or frame.
+10. **Things start when you ask.** The voice thread on the first call and FFmpeg on the first video. Off-screen video is released after 30 seconds, and with no plugin on there's no plugin thread, no Lua state and no extra work per message, key or frame.
 
 ## The budget in CI
 

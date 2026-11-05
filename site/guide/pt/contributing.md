@@ -13,6 +13,7 @@ tools/membench.sh 50                # RAM e CPU parado por tema, com um orçamen
 |---|---|
 | `zig build test` | Testa as partes puras: KDL, cores, layout, markdown, Store, temas embutidos, configurações, protobuf, APNG, URLs de mídia. Não precisa de SDL nem de janela |
 | `tools/qa.sh` | Um build de debug com verificações de segurança. Roda a bateria geral, a tela de login nos dois modos e uma bateria por tema, em claro e escuro. As capturas de tela vão para `qa-out/` |
+| `tools/qa_http_tls.sh` | Depois do `tools/qa.sh`: o HTTP dos plugins com TLS de verdade, contra um servidor local com certificado próprio. Precisa de `python3` e `openssl` |
 | `tools/snapshots.sh` | Regenera as capturas de tela do README em `docs/` sem abrir janela |
 | `tools/membench.sh N` | Mede todos os temas e falha se passar de N MB |
 | `tools/site_shots.sh` | Regenera as imagens do site |

@@ -1,21 +1,39 @@
 //! O lado do app dos plugins (ver engine.zig): lê a pasta, guarda quem está
-//! desligado, traduz teclas e entrega eventos, avisos e mensagens.
-//! A pasta é ~/.config/larpercord/plugins (ou $XDG_CONFIG_HOME/larpercord/plugins);
-//! a escolha de ligado/desligado fica em ~/.config/larpercord/plugins.kdl.
-//! No QA a pasta é qa-out/plugins e nada é salvo.
+//! desligado e os hosts aprovados, traduz teclas e entrega eventos, avisos e
+//! mensagens. A pasta é ~/.config/larpercord/plugins (ou
+//! $XDG_CONFIG_HOME/larpercord/plugins); as escolhas ficam em
+//! ~/.config/larpercord/plugins.kdl e os dados de cada plugin, por conta, em
+//! ~/.config/larpercord/plugin-data. No QA é tudo em qa-out e nada de escolha é salvo.
 const std = @import("std");
 const c = @import("c");
 const App = @import("../app.zig").App;
 const engine = @import("engine.zig");
+const runtime = @import("runtime.zig");
+const http_curl = @import("http_curl.zig");
 const types = @import("../core/types.zig");
+const Store = @import("../core/store.zig").Store;
 const kdl = @import("../theme/kdl.zig");
 const i18n = @import("../ui/i18n.zig");
 const nowMs = @import("../net/fake_gateway.zig").nowMs;
 const fsutil = @import("../platform/fsutil.zig");
+const sys = @import("../platform/sys.zig");
+const platform = @import("../platform/window.zig");
 
 pub const Engine = engine.Engine;
 
+/// QA: notificações do sistema que teriam saído, e o texto da última.
+pub var qa_desktop: u32 = 0;
+pub var qa_desktop_text: [256]u8 = undefined;
+pub var qa_desktop_len: usize = 0;
+
+var app_global: ?*App = null;
+
+pub fn appOf() *App {
+    return app_global.?;
+}
+
 pub fn init(app: *App) void {
+    app_global = app;
     app.plugins = Engine.init(app.gpa, .{
         .ctx = app,
         .notify = &notify,
@@ -25,9 +43,18 @@ pub fn init(app: *App) void {
         .rescan = &rescan,
         .save = &save,
         .failed = &failed,
+        .insert = &insert,
+        .jump = &jump,
+        .messages = &messages,
+        .wake = &wake,
+        .read_data = &readData,
+        .write_data = &writeData,
+        .keep_broken_data = &keepBroken,
+        .http_start = &http_curl.start,
+        .http_stop = &http_curl.stop,
     });
     engine.current = &app.plugins;
-    engine.lang_en = &i18n.en;
+    runtime.lang_en = &i18n.en;
     // Prints da documentação: sempre iguais, sem os plugins de quem roda.
     if (app.opts.shot != null) return;
     var buf: [512]u8 = undefined;
@@ -60,7 +87,7 @@ fn rescan(ctx: *anyopaque) void {
             for (0..@intCast(count)) |i| {
                 const n = std.mem.span(names[i] orelse continue);
                 // Só arquivos diretos da pasta (o glob não desce, mas confere).
-                if (std.mem.indexOfScalar(u8, n, '/') != null or n.len > 120) continue;
+                if (std.mem.indexOfAny(u8, n, "/\\") != null or n.len > 120) continue;
                 list.append(a, a.dupe(u8, n) catch continue) catch continue;
             }
             @import("../core/sort.zig").stable([]const u8, list.items, {}, struct {
@@ -74,7 +101,7 @@ fn rescan(ctx: *anyopaque) void {
                 var info: c.SDL_PathInfo = undefined;
                 if (!c.SDL_GetPathInfo(path.ptr, &info) or info.type != c.SDL_PATHTYPE_FILE) continue;
                 // Grande demais: entra na lista vazio (e dá erro de "arquivo grande").
-                var src: []const u8 = "error('arquivo maior que 256 KB')";
+                var src: []const u8 = i18n.tr("error('arquivo maior que 256 KB')", "error('file larger than 256 KB')");
                 if (info.size <= engine.max_source) {
                     var size: usize = 0;
                     const data = c.SDL_LoadFile(path.ptr, &size) orelse continue;
@@ -92,7 +119,6 @@ fn prefsPath(buf: []u8) ?[:0]const u8 {
     return fsutil.configPath(buf, "plugins.kdl");
 }
 
-/// `plugin "nome.lua" enabled=#false`
 fn loadPrefs(app: *App) void {
     var buf: [512]u8 = undefined;
     const path = prefsPath(&buf) orelse return;
@@ -103,11 +129,7 @@ fn loadPrefs(app: *App) void {
     defer arena.deinit();
     const src = arena.allocator().dupe(u8, @as([*]const u8, @ptrCast(data))[0..size]) catch return;
     const nodes = kdl.parse(arena.allocator(), src, null) catch return;
-    for (nodes) |*n| {
-        if (!std.mem.eql(u8, n.name, "plugin")) continue;
-        const name = (n.arg(0) orelse continue).asString() orelse continue;
-        if (n.flag("enabled") == false) app.plugins.setDisabledName(name);
-    }
+    for (nodes) |*n| app.plugins.applyPrefNode(n);
 }
 
 fn save(ctx: *anyopaque) void {
@@ -117,33 +139,53 @@ fn save(ctx: *anyopaque) void {
     const path = prefsPath(&buf) orelse return;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(app.gpa);
-    out.appendSlice(app.gpa, "// gerado pelo larperCord: plugins desligados\n") catch return;
-    var it = app.plugins.disabled.keyIterator();
-    while (it.next()) |k| {
-        // Nomes que o KDL precisaria escapar ficam de fora.
-        if (std.mem.indexOfAny(u8, k.*, "\"\\\n") != null) continue;
-        out.print(app.gpa, "plugin \"{s}\" enabled=#false\n", .{k.*}) catch return;
-    }
+    app.plugins.writePrefs(app.gpa, &out) catch return;
     _ = fsutil.writePrivate(path, out.items);
+}
+
+/// A largura ou o lado do painel mudaram (a interface chama ao soltar o mouse).
+pub fn savePrefs() void {
+    if (app_global) |app| save(app);
 }
 
 // --- Host -------------------------------------------------------------------
 
-fn notify(ctx: *anyopaque, plugin: []const u8, text: []const u8) void {
+/// Quantas notificações do sistema os plugins mandam em 1 minuto: nem um plugin
+/// com defeito nem uma rajada de mensagens enche a área de trabalho.
+const desktop_per_minute = 6;
+var desktop_from: i64 = 0;
+var desktop_n: u32 = 0;
+
+fn notify(ctx: *anyopaque, plugin: []const u8, text: []const u8, desktop: bool) void {
     const app: *App = @ptrCast(@alignCast(ctx));
     app.st.showToast(nowMs(), false, "{s}", "{s}", .{text});
-    // Janela fora de foco: também uma notificação do sistema.
-    const focused = (c.SDL_GetWindowFlags(app.win.window) & c.SDL_WINDOW_INPUT_FOCUS) != 0;
-    if (app.opts.qa or focused or !app.st.settings.desktop_notifs or app.notifiers.items.len >= 8) return;
+    const flags = c.SDL_GetWindowFlags(app.win.window);
+    const hidden = flags & c.SDL_WINDOW_HIDDEN != 0;
+    const focused = !hidden and flags & c.SDL_WINDOW_INPUT_FOCUS != 0 and !app.qa_blur;
+    // Sem `desktop`, só com a pessoa longe da janela (e fora do modo foco, que
+    // só deixa passar DMs e menções).
+    if (!desktop and (focused or app.st.filtros.focusOn(nowMs()))) return;
+    if (!app.st.settings.desktop_notifs) return;
+    const now = nowMs();
+    if (now - desktop_from >= 60_000) {
+        desktop_from = now;
+        desktop_n = 0;
+    }
+    if (desktop_n >= desktop_per_minute) return;
+    desktop_n += 1;
     var tb: [160]u8 = undefined;
     const title = std.fmt.bufPrintSentinel(&tb, "larperCord · {s}", .{plugin}, 0) catch return;
     var cut = @min(text.len, 200);
     while (cut > 0 and cut < text.len and (text[cut] & 0xC0) == 0x80) cut -= 1;
     var bb: [208]u8 = undefined;
     const body = std.fmt.bufPrintSentinel(&bb, "{s}", .{text[0..cut]}, 0) catch return;
-    var args = [_:null]?[*:0]const u8{ "notify-send", "--app-name=larperCord", "--", title.ptr, body.ptr };
-    const proc = c.SDL_CreateProcess(@ptrCast(&args), false) orelse return;
-    app.notifiers.append(app.gpa, proc) catch c.SDL_DestroyProcess(proc);
+    if (app.opts.qa) {
+        qa_desktop +%= 1;
+        qa_desktop_len = @min(body.len, qa_desktop_text.len);
+        @memcpy(qa_desktop_text[0..qa_desktop_len], body[0..qa_desktop_len]);
+        return;
+    }
+    app.desktopNotify(title, body);
 }
 
 fn send(ctx: *anyopaque, channel: u64, text: []const u8) bool {
@@ -173,6 +215,100 @@ fn failed(ctx: *anyopaque, plugin: []const u8, msg: []const u8) void {
     const app: *App = @ptrCast(@alignCast(ctx));
     app.st.showToast(nowMs(), true, "plugin {s}: {s}", "plugin {s}: {s}", .{ plugin, msg });
     std.log.warn("plugin {s}: {s}", .{ plugin, msg });
+}
+
+fn insert(ctx: *anyopaque, text: []const u8) void {
+    const app: *App = @ptrCast(@alignCast(ctx));
+    @import("../ui/popup.zig").insertText(&app.st, text, false);
+}
+
+fn jump(ctx: *anyopaque, channel: u64, id: u64) void {
+    const app: *App = @ptrCast(@alignCast(ctx));
+    app.handle(.{ .open_message = .{ .channel = channel, .id = id } });
+}
+
+/// A mensagem como o plugin vê. Nunca o que foi apagado (com o registro ligado
+/// ela continua na memória) nem o texto de antes de uma edição.
+pub fn pluginMessage(app: *const App, store: *const Store, m: *const types.Message) engine.Message {
+    const cs = store.channel(m.channel);
+    const guild_id: types.Id = if (cs) |x| x.info.guild else 0;
+    const g = if (guild_id != 0) store.guild(guild_id) else null;
+    return .{
+        .id = m.id,
+        .content = m.content,
+        .author = m.author,
+        .author_name = if (store.user(m.author)) |u| u.name else "?",
+        .channel = m.channel,
+        .channel_name = if (cs) |x| x.info.name else "",
+        .guild = if (g) |x| x.id else 0,
+        .guild_name = if (g) |x| x.name else "",
+        .mine = m.author == store.me,
+        .ignored = app.st.filtros.isIgnored(m.author),
+        .timestamp = m.timestamp,
+        .attachments = @intCast(@min(m.attachments.len, std.math.maxInt(u16))),
+    };
+}
+
+fn messages(ctx: *anyopaque, channel: u64, limit: u32, out: *engine.MsgList) void {
+    const app: *App = @ptrCast(@alignCast(ctx));
+    const ch = if (channel != 0) channel else app.st.activeChannel() orelse return;
+    const cs = app.store.channel(ch) orelse return;
+    out.channel = ch;
+    const items = cs.messages.items;
+    // As últimas `limit`, sem o que foi apagado, as pendentes e as de sistema.
+    var first = items.len;
+    var kept: u32 = 0;
+    while (first > 0 and kept < limit) {
+        first -= 1;
+        if (visible(&items[first])) kept += 1;
+    }
+    for (items[first..]) |*m| {
+        if (!visible(m)) continue;
+        const pm = pluginMessage(app, &app.store, &m.msg);
+        out.add(&pm);
+    }
+}
+
+fn visible(m: *const @import("../core/store.zig").StoredMessage) bool {
+    return !m.deleted and !m.pending and m.msg.id != 0 and m.msg.system == .none;
+}
+
+fn wake(ctx: *anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx));
+    platform.Window.wake(app.win.wake_type, .plugins);
+}
+
+// --- Dados de cada plugin (na thread dos plugins) -----------------------------------
+
+fn dataPath(app: *const App, buf: []u8, account: u64, plugin: []const u8) ?[:0]const u8 {
+    if (app.opts.qa) return std.fmt.bufPrintSentinel(buf, "qa-out/plugin-data/{d}/{s}.json", .{ account, plugin }, 0) catch null;
+    var nb: [200]u8 = undefined;
+    const rel = std.fmt.bufPrint(&nb, "plugin-data/{d}/{s}.json", .{ account, plugin }) catch return null;
+    return fsutil.configPath(buf, rel);
+}
+
+fn readData(ctx: *anyopaque, gpa: std.mem.Allocator, account: u64, plugin: []const u8) ?[]u8 {
+    const app: *App = @ptrCast(@alignCast(ctx));
+    var buf: [640]u8 = undefined;
+    const path = dataPath(app, &buf, account, plugin) orelse return null;
+    var size: usize = 0;
+    const data = c.SDL_LoadFile(path.ptr, &size) orelse return null;
+    defer c.SDL_free(data);
+    return gpa.dupe(u8, @as([*]const u8, @ptrCast(data))[0..size]) catch null;
+}
+
+fn writeData(ctx: *anyopaque, account: u64, plugin: []const u8, bytes: []const u8) bool {
+    const app: *App = @ptrCast(@alignCast(ctx));
+    var buf: [640]u8 = undefined;
+    const path = dataPath(app, &buf, account, plugin) orelse return false;
+    return fsutil.writePrivate(path, bytes);
+}
+
+fn keepBroken(ctx: *anyopaque, account: u64, plugin: []const u8) void {
+    const app: *App = @ptrCast(@alignCast(ctx));
+    var buf: [640]u8 = undefined;
+    const path = dataPath(app, &buf, account, plugin) orelse return;
+    fsutil.keepBroken(path);
 }
 
 fn keyCode(name: []const u8) ?i32 {
@@ -207,21 +343,19 @@ fn keyCode(name: []const u8) ?i32 {
 /// MESSAGE_CREATE (antes de ir para o Store; os textos ainda são da mensagem).
 pub fn onMessage(app: *App, m: types.Message) void {
     if (app.plugins.n_message == 0 or m.system != .none) return;
-    const cs = app.store.channel(m.channel);
-    const guild_id: types.Id = if (cs) |x| x.info.guild else 0;
-    const g = if (guild_id != 0) app.store.guild(guild_id) else null;
-    const msg: engine.Message = .{
-        .id = m.id,
-        .content = m.content,
-        .author = m.author,
-        .author_name = if (app.store.user(m.author)) |u| u.name else "?",
-        .channel = m.channel,
-        .channel_name = if (cs) |x| x.info.name else "",
-        .guild = if (g) |x| x.id else 0,
-        .guild_name = if (g) |x| x.name else "",
-        .mine = m.author == app.store.me,
-    };
+    const msg = pluginMessage(app, &app.store, &m);
     app.plugins.onMessage(&msg);
+}
+
+/// MESSAGE_DELETE: a nota de plugin dessa mensagem sai, e quem pediu fica sabendo.
+pub fn onDelete(app: *App, channel: types.Id, id: types.Id) void {
+    app.plugins.onDelete(channel, id);
+}
+
+/// A cada quadro (antes do desenho): custa uma comparação sem plugin rodando.
+pub fn frame(app: *App) void {
+    const ch: u64 = if (app.st.friends) 0 else app.st.activeChannel() orelse 0;
+    app.plugins.frameTick(ch, i18n.en());
 }
 
 fn pressed(ctx: *anyopaque, k: *const engine.Keybind) bool {
@@ -236,4 +370,32 @@ pub fn pollKeys(app: *App) void {
     const st = &app.st;
     if (st.settings.open or st.palette.open or app.login.visible()) return;
     app.plugins.pollKeys(app.io, &pressed);
+}
+
+/// Clicou na entrada `index` dos menus de plugin (a ordem de `eachMenu`).
+pub fn menuClick(app: *App, kind: engine.MenuKind, index: usize, id: types.Id) void {
+    const e = &app.plugins;
+    var i: usize = 0;
+    for (e.list.items) |p| {
+        if (!p.isRunning()) continue;
+        for (p.menus.items) |*entry| {
+            if (entry.kind != kind) continue;
+            if (i == index) {
+                switch (kind) {
+                    .message => {
+                        const f = app.store.findAny(id) orelse return;
+                        if (f.m.deleted) return;
+                        const pm = pluginMessage(app, &app.store, &f.m.msg);
+                        e.menuMessage(p, entry, &pm);
+                    },
+                    .user => {
+                        const u = app.store.user(id) orelse return;
+                        e.menuUser(p, entry, id, u.name);
+                    },
+                }
+                return;
+            }
+            i += 1;
+        }
+    }
 }

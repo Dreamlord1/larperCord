@@ -51,9 +51,12 @@ By default, the proxy applies to media from outside Discord. **Use the proxy for
 
 Plugins run with your account, so only use files you've read and understand. The sandbox limits what they can do:
 
-- No file, process or network access. `io`, `os.execute`, `os.remove`, `os.getenv`, `require`, `package`, `debug`, `coroutine`, `load`, `loadfile`, `dofile`, `collectgarbage` and `string.dump` don't exist.
-- About 5 million instructions per call and 8 MB of memory per plugin.
-- `larper.send` only works from a command you typed or a keybind you pressed, because automatic replies would turn your account into a self-bot.
+- A plugin never sees your token or your email.
+- No file, process or socket access. `io`, `os.execute`, `os.remove`, `os.getenv`, `require`, `package`, `debug`, `coroutine`, `load`, `loadfile`, `dofile`, `collectgarbage` and `string.dump` don't exist.
+- About 5 million instructions per call and 8 MB of memory per plugin, on a thread of their own.
+- `larper.send` only works directly from a gesture on that plugin (its command, keybind, button or menu entry), because automatic replies would turn your account into a self-bot.
+- The only network is `larper.http`: HTTPS only, to hosts the plugin declares and you approve one by one in Settings → Plugins, with no cookies, token or Discord headers. Nothing goes out until you approve.
+- A plugin's data stays in `~/.config/larpercord/plugin-data/`, separate per plugin and account, readable only by you. The plugins that come with the app don't keep the text of messages after they're deleted.
 
 The details are in [Lua plugins](page:plugins).
 

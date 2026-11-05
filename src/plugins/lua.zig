@@ -37,12 +37,17 @@ pub extern fn lua_rotate(L: ?*State, idx: c_int, n: c_int) void;
 pub extern fn lua_type(L: ?*State, idx: c_int) c_int;
 pub extern fn lua_tolstring(L: ?*State, idx: c_int, len: ?*usize) ?[*]const u8;
 pub extern fn lua_tointegerx(L: ?*State, idx: c_int, isnum: ?*c_int) Integer;
+pub extern fn lua_tonumberx(L: ?*State, idx: c_int, isnum: ?*c_int) f64;
+pub extern fn lua_isinteger(L: ?*State, idx: c_int) c_int;
+pub extern fn lua_absindex(L: ?*State, idx: c_int) c_int;
+pub extern fn lua_next(L: ?*State, idx: c_int) c_int;
 pub extern fn lua_toboolean(L: ?*State, idx: c_int) c_int;
 pub extern fn lua_touserdata(L: ?*State, idx: c_int) ?*anyopaque;
 pub extern fn lua_rawlen(L: ?*State, idx: c_int) u64;
 
 pub extern fn lua_pushnil(L: ?*State) void;
 pub extern fn lua_pushinteger(L: ?*State, n: Integer) void;
+pub extern fn lua_pushnumber(L: ?*State, n: f64) void;
 pub extern fn lua_pushlstring(L: ?*State, s: [*]const u8, len: usize) ?[*]const u8;
 pub extern fn lua_pushstring(L: ?*State, s: [*:0]const u8) ?[*]const u8;
 pub extern fn lua_pushcclosure(L: ?*State, f: CFunction, n: c_int) void;
@@ -70,6 +75,7 @@ pub extern fn luaL_loadbufferx(L: ?*State, buf: [*]const u8, sz: usize, name: [*
 pub extern fn luaL_checklstring(L: ?*State, arg: c_int, len: ?*usize) [*]const u8;
 pub extern fn luaL_checktype(L: ?*State, arg: c_int, t: c_int) void;
 pub extern fn luaL_checkany(L: ?*State, arg: c_int) void;
+pub extern fn luaL_checkstack(L: ?*State, sz: c_int, msg: ?[*:0]const u8) void;
 pub extern fn luaL_tolstring(L: ?*State, idx: c_int, len: ?*usize) [*]const u8;
 pub extern fn luaL_where(L: ?*State, lvl: c_int) void;
 

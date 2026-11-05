@@ -284,7 +284,7 @@
   <h2 class="h reveal">Lua, <em>in a cage.</em></h2>
   <div class="split reveal">
     <div>
-      <p class="lede" style="margin-top:0">Drop a <code>.lua</code> file in <code>~/.config/larpercord/plugins/</code> to react to messages and add local commands and keybinds, without recompiling anything.</p>
+      <p class="lede" style="margin-top:0">Drop a <code>.lua</code> file in <code>~/.config/larpercord/plugins/</code> to add panels, right-click entries, notes under messages, commands and keybinds, without recompiling anything. Bookmarks, reminders, highlights, a local filter, snippets, translate and channel stats come with the app.</p>
       <div class="code" data-lang="lua"><span class="code-lang">lua</span><button class="copy" type="button" data-copy>copy</button><pre><code><span class="t-p">larper.command</span>(<span class="t-s">"/shrug"</span>, <span class="t-k">function</span>(args)
   <span class="t-k">local</span> text = <span class="t-s">"¯\\_(ツ)_/¯"</span>
   <span class="t-k">if</span> args ~= <span class="t-s">""</span> <span class="t-k">then</span> text = args .. <span class="t-s">" "</span> .. text <span class="t-k">end</span>
@@ -298,10 +298,11 @@
 <span class="t-k">end</span>)</code></pre></div>
     </div>
     <ul class="ticks">
-      <li><strong>No files, no processes, no network.</strong> <code>io</code>, <code>os.execute</code>, <code>require</code>, <code>load</code> and <code>debug</code> simply don't exist.</li>
+      <li><strong>On a thread of their own.</strong> A slow plugin can't make the interface stutter. With no plugin on, the thread doesn't even exist.</li>
+      <li><strong>No files, no processes, no sockets.</strong> <code>io</code>, <code>os.execute</code>, <code>require</code>, <code>load</code> and <code>debug</code> simply don't exist. The only network is HTTPS to hosts you approve one by one, without your token or cookies.</li>
       <li><strong>About 5 million instructions per call.</strong> A <code>while true do end</code> gets stopped and doesn't freeze the app. <code>pcall</code> can't catch that.</li>
       <li><strong>8&nbsp;MB per plugin.</strong> Each one runs in its own Lua state. After 10 errors, it's stopped.</li>
-      <li><strong><code>larper.send</code> only works from your own keypress.</strong> Automatic replies would make your account a self-bot, so they're blocked by design. <a href="guide/plugins.html">Plugin API →</a></li>
+      <li><strong><code>larper.send</code> only works from your own gesture.</strong> Automatic replies would make your account a self-bot, so they're blocked by design. <a href="guide/plugins.html">Plugin API →</a></li>
     </ul>
   </div>
   <span class="close">}</span>
@@ -320,7 +321,7 @@
     <li><strong>Memory has ceilings.</strong> 1,500 messages per channel and 3,000 in total. Forgotten conversations get unloaded, and the image cache has a fixed 64&nbsp;MB budget.</li>
     <li><strong>fontconfig gets freed.</strong> After fonts are resolved: <code>FcFini</code>, then <code>malloc_trim</code>.</li>
     <li><strong>No blinking cursor.</strong> A blinking cursor would keep the CPU awake for no good reason.</li>
-    <li><strong>Things start when you ask.</strong> The voice thread on your first call, FFmpeg on your first video. Without plugins, plugins cost nothing per message, key or frame.</li>
+    <li><strong>Things start when you ask.</strong> The voice thread on your first call, FFmpeg on your first video. With no plugin on, there's no plugin thread and no Lua, and nothing is spent per message, key or frame.</li>
   </ol>
   <div class="flow reveal" aria-label="Data flow">
     <b class="hot">UI</b> → <b>Action</b> → <b>app</b> → <b>Command</b> → <b>gateway</b> → <b>Event</b> → <b>Store</b> → <b class="hot">UI</b>

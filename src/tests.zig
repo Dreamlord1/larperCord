@@ -48,6 +48,10 @@ test {
     _ = @import("net/user_json.zig");
     _ = @import("ui/apng.zig");
     _ = @import("plugins/engine.zig");
+    _ = @import("plugins/manifest.zig");
+    _ = @import("plugins/deco.zig");
+    _ = @import("plugins/panel.zig");
+    _ = @import("plugins/json.zig");
 }
 
 /// Componentes que a interface sabe desenhar (manter igual a ui/root.zig).

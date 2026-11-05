@@ -40,7 +40,7 @@ A página Desempenho nas configurações mostra números ao vivo, e o `--stats` 
 7. **Memória com teto.** 1.500 mensagens por canal e 3.000 no total, e depois disso a conversa vista há mais tempo é descarregada. As imagens têm um orçamento fixo de 64 MB, e qualquer download isolado para em 32 MB.
 8. **O fontconfig é liberado** depois que as fontes são resolvidas (`FcFini` e `malloc_trim`).
 9. **Sem cursor piscando.** Ele manteria a CPU acordada à toa.
-10. **As coisas começam quando você pede.** A thread de voz na primeira call e o FFmpeg no primeiro vídeo. O vídeo fora da tela é liberado depois de 30 segundos, e sem plugins não há trabalho extra por mensagem, tecla ou quadro.
+10. **As coisas começam quando você pede.** A thread de voz na primeira call e o FFmpeg no primeiro vídeo. O vídeo fora da tela é liberado depois de 30 segundos, e sem plugin ligado não há thread de plugins, estado de Lua nem trabalho extra por mensagem, tecla ou quadro.
 
 ## O orçamento no CI
 

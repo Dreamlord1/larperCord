@@ -18,7 +18,7 @@ Open settings with `Ctrl+,`. Changes apply right away and are saved in `~/.confi
 | **Language** | Follow the system, Português (Brasil) or English (US) |
 | **Advanced** | Developer mode (message IDs, "Copy ID") and reload themes on save |
 | **Performance** | RAM, CPU per frame, idle CPU and messages per channel |
-| **Plugins** | The list of plugins, on/off, errors, Reload and Install examples |
+| **Plugins** | A card for each plugin (what it is and what it asks for), on/off, errors, host approvals, its panel, Reload and Install bundled plugins |
 | **About** | Version and what it's built with |
 
 ## Privacy choices worth knowing
@@ -40,7 +40,8 @@ Open settings with `Ctrl+,`. Changes apply right away and are saved in `~/.confi
 | `~/.config/larpercord/settings.kdl` | Settings, including per-theme options and colors |
 | `~/.config/larpercord/themes/*.kdl` | Your themes |
 | `~/.config/larpercord/plugins/*.lua` | Your plugins |
-| `~/.config/larpercord/plugins.kdl` | Which plugins are on or off |
+| `~/.config/larpercord/plugins.kdl` | Which plugins are off, the hosts you approved, and the side panel |
+| `~/.config/larpercord/plugin-data/` | What each plugin stores, per account |
 | `~/.config/larpercord/drafts.kdl` | Unsent drafts per channel (`chmod 600`) |
 | `~/.config/larpercord/saved-<account>.json` | Saved messages and notes |
 | `~/.config/larpercord/accounts` | Saved accounts: ID, name and avatar only |

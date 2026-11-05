@@ -15,6 +15,8 @@ pub const Wake = enum(i32) {
     show = 6,
     /// Sair de verdade: menu da bandeja.
     quit = 7,
+    /// A thread dos plugins tem pedidos para a interface.
+    plugins = 8,
 };
 
 pub const Window = struct {

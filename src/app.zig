@@ -298,6 +298,8 @@ pub const App = struct {
         lsp_net.shutdown();
         voz_audio.shutdown();
         _ = c.SDL_RemoveTimer(app.timer);
+        // O painel aberto agora volta aberto na próxima vez.
+        plugin_host.savePrefs();
         app.plugins.deinit();
         // O que estava na caixa de texto vira o rascunho do canal.
         _ = app.st.drafts.switchTo(app.gpa, 0, &app.st.input, app.st.editing == 0);
@@ -484,6 +486,7 @@ pub const App = struct {
         app.st.viewer = null;
         app.st.saved.clear(app.gpa);
         app.st.saved.owner = 0;
+        app.plugins.setAccount(0);
         app.store.deinit();
         app.store = Store.init(app.gpa);
         app.store.on_evict = msg_cache.onEvict;
@@ -1394,6 +1397,7 @@ pub const App = struct {
             },
             .mark_read => |id| app.markReadAction(id),
             .channel_seen => |id| app.readChannel(id),
+            .deco_dismiss => |dd| app.plugins.deco.remove(dd.run, dd.id),
             .mark_unread => |id| app.markUnreadAction(id),
             .typing => |id| {
                 if (!st.settings.send_typing or app.store.demo) return;
@@ -1640,6 +1644,7 @@ pub const App = struct {
             // Antes de o Store ficar com a mensagem (se o canal não existe, ele a libera).
             const quiet: ?types.Id = if (e == .message_create and app.store.ready) app.incoming(e.message_create) else null;
             if (e == .message_create and app.store.ready) plugin_host.onMessage(app, e.message_create);
+            if (e == .message_delete) plugin_host.onDelete(app, e.message_delete.channel, e.message_delete.id);
             if (app.opts.stats) switch (e) {
                 .status => |st| std.log.info("conexão: {t}", .{st}),
                 .notice => |n| std.log.info("aviso: {s}", .{n}),
@@ -1807,6 +1812,12 @@ pub const App = struct {
         while (cut > 0 and cut < body_src.len and (body_src[cut] & 0xC0) == 0x80) cut -= 1;
         var bb: [208]u8 = undefined;
         const body = std.fmt.bufPrintSentinel(&bb, "{s}{s}", .{ body_src[0..cut], if (cut < body_src.len) "…" else "" }, 0) catch return;
+        app.desktopNotify(title, body);
+    }
+
+    /// Uma notificação do sistema: notify-send no Linux, o aviso da bandeja no Windows.
+    pub fn desktopNotify(app: *App, title: [:0]const u8, body: [:0]const u8) void {
+        if (app.notifiers.items.len >= 8) return;
         if (sys.windows) return sys.toast(c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(app.win.window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null), now(), title, body);
         var args = [_:null]?[*:0]const u8{ "notify-send", "--app-name=larperCord", "--", title.ptr, body.ptr };
         const proc = c.SDL_CreateProcess(@ptrCast(&args), false) orelse return;
@@ -1907,6 +1918,7 @@ pub const App = struct {
     fn onReady(app: *App) void {
         // As salvas desta conta (o QA e os prints começam sem nenhuma).
         saved_ui.load(&app.st.saved, app.gpa, app.store.me, !app.opts.qa and app.opts.shot == null);
+        app.plugins.setAccount(app.store.me);
         // O status escolhido da última vez (o Discord começa em online).
         if (app.st.settings.my_status != 0) app.handle(.{ .set_status = @fromBackingInt(@intCast(@min(app.st.settings.my_status, 3))) });
         if (!app.store.demo) {
@@ -2125,6 +2137,8 @@ pub const App = struct {
                                 if (msg_cache.flushSome(&app.store, 4)) app.cache_flush_ms -= 50_000;
                             }
                             sys.toastExpire(now(), false);
+                            // Por garantia: um aviso dos plugins pode ter se perdido com a fila cheia.
+                            app.plugins.drain();
                             // O painel sumiu com a janela escondida (fechou, travou):
                             // a janela volta em vez de ficar sem caminho de volta.
                             if (tray.active()) {
@@ -2143,6 +2157,10 @@ pub const App = struct {
                             pending = 3;
                         },
                         .quit => running = false,
+                        .plugins => {
+                            app.plugins.drain();
+                            pending = @max(pending, 2);
+                        },
                     }
                 } else {
                     input = true;
@@ -2241,6 +2259,7 @@ pub const App = struct {
             voz_audio.apply(set);
             lsp_ui.apply(set);
             voz_audio.setPageOpen(set.open and set.page == .voz and app.store.ready);
+            plugin_host.frame(app);
             @import("ui/attachments.zig").hide_embeds = !set.show_embeds;
             app.store.keep_log = set.message_log;
             msg_cache.enabled = set.message_cache;

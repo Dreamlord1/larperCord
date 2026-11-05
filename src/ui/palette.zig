@@ -191,6 +191,12 @@ fn rebuild(ctx: *d.Ctx) void {
         const label = i18n.allocPrint(a, "Configurações: {s}", "Settings: {s}", .{i18n.tr(it.label, it.label_en)}) catch continue;
         add(p, gpa, q, .{ .label = label, .hint = i18n.tr("configurações", "settings"), .kind = .page, .index = @intFromEnum(it.page) });
     };
+    // Painéis dos plugins que estão rodando.
+    if (@import("../plugins/engine.zig").current) |e| for (e.list.items, 0..) |pl, i| {
+        if (pl.tree == null) continue;
+        const label = i18n.allocPrint(a, "Painel: {s}", "Panel: {s}", .{pl.title()}) catch continue;
+        add(p, gpa, q, .{ .label = label, .hint = "plugin", .kind = .plugin, .index = i });
+    };
     // Opções liga/desliga: o rótulo diz o que vai acontecer.
     for (S.fields(), 0..) |f, i| {
         if (f.kind != .boolean) continue;
@@ -221,6 +227,9 @@ fn choose(ctx: *d.Ctx, item: state.PaletteItem) void {
             // Abrir as configurações já fecha a paleta.
             ctx.st.settings.page = @enumFromInt(item.index);
             return ctx.act(.open_settings);
+        },
+        .plugin => if (@import("../plugins/engine.zig").current) |e| {
+            if (item.index < e.list.items.len and e.list.items[item.index].tree != null) e.openPanel(e.list.items[item.index]);
         },
         .setting => if (S.getByte(&ctx.st.settings, item.index)) |cur| {
             const on = cur == 0;

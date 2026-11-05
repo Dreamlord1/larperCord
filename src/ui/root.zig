@@ -26,6 +26,7 @@ const fx = @import("fx.zig");
 const display = @import("display_text.zig");
 const backdrop = @import("backdrop.zig");
 const resize = @import("resize.zig");
+const plugin_panel = @import("plugin_panel.zig");
 
 const Component = *const fn (*d.Ctx, *const kdl.Node, d.Rect) void;
 
@@ -130,9 +131,11 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
             hides[n_hides] = "status-bar";
             n_hides += 1;
         }
+        // Painel de plugin aberto: o tema inteiro cabe no que sobra da janela.
+        const bounds = plugin_panel.reserve(ctx.win);
         // Largura dos painéis: a da pessoa, com a conversa sempre usável.
         var sizes = resize.sizes(&ctx.st.settings);
-        layout.solveSized(ctx.st.gpa, root, ctx.win, ctx.win.w, .{ .ctx = ctx.th, .get = Look.get, .hides = hides[0..n_hides] }, &sizes, "messages", resize.min_chat, placed) catch {};
+        layout.solveSized(ctx.st.gpa, root, bounds, bounds.w, .{ .ctx = ctx.th, .get = Look.get, .hides = hides[0..n_hides] }, &sizes, "messages", resize.min_chat, placed) catch {};
         resize.addPanels(ctx, placed.items, &sizes);
         const base_theme = ctx.th;
         defer ctx.th = base_theme;
@@ -166,6 +169,7 @@ pub fn frame(ctx: *d.Ctx, placed: *std.ArrayList(layout.Placed), previews: []con
     }
     // Por cima dos painéis, por baixo do que flutua (a lista do autocompletar).
     resize.submit(ctx);
+    plugin_panel.draw(ctx);
     @import("lsp_ui.zig").panel(ctx);
     @import("autocomplete.zig").draw(ctx);
     c.ImGui_End();

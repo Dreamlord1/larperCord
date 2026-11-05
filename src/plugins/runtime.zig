@@ -1,0 +1,2240 @@
+//! A thread dos plugins: todo o Lua roda aqui, nunca na thread da interface.
+//!
+//! Cada plugin tem o próprio `lua_State` (um travado ou com erro não mexe nos
+//! outros) e roda num sandbox:
+//! - só as bibliotecas base, string, table, math e utf8, mais os.time, os.date
+//!   e os.clock. Sem io, os.execute, require, load/dofile, debug;
+//! - um limite de instruções por chamada (lua_sethook com contagem): um laço
+//!   infinito vira erro, e `pcall` não consegue engolir esse erro;
+//! - um teto de memória por plugin (o alocador recusa passar dele);
+//! - toda entrada no Lua passa por um `lua_pcall` (até montar as tabelas),
+//!   então nenhum erro derruba o app: vira aviso na interface.
+//!
+//! A conversa com a interface é só por duas filas (ver wire.zig): `Ev` chega,
+//! `Cmd` sai. Dormindo, a thread espera a condição da fila, com prazo apenas se
+//! algum plugin tem temporizador: sem nada acontecendo não há quadro, tique nem
+//! varredura. Sem plugin ligado a thread nem existe (ver engine.zig).
+const std = @import("std");
+const lua = @import("lua.zig");
+const lsp_core = @import("../core/lsp.zig");
+const filtros = @import("../core/filtros.zig");
+const wire = @import("wire.zig");
+const manifest = @import("manifest.zig");
+const panel = @import("panel.zig");
+const deco = @import("deco.zig");
+const json = @import("json.zig");
+const sync = @import("sync.zig");
+
+pub const max_plugins = 64;
+pub const max_source = 256 * 1024;
+const max_commands = 32;
+const max_keys = 32;
+const max_lsp = 8;
+const max_menus = 4;
+const max_timers = 64;
+/// Teto de memória de cada plugin.
+pub const mem_cap = 8 * 1024 * 1024;
+/// O gancho do Lua roda a cada tantas instruções.
+const hook_every = 1000;
+/// Erros seguidos (fora o de travar) antes de o plugin ser parado.
+const max_errors = 10;
+/// larper.send por gesto.
+const max_sends = 5;
+/// Eventos esperando: uma rajada de mensagens não cresce sem limite. Gestos da
+/// pessoa nunca são jogados fora.
+const max_events = 4096;
+const max_out = 16 * 1024;
+/// O que um plugin pode pedir à interface numa chamada só.
+const max_cmds_per_call = 4096;
+/// larper.storage: tamanho total (chaves e valores em JSON).
+pub const storage_cap = 1024 * 1024;
+const storage_flush_ms = 1500;
+/// larper.notify: quantos em 10 s (o resto é ignorado em silêncio).
+const notify_burst = 20;
+/// larper.every: o menor intervalo. Bem mais que isso seria um plugin ocupado à toa.
+const every_min_ms = 1000;
+/// Plugin com temporizador longe: a thread confere o relógio de minuto em minuto
+/// (o computador pode ter dormido; esperas longas não contam esse tempo).
+const timer_recheck_ms = 60_000;
+/// larper.messages: quantas por vez, e no máximo uma consulta a cada tanto.
+const messages_default = 200;
+const messages_max = 500;
+const messages_gap_ms = 500;
+/// larper.http: limites por plugin.
+pub const http_body_max = 64 * 1024;
+const http_per_minute = 30;
+const http_in_flight = 3;
+
+/// Idioma das mensagens de erro (o app troca por `i18n.en`, que é atômico).
+pub var lang_en: *const fn () bool = &struct {
+    fn f() bool {
+        return false;
+    }
+}.f;
+
+fn tr(pt: []const u8, en: []const u8) []const u8 {
+    return if (lang_en()) en else pt;
+}
+
+// --- A thread --------------------------------------------------------------------
+
+const WhereBuf = struct {
+    channel: u64 = 0,
+    guild: u64 = 0,
+    channel_name: [128]u8 = undefined,
+    channel_len: u8 = 0,
+    guild_name: [128]u8 = undefined,
+    guild_len: u8 = 0,
+
+    fn put(buf: *[128]u8, s: []const u8) u8 {
+        var n = @min(s.len, buf.len);
+        while (n > 0 and n < s.len and (s[n] & 0xC0) == 0x80) n -= 1;
+        @memcpy(buf[0..n], s[0..n]);
+        return @intCast(n);
+    }
+};
+
+pub const Worker = struct {
+    gpa: std.mem.Allocator,
+    host: wire.Host,
+    lock: sync.Lock,
+    // Com a trava:
+    events: std.ArrayList(wire.Ev) = .empty,
+    out: std.ArrayList(wire.Cmd) = .empty,
+    where: WhereBuf = .{},
+    /// Rodando Lua agora (ou acabou de pegar eventos).
+    busy: bool = false,
+    /// A thread deve sair depois do que está na fila.
+    quit: bool = false,
+    // Atômicos:
+    /// O app está fechando: até o que está rodando para.
+    closing: std.atomic.Value(bool) = .init(false),
+    /// A thread saiu e dá para juntar sem esperar.
+    exited: std.atomic.Value(bool) = .init(false),
+    /// Já tem um aviso para a interface a caminho.
+    signaled: std.atomic.Value(bool) = .init(false),
+    /// Bytes de Lua por plugin (a página mostra).
+    mem: [max_plugins]std.atomic.Value(usize) = @splat(.init(0)),
+    /// Quantas vezes a thread acordou (o QA confere que parada ela não acorda).
+    loops: std.atomic.Value(u32) = .init(0),
+    /// Quantos eventos foram jogados fora por excesso (só para o log).
+    dropped: u32 = 0,
+    // Só da interface:
+    thread: ?sync.Thread = null,
+    // Só da thread dos plugins:
+    rts: std.ArrayList(*Rt) = .empty,
+
+    pub fn create(gpa: std.mem.Allocator, host: wire.Host) !*Worker {
+        const w = try gpa.create(Worker);
+        w.* = .{ .gpa = gpa, .host = host, .lock = sync.lockInit() };
+        return w;
+    }
+
+    pub fn start(w: *Worker) bool {
+        if (w.thread != null) return true;
+        w.quit = false;
+        w.exited.store(false, .release);
+        w.thread = sync.Thread.spawn(threadMain, w, "plugins");
+        return w.thread != null;
+    }
+
+    /// Pede para a thread sair depois do que está na fila (sem esperar).
+    pub fn retire(w: *Worker) void {
+        w.lock.lock();
+        defer w.lock.unlock();
+        w.quit = true;
+        w.lock.signal();
+    }
+
+    /// Espera a thread acabar. Com `closing`, até o que está rodando desiste.
+    pub fn join(w: *Worker, closing: bool) void {
+        if (w.thread == null) return;
+        if (closing) w.closing.store(true, .release);
+        w.retire();
+        w.thread.?.join();
+        w.thread = null;
+    }
+
+    /// Só com a thread parada.
+    pub fn destroy(w: *Worker) void {
+        for (w.events.items) |*ev| freeEv(w.gpa, ev);
+        w.events.deinit(w.gpa);
+        for (w.out.items) |*cmd| freeCmd(w.gpa, cmd);
+        w.out.deinit(w.gpa);
+        w.rts.deinit(w.gpa);
+        w.lock.deinit();
+        w.gpa.destroy(w);
+    }
+
+    pub fn push(w: *Worker, ev: wire.Ev) void {
+        var e = ev;
+        w.lock.lock();
+        defer w.lock.unlock();
+        const droppable = switch (e) {
+            .message, .delete, .channel, .lang, .messages => true,
+            else => false,
+        };
+        if (droppable and w.events.items.len >= max_events) {
+            w.dropped +%= 1;
+            return freeEv(w.gpa, &e);
+        }
+        w.events.append(w.gpa, e) catch return freeEv(w.gpa, &e);
+        w.lock.signal();
+    }
+
+    pub fn setWhere(w: *Worker, wh: wire.Where) void {
+        w.lock.lock();
+        defer w.lock.unlock();
+        w.where.channel = wh.channel;
+        w.where.guild = wh.guild;
+        w.where.channel_len = WhereBuf.put(&w.where.channel_name, wh.channel_name);
+        w.where.guild_len = WhereBuf.put(&w.where.guild_name, wh.guild_name);
+    }
+
+    /// Da interface: pega tudo o que a thread mandou.
+    pub fn takeOut(w: *Worker, into: *std.ArrayList(wire.Cmd)) void {
+        w.signaled.store(false, .release);
+        w.lock.lock();
+        defer w.lock.unlock();
+        std.mem.swap(std.ArrayList(wire.Cmd), &w.out, into);
+    }
+
+    /// A fila vazia e nada rodando (os testes esperam por isso).
+    pub fn idle(w: *Worker) bool {
+        w.lock.lock();
+        defer w.lock.unlock();
+        return w.events.items.len == 0 and !w.busy and w.out.items.len == 0;
+    }
+
+    fn emit(w: *Worker, run: u32, what: wire.CmdWhat) bool {
+        var cmd: wire.Cmd = .{ .run = run, .what = what };
+        w.lock.lock();
+        defer w.lock.unlock();
+        if (w.out.items.len >= max_out) {
+            freeCmd(w.gpa, &cmd);
+            return false;
+        }
+        w.out.append(w.gpa, cmd) catch {
+            freeCmd(w.gpa, &cmd);
+            return false;
+        };
+        return true;
+    }
+
+    /// Acorda a interface, se tem o que ela ver e ninguém avisou ainda.
+    fn kick(w: *Worker) void {
+        w.lock.lock();
+        const any = w.out.items.len > 0;
+        w.lock.unlock();
+        if (any and !w.signaled.swap(true, .acq_rel)) w.host.wake(w.host.ctx);
+    }
+
+    fn find(w: *Worker, run: u32) ?*Rt {
+        for (w.rts.items) |rt| if (rt.run == run and !rt.dead) return rt;
+        return null;
+    }
+
+    fn nextDue(w: *const Worker) ?i64 {
+        var due: ?i64 = null;
+        for (w.rts.items) |rt| {
+            if (rt.dead) continue;
+            for (rt.timers.items) |t| {
+                if (due == null or t.due_ms < due.?) due = t.due_ms;
+            }
+            if (rt.store_dirty and (due == null or rt.store_flush_at < due.?)) due = rt.store_flush_at;
+        }
+        return due;
+    }
+
+    fn handle(w: *Worker, ev: *wire.Ev) void {
+        switch (ev.*) {
+            .start => |args| startRun(w, args),
+            .stop => |run| if (w.find(run)) |rt| rt.close(),
+            .ready => for (w.rts.items) |rt| if (rt.n_ready > 0 and !rt.dead) {
+                rt.invoke(.{ .kind = .ready });
+            },
+            .message => |own| for (w.rts.items) |rt| if (rt.n_message > 0 and !rt.dead) {
+                rt.invoke(.{ .kind = .message, .msg = &own.msg });
+            },
+            .delete => |d| for (w.rts.items) |rt| if (rt.n_delete > 0 and !rt.dead) {
+                rt.invoke(.{ .kind = .delete, .id = d.id, .channel = d.channel });
+            },
+            .channel => for (w.rts.items) |rt| if (rt.n_channel > 0 and !rt.dead) {
+                rt.invoke(.{ .kind = .channel });
+            },
+            .lang => for (w.rts.items) |rt| if (rt.n_lang > 0 and !rt.dead) {
+                rt.invoke(.{ .kind = .lang });
+            },
+            .panel_state => |s| if (w.find(s.run)) |rt| {
+                if (rt.n_panel > 0) rt.invoke(.{ .kind = .panel_state, .flag = s.open });
+            },
+            .gesture => |g| if (w.find(g.run)) |rt| switch (g.what) {
+                .command => |x| rt.invoke(.{ .kind = .command, .name = x.name, .args = x.args, .token = g.token }),
+                .key => |slot| rt.invoke(.{ .kind = .key, .slot = slot, .token = g.token }),
+                .menu_message => |x| rt.invoke(.{ .kind = .menu_message, .slot = x.slot, .msg = &x.msg.msg, .token = g.token }),
+                .menu_user => |x| rt.invoke(.{ .kind = .menu_user, .slot = x.slot, .id = x.id, .name = x.name, .token = g.token }),
+                .panel => |x| rt.invoke(.{ .kind = .panel, .handle = x.handle, .value = x.value, .token = g.token }),
+            },
+            .messages => |r| if (w.find(r.run)) |rt| {
+                rt.invoke(.{ .kind = .messages, .slot = r.req, .list = r.list });
+            },
+            .http => |res| if (w.find(res.run)) |rt| {
+                if (!res.refused) rt.http_flying -|= 1;
+                rt.invoke(.{ .kind = .http, .res = res });
+            },
+            .hosts => |h| if (w.find(h.run)) |rt| {
+                rt.freeApproved();
+                rt.approved = h.approved;
+                ev.* = .ready; // quem ficou com a lista foi o plugin
+            },
+        }
+        freeEv(w.gpa, ev);
+    }
+
+    fn fireTimers(w: *Worker) void {
+        const now = sync.nowMs();
+        // O plugin pode mexer nos próprios temporizadores: procura de novo a cada um.
+        for (w.rts.items) |rt| {
+            var guard: usize = 0;
+            while (!rt.dead and guard < max_timers) : (guard += 1) {
+                const i = for (rt.timers.items, 0..) |t, k| {
+                    if (t.due_ms <= now and !t.fired) break k;
+                } else break;
+                const t = &rt.timers.items[i];
+                const id = t.id;
+                if (t.every_ms > 0) {
+                    // Sem correr atrás do tempo perdido (o computador dormiu).
+                    t.due_ms = now + t.every_ms;
+                    t.fired = true;
+                } else _ = rt.timers.swapRemove(i);
+                rt.invoke(.{ .kind = .timer, .slot = id });
+            }
+            for (rt.timers.items) |*t| t.fired = false;
+        }
+    }
+
+    fn flushDue(w: *Worker) void {
+        const now = sync.nowMs();
+        for (w.rts.items) |rt| if (!rt.dead and rt.store_dirty and rt.store_flush_at <= now) rt.flushStorage();
+    }
+
+    /// Tira da lista quem parou.
+    fn reap(w: *Worker) void {
+        var i: usize = 0;
+        while (i < w.rts.items.len) {
+            const rt = w.rts.items[i];
+            if (rt.dead) {
+                _ = w.rts.orderedRemove(i);
+                rt.destroy();
+            } else i += 1;
+        }
+    }
+};
+
+fn threadMain(raw: ?*anyopaque) void {
+    const w: *Worker = @ptrCast(@alignCast(raw.?));
+    var batch: std.ArrayList(wire.Ev) = .empty;
+    defer batch.deinit(w.gpa);
+    while (true) {
+        w.lock.lock();
+        w.busy = false;
+        while (w.events.items.len == 0 and !w.quit) {
+            const due = w.nextDue() orelse {
+                w.lock.wait(null);
+                continue;
+            };
+            const now = sync.nowMs();
+            if (due <= now) break;
+            w.lock.wait(@intCast(@min(due - now, timer_recheck_ms)));
+            // Pode ter acordado sem nada novo: o laço confere de novo o prazo.
+        }
+        if (w.quit and w.events.items.len == 0) {
+            w.lock.unlock();
+            break;
+        }
+        w.busy = true;
+        std.mem.swap(std.ArrayList(wire.Ev), &w.events, &batch);
+        w.lock.unlock();
+        _ = w.loops.fetchAdd(1, .monotonic);
+
+        for (batch.items) |*ev| {
+            w.handle(ev);
+            w.kick();
+        }
+        batch.clearRetainingCapacity();
+        w.fireTimers();
+        w.flushDue();
+        w.reap();
+        w.kick();
+    }
+    // Saindo: o que estava escrito vai para o disco.
+    for (w.rts.items) |rt| rt.close();
+    w.reap();
+    w.exited.store(true, .release);
+    w.lock.lock();
+    w.busy = false;
+    w.lock.unlock();
+    if (!w.signaled.swap(true, .acq_rel)) w.host.wake(w.host.ctx);
+}
+
+pub fn freeEv(gpa: std.mem.Allocator, ev: *wire.Ev) void {
+    switch (ev.*) {
+        .start => |a| {
+            gpa.free(a.name);
+            gpa.free(a.src);
+            freeList(gpa, a.approved);
+            gpa.destroy(a);
+        },
+        .message => |m| m.free(gpa),
+        .gesture => |g| switch (g.what) {
+            .command => |x| {
+                gpa.free(x.name);
+                gpa.free(x.args);
+            },
+            .menu_message => |x| x.msg.free(gpa),
+            .menu_user => |x| gpa.free(x.name),
+            .panel => |x| if (x.value) |v| gpa.free(v),
+            .key => {},
+        },
+        .messages => |r| r.list.free(),
+        .http => |r| {
+            gpa.free(r.body);
+            gpa.destroy(r);
+        },
+        .hosts => |h| freeList(gpa, h.approved),
+        .stop, .ready, .delete, .channel, .lang, .panel_state => {},
+    }
+}
+
+pub fn freeCmd(gpa: std.mem.Allocator, cmd: *wire.Cmd) void {
+    switch (cmd.what) {
+        .reg => |r| r.free(gpa),
+        .failed => |f| gpa.free(f.msg),
+        .notify => |n| gpa.free(n.text),
+        .send => |s| gpa.free(s.text),
+        .insert => |s| gpa.free(s.text),
+        .panel_tree => |t| t.destroy(),
+        .deco_set => |s| {
+            gpa.free(s.badge);
+            gpa.free(s.note);
+            gpa.free(s.label);
+        },
+        .deco_rules => |list| {
+            for (list) |*r| r.free(gpa);
+            gpa.free(list);
+        },
+        .jump, .panel_show, .deco_remove, .want_messages => {},
+    }
+}
+
+pub fn freeList(gpa: std.mem.Allocator, list: [][]u8) void {
+    for (list) |s| gpa.free(s);
+    gpa.free(list);
+}
+
+fn startRun(w: *Worker, args: *wire.StartArgs) void {
+    const rt = w.gpa.create(Rt) catch return;
+    rt.* = .{ .w = w, .run = args.run, .slot = args.slot, .account = args.account, .budget = args.budget, .name = args.name };
+    args.name = &.{};
+    rt.approved = args.approved;
+    args.approved = &.{};
+    w.rts.append(w.gpa, rt) catch {
+        rt.destroy();
+        return;
+    };
+    rt.boot(args.src, args.fire_ready);
+}
+
+// --- Um plugin -------------------------------------------------------------------
+
+const Timer = struct { id: u32, due_ms: i64, every_ms: i64 = 0, fired: bool = false };
+
+const Kind = enum { setup, store_load, store_flush, message, ready, delete, channel, lang, panel_state, command, key, menu_message, menu_user, panel, timer, http, messages };
+
+/// O que o trampolim protegido vai fazer dentro do Lua.
+const Call = struct {
+    kind: Kind,
+    msg: ?*const wire.Message = null,
+    name: []const u8 = "",
+    args: []const u8 = "",
+    slot: u32 = 0,
+    id: u64 = 0,
+    channel: u64 = 0,
+    handle: u32 = 0,
+    value: ?[]const u8 = null,
+    res: ?*const wire.HttpRes = null,
+    list: ?*const wire.MsgList = null,
+    bytes: []const u8 = "",
+    flag: bool = false,
+    /// Diferente de 0: é um gesto da pessoa neste plugin (libera larper.send etc.).
+    token: u32 = 0,
+};
+
+pub const Rt = struct {
+    w: *Worker,
+    run: u32,
+    slot: u16,
+    account: u64,
+    budget: u32,
+    name: []u8,
+    /// Capacidades e hosts pedidos (os hosts são cópias: o fonte não fica guardado).
+    m: manifest.Manifest = .{},
+    host_copies: [manifest.max_hosts][]u8 = undefined,
+    approved: [][]u8 = &.{},
+    L: ?*lua.State = null,
+    dead: bool = false,
+    /// Bytes que o Lua deste plugin está usando.
+    mem: usize = 0,
+    steps: u32 = 0,
+    timed_out: bool = false,
+    /// O gesto da chamada de agora (0 = não veio da pessoa).
+    gesture: u32 = 0,
+    sends: u8 = 0,
+    cmds: u32 = 0,
+    errors: u8 = 0,
+    n_message: u16 = 0,
+    n_ready: u16 = 0,
+    n_delete: u16 = 0,
+    n_channel: u16 = 0,
+    n_lang: u16 = 0,
+    n_panel: u16 = 0,
+    commands: std.ArrayList([]u8) = .empty,
+    keys: std.ArrayList(wire.Keybind) = .empty,
+    lsp: std.ArrayList(wire.LspServer) = .empty,
+    menus: std.ArrayList(wire.MenuEntry) = .empty,
+    /// Algo acima mudou: a interface precisa saber.
+    reg_dirty: bool = false,
+    timers: std.ArrayList(Timer) = .empty,
+    next_id: u32 = 1,
+    store_bytes: usize = 0,
+    store_dirty: bool = false,
+    store_flush_at: i64 = 0,
+    /// Rascunho do que o Zig monta com o Lua no meio (um erro pula as limpezas:
+    /// fica aqui até a próxima vez ou até o plugin parar).
+    scratch: std.ArrayList(u8) = .empty,
+    scratch2: std.ArrayList(u8) = .empty,
+    wip: ?*panel.Tree = null,
+    /// Árvore pronta: sai ao fim da chamada (publicar 100 vezes conta uma só).
+    tree_ready: ?*panel.Tree = null,
+    notify_from: i64 = 0,
+    notify_n: u8 = 0,
+    messages_at: i64 = 0,
+    http_flying: u8 = 0,
+    http_from: i64 = 0,
+    http_n: u8 = 0,
+
+    fn gpa(rt: *const Rt) std.mem.Allocator {
+        return rt.w.gpa;
+    }
+
+    fn freeApproved(rt: *Rt) void {
+        freeList(rt.gpa(), rt.approved);
+        rt.approved = &.{};
+    }
+
+    fn destroy(rt: *Rt) void {
+        const a = rt.gpa();
+        rt.closeLua();
+        a.free(rt.name);
+        freeList(a, rt.approved);
+        for (rt.m.hostList(), 0..) |_, i| a.free(rt.host_copies[i]);
+        rt.commands.deinit(a);
+        rt.keys.deinit(a);
+        rt.lsp.deinit(a);
+        rt.menus.deinit(a);
+        rt.timers.deinit(a);
+        rt.scratch.deinit(a);
+        rt.scratch2.deinit(a);
+        a.destroy(rt);
+    }
+
+    fn clearLists(rt: *Rt) void {
+        const a = rt.gpa();
+        for (rt.commands.items) |s| a.free(s);
+        rt.commands.clearRetainingCapacity();
+        rt.keys.clearRetainingCapacity();
+        rt.lsp.clearRetainingCapacity();
+        for (rt.menus.items) |*m| {
+            a.free(m.pt);
+            a.free(m.en);
+        }
+        rt.menus.clearRetainingCapacity();
+        rt.timers.clearRetainingCapacity();
+        rt.n_message = 0;
+        rt.n_ready = 0;
+        rt.n_delete = 0;
+        rt.n_channel = 0;
+        rt.n_lang = 0;
+        rt.n_panel = 0;
+    }
+
+    fn closeLua(rt: *Rt) void {
+        if (rt.L) |L| {
+            // __gc não existe aqui (ver lSetmetatable): fechar não roda código do plugin.
+            rt.L = null;
+            lua.lua_close(L);
+        }
+        if (rt.wip) |t| t.destroy();
+        rt.wip = null;
+        if (rt.tree_ready) |t| t.destroy();
+        rt.tree_ready = null;
+        rt.clearLists();
+        rt.w.mem[rt.slot].store(0, .monotonic);
+    }
+
+    /// Parou (desligado, erro ou o app fechando): grava o que falta e fecha o Lua.
+    fn close(rt: *Rt) void {
+        if (rt.dead) return;
+        if (rt.store_dirty) rt.flushStorage();
+        rt.dead = true;
+        rt.closeLua();
+    }
+
+    fn boot(rt: *Rt, src: []const u8, fire_ready: bool) void {
+        rt.m = manifest.parse(src);
+        // O cabeçalho aponta para o fonte, que não fica: copia só o que serve depois.
+        const m_hosts = rt.m.n_hosts;
+        rt.m.n_hosts = 0;
+        for (rt.m.hosts[0..m_hosts]) |h| {
+            const own = rt.gpa().dupe(u8, h) catch return rt.fail(tr("sem memória", "out of memory"));
+            rt.host_copies[rt.m.n_hosts] = own;
+            rt.m.hosts[rt.m.n_hosts] = own;
+            rt.m.n_hosts += 1;
+        }
+        var pb: [300]u8 = undefined;
+        if (rt.m.problemText(&pb, lang_en())) |msg| return rt.fail(msg);
+        rt.m.name = "";
+        rt.m.name_pt = "";
+        rt.m.description = "";
+        rt.m.description_pt = "";
+        rt.m.version = "";
+        rt.m.problem = .none;
+
+        const L = lua.lua_newstate(&alloc, rt) orelse return rt.fail(tr("sem memória para o Lua", "out of memory for Lua"));
+        _ = lua.lua_atpanic(L, &panicFn);
+        rt.L = L;
+        lua.lua_sethook(L, &hook, lua.MASKCOUNT, hook_every);
+        if (!rt.protected(.{ .kind = .setup })) return;
+        rt.loadStorage();
+        if (rt.dead) return;
+        var nbuf: [160]u8 = undefined;
+        const chunk = std.fmt.bufPrintSentinel(&nbuf, "@{s}", .{rt.name}, 0) catch "@plugin";
+        // Só texto: bytecode pré-compilado poderia burlar o sandbox.
+        if (lua.luaL_loadbufferx(L, src.ptr, src.len, chunk.ptr, "t") != lua.OK) {
+            return rt.fail(lua.toSlice(L, -1) orelse "?");
+        }
+        rt.steps = 0;
+        rt.timed_out = false;
+        rt.cmds = 0;
+        // Erro aqui em cima deixaria o plugin pela metade: para e mostra o erro.
+        if (lua.pcall(L, 0, 0) != lua.OK) {
+            const raw = (if (lua.lua_type(L, -1) == lua.TSTRING) lua.toSlice(L, -1) else null) orelse tr("erro sem mensagem", "error without a message");
+            return rt.fail(raw);
+        }
+        if (fire_ready and rt.n_ready > 0) rt.invoke(.{ .kind = .ready }) else rt.publish();
+    }
+
+    fn fail(rt: *Rt, msg: []const u8) void {
+        const own = rt.gpa().dupe(u8, msg) catch "";
+        _ = rt.w.emit(rt.run, .{ .failed = .{ .msg = @constCast(own), .stopped = true } });
+        rt.close();
+    }
+
+    fn report(rt: *Rt, msg: []const u8) void {
+        const own = rt.gpa().dupe(u8, msg) catch return;
+        _ = rt.w.emit(rt.run, .{ .failed = .{ .msg = own, .stopped = false } });
+    }
+
+    /// Roda `call` num pcall. false = deu erro (já tratado).
+    fn protected(rt: *Rt, call: Call) bool {
+        const L = rt.L orelse return false;
+        var cl = call;
+        rt.steps = 0;
+        rt.timed_out = false;
+        rt.sends = 0;
+        rt.cmds = 0;
+        rt.gesture = call.token;
+        defer rt.gesture = 0;
+        lua.pushcfunction(L, &trampoline);
+        lua.lua_pushlightuserdata(L, &cl);
+        if (lua.pcall(L, 1, 0) == lua.OK) return true;
+        rt.afterError();
+        return false;
+    }
+
+    fn invoke(rt: *Rt, call: Call) void {
+        _ = rt.protected(call);
+        if (!rt.dead) rt.publish();
+    }
+
+    /// O erro está no topo da pilha do plugin.
+    fn afterError(rt: *Rt) void {
+        const L = rt.L.?;
+        // Só texto: converter um número aloca, e sem pcall um erro de memória aqui derruba o app.
+        const raw = (if (lua.lua_type(L, -1) == lua.TSTRING) lua.toSlice(L, -1) else null) orelse tr("erro sem mensagem", "error without a message");
+        var buf: [300]u8 = undefined;
+        if (rt.timed_out) {
+            const msg = std.fmt.bufPrint(&buf, "{s} {s}", .{ tr("parado:", "stopped:"), raw }) catch raw;
+            return rt.fail(msg);
+        }
+        rt.errors += 1;
+        if (rt.errors >= max_errors) {
+            const msg = std.fmt.bufPrint(&buf, "{s} {s}", .{ tr("parado depois de 10 erros:", "stopped after 10 errors:"), raw }) catch raw;
+            return rt.fail(msg);
+        }
+        rt.report(raw);
+        lua.pop(L, 1);
+    }
+
+    /// Ao fim de cada chamada: o que mudou vai para a interface, de uma vez.
+    fn publish(rt: *Rt) void {
+        rt.w.mem[rt.slot].store(rt.mem, .monotonic);
+        if (rt.tree_ready) |t| {
+            rt.tree_ready = null;
+            _ = rt.w.emit(rt.run, .{ .panel_tree = t });
+        }
+        if (!rt.reg_dirty) return;
+        rt.reg_dirty = false;
+        const reg = rt.buildReg() catch return;
+        _ = rt.w.emit(rt.run, .{ .reg = reg });
+    }
+
+    fn buildReg(rt: *Rt) !*wire.Reg {
+        const a = rt.gpa();
+        const reg = try a.create(wire.Reg);
+        reg.* = .{ .n_message = rt.n_message, .n_ready = rt.n_ready, .n_delete = rt.n_delete, .n_channel = rt.n_channel, .n_lang = rt.n_lang };
+        errdefer reg.free(a);
+        var cmds: std.ArrayList([]u8) = .empty;
+        for (rt.commands.items) |s| try cmds.append(a, try a.dupe(u8, s));
+        reg.commands = try cmds.toOwnedSlice(a);
+        reg.keys = try a.dupe(wire.Keybind, rt.keys.items);
+        reg.lsp = try a.dupe(wire.LspServer, rt.lsp.items);
+        var mens: std.ArrayList(wire.MenuEntry) = .empty;
+        for (rt.menus.items) |m| try mens.append(a, .{ .kind = m.kind, .slot = m.slot, .pt = try a.dupe(u8, m.pt), .en = try a.dupe(u8, m.en) });
+        reg.menus = try mens.toOwnedSlice(a);
+        return reg;
+    }
+
+    fn loadStorage(rt: *Rt) void {
+        if (!rt.m.has(.storage)) return;
+        const bytes = rt.w.host.read_data(rt.w.host.ctx, rt.gpa(), rt.account, rt.name) orelse return;
+        defer rt.gpa().free(bytes);
+        _ = rt.protected(.{ .kind = .store_load, .bytes = bytes });
+    }
+
+    fn flushStorage(rt: *Rt) void {
+        rt.store_dirty = false;
+        if (rt.L == null) return;
+        if (!rt.protected(.{ .kind = .store_flush })) return;
+        if (!rt.w.host.write_data(rt.w.host.ctx, rt.account, rt.name, rt.scratch.items)) {
+            rt.report(tr("larper.storage: não consegui gravar no disco", "larper.storage: couldn't write to disk"));
+        }
+    }
+
+    fn hostApproved(rt: *const Rt, host: []const u8) bool {
+        for (rt.approved) |h| if (std.ascii.eqlIgnoreCase(h, host)) return true;
+        return false;
+    }
+
+    /// Mais um pedido à interface. Sem isso um laço encheria a fila dela.
+    fn budgetCmd(rt: *Rt, L: ?*lua.State) void {
+        rt.cmds += 1;
+        if (rt.cmds > max_cmds_per_call) raise(L, tr("pedidos demais à interface numa chamada só", "too many requests to the interface in a single call"));
+    }
+
+    fn dupText(rt: *const Rt, L: ?*lua.State, s: []const u8) []u8 {
+        return rt.gpa().dupe(u8, s) catch raise(L, tr("sem memória", "out of memory"));
+    }
+};
+
+// --- Ponte C -> Zig ------------------------------------------------------------
+
+fn plug(L: ?*lua.State) *Rt {
+    var ud: ?*anyopaque = null;
+    _ = lua.lua_getallocf(L, &ud);
+    return @ptrCast(@alignCast(ud.?));
+}
+
+/// Erro de Lua com "arquivo:linha:" na frente. Não volta (longjmp).
+fn raise(L: ?*lua.State, msg: []const u8) noreturn {
+    lua.luaL_where(L, 1);
+    lua.pushSlice(L, msg);
+    lua.lua_concat(L, 2);
+    _ = lua.lua_error(L);
+    unreachable;
+}
+
+fn raiseFmt(L: ?*lua.State, comptime pt: []const u8, comptime en: []const u8, args: anytype) noreturn {
+    var buf: [400]u8 = undefined;
+    const msg = (if (lang_en()) std.fmt.bufPrint(&buf, en, args) else std.fmt.bufPrint(&buf, pt, args)) catch "larper";
+    raise(L, msg);
+}
+
+/// A função pede uma capacidade que o cabeçalho não declara: explica como pedir.
+fn need(L: ?*lua.State, rt: *const Rt, cap: manifest.Cap, api: []const u8) void {
+    if (rt.m.has(cap)) return;
+    if (rt.m.legacy) raiseFmt(L, "{s} precisa de um cabeçalho: acrescente \"-- @capabilities {t}\" no começo do arquivo (veja docs/plugins.md)", "{s} needs a manifest: add \"-- @capabilities {t}\" at the top of the file (see docs/plugins.md)", .{ api, cap });
+    raiseFmt(L, "{s}: acrescente \"{t}\" em @capabilities no cabeçalho do plugin", "{s}: add \"{t}\" to @capabilities in the plugin's manifest", .{ api, cap });
+}
+
+fn alloc(ud: ?*anyopaque, ptr: ?*anyopaque, osize: usize, nsize: usize) callconv(.c) ?*anyopaque {
+    const p: *Rt = @ptrCast(@alignCast(ud.?));
+    // Com ptr nulo, osize diz o tipo do objeto, não o tamanho.
+    const old: usize = if (ptr == null) 0 else osize;
+    if (nsize == 0) {
+        std.c.free(ptr);
+        p.mem -|= old;
+        return null;
+    }
+    if (nsize > old and p.mem - old + nsize > mem_cap) return null;
+    const np = std.c.realloc(ptr, nsize) orelse return null;
+    p.mem = p.mem - old + nsize;
+    return np;
+}
+
+fn panicFn(L: ?*lua.State) callconv(.c) c_int {
+    // Não deveria acontecer: toda entrada no Lua é protegida.
+    std.log.err("lua: erro sem proteção: {s}", .{lua.toSlice(L, -1) orelse "?"});
+    return 0;
+}
+
+fn hook(L: ?*lua.State, _: ?*lua.Debug) callconv(.c) void {
+    const p = plug(L);
+    p.steps +|= hook_every;
+    if (p.timed_out or p.steps > p.budget or p.w.closing.load(.monotonic)) {
+        // Continua valendo até a chamada acabar: o erro sai de qualquer pcall.
+        p.timed_out = true;
+        lua.luaL_where(L, 0);
+        lua.pushSlice(L, tr("passou do limite de instruções (laço infinito?)", "went over the instruction limit (infinite loop?)"));
+        lua.lua_concat(L, 2);
+        _ = lua.lua_error(L);
+    }
+}
+
+/// Primeira função de toda chamada: já dentro do pcall, então até faltar
+/// memória montando uma tabela vira um erro normal.
+fn trampoline(L: ?*lua.State) callconv(.c) c_int {
+    const call: *const Call = @ptrCast(@alignCast(lua.lua_touserdata(L, 1).?));
+    if (call.kind == .setup) {
+        setup(L);
+        return 0;
+    }
+    _ = lua.lua_getfield(L, lua.REGISTRYINDEX, "larper"); // 2
+    switch (call.kind) {
+        .setup => unreachable,
+        .store_load => storageRead(L, plug(L), call.bytes),
+        .store_flush => storageWrite(L, plug(L)),
+        .message, .ready, .delete, .channel, .lang, .panel_state => {
+            const field: [*:0]const u8 = switch (call.kind) {
+                .message => "message",
+                .ready => "ready",
+                .delete => "delete",
+                .channel => "channel",
+                .panel_state => "panel",
+                else => "lang",
+            };
+            _ = lua.lua_getfield(L, 2, field); // 3
+            switch (call.kind) {
+                .message => pushMessage(L, call.msg.?),
+                .delete => {
+                    lua.lua_createtable(L, 0, 2);
+                    pushId(L, call.id);
+                    lua.lua_setfield(L, -2, "id");
+                    pushId(L, call.channel);
+                    lua.lua_setfield(L, -2, "channel");
+                },
+                .channel => pushChannel(L, plug(L)),
+                .panel_state => lua.lua_pushboolean(L, @intFromBool(call.flag)),
+                else => lua.lua_pushnil(L),
+            } // 4
+            const n: lua.Integer = @intCast(lua.lua_rawlen(L, 3));
+            var i: lua.Integer = 1;
+            while (i <= n) : (i += 1) {
+                _ = lua.lua_rawgeti(L, 3, i);
+                lua.lua_pushvalue(L, 4);
+                lua.call(L, 1, 0);
+            }
+        },
+        .command => {
+            _ = lua.lua_getfield(L, 2, "commands");
+            lua.pushSlice(L, call.name);
+            _ = lua.lua_rawget(L, -2);
+            lua.pushSlice(L, call.args);
+            lua.call(L, 1, 0);
+        },
+        .key => {
+            _ = lua.lua_getfield(L, 2, "keys");
+            _ = lua.lua_rawgeti(L, -1, call.slot);
+            lua.call(L, 0, 0);
+        },
+        .menu_message, .menu_user => {
+            _ = lua.lua_getfield(L, 2, "menus");
+            _ = lua.lua_rawgeti(L, -1, call.slot);
+            if (call.kind == .menu_message) pushMessage(L, call.msg.?) else pushRef(L, call.id, call.name);
+            lua.call(L, 1, 0);
+        },
+        .panel => {
+            // A função pode ser da árvore de agora ou da anterior (o clique veio
+            // de um quadro de antes da troca).
+            for ([_][*:0]const u8{ "cb_now", "cb_prev" }) |t| {
+                _ = lua.lua_getfield(L, 2, t);
+                _ = lua.lua_rawgeti(L, -1, call.handle);
+                if (lua.lua_type(L, -1) == lua.TFUNCTION) {
+                    if (call.value) |v| lua.pushSlice(L, v) else lua.lua_pushnil(L);
+                    lua.call(L, 1, 0);
+                    break;
+                }
+                lua.pop(L, 2);
+            }
+        },
+        .timer => {
+            _ = lua.lua_getfield(L, 2, "timers");
+            const timers = lua.lua_gettop(L);
+            _ = lua.lua_rawgeti(L, timers, call.slot);
+            if (lua.lua_type(L, -1) != lua.TFUNCTION) return 0;
+            // De uma vez só: `after` sai da tabela antes de rodar.
+            const still = for (plug(L).timers.items) |t| {
+                if (t.id == call.slot) break true;
+            } else false;
+            if (!still) {
+                lua.lua_pushnil(L);
+                lua.lua_rawseti(L, timers, call.slot);
+            }
+            lua.call(L, 0, 0);
+        },
+        .http => {
+            const res = call.res.?;
+            _ = lua.lua_getfield(L, 2, "http");
+            _ = lua.lua_rawgeti(L, -1, res.id);
+            lua.lua_pushnil(L);
+            lua.lua_rawseti(L, -3, res.id);
+            if (lua.lua_type(L, -1) != lua.TFUNCTION) return 0;
+            lua.lua_createtable(L, 0, 4);
+            lua.lua_pushboolean(L, @intFromBool(res.err == .none and res.status >= 200 and res.status < 300));
+            lua.lua_setfield(L, -2, "ok");
+            lua.lua_pushinteger(L, res.status);
+            lua.lua_setfield(L, -2, "status");
+            lua.pushSlice(L, res.body);
+            lua.lua_setfield(L, -2, "body");
+            if (res.err != .none) {
+                _ = lua.lua_pushstring(L, @tagName(res.err));
+                lua.lua_setfield(L, -2, "error");
+            }
+            lua.call(L, 1, 0);
+        },
+        .messages => {
+            const list = call.list.?;
+            _ = lua.lua_getfield(L, 2, "msgs");
+            _ = lua.lua_rawgeti(L, -1, call.slot);
+            lua.lua_pushnil(L);
+            lua.lua_rawseti(L, -3, call.slot);
+            if (lua.lua_type(L, -1) != lua.TFUNCTION) return 0;
+            lua.lua_createtable(L, @intCast(list.items.items.len), 0);
+            for (list.items.items, 1..) |o, i| {
+                pushMessage(L, &o.msg);
+                lua.lua_rawseti(L, -2, @intCast(i));
+            }
+            lua.call(L, 1, 0);
+        },
+    }
+    return 0;
+}
+
+fn pushId(L: ?*lua.State, id: u64) void {
+    var b: [24]u8 = undefined;
+    lua.pushSlice(L, std.fmt.bufPrint(&b, "{d}", .{id}) catch "0");
+}
+
+/// {id="123", name="geral"}
+fn pushRef(L: ?*lua.State, id: u64, name: []const u8) void {
+    lua.lua_createtable(L, 0, 2);
+    pushId(L, id);
+    lua.lua_setfield(L, -2, "id");
+    lua.pushSlice(L, name);
+    lua.lua_setfield(L, -2, "name");
+}
+
+fn pushMessage(L: ?*lua.State, m: *const wire.Message) void {
+    lua.lua_createtable(L, 0, 9);
+    pushId(L, m.id);
+    lua.lua_setfield(L, -2, "id");
+    lua.pushSlice(L, m.content);
+    lua.lua_setfield(L, -2, "content");
+    pushRef(L, m.author, m.author_name);
+    lua.lua_setfield(L, -2, "author");
+    pushRef(L, m.channel, m.channel_name);
+    lua.lua_setfield(L, -2, "channel");
+    if (m.guild != 0) {
+        pushRef(L, m.guild, m.guild_name);
+        lua.lua_setfield(L, -2, "guild");
+    }
+    lua.lua_pushboolean(L, @intFromBool(m.mine));
+    lua.lua_setfield(L, -2, "mine");
+    lua.lua_pushboolean(L, @intFromBool(m.ignored));
+    lua.lua_setfield(L, -2, "ignored");
+    lua.lua_pushinteger(L, m.timestamp);
+    lua.lua_setfield(L, -2, "time");
+    lua.lua_pushinteger(L, m.attachments);
+    lua.lua_setfield(L, -2, "attachments");
+}
+
+/// Abre só o que o sandbox permite e cria a tabela `larper`.
+fn setup(L: ?*lua.State) void {
+    lua.pushcfunction(L, &lua.luaopen_base);
+    lua.call(L, 0, 1);
+    lua.pop(L, 1);
+    const libs = [_]struct { name: [*:0]const u8, open: lua.CFunction }{
+        .{ .name = "string", .open = &lua.luaopen_string },
+        .{ .name = "table", .open = &lua.luaopen_table },
+        .{ .name = "math", .open = &lua.luaopen_math },
+        .{ .name = "utf8", .open = &lua.luaopen_utf8 },
+    };
+    for (libs) |lib| {
+        lua.pushcfunction(L, lib.open);
+        lua.call(L, 0, 1);
+        lua.lua_setglobal(L, lib.name);
+    }
+    // string.dump gera bytecode (que nem dá para carregar aqui, mas fora).
+    _ = lua.lua_getglobal(L, "string");
+    lua.lua_pushnil(L);
+    lua.lua_setfield(L, -2, "dump");
+    lua.pop(L, 1);
+    // os: só o relógio.
+    lua.pushcfunction(L, &lua.luaopen_os);
+    lua.call(L, 0, 1);
+    lua.newtable(L);
+    for ([_][*:0]const u8{ "time", "date", "clock", "difftime" }) |f| {
+        _ = lua.lua_getfield(L, -2, f);
+        lua.lua_setfield(L, -2, f);
+    }
+    lua.lua_setglobal(L, "os");
+    lua.pop(L, 1);
+    // Fora da base: ler/rodar arquivos e código, e desligar o coletor.
+    for ([_][*:0]const u8{ "dofile", "loadfile", "load", "collectgarbage" }) |f| {
+        lua.lua_pushnil(L);
+        lua.lua_setglobal(L, f);
+    }
+    const Fn = struct { name: [*:0]const u8, f: lua.CFunction };
+    const base = [_]Fn{
+        .{ .name = "print", .f = &lPrint },
+        .{ .name = "pcall", .f = &lPcall },
+        .{ .name = "xpcall", .f = &lXpcall },
+        .{ .name = "setmetatable", .f = &lSetmetatable },
+    };
+    for (base) |b| {
+        lua.pushcfunction(L, b.f);
+        lua.lua_setglobal(L, b.name);
+    }
+    const api = [_]Fn{
+        .{ .name = "on", .f = &lOn },
+        .{ .name = "command", .f = &lCommand },
+        .{ .name = "keybind", .f = &lKeybind },
+        .{ .name = "notify", .f = &lNotify },
+        .{ .name = "send", .f = &lSend },
+        .{ .name = "channel", .f = &lChannel },
+        .{ .name = "guild", .f = &lGuild },
+        .{ .name = "lsp", .f = &lLsp },
+        .{ .name = "lang", .f = &lLang },
+        .{ .name = "tr", .f = &lTr },
+        .{ .name = "after", .f = &lAfter },
+        .{ .name = "every", .f = &lEvery },
+        .{ .name = "cancel", .f = &lCancel },
+        .{ .name = "menu", .f = &lMenu },
+        .{ .name = "decorate", .f = &lDecorate },
+        .{ .name = "undecorate", .f = &lUndecorate },
+        .{ .name = "rules", .f = &lRules },
+        .{ .name = "messages", .f = &lMessages },
+        .{ .name = "jump", .f = &lJump },
+        .{ .name = "insert", .f = &lInsert },
+        .{ .name = "urlencode", .f = &lUrlencode },
+    };
+    lua.lua_createtable(L, 0, api.len + 4);
+    for (api) |a| {
+        lua.pushcfunction(L, a.f);
+        lua.lua_setfield(L, -2, a.name);
+    }
+    const groups = [_]struct { name: [*:0]const u8, fns: []const Fn }{
+        .{ .name = "storage", .fns = &.{
+            .{ .name = "get", .f = &lStoreGet },
+            .{ .name = "set", .f = &lStoreSet },
+            .{ .name = "delete", .f = &lStoreDelete },
+            .{ .name = "keys", .f = &lStoreKeys },
+            .{ .name = "clear", .f = &lStoreClear },
+        } },
+        .{ .name = "panel", .fns = &.{
+            .{ .name = "set", .f = &lPanelSet },
+            .{ .name = "open", .f = &lPanelOpen },
+            .{ .name = "close", .f = &lPanelClose },
+        } },
+        .{ .name = "http", .fns = &.{
+            .{ .name = "get", .f = &lHttpGet },
+            .{ .name = "post", .f = &lHttpPost },
+            .{ .name = "allowed", .f = &lHttpAllowed },
+        } },
+        .{ .name = "json", .fns = &.{
+            .{ .name = "encode", .f = &lJsonEncode },
+            .{ .name = "decode", .f = &lJsonDecode },
+        } },
+    };
+    for (groups) |g| {
+        lua.lua_createtable(L, 0, @intCast(g.fns.len));
+        for (g.fns) |a| {
+            lua.pushcfunction(L, a.f);
+            lua.lua_setfield(L, -2, a.name);
+        }
+        lua.lua_setfield(L, -2, g.name);
+    }
+    lua.lua_setglobal(L, "larper");
+    // As funções registradas ficam no registro, longe do script.
+    const lists = [_][*:0]const u8{ "message", "ready", "delete", "channel", "lang", "panel", "commands", "keys", "menus", "timers", "http", "msgs", "cb_now", "cb_prev", "storage" };
+    lua.lua_createtable(L, 0, lists.len);
+    for (lists) |k| {
+        lua.newtable(L);
+        lua.lua_setfield(L, -2, k);
+    }
+    lua.lua_setfield(L, lua.REGISTRYINDEX, "larper");
+}
+
+// --- Funções do Lua ----------------------------------------------------------
+
+/// setmetatable sem `__gc`: o finalizador roda com o gancho de instruções
+/// desligado, então um `while true do end` nele prenderia a thread para sempre.
+/// O Lua só registra finalizador nesta chamada; criar o campo depois não vale.
+fn lSetmetatable(L: ?*lua.State) callconv(.c) c_int {
+    lua.luaL_checktype(L, 1, lua.TTABLE);
+    const kind = lua.lua_type(L, 2);
+    if (kind != lua.TNIL and kind != lua.TTABLE) raise(L, tr("setmetatable: a metatabela precisa ser uma tabela ou nil", "setmetatable: the metatable must be a table or nil"));
+    if (kind == lua.TTABLE) {
+        _ = lua.lua_pushstring(L, "__gc");
+        const has_gc = lua.lua_rawget(L, 2) != lua.TNIL;
+        lua.pop(L, 1);
+        if (has_gc) raise(L, tr("setmetatable: __gc não é permitido em plugins", "setmetatable: __gc isn't allowed in plugins"));
+    }
+    if (lua.lua_getmetatable(L, 1) != 0) {
+        _ = lua.lua_pushstring(L, "__metatable");
+        const protected_mt = lua.lua_rawget(L, -2) != lua.TNIL;
+        lua.pop(L, 2);
+        if (protected_mt) raise(L, tr("setmetatable: metatabela protegida", "setmetatable: protected metatable"));
+    }
+    lua.lua_settop(L, 2);
+    _ = lua.lua_setmetatable(L, 1);
+    return 1;
+}
+
+fn lPrint(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    var buf: [512]u8 = undefined;
+    var n: usize = 0;
+    const top = lua.lua_gettop(L);
+    var i: c_int = 1;
+    while (i <= top) : (i += 1) {
+        var len: usize = 0;
+        const s = lua.luaL_tolstring(L, i, &len);
+        if (i > 1 and n < buf.len) {
+            buf[n] = '\t';
+            n += 1;
+        }
+        const k = @min(len, buf.len - n);
+        @memcpy(buf[n..][0..k], s[0..k]);
+        n += k;
+        lua.pop(L, 1);
+    }
+    std.log.info("[{s}] {s}", .{ p.name, buf[0..n] });
+    return 0;
+}
+
+/// pcall que não segura o erro de "travou": esse sempre sai até o app.
+fn lPcall(L: ?*lua.State) callconv(.c) c_int {
+    lua.luaL_checkany(L, 1);
+    const rc = lua.lua_pcallk(L, lua.lua_gettop(L) - 1, lua.MULTRET, 0, 0, null);
+    if (plug(L).timed_out) return lua.lua_error(L);
+    if (rc == lua.OK) {
+        lua.lua_pushboolean(L, 1);
+        lua.insert(L, 1);
+        return lua.lua_gettop(L);
+    }
+    lua.lua_pushboolean(L, 0);
+    lua.insert(L, -2);
+    return 2;
+}
+
+fn lXpcall(L: ?*lua.State) callconv(.c) c_int {
+    const n = lua.lua_gettop(L);
+    lua.luaL_checktype(L, 2, lua.TFUNCTION);
+    // [f, msgh, args…] -> [f, msgh, true, f, args…]
+    lua.lua_pushboolean(L, 1);
+    lua.lua_pushvalue(L, 1);
+    lua.lua_rotate(L, 3, 2);
+    const rc = lua.lua_pcallk(L, n - 2, lua.MULTRET, 2, 0, null);
+    if (plug(L).timed_out) return lua.lua_error(L);
+    if (rc == lua.OK) return lua.lua_gettop(L) - 2;
+    lua.lua_pushboolean(L, 0);
+    lua.lua_pushvalue(L, -2);
+    return 2;
+}
+
+fn registryList(L: ?*lua.State, field: [*:0]const u8) void {
+    _ = lua.lua_getfield(L, lua.REGISTRYINDEX, "larper");
+    _ = lua.lua_getfield(L, -1, field);
+}
+
+/// larper.on("message" | "ready" | "delete" | "channel" | "lang" | "panel", fn)
+fn lOn(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    const event = lua.checkSlice(L, 1);
+    lua.luaL_checktype(L, 2, lua.TFUNCTION);
+    const eql = std.mem.eql;
+    const field: [*:0]const u8, const counter: *u16 = if (eql(u8, event, "message"))
+        .{ "message", &p.n_message }
+    else if (eql(u8, event, "ready"))
+        .{ "ready", &p.n_ready }
+    else if (eql(u8, event, "delete"))
+        .{ "delete", &p.n_delete }
+    else if (eql(u8, event, "channel"))
+        .{ "channel", &p.n_channel }
+    else if (eql(u8, event, "lang"))
+        .{ "lang", &p.n_lang }
+    else if (eql(u8, event, "panel"))
+        .{ "panel", &p.n_panel }
+    else
+        raise(L, tr("larper.on: evento desconhecido (use \"message\", \"ready\", \"delete\", \"channel\", \"lang\" ou \"panel\")", "larper.on: unknown event (use \"message\", \"ready\", \"delete\", \"channel\", \"lang\" or \"panel\")"));
+    if (eql(u8, event, "message") or eql(u8, event, "delete")) need(L, p, .messages, "larper.on");
+    if (counter.* >= 64) raise(L, tr("larper.on: funções demais para esse evento", "larper.on: too many functions for that event"));
+    registryList(L, field);
+    const n = lua.lua_rawlen(L, -1);
+    lua.lua_pushvalue(L, 2);
+    lua.lua_rawseti(L, -2, @intCast(n + 1));
+    counter.* += 1;
+    p.reg_dirty = true;
+    return 0;
+}
+
+pub fn validCommand(name: []const u8) bool {
+    if (name.len < 2 or name.len > 32 or name[0] != '/') return false;
+    for (name[1..]) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '-') return false;
+    return true;
+}
+
+/// larper.command("/nome", fn(args))
+fn lCommand(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    const name = lua.checkSlice(L, 1);
+    lua.luaL_checktype(L, 2, lua.TFUNCTION);
+    if (!validCommand(name)) raise(L, tr("larper.command: o nome é \"/\" seguido de letras, números, _ ou - (até 32)", "larper.command: the name is \"/\" followed by letters, digits, _ or - (up to 32)"));
+    const known = for (p.commands.items) |cmd| {
+        if (std.mem.eql(u8, cmd, name)) break true;
+    } else false;
+    if (!known and p.commands.items.len >= max_commands) raise(L, tr("larper.command: comandos demais", "larper.command: too many commands"));
+    registryList(L, "commands");
+    lua.lua_pushvalue(L, 1);
+    lua.lua_pushvalue(L, 2);
+    lua.lua_rawset(L, -3);
+    if (!known) {
+        const own = p.dupText(L, name);
+        p.commands.append(p.gpa(), own) catch {
+            p.gpa().free(own);
+            raise(L, tr("sem memória", "out of memory"));
+        };
+        p.reg_dirty = true;
+    }
+    return 0;
+}
+
+/// "ctrl+shift+x" -> Keybind (sem a tecla resolvida). null = inválido.
+pub fn parseKeys(spec: []const u8, key_name: *[16]u8, key_len: *usize) ?wire.Keybind {
+    var kb: wire.Keybind = .{};
+    var have_key = false;
+    var it = std.mem.splitScalar(u8, spec, '+');
+    while (it.next()) |raw| {
+        const part = std.mem.trim(u8, raw, " ");
+        if (part.len == 0 or part.len > key_name.len) return null;
+        var low: [16]u8 = undefined;
+        for (part, 0..) |ch, i| low[i] = std.ascii.toLower(ch);
+        const w = low[0..part.len];
+        if (std.mem.eql(u8, w, "ctrl") or std.mem.eql(u8, w, "control")) {
+            kb.ctrl = true;
+        } else if (std.mem.eql(u8, w, "shift")) {
+            kb.shift = true;
+        } else if (std.mem.eql(u8, w, "alt")) {
+            kb.alt = true;
+        } else if (std.mem.eql(u8, w, "super") or std.mem.eql(u8, w, "meta") or std.mem.eql(u8, w, "win") or std.mem.eql(u8, w, "cmd")) {
+            kb.super = true;
+        } else {
+            if (have_key) return null;
+            have_key = true;
+            @memcpy(key_name[0..w.len], w);
+            key_len.* = w.len;
+        }
+    }
+    if (!have_key) return null;
+    // Sem Ctrl/Alt/Super, uma letra dispararia enquanto se digita: só F1–F24.
+    const name = key_name[0..key_len.*];
+    const fkey = name.len >= 2 and name[0] == 'f' and std.ascii.isDigit(name[1]);
+    if (!kb.ctrl and !kb.alt and !kb.super and !fkey) return null;
+    // Ctrl+V e cia. acontecem o tempo todo digitando: um atalho aí seria um
+    // "a pessoa pediu" que ela nunca pediu (e libera larper.send).
+    if (kb.ctrl and !kb.shift and !kb.alt and !kb.super and name.len == 1 and std.mem.indexOfScalar(u8, "acvxyz", name[0]) != null) return null;
+    var n: usize = 0;
+    for ([_]struct { on: bool, s: []const u8 }{
+        .{ .on = kb.ctrl, .s = "Ctrl+" },
+        .{ .on = kb.alt, .s = "Alt+" },
+        .{ .on = kb.shift, .s = "Shift+" },
+        .{ .on = kb.super, .s = "Super+" },
+    }) |m| if (m.on) {
+        @memcpy(kb.label_buf[n..][0..m.s.len], m.s);
+        n += m.s.len;
+    };
+    for (name, 0..) |ch, i| {
+        kb.label_buf[n] = if (i == 0 or fkey) std.ascii.toUpper(ch) else ch;
+        n += 1;
+    }
+    kb.label_len = @intCast(n);
+    return kb;
+}
+
+/// larper.keybind("ctrl+shift+x", fn)
+fn lKeybind(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    const spec = lua.checkSlice(L, 1);
+    lua.luaL_checktype(L, 2, lua.TFUNCTION);
+    var name: [16]u8 = undefined;
+    var len: usize = 0;
+    var kb = parseKeys(spec, &name, &len) orelse
+        raise(L, tr("larper.keybind: use algo como \"ctrl+shift+x\" (letras e números pedem Ctrl, Alt ou Super; F1–F24 podem ir sozinhas)", "larper.keybind: use something like \"ctrl+shift+x\" (letters and digits need Ctrl, Alt or Super; F1–F24 can go alone)"));
+    kb.key = p.w.host.key(name[0..len]) orelse raise(L, tr("larper.keybind: tecla desconhecida", "larper.keybind: unknown key"));
+    if (p.keys.items.len >= max_keys) raise(L, tr("larper.keybind: atalhos demais", "larper.keybind: too many keybinds"));
+    registryList(L, "keys");
+    const n = lua.lua_rawlen(L, -1);
+    lua.lua_pushvalue(L, 2);
+    lua.lua_rawseti(L, -2, @intCast(n + 1));
+    kb.slot = @intCast(n + 1);
+    p.keys.append(p.gpa(), kb) catch raise(L, tr("sem memória", "out of memory"));
+    p.reg_dirty = true;
+    return 0;
+}
+
+/// larper.notify(texto, {desktop=true})
+fn lNotify(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .notify, "larper.notify");
+    const text = lua.checkSlice(L, 1);
+    var desktop = false;
+    if (lua.lua_type(L, 2) == lua.TTABLE) {
+        _ = lua.lua_pushstring(L, "desktop");
+        _ = lua.lua_rawget(L, 2);
+        desktop = lua.lua_toboolean(L, -1) != 0;
+        lua.pop(L, 1);
+    }
+    const now = sync.nowMs();
+    if (now - p.notify_from >= 10_000) {
+        p.notify_from = now;
+        p.notify_n = 0;
+    }
+    // Uma rajada não vira uma fila de avisos: o resto se perde, sem erro.
+    if (p.notify_n >= notify_burst) return 0;
+    p.notify_n += 1;
+    p.budgetCmd(L);
+    const cut = clip(text, 600);
+    _ = p.w.emit(p.run, .{ .notify = .{ .text = p.dupText(L, cut), .desktop = desktop } });
+    return 0;
+}
+
+fn clip(s: []const u8, max: usize) []const u8 {
+    if (s.len <= max) return s;
+    var n = max;
+    while (n > 0 and (s[n] & 0xC0) == 0x80) n -= 1;
+    return s[0..n];
+}
+
+fn parseId(s: []const u8) ?u64 {
+    return std.fmt.parseInt(u64, std.mem.trim(u8, s, " "), 10) catch null;
+}
+
+/// Um ID em forma de argumento: nil (0), "123", 123 ou {id="123"}.
+fn idArg(L: ?*lua.State, idx: c_int) ?u64 {
+    switch (lua.lua_type(L, idx)) {
+        lua.TNIL => return 0,
+        lua.TSTRING => return parseId(lua.toSlice(L, idx).?),
+        lua.TNUMBER => {
+            var ok: c_int = 0;
+            const v = lua.lua_tointegerx(L, idx, &ok);
+            return if (ok != 0 and v > 0) @intCast(v) else null;
+        },
+        lua.TTABLE => {
+            _ = lua.lua_pushstring(L, "id");
+            _ = lua.lua_rawget(L, idx);
+            defer lua.pop(L, 1);
+            return if (lua.lua_type(L, -1) == lua.TSTRING) parseId(lua.toSlice(L, -1).?) else null;
+        },
+        else => return null,
+    }
+}
+
+/// larper.send(canal, texto): só quando a própria pessoa fez algo no plugin.
+fn lSend(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .send, "larper.send");
+    if (p.gesture == 0) raise(L, tr("larper.send só funciona dentro de larper.command, larper.keybind, de um botão ou de um menu do plugin (nunca em resposta automática)", "larper.send only works inside larper.command, larper.keybind, or one of the plugin's buttons or menus (never as an automatic reply)"));
+    const ch = idArg(L, 1) orelse raise(L, tr("larper.send: canal inválido", "larper.send: invalid channel"));
+    const text = lua.checkSlice(L, 2);
+    if (text.len == 0 or text.len > 2000) raise(L, tr("larper.send: o texto precisa ter de 1 a 2000 bytes", "larper.send: the text must be 1 to 2000 bytes"));
+    if (p.sends >= max_sends) raise(L, tr("larper.send: no máximo 5 mensagens por comando", "larper.send: at most 5 messages per command"));
+    p.sends += 1;
+    _ = p.w.emit(p.run, .{ .send = .{ .channel = ch, .text = p.dupText(L, text), .token = p.gesture } });
+    return 0;
+}
+
+/// larper.lsp("zig", {"zls", "--flag"}): propõe um servidor de linguagem. Aqui
+/// nada roda: a proposta aparece nas Configurações e só vale depois que a pessoa
+/// ligar, para este plugin, esta linguagem e este argv.
+fn lLsp(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .lsp, "larper.lsp");
+    const lang = lua.checkSlice(L, 1);
+    lua.luaL_checktype(L, 2, lua.TTABLE);
+    if (!lsp_core.validLang(lang)) raise(L, tr("larper.lsp: a linguagem é a etiqueta do bloco: até 16 letras minúsculas, números, _, - ou +", "larper.lsp: the language is the block tag: up to 16 lowercase letters, digits, _, - or +"));
+    const n = lua.lua_rawlen(L, 2);
+    if (n == 0 or n > lsp_core.max_argv) raise(L, tr("larper.lsp: o comando é uma lista de 1 a 32 textos", "larper.lsp: the command is a list of 1 to 32 strings"));
+    var cmd: lsp_core.Command = .{};
+    var i: lua.Integer = 1;
+    while (i <= @as(lua.Integer, @intCast(n))) : (i += 1) {
+        const kind = lua.lua_rawgeti(L, 2, i);
+        const arg = (if (kind == lua.TSTRING) lua.toSlice(L, -1) else null) orelse raise(L, tr("larper.lsp: o comando é uma lista de textos", "larper.lsp: the command is a list of strings"));
+        if ((i == 1 and arg.len == 0) or !cmd.add(arg)) raise(L, tr("larper.lsp: comando vazio, longo demais ou com um byte nulo", "larper.lsp: command empty, too long or with a null byte"));
+        lua.pop(L, 1);
+    }
+    const entry: wire.LspServer = .{ .lang = lsp_core.Short.of(lang), .cmd = cmd };
+    p.reg_dirty = true;
+    for (p.lsp.items) |*old| {
+        if (old.lang.eql(lang)) {
+            old.* = entry;
+            return 0;
+        }
+    }
+    if (p.lsp.items.len >= max_lsp) raise(L, tr("larper.lsp: servidores demais", "larper.lsp: too many servers"));
+    p.lsp.append(p.gpa(), entry) catch raise(L, tr("sem memória", "out of memory"));
+    return 0;
+}
+
+fn pushChannel(L: ?*lua.State, p: *Rt) void {
+    var wb: WhereBuf = undefined;
+    p.w.lock.lock();
+    wb = p.w.where;
+    p.w.lock.unlock();
+    if (wb.channel == 0) lua.lua_pushnil(L) else pushRef(L, wb.channel, wb.channel_name[0..wb.channel_len]);
+}
+
+/// larper.channel() -> {id, name} ou nil
+fn lChannel(L: ?*lua.State) callconv(.c) c_int {
+    pushChannel(L, plug(L));
+    return 1;
+}
+
+/// larper.guild() -> {id, name} ou nil (mensagens diretas)
+fn lGuild(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    var wb: WhereBuf = undefined;
+    p.w.lock.lock();
+    wb = p.w.where;
+    p.w.lock.unlock();
+    if (wb.guild == 0) lua.lua_pushnil(L) else pushRef(L, wb.guild, wb.guild_name[0..wb.guild_len]);
+    return 1;
+}
+
+/// larper.lang() -> "pt" ou "en": o idioma da interface.
+fn lLang(L: ?*lua.State) callconv(.c) c_int {
+    _ = lua.lua_pushstring(L, if (lang_en()) "en" else "pt");
+    return 1;
+}
+
+/// larper.tr("texto", "text"): o texto no idioma da interface.
+fn lTr(L: ?*lua.State) callconv(.c) c_int {
+    lua.luaL_checkany(L, 1);
+    lua.luaL_checkany(L, 2);
+    lua.lua_pushvalue(L, if (lang_en()) 2 else 1);
+    return 1;
+}
+
+// --- Temporizadores --------------------------------------------------------------
+
+fn addTimer(L: ?*lua.State, every: bool) c_int {
+    const p = plug(L);
+    need(L, p, .timers, if (every) "larper.every" else "larper.after");
+    var ok: c_int = 0;
+    const secs = lua.lua_tonumberx(L, 1, &ok);
+    if (ok == 0 or std.math.isNan(secs)) raise(L, tr("o tempo é um número de segundos", "the time is a number of seconds"));
+    lua.luaL_checktype(L, 2, lua.TFUNCTION);
+    if (p.timers.items.len >= max_timers) raise(L, tr("temporizadores demais (no máximo 64)", "too many timers (at most 64)"));
+    // Um pouco de folga: `after(0)` chamando a si mesmo não vira um laço a toda velocidade.
+    const ms: i64 = @intFromFloat(std.math.clamp(secs * 1000, 10, 365.0 * 86400 * 1000));
+    if (every and ms < every_min_ms) raise(L, tr("larper.every: o menor intervalo é 1 segundo", "larper.every: the shortest interval is 1 second"));
+    const id = p.next_id;
+    p.next_id +%= 1;
+    registryList(L, "timers");
+    lua.lua_pushvalue(L, 2);
+    lua.lua_rawseti(L, -2, id);
+    p.timers.append(p.gpa(), .{ .id = id, .due_ms = sync.nowMs() + ms, .every_ms = if (every) ms else 0 }) catch raise(L, tr("sem memória", "out of memory"));
+    lua.lua_pushinteger(L, id);
+    return 1;
+}
+
+/// larper.after(segundos, fn) -> id
+fn lAfter(L: ?*lua.State) callconv(.c) c_int {
+    return addTimer(L, false);
+}
+
+/// larper.every(segundos, fn) -> id
+fn lEvery(L: ?*lua.State) callconv(.c) c_int {
+    return addTimer(L, true);
+}
+
+/// larper.cancel(id)
+fn lCancel(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    var ok: c_int = 0;
+    const id = lua.lua_tointegerx(L, 1, &ok);
+    if (ok == 0) return 0;
+    for (p.timers.items, 0..) |t, i| if (t.id == id) {
+        _ = p.timers.swapRemove(i);
+        registryList(L, "timers");
+        lua.lua_pushnil(L);
+        lua.lua_rawseti(L, -2, id);
+        break;
+    };
+    return 0;
+}
+
+// --- Armazenamento ---------------------------------------------------------------
+
+fn encodeValue(L: ?*lua.State, p: *Rt, idx: c_int, max: usize, api: []const u8) []const u8 {
+    p.scratch.clearRetainingCapacity();
+    json.encode(L, p.gpa(), &p.scratch, max, idx) catch |e| switch (e) {
+        error.TooBig => raiseFmt(L, "{s}: grande demais", "{s}: too big", .{api}),
+        error.TooDeep => raiseFmt(L, "{s}: tabelas aninhadas demais (ou uma tabela dentro dela mesma)", "{s}: tables nested too deep (or a table inside itself)", .{api}),
+        error.OutOfMemory => raise(L, tr("sem memória", "out of memory")),
+        else => raiseFmt(L, "{s}: só texto, número, booleano e tabela (lista ou com chaves de texto)", "{s}: only strings, numbers, booleans and tables (lists or with string keys)", .{api}),
+    };
+    return p.scratch.items;
+}
+
+fn storageList(L: ?*lua.State) c_int {
+    registryList(L, "storage");
+    return lua.lua_gettop(L);
+}
+
+/// larper.storage.get(chave) -> valor (uma cópia: mudar não grava)
+fn lStoreGet(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .storage, "larper.storage");
+    _ = lua.checkSlice(L, 1);
+    const t = storageList(L);
+    lua.lua_pushvalue(L, 1);
+    if (lua.lua_rawget(L, t) != lua.TSTRING) {
+        lua.lua_pushnil(L);
+        return 1;
+    }
+    const text = lua.toSlice(L, -1).?;
+    json.decode(L, p.gpa(), &p.scratch, text) catch raise(L, tr("larper.storage: valor ilegível", "larper.storage: unreadable value"));
+    return 1;
+}
+
+/// Quanto a chave em 1 ocupa agora (0 = não existe).
+fn storeOld(L: ?*lua.State, t: c_int) usize {
+    lua.lua_pushvalue(L, 1);
+    defer lua.pop(L, 1);
+    if (lua.lua_rawget(L, t) != lua.TSTRING) return 0;
+    return lua.toSlice(L, -1).?.len + lua.checkSlice(L, 1).len;
+}
+
+fn storeTouch(p: *Rt) void {
+    if (!p.store_dirty) p.store_flush_at = sync.nowMs() + storage_flush_ms;
+    p.store_dirty = true;
+}
+
+/// larper.storage.set(chave, valor): nil apaga.
+fn lStoreSet(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .storage, "larper.storage");
+    const key = lua.checkSlice(L, 1);
+    if (key.len == 0 or key.len > 256) raise(L, tr("larper.storage: a chave tem de 1 a 256 bytes", "larper.storage: the key is 1 to 256 bytes"));
+    const t = storageList(L);
+    const old = storeOld(L, t);
+    lua.lua_pushvalue(L, 1);
+    if (lua.lua_type(L, 2) == lua.TNIL) {
+        lua.lua_pushnil(L);
+        lua.lua_rawset(L, t);
+        p.store_bytes -|= old;
+        storeTouch(p);
+        return 0;
+    }
+    const text = encodeValue(L, p, 2, storage_cap, "larper.storage");
+    // Sem espaço, o valor antigo continua lá.
+    if ((p.store_bytes -| old) + text.len + key.len > storage_cap) raise(L, tr("larper.storage: cheio (1 MB por plugin)", "larper.storage: full (1 MB per plugin)"));
+    lua.pushSlice(L, text);
+    lua.lua_rawset(L, t);
+    p.store_bytes = (p.store_bytes -| old) + text.len + key.len;
+    storeTouch(p);
+    return 0;
+}
+
+/// larper.storage.delete(chave)
+fn lStoreDelete(L: ?*lua.State) callconv(.c) c_int {
+    lua.lua_settop(L, 1);
+    lua.lua_pushnil(L);
+    return lStoreSet(L);
+}
+
+/// larper.storage.keys() -> lista de chaves
+fn lStoreKeys(L: ?*lua.State) callconv(.c) c_int {
+    need(L, plug(L), .storage, "larper.storage");
+    const t = storageList(L);
+    lua.newtable(L);
+    const out = lua.lua_gettop(L);
+    var i: lua.Integer = 1;
+    lua.lua_pushnil(L);
+    while (lua.lua_next(L, t) != 0) {
+        lua.pop(L, 1);
+        lua.lua_pushvalue(L, -1);
+        lua.lua_rawseti(L, out, i);
+        i += 1;
+    }
+    return 1;
+}
+
+/// larper.storage.clear()
+fn lStoreClear(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .storage, "larper.storage");
+    _ = lua.lua_getfield(L, lua.REGISTRYINDEX, "larper");
+    lua.newtable(L);
+    lua.lua_setfield(L, -2, "storage");
+    p.store_bytes = 0;
+    storeTouch(p);
+    return 0;
+}
+
+fn storageRead(L: ?*lua.State, p: *Rt, bytes: []const u8) void {
+    const t = storageList(L);
+    var f = json.Fields.init(p.gpa(), &p.scratch, &p.scratch2, bytes) catch return storageBroken(L, p);
+    var total: usize = 0;
+    while (true) {
+        const field = (f.next() catch return storageBroken(L, p)) orelse break;
+        lua.pushSlice(L, field.key);
+        lua.pushSlice(L, field.value);
+        lua.lua_rawset(L, t);
+        total += field.key.len + field.value.len;
+    }
+    p.store_bytes = total;
+}
+
+/// Arquivo que não dá para ler: fica guardado à parte (não some o que a pessoa
+/// tinha) e o plugin começa do zero, com o erro na página.
+fn storageBroken(L: ?*lua.State, p: *Rt) void {
+    _ = lua.lua_getfield(L, lua.REGISTRYINDEX, "larper");
+    lua.newtable(L);
+    lua.lua_setfield(L, -2, "storage");
+    p.store_bytes = 0;
+    p.w.host.keep_broken_data(p.w.host.ctx, p.account, p.name);
+    p.report(tr("larper.storage: o arquivo estava ilegível; guardei uma cópia .bad e comecei do zero", "larper.storage: the file was unreadable; kept a .bad copy and started empty"));
+}
+
+fn storageWrite(L: ?*lua.State, p: *Rt) void {
+    p.scratch.clearRetainingCapacity();
+    const a = p.gpa();
+    const t = storageList(L);
+    const max = storage_cap * 2;
+    json_or(L, p.scratch.append(a, '{'));
+    var first = true;
+    lua.lua_pushnil(L);
+    while (lua.lua_next(L, t) != 0) {
+        const key = lua.toSlice(L, -2).?;
+        const val = lua.toSlice(L, -1).?;
+        if (!first) json_or(L, p.scratch.append(a, ','));
+        first = false;
+        json.quote(a, &p.scratch, max, key) catch raise(L, "storage");
+        json_or(L, p.scratch.append(a, ':'));
+        json_or(L, p.scratch.appendSlice(a, val));
+        lua.pop(L, 1);
+    }
+    json_or(L, p.scratch.append(a, '}'));
+}
+
+fn json_or(L: ?*lua.State, r: anyerror!void) void {
+    r catch raise(L, tr("sem memória", "out of memory"));
+}
+
+/// larper.json.encode(valor) -> texto
+fn lJsonEncode(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    lua.luaL_checkany(L, 1);
+    lua.pushSlice(L, encodeValue(L, p, 1, storage_cap, "larper.json.encode"));
+    return 1;
+}
+
+/// larper.json.decode(texto) -> valor, ou nil e o erro
+fn lJsonDecode(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    const text = lua.checkSlice(L, 1);
+    json.decode(L, p.gpa(), &p.scratch, text) catch |e| {
+        lua.lua_settop(L, 1);
+        lua.lua_pushnil(L);
+        _ = lua.lua_pushstring(L, if (e == error.TooDeep) "too deep" else "invalid json");
+        return 2;
+    };
+    return 1;
+}
+
+/// larper.urlencode(texto): pronto para ir numa URL.
+fn lUrlencode(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    const text = lua.checkSlice(L, 1);
+    if (text.len > 64 * 1024) raise(L, tr("larper.urlencode: texto longo demais", "larper.urlencode: text too long"));
+    p.scratch.clearRetainingCapacity();
+    const a = p.gpa();
+    for (text) |ch| {
+        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
+            json_or(L, p.scratch.append(a, ch));
+        } else {
+            var b: [3]u8 = undefined;
+            json_or(L, p.scratch.appendSlice(a, std.fmt.bufPrint(&b, "%{X:0>2}", .{ch}) catch unreachable));
+        }
+    }
+    lua.pushSlice(L, p.scratch.items);
+    return 1;
+}
+
+// --- Painel ----------------------------------------------------------------------
+
+/// Texto (ou número) de um campo da tabela em `t`, sem passar por metatabela.
+fn fieldText(L: ?*lua.State, t: c_int, name: [*:0]const u8) []const u8 {
+    _ = lua.lua_pushstring(L, name);
+    const kind = lua.lua_rawget(L, t);
+    defer lua.pop(L, 1);
+    if (kind != lua.TSTRING and kind != lua.TNUMBER) return "";
+    return lua.toSlice(L, -1) orelse "";
+}
+
+fn fieldBool(L: ?*lua.State, t: c_int, name: [*:0]const u8) bool {
+    _ = lua.lua_pushstring(L, name);
+    _ = lua.lua_rawget(L, t);
+    defer lua.pop(L, 1);
+    return lua.lua_toboolean(L, -1) != 0;
+}
+
+fn fieldNum(L: ?*lua.State, t: c_int, name: [*:0]const u8) f32 {
+    _ = lua.lua_pushstring(L, name);
+    _ = lua.lua_rawget(L, t);
+    defer lua.pop(L, 1);
+    var ok: c_int = 0;
+    const v = lua.lua_tonumberx(L, -1, &ok);
+    return if (ok != 0 and !std.math.isNan(v)) @floatCast(std.math.clamp(v, -1e12, 1e12)) else 0;
+}
+
+/// A função de um campo vira um número que a interface manda de volta.
+fn fieldFn(L: ?*lua.State, p: *Rt, t: c_int, name: [*:0]const u8) u32 {
+    _ = lua.lua_pushstring(L, name);
+    _ = lua.lua_rawget(L, t);
+    defer lua.pop(L, 1);
+    if (lua.lua_type(L, -1) != lua.TFUNCTION) return 0;
+    const handle = p.next_id;
+    p.next_id +%= 1;
+    registryList(L, "cb_now");
+    lua.lua_pushvalue(L, -3);
+    lua.lua_rawseti(L, -2, handle);
+    lua.pop(L, 2);
+    return handle;
+}
+
+fn treeText(L: ?*lua.State, tree: *panel.Tree, s: []const u8) []const u8 {
+    return tree.text(s) catch raise(L, tr("larper.panel.set: painel grande demais", "larper.panel.set: panel too big"));
+}
+
+fn treeAdd(L: ?*lua.State, tree: *panel.Tree, n: panel.Node) u32 {
+    return tree.add(n) catch raise(L, tr("larper.panel.set: painel grande demais", "larper.panel.set: panel too big"));
+}
+
+fn styleOf(L: ?*lua.State, t: c_int) panel.Style {
+    return std.meta.stringToEnum(panel.Style, fieldText(L, t, "style")) orelse .normal;
+}
+
+/// Os filhos que estão na parte de lista da tabela em `t`.
+fn treeChildren(L: ?*lua.State, p: *Rt, tree: *panel.Tree, t: c_int, depth: u8) u32 {
+    if (depth > 6) raise(L, tr("larper.panel.set: fundo demais", "larper.panel.set: nested too deep"));
+    lua.luaL_checkstack(L, 12, "panel");
+    var first = panel.none;
+    var last = panel.none;
+    const n = lua.lua_rawlen(L, t);
+    var i: lua.Integer = 1;
+    while (i <= @as(lua.Integer, @intCast(n))) : (i += 1) {
+        if (lua.lua_rawgeti(L, t, i) != lua.TTABLE) raise(L, tr("larper.panel.set: cada item é uma tabela com `type`", "larper.panel.set: each item is a table with `type`"));
+        const at = treeNode(L, p, tree, lua.lua_gettop(L), depth);
+        lua.pop(L, 1);
+        if (last == panel.none) first = at else tree.nodes.items[last].next = at;
+        last = at;
+    }
+    return first;
+}
+
+fn treeNode(L: ?*lua.State, p: *Rt, tree: *panel.Tree, t: c_int, depth: u8) u32 {
+    const type_name = fieldText(L, t, "type");
+    const kind = std.meta.stringToEnum(panel.Kind, type_name) orelse
+        raiseFmt(L, "larper.panel.set: tipo desconhecido \"{s}\"", "larper.panel.set: unknown type \"{s}\"", .{type_name});
+    var node: panel.Node = .{ .kind = kind, .style = styleOf(L, t), .key = treeText(L, tree, fieldText(L, t, "key")) };
+    switch (kind) {
+        .text, .heading => node.text = treeText(L, tree, fieldText(L, t, "text")),
+        .separator => {},
+        .button => {
+            node.text = treeText(L, tree, fieldText(L, t, "label"));
+            node.click = fieldFn(L, p, t, "on_click");
+        },
+        .input => {
+            node.sub = treeText(L, tree, fieldText(L, t, "placeholder"));
+            node.meta = treeText(L, tree, fieldText(L, t, "value"));
+            node.change = fieldFn(L, p, t, "on_change");
+            node.submit = fieldFn(L, p, t, "on_submit");
+            node.clear = fieldBool(L, t, "clear");
+            if (node.key.len == 0) raise(L, tr("larper.panel.set: um campo de texto precisa de `key`", "larper.panel.set: an input needs a `key`"));
+        },
+        .bar => {
+            node.text = treeText(L, tree, fieldText(L, t, "label"));
+            node.meta = treeText(L, tree, fieldText(L, t, "text"));
+            node.value = fieldNum(L, t, "value");
+            node.max = fieldNum(L, t, "max");
+        },
+        .item => {
+            node.text = treeText(L, tree, fieldText(L, t, "title"));
+            node.sub = treeText(L, tree, fieldText(L, t, "subtitle"));
+            node.meta = treeText(L, tree, fieldText(L, t, "meta"));
+            node.click = fieldFn(L, p, t, "on_click");
+        },
+        .row, .list => {},
+    }
+    const at = treeAdd(L, tree, node);
+    switch (kind) {
+        .row => {
+            // Separado: montar os filhos pode realocar a lista de nós.
+            const child = treeChildren(L, p, tree, t, depth + 1);
+            tree.nodes.items[at].child = child;
+        },
+        .list, .item => {
+            // list: `items`; item: `actions` (botões).
+            _ = lua.lua_pushstring(L, if (kind == .list) "items" else "actions");
+            const tp = lua.lua_rawget(L, t);
+            if (tp == lua.TTABLE) {
+                const child = treeChildrenAs(L, p, tree, lua.lua_gettop(L), depth + 1, if (kind == .list) .item else .button);
+                tree.nodes.items[at].child = child;
+            }
+            lua.pop(L, 1);
+            if (kind == .list) tree.nodes.items[at].text = treeText(L, tree, fieldText(L, t, "empty"));
+        },
+        else => {},
+    }
+    return at;
+}
+
+/// Lista em que o tipo de cada item já se sabe (`items` de uma lista, `actions` de um item).
+fn treeChildrenAs(L: ?*lua.State, p: *Rt, tree: *panel.Tree, t: c_int, depth: u8, kind: panel.Kind) u32 {
+    if (depth > 6) raise(L, tr("larper.panel.set: fundo demais", "larper.panel.set: nested too deep"));
+    lua.luaL_checkstack(L, 12, "panel");
+    var first = panel.none;
+    var last = panel.none;
+    const n = lua.lua_rawlen(L, t);
+    var i: lua.Integer = 1;
+    while (i <= @as(lua.Integer, @intCast(n))) : (i += 1) {
+        if (lua.lua_rawgeti(L, t, i) != lua.TTABLE) raise(L, tr("larper.panel.set: cada item é uma tabela", "larper.panel.set: each item is a table"));
+        const it = lua.lua_gettop(L);
+        // Assume o tipo sem exigir que venha escrito.
+        _ = lua.lua_pushstring(L, "type");
+        _ = lua.lua_pushstring(L, @tagName(kind));
+        lua.lua_rawset(L, it);
+        const at = treeNode(L, p, tree, it, depth);
+        lua.pop(L, 1);
+        if (last == panel.none) first = at else tree.nodes.items[last].next = at;
+        last = at;
+    }
+    return first;
+}
+
+/// larper.panel.set({ title = "…", {type="text", text="…"}, … })
+fn lPanelSet(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .panel, "larper.panel");
+    lua.luaL_checktype(L, 1, lua.TTABLE);
+    if (p.wip) |old| {
+        old.destroy();
+        p.wip = null;
+    }
+    const tree = panel.Tree.create(p.gpa()) catch raise(L, tr("sem memória", "out of memory"));
+    p.wip = tree;
+    // As funções da árvore passada continuam valendo até a próxima troca.
+    _ = lua.lua_getfield(L, lua.REGISTRYINDEX, "larper");
+    _ = lua.lua_getfield(L, -1, "cb_now");
+    lua.lua_setfield(L, -2, "cb_prev");
+    lua.newtable(L);
+    lua.lua_setfield(L, -2, "cb_now");
+    lua.pop(L, 1);
+    tree.title = treeText(L, tree, fieldText(L, 1, "title"));
+    tree.first = treeChildren(L, p, tree, 1, 0);
+    if (p.tree_ready) |old| old.destroy();
+    p.tree_ready = tree;
+    p.wip = null;
+    return 0;
+}
+
+fn panelShow(L: ?*lua.State, open: bool) c_int {
+    const p = plug(L);
+    need(L, p, .panel, "larper.panel");
+    // Abrir na cara da pessoa só quando foi ela quem pediu.
+    if (open and p.gesture == 0) raise(L, tr("larper.panel.open só funciona num comando, atalho, botão ou menu do plugin", "larper.panel.open only works inside one of the plugin's commands, keybinds, buttons or menus"));
+    p.budgetCmd(L);
+    _ = p.w.emit(p.run, .{ .panel_show = .{ .open = open, .token = p.gesture } });
+    return 0;
+}
+
+fn lPanelOpen(L: ?*lua.State) callconv(.c) c_int {
+    return panelShow(L, true);
+}
+
+fn lPanelClose(L: ?*lua.State) callconv(.c) c_int {
+    return panelShow(L, false);
+}
+
+// --- Menus e decoração ------------------------------------------------------------
+
+/// larper.menu("message" | "user", "rótulo" ou {pt=, en=}, fn(alvo))
+fn lMenu(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .menu, "larper.menu");
+    const kind_s = lua.checkSlice(L, 1);
+    const kind = std.meta.stringToEnum(wire.MenuKind, kind_s) orelse raise(L, tr("larper.menu: use \"message\" ou \"user\"", "larper.menu: use \"message\" or \"user\""));
+    lua.luaL_checktype(L, 3, lua.TFUNCTION);
+    var pt: []const u8 = "";
+    var en: []const u8 = "";
+    switch (lua.lua_type(L, 2)) {
+        lua.TSTRING => {
+            pt = lua.toSlice(L, 2).?;
+            en = pt;
+        },
+        lua.TTABLE => {
+            pt = fieldText(L, 2, "pt");
+            en = fieldText(L, 2, "en");
+            if (pt.len == 0) pt = en;
+            if (en.len == 0) en = pt;
+        },
+        else => {},
+    }
+    if (pt.len == 0) raise(L, tr("larper.menu: falta o rótulo", "larper.menu: the label is missing"));
+    if (p.menus.items.len >= max_menus) raise(L, tr("larper.menu: no máximo 4 entradas por plugin", "larper.menu: at most 4 entries per plugin"));
+    registryList(L, "menus");
+    const n = lua.lua_rawlen(L, -1);
+    lua.lua_pushvalue(L, 3);
+    lua.lua_rawseti(L, -2, @intCast(n + 1));
+    const a = p.gpa();
+    const pt_own = p.dupText(L, clip(pt, 80));
+    const en_own = a.dupe(u8, clip(en, 80)) catch {
+        a.free(pt_own);
+        raise(L, tr("sem memória", "out of memory"));
+    };
+    p.menus.append(a, .{ .kind = kind, .slot = @intCast(n + 1), .pt = pt_own, .en = en_own }) catch {
+        a.free(pt_own);
+        a.free(en_own);
+        raise(L, tr("sem memória", "out of memory"));
+    };
+    p.reg_dirty = true;
+    return 0;
+}
+
+fn msgIdArg(L: ?*lua.State, api: []const u8) u64 {
+    const id = idArg(L, 1) orelse 0;
+    if (id == 0) raiseFmt(L, "{s}: falta o ID da mensagem (texto, ou a tabela da mensagem)", "{s}: the message ID is missing (a string, or the message table)", .{api});
+    return id;
+}
+
+/// larper.decorate(mensagem, {badge=, note=, collapse=, label=})
+fn lDecorate(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .decorate, "larper.decorate");
+    const id = msgIdArg(L, "larper.decorate");
+    lua.luaL_checktype(L, 2, lua.TTABLE);
+    p.budgetCmd(L);
+    // Lê tudo antes de alocar: o que pode dar erro de Lua vem primeiro.
+    const badge_s = clip(fieldText(L, 2, "badge"), 48);
+    const note_s = clip(fieldText(L, 2, "note"), 2000);
+    const label_s = clip(fieldText(L, 2, "label"), 80);
+    const collapse = fieldBool(L, 2, "collapse");
+    const a = p.gpa();
+    const badge = a.dupe(u8, badge_s) catch return 0;
+    const note = a.dupe(u8, note_s) catch {
+        a.free(badge);
+        return 0;
+    };
+    const label = a.dupe(u8, label_s) catch {
+        a.free(badge);
+        a.free(note);
+        return 0;
+    };
+    _ = p.w.emit(p.run, .{ .deco_set = .{ .id = id, .badge = badge, .note = note, .label = label, .collapse = collapse } });
+    return 0;
+}
+
+/// larper.undecorate(mensagem)
+fn lUndecorate(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .decorate, "larper.undecorate");
+    const id = msgIdArg(L, "larper.undecorate");
+    p.budgetCmd(L);
+    _ = p.w.emit(p.run, .{ .deco_remove = id });
+    return 0;
+}
+
+/// larper.rules({ {word="x", collapse=true, label="…"}, {user="123", badge="…"} })
+/// A interface aplica sozinha, sem chamar o plugin a cada mensagem.
+fn lRules(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .decorate, "larper.rules");
+    lua.luaL_checktype(L, 1, lua.TTABLE);
+    p.budgetCmd(L);
+    const a = p.gpa();
+    const n: usize = @intCast(lua.lua_rawlen(L, 1));
+    if (n > deco.max_rules) raise(L, tr("larper.rules: no máximo 256 regras", "larper.rules: at most 256 rules"));
+    // Lê tudo antes de alocar: um erro de Lua no meio não deixa nada para trás.
+    // (Os textos continuam vivos: estão na tabela, que é o argumento.)
+    const Raw = struct { word: []const u8, user: u64, badge: []const u8, note: []const u8, label: []const u8, collapse: bool };
+    var raw: [deco.max_rules]Raw = undefined;
+    for (raw[0..n], 1..) |*r, i| {
+        if (lua.lua_rawgeti(L, 1, @intCast(i)) != lua.TTABLE) raise(L, tr("larper.rules: cada regra é uma tabela", "larper.rules: each rule is a table"));
+        const t = lua.lua_gettop(L);
+        r.* = .{
+            .word = std.mem.trim(u8, fieldText(L, t, "word"), " \t\r\n"),
+            .user = parseId(fieldText(L, t, "user")) orelse 0,
+            .badge = clip(fieldText(L, t, "badge"), 48),
+            .note = clip(fieldText(L, t, "note"), 500),
+            .label = clip(fieldText(L, t, "label"), 80),
+            .collapse = fieldBool(L, t, "collapse"),
+        };
+        lua.pop(L, 1);
+    }
+    const list = a.alloc(deco.Rule, n) catch return 0;
+    var built: usize = 0;
+    for (raw[0..n]) |r| {
+        var fb: [64]u8 = undefined;
+        const rule = dupRule(a, filtros.fold(&fb, r.word), r.badge, r.note, r.label) orelse break;
+        list[built] = rule;
+        list[built].user = r.user;
+        list[built].collapse = r.collapse;
+        built += 1;
+    }
+    _ = p.w.emit(p.run, .{ .deco_rules = a.realloc(list, built) catch list[0..built] });
+    return 0;
+}
+
+fn dupRule(a: std.mem.Allocator, word: []const u8, badge: []const u8, note: []const u8, label: []const u8) ?deco.Rule {
+    const w = a.dupe(u8, word) catch return null;
+    const b = a.dupe(u8, badge) catch {
+        a.free(w);
+        return null;
+    };
+    const n = a.dupe(u8, note) catch {
+        a.free(w);
+        a.free(b);
+        return null;
+    };
+    const l = a.dupe(u8, label) catch {
+        a.free(w);
+        a.free(b);
+        a.free(n);
+        return null;
+    };
+    return .{ .word = w, .badge = b, .note = n, .label = l };
+}
+
+// --- Mensagens, composição e pulo ---------------------------------------------------
+
+/// larper.messages([{channel=id, limit=n}], fn(lista)) -> true, ou false se pediu
+/// cedo demais. A interface copia as carregadas e o resultado chega por `fn`.
+fn lMessages(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .messages, "larper.messages");
+    var channel: u64 = 0;
+    var limit: u32 = messages_default;
+    var cb: c_int = 1;
+    if (lua.lua_type(L, 1) == lua.TTABLE) {
+        cb = 2;
+        const ch_text = fieldText(L, 1, "channel");
+        if (ch_text.len > 0) channel = parseId(ch_text) orelse raise(L, tr("larper.messages: canal inválido", "larper.messages: invalid channel"));
+        const n = fieldNum(L, 1, "limit");
+        if (n > 0) limit = @intFromFloat(@min(n, messages_max));
+    }
+    lua.luaL_checktype(L, cb, lua.TFUNCTION);
+    const now = sync.nowMs();
+    if (now - p.messages_at < messages_gap_ms) {
+        lua.lua_pushboolean(L, 0);
+        return 1;
+    }
+    p.messages_at = now;
+    const id = p.next_id;
+    p.next_id +%= 1;
+    registryList(L, "msgs");
+    lua.lua_pushvalue(L, cb);
+    lua.lua_rawseti(L, -2, id);
+    p.budgetCmd(L);
+    _ = p.w.emit(p.run, .{ .want_messages = .{ .req = id, .channel = channel, .limit = limit } });
+    lua.lua_pushboolean(L, 1);
+    return 1;
+}
+
+fn needGesture(L: ?*lua.State, p: *const Rt, api: []const u8) void {
+    if (p.gesture == 0) raiseFmt(L, "{s} só funciona num comando, atalho, botão ou menu do plugin", "{s} only works inside one of the plugin's commands, keybinds, buttons or menus", .{api});
+}
+
+/// larper.jump(canal, mensagem): abre o canal e vai até a mensagem.
+fn lJump(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    needGesture(L, p, "larper.jump");
+    const ch = idArg(L, 1) orelse 0;
+    const id = idArg(L, 2) orelse raise(L, tr("larper.jump: mensagem inválida", "larper.jump: invalid message"));
+    if (ch == 0) raise(L, tr("larper.jump: falta o canal", "larper.jump: the channel is missing"));
+    p.budgetCmd(L);
+    _ = p.w.emit(p.run, .{ .jump = .{ .channel = ch, .id = id, .token = p.gesture } });
+    return 0;
+}
+
+/// larper.insert(texto): põe na caixa de mensagem (nunca envia). Só num gesto: um
+/// plugin em segundo plano escrevendo ali faria a pessoa mandar o que não pediu.
+fn lInsert(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .composer, "larper.insert");
+    needGesture(L, p, "larper.insert");
+    const text = lua.checkSlice(L, 1);
+    p.budgetCmd(L);
+    _ = p.w.emit(p.run, .{ .insert = .{ .text = p.dupText(L, clip(text, 2000)), .token = p.gesture } });
+    return 0;
+}
+
+// --- HTTP --------------------------------------------------------------------------
+
+fn httpDone(ctx: *anyopaque, res: *wire.HttpRes) void {
+    const w: *Worker = @ptrCast(@alignCast(ctx));
+    w.push(.{ .http = res });
+}
+
+/// Resposta que nem chegou a sair: entra na fila, como uma de verdade.
+fn httpRefuse(L: ?*lua.State, p: *Rt, id: u32, err: wire.HttpError) void {
+    const res = p.gpa().create(wire.HttpRes) catch raise(L, tr("sem memória", "out of memory"));
+    res.* = .{ .run = p.run, .id = id, .err = err, .refused = true };
+    p.w.push(.{ .http = res });
+}
+
+fn allowedHeader(name: []const u8) bool {
+    for ([_][]const u8{ "accept", "accept-language", "content-type" }) |ok| {
+        if (std.ascii.eqlIgnoreCase(name, ok)) return true;
+    }
+    return false;
+}
+
+/// Os cabeçalhos pedidos, só os da lista: nada de Cookie, Authorization ou os do
+/// Discord. O app também não acrescenta nenhum desses.
+fn httpHeaders(L: ?*lua.State, p: *Rt, opts: c_int) [][:0]u8 {
+    const a = p.gpa();
+    if (opts == 0) return &.{};
+    _ = lua.lua_pushstring(L, "headers");
+    if (lua.lua_rawget(L, opts) != lua.TTABLE) {
+        lua.pop(L, 1);
+        return &.{};
+    }
+    const t = lua.lua_gettop(L);
+    var list: std.ArrayList([:0]u8) = .empty;
+    lua.lua_pushnil(L);
+    while (list.items.len < 8 and lua.lua_next(L, t) != 0) {
+        defer lua.pop(L, 1);
+        if (lua.lua_type(L, -2) != lua.TSTRING or lua.lua_type(L, -1) != lua.TSTRING) continue;
+        const k = lua.toSlice(L, -2).?;
+        const v = lua.toSlice(L, -1).?;
+        if (!allowedHeader(k)) continue;
+        if (std.mem.indexOfAny(u8, v, "\r\n\x00") != null or v.len > 256) continue;
+        const line = std.fmt.allocPrintSentinel(a, "{s}: {s}", .{ k, v }, 0) catch continue;
+        list.append(a, line) catch a.free(line);
+    }
+    lua.lua_settop(L, t - 1);
+    return list.toOwnedSlice(a) catch &.{};
+}
+
+fn httpCall(L: ?*lua.State, post: bool) c_int {
+    const p = plug(L);
+    const api = if (post) "larper.http.post" else "larper.http.get";
+    need(L, p, .http, api);
+    const url = lua.checkSlice(L, 1);
+    const opts: c_int = if (lua.lua_type(L, 2) == lua.TTABLE) 2 else 0;
+    const cb: c_int = if (opts != 0) 3 else 2;
+    lua.luaL_checktype(L, cb, lua.TFUNCTION);
+    const parsed = manifest.parseHttps(url) orelse
+        raiseFmt(L, "{s}: a URL precisa ser https://nome/caminho, sem porta nem usuário e com o texto codificado (larper.urlencode)", "{s}: the URL must be https://name/path, with no port or user and with the text encoded (larper.urlencode)", .{api});
+    if (!p.m.declares(parsed.host)) raiseFmt(L, "{s}: \"{s}\" não está em @hosts no cabeçalho", "{s}: \"{s}\" isn't in @hosts in the manifest", .{ api, parsed.host });
+    var body: []const u8 = "";
+    if (opts != 0) body = fieldText(L, opts, "body");
+    if (body.len > http_body_max) raiseFmt(L, "{s}: o corpo tem no máximo 64 KB", "{s}: the body is at most 64 KB", .{api});
+    p.budgetCmd(L);
+
+    const id = p.next_id;
+    p.next_id +%= 1;
+    registryList(L, "http");
+    lua.lua_pushvalue(L, cb);
+    lua.lua_rawseti(L, -2, id);
+    lua.pop(L, 2);
+
+    if (!p.hostApproved(parsed.host)) {
+        httpRefuse(L, p, id, .not_approved);
+        return 0;
+    }
+    const now = sync.nowMs();
+    if (now - p.http_from >= 60_000) {
+        p.http_from = now;
+        p.http_n = 0;
+    }
+    if (p.http_n >= http_per_minute or p.http_flying >= http_in_flight) {
+        httpRefuse(L, p, id, .rate_limited);
+        return 0;
+    }
+    p.http_n += 1;
+
+    const a = p.gpa();
+    const headers = httpHeaders(L, p, opts);
+    const req = a.create(wire.HttpReq) catch raise(L, tr("sem memória", "out of memory"));
+    req.* = .{
+        .gpa = a,
+        .run = p.run,
+        .id = id,
+        .post = post,
+        .url = a.dupeSentinel(u8, url, 0) catch raise(L, tr("sem memória", "out of memory")),
+        .body = a.dupe(u8, body) catch raise(L, tr("sem memória", "out of memory")),
+        .headers = headers,
+        .done_ctx = p.w,
+        .done = &httpDone,
+    };
+    if (p.w.host.http_start(req)) {
+        p.http_flying += 1;
+    } else {
+        req.free();
+        httpRefuse(L, p, id, .network);
+    }
+    return 0;
+}
+
+/// larper.http.get(url, [opções], fn(resposta))
+fn lHttpGet(L: ?*lua.State) callconv(.c) c_int {
+    return httpCall(L, false);
+}
+
+/// larper.http.post(url, {body=, headers=}, fn(resposta))
+fn lHttpPost(L: ?*lua.State) callconv(.c) c_int {
+    return httpCall(L, true);
+}
+
+/// larper.http.allowed("host") -> a pessoa já aprovou?
+fn lHttpAllowed(L: ?*lua.State) callconv(.c) c_int {
+    const p = plug(L);
+    need(L, p, .http, "larper.http.allowed");
+    const host = lua.checkSlice(L, 1);
+    lua.lua_pushboolean(L, @intFromBool(p.m.declares(host) and p.hostApproved(host)));
+    return 1;
+}

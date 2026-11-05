@@ -32,6 +32,8 @@ const forum = @import("forum.zig");
 const store_mod = @import("../core/store.zig");
 const types = @import("../core/types.zig");
 const i18n = @import("i18n.zig");
+const inbox_ui = @import("inbox.zig");
+const plugins = @import("../plugins/engine.zig");
 const Id = types.Id;
 const StoredMessage = store_mod.StoredMessage;
 
@@ -161,7 +163,11 @@ fn editedW(g: Geo) f32 {
 
 fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     // O idioma entra na chave: "(editado)" e "(edited)" têm larguras diferentes.
-    const key: u32 = @as(u32, @intFromEnum(g.variant)) | (@as(u32, ctx.st.theme_gen) << 2) | (@as(u32, flags) << 10) | (@as(u32, @intFromBool(i18n.en())) << 18);
+    // A decoração dos plugins também, quando uma regra ou um plugin mudam.
+    const deco_gen: u32 = if (decoIndex(false)) |dx| dx.layout_gen else 0;
+    const key: u32 = @as(u32, @intFromEnum(g.variant)) | (@as(u32, ctx.st.theme_gen) << 2) | (@as(u32, flags) << 10) | (@as(u32, @intFromBool(i18n.en())) << 18) | (deco_gen << 19);
+    // Uma entrada nova nesta mensagem (uma tradução que chegou) invalida a medida.
+    if (decoIndex(true)) |dx| _ = dx.view(m, ctx.store.me);
     if (m.layout_w == g.wrap and m.layout_variant == key) return m.height;
     const self = m.msg.author == ctx.store.me;
     const t = rich.layout(null, ctx.store, ctx.th, m.spans, 0, 0, g.wrap, textOpts(ctx, g, self and g.variant == .bubbles), ctx.mouse);
@@ -169,6 +175,10 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     text_h += att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
     text_h += emb.block(ctx, null, m, 0, 0, g.wrap, 1, .{});
     text_h += threads.cardHeight(ctx, m);
+    if (decoIndex(true)) |dx| {
+        const nh = decoHeight(ctx, g, dx.view(m, ctx.store.me));
+        text_h += nh;
+    }
     if (m.failed) text_h += g.line_h;
     const group = flags & flag_group != 0;
     const day = flags & flag_day != 0;
@@ -206,7 +216,93 @@ fn measure(ctx: *d.Ctx, g: Geo, m: *StoredMessage, flags: u8) f32 {
     if (m.msg.thread != 0) m.natural_w = @max(m.natural_w, @min(g.wrap, threads.card_w));
     if (reply and g.variant == .bubbles) m.natural_w = @max(m.natural_w, 180);
     if (m.failed) m.natural_w = @max(m.natural_w, failedW(g));
+    if (decoIndex(true)) |dx| {
+        // A nota ocupa o que precisar, até a largura da conversa.
+        const v = dx.view(m, ctx.store.me);
+        for (v.slice()) |*part| m.natural_w = @max(m.natural_w, @min(g.wrap, decoWidth(g, part)));
+    }
     return h;
+}
+
+// --- Decoração dos plugins (plugins/deco.zig) ---------------------------------------
+
+/// O índice, se tem algo nele (`active_only`). Sem plugins, nem é consultado.
+fn decoIndex(active_only: bool) ?*plugins.deco.Index {
+    const e = plugins.current orelse return null;
+    if (active_only and !e.deco.active()) return null;
+    return &e.deco;
+}
+
+const note_size_delta: f32 = 1.5;
+
+fn noteFont(g: Geo) *c.ImFont {
+    return g.fam.get(.regular);
+}
+
+fn badgeW(g: Geo, part: *const plugins.deco.Part) f32 {
+    if (part.badge.len == 0) return 0;
+    return d.width(g.fam.get(.semibold), 11.5, part.badge) + 14;
+}
+
+fn decoWidth(g: Geo, part: *const plugins.deco.Part) f32 {
+    const size = g.size - note_size_delta;
+    const close: f32 = if (part.note.len > 0 and part.id != 0) 20 else 0;
+    return badgeW(g, part) + 10 + d.width(noteFont(g), size, part.note) + close;
+}
+
+fn partHeight(g: Geo, part: *const plugins.deco.Part) f32 {
+    if (part.note.len == 0) return 22;
+    const size = g.size - note_size_delta;
+    const tw = @max(g.wrap - 10 - 20 - badgeW(g, part), 60);
+    return @max(22, inbox_ui.wrapText(null, noteFont(g), size, 0, 0, tw, part.note, 12, d.Rgba.white) + 6);
+}
+
+fn decoHeight(_: *d.Ctx, g: Geo, v: plugins.deco.View) f32 {
+    var h: f32 = 0;
+    for (v.slice()) |*part| h += partHeight(g, part) + 2;
+    return h;
+}
+
+/// Selo e nota embaixo da mensagem. Retorna a altura usada.
+fn decoBlock(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, x: f32, y_in: f32) f32 {
+    const dx = decoIndex(true) orelse return 0;
+    const v = dx.view(m, ctx.store.me);
+    var y = y_in;
+    for (v.slice(), 0..) |*part, i| {
+        const h = partHeight(g, part);
+        d.rect(dl, .{ .x = x, .y = y + 2, .w = 2, .h = h - 4 }, ctx.col(.accent).alpha(0.7), 1);
+        var tx = x + 8;
+        // A nota de uma mensagem só (não de uma regra) pode ser dispensada. O × fica
+        // à esquerda: à direita, a barra de ações da mensagem cobriria ele.
+        if (part.note.len > 0 and part.id != 0) {
+            const xr: d.Rect = .{ .x = tx, .y = y + 2, .w = 16, .h = 16 };
+            const hb = d.hitUnder(ctx, @truncate(m.msg.id ^ (0xDEC0_0000 + i)), xr);
+            qa.mark(xr, "deco-close:{d}", .{m.msg.id});
+            const ink = if (hb.hovered) ctx.col(.text) else ctx.col(.faint);
+            d.line(dl, xr.x + 4, xr.y + 4, xr.right() - 4, xr.bottom() - 4, ink, 1.4);
+            d.line(dl, xr.right() - 4, xr.y + 4, xr.x + 4, xr.bottom() - 4, ink, 1.4);
+            d.tip(ctx, xr, i18n.tr("Dispensar", "Dismiss"), hb.hovered);
+            if (hb.clicked) ctx.act(.{ .deco_dismiss = .{ .run = part.run, .id = part.id } });
+            tx += 20;
+        }
+        if (part.badge.len > 0) {
+            const bw = badgeW(g, part);
+            const f = g.fam.get(.semibold);
+            const br: d.Rect = .{ .x = tx, .y = y + 2, .w = bw, .h = 18 };
+            d.rect(dl, br, ctx.col(.accent).alpha(0.16), 9);
+            d.text(dl, f, 11.5, br.x + 7, d.centerY(br, 11.5), ctx.col(.text), part.badge);
+            qa.mark(br, "deco-badge:{d}", .{m.msg.id});
+            tx += bw + 4;
+        }
+        if (part.note.len > 0) {
+            const size = g.size - note_size_delta;
+            const tw = @max(g.wrap - 10 - 20 - badgeW(g, part), 60);
+            _ = inbox_ui.wrapText(dl, noteFont(g), size, tx, y + 3, tw, part.note, 12, ctx.col(.muted).mix(ctx.col(.text), 0.35));
+            qa.mark(.{ .x = tx, .y = y, .w = tw, .h = h }, "deco-note:{d}", .{m.msg.id});
+        }
+        y += h + 2;
+    }
+    return y - y_in;
 }
 
 /// Faixa da seleção dentro de uma mensagem.
@@ -272,6 +368,7 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
     const filt = &st.filtros;
     // Sem ignorados nem filtro (o comum), nada fica recolhido: nem pergunta.
     const any_hide = filt.ignored.count() > 0 or filt.filter.items.len > 0;
+    const dx = decoIndex(true);
     var prev_hidden = false;
     for (msgs, 0..) |*m, i| {
         var flags: u8 = 0;
@@ -297,7 +394,10 @@ pub fn history(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, ch_id: Id, region: [*
                 total += new_line_h;
             }
         }
-        const hide = any_hide and filt.hides(m, ctx.store.me);
+        var hide = any_hide and filt.hides(m, ctx.store.me);
+        if (!hide) if (dx) |ix| {
+            if (ix.collapses(m, ctx.store.me) and !filt.revealed.contains(m.msg.id)) hide = true;
+        };
         prev_hidden = hide;
         if (hide) flags |= flag_hidden;
         st.groups.items[i] = flags;
@@ -715,7 +815,15 @@ fn drawCollapsed(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flag
         .bubbles => r.x + 20,
     };
     const ignored = ctx.st.filtros.isIgnored(m.msg.author);
-    const label = if (ignored) i18n.tr("Mensagem de alguém ignorado — ", "Message from someone you ignored — ") else i18n.tr("Mensagem filtrada — ", "Filtered message — ");
+    // Quem recolheu pode dizer por quê (filtro de um plugin).
+    var lb: [120]u8 = undefined;
+    const plugin_label: []const u8 = if (decoIndex(true)) |ix| ix.view(m, ctx.store.me).label else "";
+    const label = if (ignored)
+        i18n.tr("Mensagem de alguém ignorado — ", "Message from someone you ignored — ")
+    else if (plugin_label.len > 0)
+        d.printClip(&lb, "{s} — ", .{plugin_label})
+    else
+        i18n.tr("Mensagem filtrada — ", "Filtered message — ");
     const fs: f32 = 13;
     const lw = d.width(fam.get(.italic), fs, label);
     d.text(dl, fam.get(.italic), fs, x, cy - fs * 0.6, ctx.col(.faint), label);
@@ -812,6 +920,7 @@ fn snippet(buf: []u8, s: []const u8) []const u8 {
 /// recolhida (ignorado/filtro).
 fn quotedText(ctx: *d.Ctx, m: *StoredMessage) []const u8 {
     if (ctx.st.filtros.hides(m, ctx.store.me)) return i18n.tr("mensagem recolhida", "collapsed message");
+    if (decoIndex(true)) |ix| if (ix.collapses(m, ctx.store.me) and !ctx.st.filtros.revealed.contains(m.msg.id)) return i18n.tr("mensagem recolhida", "collapsed message");
     return m.msg.content;
 }
 
@@ -1098,6 +1207,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
             ah += emb.block(ctx, dl, m, tx, y + th + ah, g.wrap, alpha, .{ .from = sel_from, .to = sel_to, .probe = probe });
             ah += threads.card(ctx, dl, m, tx, y + th + ah, g.wrap);
+            ah += decoBlock(ctx, dl, g, m, tx, y + th + ah);
             if (m.failed) failedRow(ctx, dl, g, m, tx, y + th + ah);
             if (m.n_reactions > 0) reactions(ctx, dl, m, tx, y + th + ah, under, false, 0);
             if (ctx.st.settings.developer_mode and under) {
@@ -1156,6 +1266,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             var ah = att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
             ah += emb.block(ctx, dl, m, r.x + g.content_x, y + th + ah, g.wrap, alpha, .{ .from = sel_from, .to = sel_to, .probe = probe });
             ah += threads.card(ctx, dl, m, r.x + g.content_x, y + th + ah, g.wrap);
+            ah += decoBlock(ctx, dl, g, m, r.x + g.content_x, y + th + ah);
             if (m.failed) failedRow(ctx, dl, g, m, r.x + g.content_x, y + th + ah);
             if (m.n_reactions > 0) reactions(ctx, dl, m, r.x + g.content_x, y + th + ah - 2, under, false, 0);
             if (show_bar) toolbar(ctx, dl, m, r.right() - 12, row.y - 2);
@@ -1205,6 +1316,7 @@ fn drawMessage(ctx: *d.Ctx, dl: *c.ImDrawList, g: Geo, m: *StoredMessage, flags:
             const below = textH(g, m, t) + att.blockHeight(m.msg.attachments, g.wrap, m.msg.content.len > 0);
             var eh = emb.block(ctx, dl, m, br.x + 14, ty + below, g.wrap, alpha, .{ .from = sel_from, .to = sel_to, .probe = probe });
             eh += threads.card(ctx, dl, m, br.x + 14, ty + below + eh, g.wrap);
+            eh += decoBlock(ctx, dl, g, m, br.x + 14, ty + below + eh);
             if (m.failed) failedRow(ctx, dl, g, m, br.x + 14, ty + below + eh);
             if (m.n_reactions > 0) reactions(ctx, dl, m, br.x, br.bottom(), under, self, br.right());
             if (ctx.hovering(br)) {

@@ -16,6 +16,7 @@ const layout = @import("../theme/layout.zig");
 const S = @import("settings_state.zig");
 const dropdown = @import("dropdown.zig");
 const search = @import("search.zig");
+const plugin_panel = @import("plugin_panel.zig");
 
 /// A conversa nunca fica mais estreita que isto por causa de um painel alargado.
 pub const min_chat: f32 = 360;
@@ -124,7 +125,7 @@ pub fn submit(ctx: *d.Ctx) void {
     dragging = false;
     // Com algo aberto por cima, o clique é de quem está aberto (ou o fecha).
     const st = ctx.st;
-    if (st.popup != .none or st.settings.open or st.viewer != null or st.palette.open or search.open or dropdown.anyOpen()) return;
+    if (st.popup != .none or st.settings.open or st.viewer != null or st.palette.open or search.open or dropdown.anyOpen() or plugin_panel.floating()) return;
     for (queue[0..queued]) |h| one(ctx, h);
 }
 

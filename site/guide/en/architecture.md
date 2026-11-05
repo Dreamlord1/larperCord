@@ -33,7 +33,8 @@ tools/        QA, memory benchmark, screenshots, logo and site generators
 
 | Thread | When it exists | Job |
 |---|---|---|
-| UI | Always | The main loop, sleeping in `SDL_WaitEvent` when nothing happens. Lua plugins run here too |
+| UI | Always | The main loop, sleeping in `SDL_WaitEvent` when nothing happens |
+| Plugins | With a plugin on | All Lua runs here. It talks to the UI through two queues and sleeps when nothing happens |
 | Gateway | With a token | WebSocket with heartbeat, RESUME, zlib-stream and reconnects, plus REST, one request at a time |
 | Demo gateway | Without a token | Fake servers, people and messages |
 | Media | Always, mostly asleep | Downloads and decodes images at low priority, at most 2 decodes at a time |

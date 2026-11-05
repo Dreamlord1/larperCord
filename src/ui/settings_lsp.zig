@@ -125,7 +125,7 @@ fn plugins(p: anytype, s: *S.Settings) void {
     const e = engine.current orelse return;
     var any = false;
     for (e.list.items) |pl| {
-        if (pl.L != null and pl.lsp.items.len > 0) any = true;
+        if (pl.isRunning() and pl.lsp.items.len > 0) any = true;
     }
     if (!any) {
         p.note(i18n.tr("Plugins também podem propor um servidor, com larper.lsp. Guia: docs/lsp.md", "Plugins can also propose a server, with larper.lsp. Guide: docs/lsp.md"));
@@ -136,7 +136,7 @@ fn plugins(p: anytype, s: *S.Settings) void {
     p.note(i18n.tr("Ligue só se confiar no programa abaixo. Se o plugin mudar o comando, ele volta a ficar desligado.", "Only turn on if you trust the program below. If the plugin changes the command, it goes back to off."));
     p.note(i18n.tr("Se a linguagem também tem um comando seu ligado acima, o seu vale.", "If the language also has your own command on above, yours wins."));
     for (e.list.items) |pl| {
-        if (pl.L == null) continue;
+        if (!pl.isRunning()) continue;
         for (pl.lsp.items) |*srv| pluginRow(p, s, pl, srv);
     }
 }
