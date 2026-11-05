@@ -48,6 +48,9 @@ pub const Op = union(enum) {
     dclick: Target,
     hover: Target,
     drag: struct { from: Target, to: Target },
+    /// Arrasta algo que anda junto com o mouse (a alça de um painel): o caminho
+    /// sai de onde ele estava ao começar. Alvo vazio pula o passo.
+    drag_by: struct { from: Target, dx: f32 },
     key: struct { key: c_int, ctrl: bool = false, shift: bool = false, alt: bool = false },
     text: []const u8,
     wait: u32,
@@ -2408,7 +2411,7 @@ const ops = [_]Op{
     .{ .sweep = &.{ "toggle:", "button:" } },
     key(c.ImGuiKey_Escape),
 
-} ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ @import("qa_bandeja.zig").ops ++ lsp_ops ++ [_]Op{
+} ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ @import("qa_bandeja.zig").ops ++ lsp_ops ++ @import("qa_paineis.zig").all ++ [_]Op{
     s("caixa de entrada"),
     click("guild:500000"),
     click("channel:500005"),
@@ -2715,6 +2718,7 @@ const ops_nome = [_]Op{
 
 /// Só o emoji e o autocompletar (QA_SCENE=emoji), para olhar em outros temas.
 const ops_emoji = [_]Op{expect("pronto", ready)} ++ @import("qa_emoji.zig").ops;
+const ops_paineis = [_]Op{expect("pronto", ready)} ++ @import("qa_paineis.zig").all;
 
 const ops_config = [_]Op{
     expect("pronto", ready),
@@ -2873,7 +2877,7 @@ const ops_theme = [_]Op{
     .{ .shot = "tema-config" },
     key(c.ImGuiKey_Escape),
     expect("Esc fecha as configurações", settingsClosed),
-} ++ qa_temas.ops_resize_before ++ [_]Op{
+} ++ @import("qa_paineis.zig").ops_pages_theme ++ @import("qa_paineis.zig").ops_theme ++ qa_temas.ops_resize_before ++ [_]Op{
     .{ .resize = .{ 860, 600 } },
     .{ .wait = 300 },
 } ++ qa_temas.ops_resize_after ++ [_]Op{
@@ -2983,6 +2987,7 @@ fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "bandeja-menu")) return &ops_bandeja_menu;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "bandeja-reinicio")) return &ops_bandeja_reinicio;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp-real")) return &ops_lsp_real;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "paineis")) return &ops_paineis;
     const scene = std.mem.span(c.SDL_getenv("QA_SCENE") orelse return &ops);
     if (std.mem.eql(u8, scene, "ctrl")) return &ops_ctrl;
     if (std.mem.eql(u8, scene, "nome")) return &ops_nome;
@@ -3009,6 +3014,7 @@ pub const Runner = struct {
     still_n: u8 = 0,
     mouse_set: bool = false,
     settle: u32 = 0,
+    dclick_time: [2]f32 = .{ 0, 0 },
 
     fn now() i64 {
         return gw.nowMs();
@@ -3354,6 +3360,13 @@ pub const Runner = struct {
         switch (r.sub) {
             0 => {
                 if (ctrl_held) c.ImGuiIO_AddKeyEvent(app.io, c.ImGuiMod_Ctrl, true);
+                // Em máquina lenta, dois quadros já passam do tempo de um duplo clique.
+                // (O ImGui exige o atraso do clique simples maior que esse tempo.)
+                if (double) {
+                    r.dclick_time = .{ app.io.*.MouseDoubleClickTime, app.io.*.MouseSingleClickDelay };
+                    app.io.*.MouseSingleClickDelay = 3.5;
+                    app.io.*.MouseDoubleClickTime = 3;
+                }
                 r.pos(app, r.target_pos);
             },
             1 => c.ImGuiIO_AddMouseButtonEvent(app.io, button, true),
@@ -3362,6 +3375,10 @@ pub const Runner = struct {
             4 => if (double) c.ImGuiIO_AddMouseButtonEvent(app.io, button, false),
             else => {
                 if (ctrl_held) c.ImGuiIO_AddKeyEvent(app.io, c.ImGuiMod_Ctrl, false);
+                if (double) {
+                    app.io.*.MouseDoubleClickTime = r.dclick_time[0];
+                    app.io.*.MouseSingleClickDelay = r.dclick_time[1];
+                }
                 return r.next();
             },
         }
@@ -3390,6 +3407,11 @@ pub const Runner = struct {
             .dclick => |t| r.clickOp(app, t, 0, false, true),
             .hover => |t| {
                 var buf: [64]u8 = undefined;
+                // Alvo vazio: não se aplica aqui (um tema sem a tal coisa).
+                if (targetName(app, t, &buf).len == 0) {
+                    r.next();
+                    return true;
+                }
                 if (resolve(app, t, &buf)) |p| {
                     if (!r.targetStill(p)) return true;
                     r.pos(app, p);
@@ -3421,6 +3443,40 @@ pub const Runner = struct {
                     else => return blk: {
                         r.next();
                         break :blk true;
+                    },
+                }
+                r.sub += 1;
+            },
+            .drag_by => |dg| {
+                if (r.sub == 0) {
+                    var b1: [64]u8 = undefined;
+                    if (targetName(app, dg.from, &b1).len == 0) {
+                        r.next();
+                        return true;
+                    }
+                    const a = resolve(app, dg.from, &b1) orelse {
+                        if (now() - r.step_ms > slowed(1500)) {
+                            r.record(false, "início do arraste não encontrado: {s}", .{targetName(app, dg.from, &b1)});
+                            r.next();
+                        }
+                        return true;
+                    };
+                    if (!r.targetStill(a)) return true;
+                    r.target_pos = a;
+                }
+                const a = r.target_pos;
+                switch (r.sub) {
+                    0 => r.pos(app, a),
+                    1 => c.ImGuiIO_AddMouseButtonEvent(app.io, 0, true),
+                    2, 3, 4, 5 => {
+                        const k = @as(f32, @floatFromInt(r.sub - 1)) / 4;
+                        r.pos(app, .{ a[0] + dg.dx * k, a[1] });
+                    },
+                    6 => c.ImGuiIO_AddMouseButtonEvent(app.io, 0, false),
+                    7 => {},
+                    else => {
+                        r.next();
+                        return true;
                     },
                 }
                 r.sub += 1;
