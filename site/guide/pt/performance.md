@@ -5,11 +5,14 @@
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | 1.279 MB | 12–47% ¹ | 287 MB |
-| **larperCord** ² | **44–47 MB** | **0–0,4%** | **~6,7 MB** |
+| **larperCord**, conta real ³ | **~130 MB** | **0–0,4%** | **~6,7 MB** |
+| **larperCord**, demonstração ² | **44–47 MB** | **0–0,4%** | **~6,7 MB** |
 
 ¹ Média desde a abertura, medida com `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
 
 ² Dados de demonstração, os 11 temas, GPU de verdade, janela de verdade num workspace escondido do Hyprland e reprodução automática de GIFs desligada. Uma janela à vista pode medir diferente.
+
+³ 125–140 MB no uso normal de uma conta, no mesmo PC, com um i5-2400S. O seu depende dos seus servidores, membros e imagens. Configurações → Desempenho mostra para onde vai.
 
 Leia esses números com as ressalvas certas:
 
@@ -27,17 +30,17 @@ tools/membench.sh 60
 
 Para cada tema, ele abre o app em modo demonstração com configurações limpas e a reprodução automática de GIFs desligada, espera, mede a CPU parada durante 5 segundos, lê o PSS em `/proc/<pid>/smaps_rollup` e falha se algum tema passar do orçamento em MB. Por causa dessa variação, o `terminal` às vezes falha com 60.
 
-A página Desempenho nas configurações mostra números ao vivo, e o `--stats` mostra o tempo até o primeiro quadro.
+A página Desempenho nas configurações mostra números ao vivo, inclusive para onde vai a memória na sua conta, e o `--stats` mostra o tempo até o primeiro quadro.
 
 ## Dez decisões
 
-1. **Dorme quando nada acontece.** O laço espera em `SDL_WaitEvent`. Rede, inotify e o relógio acordam o app por eventos. Sem animação, sem redesenho.
+1. **Dorme quando nada acontece.** O laço espera em `SDL_WaitEvent`. Rede, inotify e o relógio acordam o app por eventos. Sem animação, sem redesenho. Quadro que sai igual ao anterior nem chega à GPU, e o mouse só passando por cima redesenha no máximo 30 vezes por segundo.
 2. **Nada de navegador.** Tudo é desenhado com o `ImDrawList` do Dear ImGui sobre o SDL_Renderer.
 3. **Fontes mapeadas, não copiadas.** Cada arquivo de fonte vira um `mmap` usado por todos os pesos e famílias, então só as páginas lidas ficam na RAM. Carregar 4 pesos do Inter mais emoji do jeito ingênuo custava cerca de 90 MB.
 4. **Só o driver de vídeo necessário.** Em máquinas só com NVIDIA, o glvnd também carregava o Mesa e o LLVM (cerca de 23 MB) à toa. O app detecta isso e evita.
 5. **Markdown interpretado uma vez**, quando a mensagem chega. A interface só faz o layout dos trechos, com cache de altura por largura.
 6. **Lista virtualizada.** Busca binária pelo primeiro item visível, depois desenha só a tela.
-7. **Memória com teto.** 1.500 mensagens por canal e 3.000 no total, e depois disso a conversa vista há mais tempo é descarregada. As imagens têm um orçamento fixo de 64 MB, e qualquer download isolado para em 32 MB.
+7. **Memória com teto.** 1.500 mensagens por canal e 3.000 no total, e depois disso a conversa vista há mais tempo é descarregada. As imagens têm um orçamento fixo de 64 MB, e qualquer download isolado para em 32 MB. Depois de um minuto na bandeja ou minimizada, as imagens também saem da memória, menos as pequenas que estavam na tela.
 8. **O fontconfig é liberado** depois que as fontes são resolvidas (`FcFini` e `malloc_trim`).
 9. **Sem cursor piscando.** Ele manteria a CPU acordada à toa.
 10. **As coisas começam quando você pede.** A thread de voz na primeira call e o FFmpeg no primeiro vídeo. O vídeo fora da tela é liberado depois de 30 segundos, e sem plugin ligado não há thread de plugins, estado de Lua nem trabalho extra por mensagem, tecla ou quadro.

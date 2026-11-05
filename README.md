@@ -2,7 +2,7 @@
 
 # larperCord
 
-**A native Discord client for Linux and Windows, of about 50 MB, whose entire interface is a theme file.**
+**A native Discord client for Linux and Windows, at about 130 MB of RAM, whose entire interface is a theme file.**
 
 Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 
@@ -26,10 +26,12 @@ The official client is a whole browser dressed up as an app. On the same PC:
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord** | **44–47 MB**² | **0–0.4%** | **~6.7 MB** |
+| **larperCord**, real account | **~130 MB**³ | **0–0.4%** | **~6.7 MB** |
+| **larperCord**, demo | **44–47 MB**² | **0–0.4%** | **~6.7 MB** |
 
 <sub>¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, 1280×800 window, `ReleaseFast` build.
-² Demo data, a real window, GIF autoplay off, measured with `tools/membench.sh`. An animated GIF on screen costs about 2.5% CPU. About half of the total is the NVIDIA driver and system libraries (libcurl, OpenSSL). A real account uses more.</sub>
+² Demo data, a real window, GIF autoplay off, measured with `tools/membench.sh`. An animated GIF on screen costs about 2.5% CPU. About half of the total is the NVIDIA driver and system libraries (libcurl, OpenSSL).
+³ 125–140 MB in one account's normal use on the same PC. Yours depends on your servers, members and images; Settings → Performance shows where it goes.</sub>
 
 ## What's in it
 
@@ -179,7 +181,8 @@ you join a call.
 No magic, just many small decisions:
 
 1. **It sleeps when nothing happens.** The loop waits in `SDL_WaitEvent`. Network, inotify and the clock
-   wake the app with events. No animation, no redraw.
+   wake the app with events. No animation, no redraw. A frame that comes out the same as the last one
+   never reaches the GPU, and a mouse just passing over things redraws at most 30 times a second.
 2. **No browser.** Everything is drawn with Dear ImGui's `ImDrawList` on top of SDL_Renderer.
 3. **Fonts are mapped, not copied.** Each font file is one `mmap` shared by
    every weight and family. Only the pages read stay in RAM. (Loading 4 weights of Inter + emoji
@@ -189,7 +192,8 @@ No magic, just many small decisions:
 5. **Markdown is parsed once**, when the message arrives. The UI only lays out the
    spans, with a **height cache per width**.
 6. **A virtualized list**: binary search for the first visible item, then draw only the screen.
-7. **Memory has ceilings**: 1,500 messages per channel and 3,000 in total, with old ones freed.
+7. **Memory has ceilings**: 1,500 messages per channel and 3,000 in total, with old ones freed. After a
+   minute in the tray or minimized, images leave memory too, except small ones that were on screen.
 8. **fontconfig gets freed** after fonts are resolved (`FcFini` + `malloc_trim`).
 9. **No blinking cursor**: a cursor blinking on its own would keep the CPU awake.
 10. **A lean binary**: a release build without debug symbols, about 6.7 MB.
@@ -216,6 +220,7 @@ zig build -Doptimize=ReleaseFast
 | `zig build test` | tests (KDL, colors, layout, markdown, Store, built-in themes, settings) |
 | `tools/snapshots.sh` | generates the screenshots in `docs/` without opening a window |
 | `tools/membench.sh 60` | measures RAM and CPU for each theme and fails over 60 MB |
+| `tools/qa_quadros.py BIN [--slow]` | checks frame skipping and hidden-window memory with a real window in Xvfb |
 
 ```
 larpercord [--theme NAME] [--demo] [--settings] [--list-themes] [--no-live] [--shot FILE.png] [--stats]

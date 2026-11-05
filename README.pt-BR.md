@@ -2,7 +2,7 @@
 
 # larperCord
 
-**Um cliente de Discord nativo, para Linux e Windows, de cerca de 50 MB, cuja interface inteira é um arquivo de tema.**
+**Um cliente de Discord nativo, para Linux e Windows, com cerca de 130 MB de RAM, cuja interface inteira é um arquivo de tema.**
 
 Zig · SDL3 · Dear ImGui · FreeType · zero Electron
 
@@ -27,10 +27,12 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord** | **44–47 MB**² | **0–0,4%** | **~6,7 MB** |
+| **larperCord**, conta real | **~130 MB**³ | **0–0,4%** | **~6,7 MB** |
+| **larperCord**, demonstração | **44–47 MB**² | **0–0,4%** | **~6,7 MB** |
 
 <sub>¹ média desde a abertura, medida pelo `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
-² Dados de demonstração, janela de verdade, reprodução automática de GIFs desligada, medido com `tools/membench.sh`. Um GIF animado na tela custa cerca de 2,5% de CPU. Cerca de metade do total é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL). Uma conta real usa mais.</sub>
+² Dados de demonstração, janela de verdade, reprodução automática de GIFs desligada, medido com `tools/membench.sh`. Um GIF animado na tela custa cerca de 2,5% de CPU. Cerca de metade do total é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL).
+³ 125–140 MB no uso normal de uma conta, no mesmo PC. O seu depende dos seus servidores, membros e imagens; Configurações → Desempenho mostra para onde vai.</sub>
 
 ## O que tem
 
@@ -180,7 +182,8 @@ numa call.
 Nada de mágica, só muitas decisões pequenas:
 
 1. **Dorme quando nada acontece.** O laço fica em `SDL_WaitEvent`. Rede, inotify e o relógio
-   acordam o app por eventos. Sem animação, sem redesenho.
+   acordam o app por eventos. Sem animação, sem redesenho. Quadro que sai igual ao anterior nem chega
+   à GPU, e o mouse só passando por cima redesenha no máximo 30 vezes por segundo.
 2. **Nada de navegador.** Tudo é desenhado com o `ImDrawList` do Dear ImGui sobre o SDL_Renderer.
 3. **Fontes mapeadas, não copiadas.** Cada arquivo de fonte vira um `mmap` compartilhado por
    todos os pesos e famílias. Só as páginas lidas ficam na RAM. (Carregar 4 pesos do Inter + emoji
@@ -190,7 +193,8 @@ Nada de mágica, só muitas decisões pequenas:
 5. **Markdown interpretado uma vez**, quando a mensagem chega. A interface só faz layout dos
    trechos, com **cache de altura por largura**.
 6. **Lista virtualizada**: busca binária pelo primeiro item visível, desenha só a tela.
-7. **Memória com teto**: 1.500 mensagens por canal e 3.000 no total, e as antigas são liberadas.
+7. **Memória com teto**: 1.500 mensagens por canal e 3.000 no total, e as antigas são liberadas. Depois
+   de um minuto na bandeja ou minimizada, as imagens também saem da memória, menos as pequenas que estavam na tela.
 8. **fontconfig liberado** depois de resolver as fontes (`FcFini` + `malloc_trim`).
 9. **Sem cursor piscando**: o cursor piscando sozinho manteria a CPU acordada.
 10. **Binário enxuto**: build release sem símbolos de debug, cerca de 6,7 MB.
@@ -215,6 +219,7 @@ zig build -Doptimize=ReleaseFast
 | `zig build test` | testes (KDL, cores, layout, markdown, Store, temas embutidos, configurações) |
 | `tools/snapshots.sh` | gera os prints de `docs/` sem abrir janela |
 | `tools/membench.sh 60` | mede RAM e CPU de cada tema e falha se passar de 60 MB |
+| `tools/qa_quadros.py BIN [--slow]` | confere o pulo de quadros e a memória com a janela escondida, com janela de verdade num Xvfb |
 
 ```
 larpercord [--theme NOME] [--demo] [--settings] [--list-themes] [--no-live] [--shot ARQ.png] [--stats]

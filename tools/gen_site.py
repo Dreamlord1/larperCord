@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "docs"
 SITE = ROOT / "site"
 REPO = "https://github.com/RshaCuDeVidro/larperCord"
+VERSION = re.search(r'number = "(.+?)"', (ROOT / "src/core/version.zig").read_text()).group(1)
 BASE_URL = "https://rshacudevidro.github.io/larperCord/"
 THEMES = ["classico", "vidro", "terminal", "subsolo", "orbital", "editorial", "bolhas", "zen", "papel", "escritorio", "cupertino"]
 LANGS = ["en", "pt"]
@@ -724,7 +725,7 @@ def shell(lang, path, alt_path, title, desc, body, kind):
     <a href="{anchor_home}#playground">Playground</a>
     <a href="{anchor_home}#features">{t(lang, 'Features', 'Recursos')}</a>
     <a href="{guide}"{' aria-current="page"' if kind == 'guide' else ''}>{t(lang, 'Guide', 'Guia')}</a>
-    <a href="{REPO}" rel="noopener">GitHub</a>
+    <a href="{REPO}" rel="noopener">★ {t(lang, 'Star on GitHub', 'Dar estrela no GitHub')}</a>
   </nav>
   <a class="kofi-mini" href="https://ko-fi.com/M7E72A1EGZ" target="_blank" rel="noopener"><img src="{root}assets/kofi6.png" alt="{t(lang, 'Buy Me a Coffee at ko-fi.com', 'Me pague um café no ko-fi.com')}" width="580" height="146"></a>
   <a class="lang" href="{rel(path, alt_path.removesuffix('index.html')) or './'}" hreflang="{'pt-BR' if other == 'pt' else 'en'}" lang="{'pt-BR' if other == 'pt' else 'en'}">{other_label}</a>
@@ -892,7 +893,7 @@ def build_landing(lang, themes):
     path = "index.html" if lang == "en" else "pt/index.html"
     alt = "pt/index.html" if lang == "en" else "index.html"
     root = root_of(path)
-    src = src.replace("%ROOT%", root).replace("%LANG%", lang).replace("%REPO%", REPO).replace("%GUIDE%", rel(path, page_url(lang, "x")).removesuffix("x.html"))
+    src = src.replace("%ROOT%", root).replace("%LANG%", lang).replace("%REPO%", REPO).replace("%VERSION%", VERSION).replace("%GUIDE%", rel(path, page_url(lang, "x")).removesuffix("x.html"))
 
     def code(m):
         return code_block(html.unescape(m.group(2)).strip("\n"), m.group(1))
@@ -916,8 +917,8 @@ def build_landing(lang, themes):
     presets = "".join(f'<option value="{n}"{" selected" if n == "subsolo" else ""}>{n}.kdl</option>' for n in THEMES)
     src = src.replace("%PRESET_OPTIONS%", presets)
     title = t(lang, "larperCord: a native Discord client whose whole UI is one file", "larperCord: um cliente nativo de Discord cuja interface inteira é um arquivo")
-    desc = t(lang, "Unofficial native Discord client in Zig. About 50 MB of RAM, 0% CPU at idle, and a whole interface described by hot-reloading KDL theme files. Voice calls, Lua plugins, offline search.",
-             "Cliente nativo e não oficial de Discord em Zig. Cerca de 50 MB de RAM, 0% de CPU parado e a interface inteira descrita em temas KDL que recarregam ao salvar. Voz, plugins em Lua, busca offline.")
+    desc = t(lang, "Unofficial native Discord client in Zig. About 130 MB of RAM with a real account, 0% CPU at idle, and a whole interface described by hot-reloading KDL theme files. Voice calls, Lua plugins, offline search.",
+             "Cliente nativo e não oficial de Discord em Zig. Cerca de 130 MB de RAM com uma conta real, 0% de CPU parado e a interface inteira descrita em temas KDL que recarregam ao salvar. Voz, plugins em Lua, busca offline.")
     src = src.replace('loading="lazy"', 'loading="lazy" decoding="async"')
     write(path, shell(lang, path, alt, title, desc, src, "landing"))
     return [

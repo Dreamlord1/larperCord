@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>larperCord: um cliente nativo de Discord cuja interface inteira é um arquivo</title>
-<meta name="description" content="Cliente nativo e não oficial de Discord em Zig. Cerca de 50 MB de RAM, 0% de CPU parado e a interface inteira descrita em temas KDL que recarregam ao salvar. Voz, plugins em Lua, busca offline.">
+<meta name="description" content="Cliente nativo e não oficial de Discord em Zig. Cerca de 130 MB de RAM com uma conta real, 0% de CPU parado e a interface inteira descrita em temas KDL que recarregam ao salvar. Voz, plugins em Lua, busca offline.">
 <meta name="color-scheme" content="dark light">
 <link rel="canonical" href="https://rshacudevidro.github.io/larperCord/pt/">
 <link rel="alternate" hreflang="en" href="https://rshacudevidro.github.io/larperCord/">
 <link rel="alternate" hreflang="pt-BR" href="https://rshacudevidro.github.io/larperCord/pt/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="larperCord: um cliente nativo de Discord cuja interface inteira é um arquivo">
-<meta property="og:description" content="Cliente nativo e não oficial de Discord em Zig. Cerca de 50 MB de RAM, 0% de CPU parado e a interface inteira descrita em temas KDL que recarregam ao salvar. Voz, plugins em Lua, busca offline.">
+<meta property="og:description" content="Cliente nativo e não oficial de Discord em Zig. Cerca de 130 MB de RAM com uma conta real, 0% de CPU parado e a interface inteira descrita em temas KDL que recarregam ao salvar. Voz, plugins em Lua, busca offline.">
 <meta property="og:image" content="https://rshacudevidro.github.io/larperCord/assets/og.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/svg+xml" href="../assets/icon-live.svg">
@@ -32,7 +32,7 @@
     <a href="#playground">Playground</a>
     <a href="#features">Recursos</a>
     <a href="../pt/guide/getting-started.html">Guia</a>
-    <a href="https://github.com/RshaCuDeVidro/larperCord" rel="noopener">GitHub</a>
+    <a href="https://github.com/RshaCuDeVidro/larperCord" rel="noopener">★ Dar estrela no GitHub</a>
   </nav>
   <a class="kofi-mini" href="https://ko-fi.com/M7E72A1EGZ" target="_blank" rel="noopener"><img src="../assets/kofi6.png" alt="Me pague um café no ko-fi.com" width="580" height="146"></a>
   <a class="lang" href="../" hreflang="en" lang="en">English</a>
@@ -43,11 +43,11 @@
   <canvas class="pixels" aria-hidden="true"></canvas>
   <div class="hero-first">
     <div class="hero-text">
-      <span class="tag"><b>layout</b> <i>{ row {</i> &nbsp;// cliente nativo e não oficial de Discord · v0.4.0</span>
+      <span class="tag"><b>layout</b> <i>{ row {</i> &nbsp;// cliente nativo e não oficial de Discord · v0.5.0</span>
       <h1><span data-g="O Discord,">O Discord,</span><em data-g="sem o navegador">sem o navegador</em><span data-g="dentro.">dentro.</span></h1>
       <p class="typed" aria-hidden="true"><span class="typed-cmd"></span><span class="typed-out"></span><i class="typed-cur"></i></p>
       <div class="hero-copy">
-        <p>Um cliente nativo que fica perto de <strong>50&nbsp;MB de RAM</strong> e em <strong>0% de CPU</strong> parado. A interface inteira é <strong>um arquivo de texto</strong> que você edita com o app aberto. Olha ela se reorganizando.</p>
+        <p>Um cliente nativo que fica perto de <strong>130&nbsp;MB de RAM</strong> com uma conta real, uns 50 na demonstração, e em <strong>0% de CPU</strong> parado. A interface inteira é <strong>um arquivo de texto</strong> que você edita com o app aberto. Olha ela se reorganizando.</p>
         <div class="cta">
           <a class="btn primary" href="#download">Baixar →</a>
           <a class="btn" href="#install">Testar a demonstração</a>
@@ -73,7 +73,8 @@
     </div></div>
     <p class="stage-note" data-stage-note></p>
     <dl class="stats">
-      <div><dt>RAM</dt><dd>~50 MB</dd></div>
+      <div><dt>RAM, conta real</dt><dd>~130 MB</dd></div>
+      <div><dt>RAM, demonstração</dt><dd>~50 MB</dd></div>
       <div><dt>CPU parado</dt><dd>0%</dd></div>
       <div><dt>temas</dt><dd>11</dd></div>
       <div><dt>electron</dt><dd>0</dd></div>
@@ -81,7 +82,7 @@
   </div>
 </section>
 
-<div class="ticker" aria-hidden="true"><div><span>ZERO ELECTRON</span><span>CERCA DE 50 MB DE RAM</span><span>0% DE CPU PARADO</span><span>11 TEMAS</span><span>UM ARQUIVO DE TEXTO</span><span>VOZ DE VERDADE, E2EE</span><span>LUA NUMA JAULA</span><span>NÃO É A DISCORD INC.</span><span>ZERO ELECTRON</span><span>CERCA DE 50 MB DE RAM</span><span>0% DE CPU PARADO</span><span>11 TEMAS</span><span>UM ARQUIVO DE TEXTO</span><span>VOZ DE VERDADE, E2EE</span><span>LUA NUMA JAULA</span><span>NÃO É A DISCORD INC.</span><span>ZERO ELECTRON</span><span>CERCA DE 50 MB DE RAM</span><span>0% DE CPU PARADO</span><span>11 TEMAS</span><span>UM ARQUIVO DE TEXTO</span><span>VOZ DE VERDADE, E2EE</span><span>LUA NUMA JAULA</span><span>NÃO É A DISCORD INC.</span><span>ZERO ELECTRON</span><span>CERCA DE 50 MB DE RAM</span><span>0% DE CPU PARADO</span><span>11 TEMAS</span><span>UM ARQUIVO DE TEXTO</span><span>VOZ DE VERDADE, E2EE</span><span>LUA NUMA JAULA</span><span>NÃO É A DISCORD INC.</span></div></div>
+<div class="ticker" aria-hidden="true"><div><span>ZERO ELECTRON</span><span>~130 MB DE RAM NUMA CONTA REAL</span><span>0% DE CPU PARADO</span><span>11 TEMAS</span><span>UM ARQUIVO DE TEXTO</span><span>VOZ DE VERDADE, E2EE</span><span>LUA NUMA JAULA</span><span>NÃO É A DISCORD INC.</span><span>ZERO ELECTRON</span><span>~130 MB DE RAM NUMA CONTA REAL</span><span>0% DE CPU PARADO</span><span>11 TEMAS</span><span>UM ARQUIVO DE TEXTO</span><span>VOZ DE VERDADE, E2EE</span><span>LUA NUMA JAULA</span><span>NÃO É A DISCORD INC.</span><span>ZERO ELECTRON</span><span>~130 MB DE RAM NUMA CONTA REAL</span><span>0% DE CPU PARADO</span><span>11 TEMAS</span><span>UM ARQUIVO DE TEXTO</span><span>VOZ DE VERDADE, E2EE</span><span>LUA NUMA JAULA</span><span>NÃO É A DISCORD INC.</span><span>ZERO ELECTRON</span><span>~130 MB DE RAM NUMA CONTA REAL</span><span>0% DE CPU PARADO</span><span>11 TEMAS</span><span>UM ARQUIVO DE TEXTO</span><span>VOZ DE VERDADE, E2EE</span><span>LUA NUMA JAULA</span><span>NÃO É A DISCORD INC.</span></div></div>
 
 <section class="node" id="numbers">
   <span class="tag reveal"><b>status-bar</b> <i>items="ram cpu size" {</i></span>
@@ -93,15 +94,19 @@
       <div class="units" data-units="1279" role="img" aria-label="Vesktop: 1.279 MB de RAM, cerca de 256 quadradinhos"></div>
     </div>
     <div class="bar-row">
-      <div class="bar-label us"><strong>~50&nbsp;MB</strong><span>larperCord</span></div>
-      <div class="units us" data-units="50" role="img" aria-label="larperCord: cerca de 50 MB de RAM, 10 quadradinhos"></div>
+      <div class="bar-label us"><strong>~130&nbsp;MB</strong><span>larperCord, conta real</span></div>
+      <div class="units us" data-units="130" role="img" aria-label="larperCord com uma conta real: cerca de 130 MB de RAM, 26 quadradinhos"></div>
+    </div>
+    <div class="bar-row">
+      <div class="bar-label us"><strong>~50&nbsp;MB</strong><span>larperCord, demonstração</span></div>
+      <div class="units us" data-units="50" role="img" aria-label="larperCord na demonstração: cerca de 50 MB de RAM, 10 quadradinhos"></div>
     </div>
   </div>
   <div class="table-scroll reveal">
   <table class="facts">
     <thead><tr><th></th><th>Vesktop (Electron)</th><th>larperCord</th></tr></thead>
     <tbody>
-      <tr><th>RAM (PSS)</th><td>1,279 MB</td><td class="us">44–47 MB</td></tr>
+      <tr><th>RAM (PSS)</th><td>1,279 MB</td><td class="us">~130 MB com conta real, 44–47 MB na demonstração</td></tr>
       <tr><th>CPU parado</th><td>12–47%</td><td class="us">0–0.4%</td></tr>
       <tr><th>Binário em disco</th><td>287 MB</td><td class="us">~6,7 MB</td></tr>
     </tbody>
@@ -428,7 +433,7 @@
       <p class="foot">Prefere não compilar? <a href="#download">Baixe</a> para Linux ou Windows.</p>
       <div class="cta" style="margin-top:20px">
         <a class="btn primary" href="../pt/guide/getting-started.html">Primeiros passos →</a>
-        <a class="btn" href="https://github.com/RshaCuDeVidro/larperCord">Código no GitHub</a>
+        <a class="btn" href="https://github.com/RshaCuDeVidro/larperCord">★ Dar estrela no GitHub</a>
       </div>
     </div>
     <div>
@@ -444,7 +449,7 @@
   <div class="tip-grid">
     <div>
       <h2 class="h reveal">Deixe o mascote <em>cafeinado.</em></h2>
-      <p class="lead reveal">O larperCord é grátis e não tem anúncio. Ele roda com cerca de 50 MB de RAM. Quem desenvolve roda a café.</p>
+      <p class="lead reveal">O larperCord é grátis e não tem anúncio. Ele roda com cerca de 130 MB de RAM. Quem desenvolve roda a café.</p>
       <div class="reveal"><a class="kofi-sticker" href="https://ko-fi.com/M7E72A1EGZ" target="_blank" rel="noopener"><img src="../assets/kofi6.png" alt="Me pague um café no ko-fi.com" width="580" height="146" loading="lazy" decoding="async" decoding="async"></a></div>
     </div>
     <div class="receipt reveal" aria-hidden="true">
@@ -453,7 +458,7 @@
         <div><dt>anúncios</dt><dd>0</dd></div>
         <div><dt>telemetria</dt><dd>0</dd></div>
         <div><dt>CPU</dt><dd>0%</dd></div>
-        <div><dt>RAM</dt><dd>~50 MB</dd></div>
+        <div><dt>RAM</dt><dd>~130 MB</dd></div>
         <div><dt>navegadores embutidos</dt><dd>0</dd></div>
         <div class="rc-due"><dt>café</dt><dd>em aberto<i></i></dd></div>
       </dl>
@@ -465,7 +470,7 @@
 
 <footer class="colophon">
   <div>
-    <p><strong style="color:var(--text)">larperCord</strong> v0.4.0</p>
+    <p><strong style="color:var(--text)">larperCord</strong> v0.5.0</p>
     <p>Projeto independente. Não tem relação nem aval da Discord Inc. “Discord” é uma marca de seu dono.</p>
     <p>Licença ainda a definir. O código de terceiros segue as licenças próprias.</p>
   </div>
