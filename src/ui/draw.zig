@@ -22,7 +22,13 @@ pub const Stats = struct {
     ram_kb: u32 = 0,
     /// Alguém desenhou o número desde o último tique (ler o /proc custa).
     ram_seen: bool = false,
+    /// A parte da RAM que não é do app, e o que o malloc tem (0 = não se sabe aqui).
+    file_kb: u32 = 0,
+    heap_used_kb: u32 = 0,
+    heap_free_kb: u32 = 0,
     frame_us: u32 = 0,
+    frames_built: u64 = 0,
+    frames_skipped: u64 = 0,
     theme_count: usize = 0,
 };
 

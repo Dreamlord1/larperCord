@@ -15,6 +15,17 @@ pub fn wantsTray(close_to_tray: bool, logged_in: bool) bool {
 /// pode ser o painel reiniciando.
 pub const tray_misses_max: u8 = 2;
 
+/// Na bandeja ou minimizada há esse tempo, as imagens saem da memória. Coberta por
+/// outra janela não: trocar de workspace não pode virar download de novo.
+pub const hidden_release_ms: i64 = 60_000;
+pub const hidden_keep_bytes: usize = 128 * 1024;
+
+/// Não há cópia das imagens em disco: o que sai é baixado de novo ao voltar. Fica o
+/// que é pequeno e estava na tela (avatares, ícones), para a janela voltar inteira.
+pub fn keepsImageHidden(bytes: usize, frames: usize, idle_ms: i64) bool {
+    return frames == 1 and bytes <= hidden_keep_bytes and idle_ms <= 1000;
+}
+
 /// Onde uma lista flutuante fica: embaixo de `anchor` se couber; senão, do lado
 /// com mais espaço, com a altura limitada a esse espaço (o resto rola).
 pub fn place(anchor: Rect, want_w: f32, want_h: f32, win: Rect) Rect {
@@ -51,6 +62,15 @@ test "fechar só vira bandeja com a opção ligada e depois do login" {
     try std.testing.expect(!wantsTray(false, true));
     try std.testing.expect(!wantsTray(true, false));
     try std.testing.expect(!wantsTray(false, false));
+}
+
+test "escondida, só fica a imagem pequena que estava na tela" {
+    try std.testing.expect(keepsImageHidden(40 * 40 * 4, 1, 0));
+    try std.testing.expect(keepsImageHidden(hidden_keep_bytes, 1, 1000));
+    // Grande, animada ou fora da tela.
+    try std.testing.expect(!keepsImageHidden(hidden_keep_bytes + 1, 1, 0));
+    try std.testing.expect(!keepsImageHidden(1024, 2, 0));
+    try std.testing.expect(!keepsImageHidden(1024, 1, 1001));
 }
 
 test "lista flutuante: embaixo, em cima se não couber, sempre dentro da janela" {

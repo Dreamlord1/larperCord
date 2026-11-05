@@ -49,6 +49,8 @@ const mem_tune = @import("platform/mem_tune.zig");
 const tray = @import("platform/tray.zig");
 const instance = @import("platform/instance.zig");
 const janela = @import("core/janela.zig");
+const ritmo = @import("core/ritmo.zig");
+const quadro = @import("ui/quadro.zig");
 
 pub const Options = struct {
     theme: ?[]const u8 = null,
@@ -106,6 +108,8 @@ pub const App = struct {
     actions: std.ArrayList(ev.Action) = .empty,
     placed: std.ArrayList(layout.Placed) = .empty,
     stats: d.Stats = .{},
+    /// Se o quadro pronto vai para a tela (o QA lê as contas).
+    gate: ritmo.Gate = .{},
     opts: Options,
     io: *c.ImGuiIO,
     timer: c.SDL_TimerID = 0,
@@ -149,6 +153,8 @@ pub const App = struct {
     viewing: types.Id = 0,
     /// QA: faz de conta que a janela perdeu o foco.
     qa_blur: bool = false,
+    /// O QA quer o portão dos quadros valendo (não vai ler os pixels nesse trecho).
+    qa_real_gate: bool = false,
 
     pub fn create(gpa: std.mem.Allocator, opts: Options) !*App {
         const started = c.SDL_GetTicksNS();
@@ -243,7 +249,7 @@ pub const App = struct {
 
         // Relógio e RAM da barra de status: um tique a cada 2 s.
         app.timer = c.SDL_AddTimer(2000, tick, app);
-        app.stats.ram_kb = platform.selfPssKb();
+        app.stats.ram_kb = platform.selfMemKb().pss;
         app.picked = try Queue([:0]u8).init(std.heap.c_allocator);
         plugin_host.init(app);
         setupLsp(opts.qa);
@@ -587,7 +593,16 @@ pub const App = struct {
         // processo leva milissegundos, e o tique roda mesmo com tudo parado.
         const ram_seen = @atomicRmw(bool, &app.stats.ram_seen, .Xchg, false, .monotonic);
         const prev = @atomicLoad(u32, &app.stats.ram_kb, .monotonic);
-        const kb = if (ram_seen) platform.selfPssKb() else prev;
+        var kb = prev;
+        if (ram_seen) {
+            const mem = platform.selfMemKb();
+            kb = mem.pss;
+            @atomicStore(u32, &app.stats.file_kb, mem.file, .monotonic);
+            if (!voz_audio.in_call.load(.acquire)) if (mem_tune.heap()) |h| {
+                @atomicStore(u32, &app.stats.heap_used_kb, h.used_kb, .monotonic);
+                @atomicStore(u32, &app.stats.heap_free_kb, h.free_kb, .monotonic);
+            };
+        }
         const S = struct {
             var last_minute: i64 = 0;
         };
@@ -2069,9 +2084,13 @@ pub const App = struct {
         // LARPER_BENCH=1: redesenha sem parar (medir o custo de um quadro parado).
         const bench = c.SDL_getenv("LARPER_BENCH") != null;
         // O que chega da rede (presença, digitando, lista de membros) redesenha
-        // no máximo a cada `bg_frame_ms`; mouse e teclado redesenham na hora.
+        // no máximo a cada `bg_frame_ms`; o mouse só andando, a cada
+        // `MousePace.interval_ms`; clique, roda e teclado redesenham na hora.
         const bg_frame_ms: i64 = 50;
         var bg_dirty = false;
+        var mouse: ritmo.MousePace = .{};
+        var hidden_since_ms: i64 = 0;
+        var skipped_in_row: u32 = 0;
         var last_frame_ms: i64 = 0;
         var typing_check_ms: i64 = 0;
         var was_active = false;
@@ -2106,6 +2125,7 @@ pub const App = struct {
             // do redesenho adiado da rede (o que vier primeiro).
             var due = @min(app.images.next_frame_ms, anim.next_wake_ms);
             if (bg_dirty) due = @min(due, last_frame_ms + bg_frame_ms);
+            if (mouse.wanted()) due = @min(due, last_frame_ms + ritmo.MousePace.interval_ms);
             const wait = due -| now();
             var got = if (busy or wait <= 0)
                 c.SDL_PollEvent(&e)
@@ -2154,6 +2174,7 @@ pub const App = struct {
                         },
                         .show => {
                             app.showWindow();
+                            app.gate.redraw();
                             pending = 3;
                         },
                         .quit => running = false,
@@ -2163,7 +2184,13 @@ pub const App = struct {
                         },
                     }
                 } else {
-                    input = true;
+                    // Sem botão apertado, passar por cima das coisas pode esperar o
+                    // próximo quadro (o ImGui guarda onde o mouse está).
+                    if (e.type == c.SDL_EVENT_MOUSE_MOTION and e.motion.state == 0) mouse.motion() else input = true;
+                    // A janela mudou ou o contexto foi refeito: o que está na tela
+                    // não vale mais, mesmo que o próximo quadro saia igual.
+                    if ((e.type >= c.SDL_EVENT_WINDOW_FIRST and e.type <= c.SDL_EVENT_WINDOW_LAST) or
+                        e.type == c.SDL_EVENT_RENDER_TARGETS_RESET or e.type == c.SDL_EVENT_RENDER_DEVICE_RESET) app.gate.redraw();
                     // Com a lista do autocompletar aberta, setas, Tab, Enter e Esc são dela.
                     const for_list = e.type == c.SDL_EVENT_KEY_DOWN and autocomplete.takeSdlKey(e.key.key, e.key.mod);
                     // Aperte para falar (e "aperte uma tecla" nas Configurações).
@@ -2209,20 +2236,37 @@ pub const App = struct {
             if (updater.takeNotice()) app.st.showToast(now(), false, "atualização disponível: veja em Configurações → Atualizações", "update available: see Settings → Updates", .{});
             const now_ms = now();
             // Nada venceu ainda: não há por que redesenhar.
-            if (timed_out and pending == 0 and !bg_dirty and !was_active and now_ms < due) continue;
-            if (c.SDL_GetWindowFlags(app.win.window) & hidden_flags != 0 and running and !app.opts.qa and app.opts.shot == null and !bench and record_dir == null) {
+            if (timed_out and pending == 0 and !bg_dirty and !mouse.wanted() and !was_active and now_ms < due) continue;
+            const win_flags = c.SDL_GetWindowFlags(app.win.window);
+            if (win_flags & hidden_flags != 0 and running and !app.opts.qa and app.opts.shot == null and !bench and record_dir == null) {
                 bg_dirty = false;
                 pending = 0;
                 was_active = false;
+                mouse = .{};
+                app.gate.redraw();
                 anim.active = false;
                 anim.next_wake_ms = std.math.maxInt(i64);
                 app.images.next_frame_ms = std.math.maxInt(i64);
+                if (win_flags & (c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_HIDDEN) == 0) {
+                    hidden_since_ms = 0;
+                } else if (hidden_since_ms == 0) {
+                    hidden_since_ms = now_ms;
+                } else if (now_ms - hidden_since_ms >= janela.hidden_release_ms) {
+                    const before = app.images.bytes;
+                    if (app.images.releaseHidden()) {
+                        app.trim_wanted.store(true, .release);
+                        if (app.opts.stats) std.log.info("janela escondida: soltou {d} KB, ficaram {d} imagens, {d} KB", .{ (before - app.images.bytes) / 1024, app.images.readyCount(), app.images.bytes / 1024 });
+                    }
+                }
                 continue;
             }
-            // Só coisa da rede e o último quadro foi agora há pouco: espera.
-            if (bg_dirty and pending == 0 and !was_active and app.opts.shot == null and !app.opts.qa and
-                !app.login.visible() and now_ms - last_frame_ms < bg_frame_ms and now_ms < @min(app.images.next_frame_ms, anim.next_wake_ms)) continue;
+            hidden_since_ms = 0;
+            // Só coisa da rede ou o mouse passando, e o último quadro foi agora há pouco: espera.
+            const soft_ms = if (mouse.wanted()) ritmo.MousePace.interval_ms else bg_frame_ms;
+            if ((bg_dirty or mouse.wanted()) and pending == 0 and !was_active and app.opts.shot == null and !app.opts.qa and
+                !app.login.visible() and now_ms - last_frame_ms < soft_ms and now_ms < @min(app.images.next_frame_ms, anim.next_wake_ms)) continue;
             bg_dirty = false;
+            mouse.frame();
             last_frame_ms = now_ms;
             anim.now_ms = now_ms;
             anim.next_wake_ms = std.math.maxInt(i64);
@@ -2336,10 +2380,19 @@ pub const App = struct {
             if (app.opts.stats) prof_render += (c.SDL_GetTicksNS() - tr0) / 1000;
 
             const r = app.win.renderer;
-            _ = c.SDL_SetRenderScale(r, app.io.*.DisplayFramebufferScale.x, app.io.*.DisplayFramebufferScale.y);
             const bg = app.themes.theme_().c(.bg);
-            _ = c.SDL_SetRenderDrawColorFloat(r, bg.r * bg.a, bg.g * bg.a, bg.b * bg.a, bg.a);
-            _ = c.SDL_RenderClear(r);
+            const clear = [4]f32{ bg.r * bg.a, bg.g * bg.a, bg.b * bg.a, bg.a };
+            const draw_data = c.ImGui_GetDrawData();
+            if (@import("ui/video.zig").takeChanged()) app.gate.redraw();
+            // Igual ao que já está na tela: sem GPU nem present. Prints e QA leem os pixels.
+            const show = app.gate.check(quadro.sum(draw_data, clear), (app.opts.qa and !app.qa_real_gate) or app.opts.shot != null or bench or record_dir != null or quadro.texturesDirty(draw_data));
+            app.stats.frames_built = app.gate.built;
+            app.stats.frames_skipped = app.gate.skipped;
+            if (show) {
+                _ = c.SDL_SetRenderScale(r, app.io.*.DisplayFramebufferScale.x, app.io.*.DisplayFramebufferScale.y);
+                _ = c.SDL_SetRenderDrawColorFloat(r, clear[0], clear[1], clear[2], clear[3]);
+                _ = c.SDL_RenderClear(r);
+            }
             if (app.opts.stats) {
                 const dd = c.ImGui_GetDrawData();
                 var cmds: u64 = 0;
@@ -2361,7 +2414,7 @@ pub const App = struct {
                 prof_vtx += vtx;
             }
             const tg0 = c.SDL_GetTicksNS();
-            c.cImGui_ImplSDLRenderer3_RenderDrawData(c.ImGui_GetDrawData(), r);
+            if (show) c.cImGui_ImplSDLRenderer3_RenderDrawData(draw_data, r);
             if (app.opts.stats) prof_gpu += (c.SDL_GetTicksNS() - tg0) / 1000;
             app.stats.frame_us = @intCast((c.SDL_GetTicksNS() - t0) / 1000);
 
@@ -2383,6 +2436,7 @@ pub const App = struct {
                     var n: u32 = 0;
                     var sum: u64 = 0;
                     var max: u32 = 0;
+                    var skipped: u64 = 0;
                 };
                 S.n += 1;
                 S.sum += app.stats.frame_us;
@@ -2390,7 +2444,8 @@ pub const App = struct {
                 const t = c.SDL_GetTicksNS();
                 if (S.since == 0) S.since = t;
                 if (t - S.since >= 2_000_000_000) {
-                    std.log.info("{d} quadros em 2 s, média {d} µs, pior {d} µs", .{ S.n, S.sum / S.n, S.max });
+                    std.log.info("{d} quadros em 2 s, {d} sem desenhar, média {d} µs, pior {d} µs", .{ S.n, app.gate.skipped - S.skipped, S.sum / S.n, S.max });
+                    S.skipped = app.gate.skipped;
                     std.log.info("   root.frame {d} µs, ImGui_Render {d} µs, RenderDrawData {d} µs (por quadro)", .{ prof_frame / S.n, prof_render / S.n, prof_gpu / S.n });
                     std.log.info("   {d} comandos, {d} trocas de textura, {d} vértices (por quadro)", .{ prof_cmds / S.n, prof_texs / S.n, prof_vtx / S.n });
                     prof_cmds = 0;
@@ -2443,9 +2498,17 @@ pub const App = struct {
                 }
             };
             if (app.opts.qa and (app.store.ready or app.login.visible()) and !runner.tick(app)) running = false;
-            _ = c.SDL_RenderPresent(r);
+            if (show) _ = c.SDL_RenderPresent(r);
             if (pending > 0) pending -= 1;
             was_active = anim.active;
+            // Sem o present, nada segura o laço no ritmo da tela. Os quadros que
+            // `pending` pede depois de um evento são poucos e podem correr; animação
+            // que não muda nada, ou quem pede quadro sem parar, não.
+            skipped_in_row = if (show) 0 else skipped_in_row +| 1;
+            if (!show and (was_active or (pending > 0 and skipped_in_row > 3))) {
+                const spent_ms = (c.SDL_GetTicksNS() - t0) / std.time.ns_per_ms;
+                if (spent_ms < 16) c.SDL_Delay(@intCast(16 - spent_ms));
+            }
         }
         // Não chegou a conectar: o que deu para medir ainda sai.
         timeline.report();

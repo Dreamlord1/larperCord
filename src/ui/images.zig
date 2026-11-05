@@ -16,6 +16,7 @@ const proxiedUrl = media_url.proxiedUrl;
 const apng = @import("apng.zig");
 const ffmpeg = @import("../platform/ffmpeg.zig");
 const proxy = @import("../net/proxy.zig");
+const janela = @import("../core/janela.zig");
 
 const alloc = std.heap.c_allocator;
 
@@ -388,12 +389,45 @@ pub const Cache = struct {
                     }
                 }
             }
-            const k = oldest orelse return;
-            var kv = cache.map.fetchRemove(k).?;
-            kv.value.free();
-            cache.bytes -= kv.value.bytes;
-            alloc.free(kv.key);
+            cache.drop(oldest orelse return);
         }
+    }
+
+    fn drop(cache: *Cache, key: []const u8) void {
+        var kv = cache.map.fetchRemove(key).?;
+        kv.value.free();
+        cache.bytes -= kv.value.bytes;
+        alloc.free(kv.key);
+    }
+
+    /// A janela está na bandeja ou minimizada há um tempo (ver janela.zig). Sem
+    /// quadros, `evict` não solta nada: o relógio dele é o último quadro desenhado.
+    /// Retorna true se soltou alguma coisa. O que ainda chega é solto na próxima vez.
+    pub fn releaseHidden(cache: *Cache) bool {
+        var freed = false;
+        while (true) {
+            var victim: ?[]const u8 = null;
+            var it = cache.map.iterator();
+            while (it.next()) |e| {
+                const v = e.value_ptr;
+                if (v.state == .loading) continue;
+                if (v.state == .ready and janela.keepsImageHidden(v.bytes, v.frames.len, cache.drawn_ms - v.used_ms)) continue;
+                victim = e.key_ptr.*;
+                break;
+            }
+            cache.drop(victim orelse return freed);
+            freed = true;
+        }
+    }
+
+    /// Quantas imagens estão prontas (a página de Desempenho mostra).
+    pub fn readyCount(cache: *const Cache) usize {
+        var n: usize = 0;
+        var it = cache.map.valueIterator();
+        while (it.next()) |e| if (e.state == .ready) {
+            n += 1;
+        };
+        return n;
     }
 
     fn freeJob(jb: Job) void {

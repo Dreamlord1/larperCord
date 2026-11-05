@@ -290,6 +290,14 @@ pub fn shutdown() void {
     while (live.load(.acquire) > 0 and waited < 3000) : (waited += 5) c.SDL_Delay(5);
 }
 
+/// A textura recebeu um quadro de vídeo: o desenho é o mesmo, mas a imagem mudou.
+var texture_changed = false;
+
+pub fn takeChanged() bool {
+    defer texture_changed = false;
+    return texture_changed;
+}
+
 /// Uma vez por quadro, depois de desenhar: o vídeo que não apareceu neste
 /// quadro (rolou para fora, trocou de canal) pausa; 30 s fora, é solto
 /// (download, quadros e textura). O app pode estar dormindo: pede um quadro
@@ -433,6 +441,7 @@ fn update(p: *Player, renderer: *c.SDL_Renderer, now_ms: i64) void {
     if (due > 0) {
         const s = &sh.ring[(sh.head + due - 1) % ring_n];
         if (p.tex) |t| _ = c.SDL_UpdateTexture(t, null, s.px.ptr, @intCast(sh.w * 4));
+        texture_changed = true;
         sh.head = (sh.head + due) % ring_n;
         sh.len -= due;
         p.shown += 1;

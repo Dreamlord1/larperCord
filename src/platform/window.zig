@@ -107,19 +107,26 @@ fn preferNvidiaEgl() void {
     if (found) _ = c.SDL_setenv_unsafe("__EGL_VENDOR_LIBRARY_FILENAMES", vendor_file, 0);
 }
 
-/// Memória proporcional (PSS) do próprio processo, em KB.
-pub fn selfPssKb() u32 {
-    if (sys.windows) return sys.privateKb();
+/// Memória proporcional (PSS) do próprio processo, em KB. `file` é a parte que vem
+/// de arquivos e dispositivos (bibliotecas, fontes, driver), 0 onde não se sabe.
+pub const SelfMem = struct { pss: u32 = 0, file: u32 = 0 };
+
+pub fn selfMemKb() SelfMem {
+    if (sys.windows) return .{ .pss = sys.privateKb() };
     // Arquivos do /proc não informam o tamanho, então lê direto.
     const fd = c.open("/proc/self/smaps_rollup", c.O_RDONLY);
-    if (fd < 0) return 0;
+    if (fd < 0) return .{};
     defer _ = c.close(fd);
     var buf: [1024]u8 = undefined;
     const n = c.read(fd, &buf, buf.len);
-    if (n <= 0) return 0;
+    if (n <= 0) return .{};
     const s = buf[0..@intCast(n)];
-    const at = std.mem.indexOf(u8, s, "\nPss:") orelse return 0;
-    var it = std.mem.tokenizeAny(u8, s[at + 5 ..], " \t");
+    return .{ .pss = rollupKb(s, "\nPss:"), .file = rollupKb(s, "\nPss_File:") };
+}
+
+fn rollupKb(s: []const u8, name: []const u8) u32 {
+    const at = std.mem.indexOf(u8, s, name) orelse return 0;
+    var it = std.mem.tokenizeAny(u8, s[at + name.len ..], " \t");
     const num = it.next() orelse return 0;
     return std.fmt.parseInt(u32, num, 10) catch 0;
 }

@@ -358,6 +358,27 @@ fn videoPlaying(app: *App) bool {
     const v = video.info();
     return v.active and v.playing and v.shown >= 3 and qa.find("video") != null;
 }
+/// O QA normalmente desenha todo quadro (lê os pixels). Aqui o portão vale de verdade.
+var gate_shown: u64 = 0;
+var gate_skipped: u64 = 0;
+var gate_video: u32 = 0;
+fn gateRealOn(app: *App) void {
+    gate_shown = app.gate.built - app.gate.skipped;
+    gate_skipped = app.gate.skipped;
+    gate_video = video.info().shown;
+    app.qa_real_gate = true;
+}
+fn gateRealOff(app: *App) void {
+    app.qa_real_gate = false;
+    gate_shown = app.gate.built - app.gate.skipped - gate_shown;
+    gate_skipped = app.gate.skipped - gate_skipped;
+    gate_video = video.info().shown - gate_video;
+}
+fn videoFramesReachScreen(_: *App) bool {
+    if (!hasFfmpeg()) return true;
+    if (c.SDL_getenv("QA_DEBUG") != null) std.debug.print("[portão] vídeo {d}, na tela {d}, pulados {d}\n", .{ gate_video, gate_shown, gate_skipped });
+    return gate_video >= 5 and gate_skipped > 0 and gate_shown >= gate_video;
+}
 fn videoLimits(_: *App) bool {
     if (!hasFfmpeg()) return true;
     const v = video.info();
@@ -2269,6 +2290,15 @@ const ops = [_]Op{
     .{ .shot = "35-video" },
     .{ .expect = .{ .name = "vídeo em até 480p e ~30 qps (o de 60 qps pula quadros)", .check = videoLimits, .timeout_ms = 4000 } },
     expect("som do vídeo vai para o SDL (quando há áudio)", videoAudio),
+    // Sem o mouse em cima, o desenho fica igual e só a textura muda.
+    .{ .hover = .{ .mark = "guild:500000" } },
+    .{ .wait = 250 },
+    .{ .run = gateRealOn },
+    .{ .wait = 500 },
+    .{ .run = gateRealOff },
+    expect("cada quadro do vídeo chega à tela, mesmo com o desenho igual", videoFramesReachScreen),
+    .{ .hover = .{ .dyn = tDemoVideo } },
+    .{ .wait = 150 },
     .{ .click = .{ .dyn = tVideoPlay } },
     expect("o botão pausa", videoPaused),
     .{ .run = rememberVideoPos },
@@ -2420,7 +2450,7 @@ const ops = [_]Op{
     expect("Apagar cache apaga os arquivos", cacheEmpty),
     key(c.ImGuiKey_Escape),
 
-} ++ ops_plugin_section ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ @import("qa_bandeja.zig").ops ++ lsp_ops ++ @import("qa_paineis.zig").all ++ [_]Op{
+} ++ ops_plugin_section ++ @import("qa_alertas.zig").ops ++ @import("qa_leitura.zig").ops ++ @import("qa_threads.zig").ops ++ @import("qa_voz.zig").ops ++ @import("qa_bandeja.zig").ops ++ lsp_ops ++ @import("qa_paineis.zig").all ++ @import("qa_quadros.zig").ops ++ [_]Op{
     s("caixa de entrada"),
     click("guild:500000"),
     click("channel:500005"),
@@ -2728,6 +2758,7 @@ const ops_nome = [_]Op{
 /// Só o emoji e o autocompletar (QA_SCENE=emoji), para olhar em outros temas.
 const ops_emoji = [_]Op{expect("pronto", ready)} ++ @import("qa_emoji.zig").ops;
 const ops_paineis = [_]Op{expect("pronto", ready)} ++ @import("qa_paineis.zig").all;
+const ops_quadros = [_]Op{expect("pronto", ready)} ++ @import("qa_quadros.zig").ops;
 
 const ops_config = [_]Op{
     expect("pronto", ready),
@@ -3002,6 +3033,7 @@ fn script() []const Op {
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "bandeja-reinicio")) return &ops_bandeja_reinicio;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "lsp-real")) return &ops_lsp_real;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "paineis")) return &ops_paineis;
+    if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "quadros")) return &ops_quadros;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins")) return &ops_plugins_only;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins-tls")) return &ops_plugins_tls;
     if (c.SDL_getenv("QA_SUITE")) |suite| if (std.mem.eql(u8, std.mem.span(suite), "plugins-a")) return &ops_plugins_a;

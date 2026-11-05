@@ -15,6 +15,7 @@ const proxy = @import("../net/proxy.zig");
 const dropdown = @import("dropdown.zig");
 const tray = @import("../platform/tray.zig");
 const inbox = @import("inbox.zig");
+const mem_use_mod = @import("../core/mem_use.zig");
 
 const Section = struct { title: []const u8, title_en: []const u8, items: []const struct { page: S.Page, label: []const u8, label_en: []const u8 } };
 
@@ -945,26 +946,71 @@ fn account(p: *Page) void {
     p.y += 8;
 }
 
+fn statRow(p: *Page, h: f32, label: []const u8, value: []const u8) void {
+    const ctx = p.ctx;
+    const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = h };
+    d.rect(p.dl, r, ctx.col(.rail).alpha(0.6), ctx.th.radius + 2);
+    d.text(p.dl, p.font(.medium), 15, r.x + 16, d.centerY(r, 15), ctx.col(.muted), label);
+    p.markText(.{ .x = r.x + 16, .y = d.centerY(r, 15), .w = d.width(p.font(.medium), 15, label), .h = 15 });
+    const vw = d.width(p.font(.bold), 18, value);
+    d.text(p.dl, p.font(.bold), 18, r.right() - 16 - vw, d.centerY(r, 18), ctx.col(.accent).mix(ctx.col(.text), 0.3), value);
+    p.markText(.{ .x = r.right() - 16 - vw, .y = d.centerY(r, 18), .w = vw, .h = 18 });
+    p.y += h + 8;
+}
+
+fn mbText(buf: []u8, prefix: []const u8, kb: u64) []const u8 {
+    if (kb < 1024) return std.fmt.bufPrint(buf, "{s}{d} KB", .{ prefix, kb }) catch "";
+    return std.fmt.bufPrint(buf, "{s}{d}.{d} MB", .{ prefix, kb / 1024, (kb % 1024) * 10 / 1024 }) catch "";
+}
+
+/// Varrer a conta custa: basta de vez em quando, e só com a página aberta.
+pub var mem_use: mem_use_mod.MemUse = .{};
+var mem_use_ms: i64 = 0;
+
+fn memoryRows(p: *Page) void {
+    const ctx = p.ctx;
+    const row_h = 44;
+    if (ctx.now_ms - mem_use_ms >= 2000 or ctx.now_ms < mem_use_ms) {
+        mem_use_ms = ctx.now_ms;
+        mem_use = mem_use_mod.of(ctx.store);
+    }
+    var l: [64]u8 = undefined;
+    var v: [32]u8 = undefined;
+    p.heading(i18n.tr("Para onde vai a memória", "Where the memory goes"));
+    statRow(p, row_h, i18n.fmt(&l, "Imagens ({d})", "Images ({d})", .{ctx.images.readyCount()}), mbText(&v, "", ctx.images.bytes / 1024));
+    statRow(p, row_h, i18n.fmt(&l, "Mensagens ({d})", "Messages ({d})", .{mem_use.n_messages}), mbText(&v, "~", mem_use.messages / 1024));
+    statRow(p, row_h, i18n.fmt(&l, "Pessoas ({d})", "People ({d})", .{mem_use.n_people}), mbText(&v, "~", mem_use.people / 1024));
+    statRow(p, row_h, i18n.fmt(&l, "Servidores ({d}) e canais ({d})", "Servers ({d}) and channels ({d})", .{ mem_use.n_guilds, mem_use.n_channels }), mbText(&v, "~", mem_use.places / 1024));
+    if (ctx.io.*.Fonts.*.TexData) |tex| statRow(p, row_h, i18n.tr("Atlas de fontes", "Font atlas"), mbText(&v, "", @as(u64, @intCast(tex.*.Width * tex.*.Height * tex.*.BytesPerPixel)) / 1024));
+    // O que este sistema não informa fica de fora, em vez de aparecer zerado.
+    const used = @atomicLoad(u32, &ctx.stats.heap_used_kb, .monotonic);
+    const free = @atomicLoad(u32, &ctx.stats.heap_free_kb, .monotonic);
+    const file = @atomicLoad(u32, &ctx.stats.file_kb, .monotonic);
+    if (used > 0) {
+        statRow(p, row_h, i18n.tr("Alocada no total", "Allocated in total"), mbText(&v, "", used));
+        statRow(p, row_h, i18n.tr("Livre, ainda não devolvida", "Free, not returned yet"), mbText(&v, "", free));
+    }
+    if (file > 0) statRow(p, row_h, i18n.tr("Driver, bibliotecas e fontes", "Driver, libraries and fonts"), mbText(&v, "", file));
+    p.note(i18n.tr("Com ~ é estimativa. As imagens podem estar na memória da placa de vídeo, e não na RAM.", "Values with ~ are estimates. Images may live in video memory rather than RAM."));
+}
+
 fn performance(p: *Page) void {
     const ctx = p.ctx;
     p.title(i18n.tr("Desempenho", "Performance"));
     p.note(i18n.tr("Números ao vivo deste processo.", "Live numbers from this process."));
-    var buf: [96]u8 = undefined;
+    var buf: [128]u8 = undefined;
     @atomicStore(bool, &ctx.stats.ram_seen, true, .monotonic);
+    const built = ctx.stats.frames_built;
+    const skipped = ctx.stats.frames_skipped;
     const stats = [_]struct { label: []const u8, value: []const u8 }{
-        .{ .label = "RAM (PSS)", .value = std.fmt.bufPrint(buf[0..32], "{d}.{d} MB", .{ ctx.stats.ram_kb / 1024, (ctx.stats.ram_kb % 1024) * 10 / 1024 }) catch "" },
+        .{ .label = "RAM (PSS)", .value = mbText(buf[0..32], "", ctx.stats.ram_kb) },
         .{ .label = i18n.tr("Tempo de CPU por quadro", "CPU time per frame"), .value = std.fmt.bufPrint(buf[32..64], "{d}.{d:0>2} ms", .{ ctx.stats.frame_us / 1000, (ctx.stats.frame_us % 1000) / 10 }) catch "" },
+        .{ .label = i18n.tr("Quadros iguais, sem desenhar", "Unchanged frames, not drawn"), .value = std.fmt.bufPrint(buf[96..128], "{d}% ({d})", .{ skipped * 100 / @max(built, 1), skipped }) catch "" },
         .{ .label = i18n.tr("CPU parado", "Idle CPU"), .value = i18n.tr("0% (dorme esperando eventos)", "0% (sleeps until there are events)") },
         .{ .label = i18n.tr("Mensagens por canal", "Messages per channel"), .value = i18n.fmt(buf[64..96], "até {d} na memória", "up to {d} in memory", .{ctx.store.max_messages}) },
     };
-    for (stats) |st| {
-        const r: d.Rect = .{ .x = p.x, .y = p.y, .w = p.w, .h = 56 };
-        d.rect(p.dl, r, ctx.col(.rail).alpha(0.6), ctx.th.radius + 2);
-        d.text(p.dl, p.font(.medium), 15, r.x + 16, d.centerY(r, 15), ctx.col(.muted), st.label);
-        const vw = d.width(p.font(.bold), 18, st.value);
-        d.text(p.dl, p.font(.bold), 18, r.right() - 16 - vw, d.centerY(r, 18), ctx.col(.accent).mix(ctx.col(.text), 0.3), st.value);
-        p.y += 64;
-    }
+    for (stats) |st| statRow(p, 56, st.label, st.value);
+    memoryRows(p);
 }
 
 fn about(p: *Page) void {
