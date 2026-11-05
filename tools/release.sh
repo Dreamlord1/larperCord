@@ -31,5 +31,8 @@ assets=(larpercord-linux-x86_64 larpercord-windows-x86_64.zip larpercord-windows
 (cd "$out" && sha256sum "${assets[@]}" > SHA256SUMS)
 zig run tools/release_sign.zig -- sign "$key" "$out/SHA256SUMS"
 awk -v v="## $ver" '$0==v{on=1;next} /^## /{on=0} on' CHANGELOG.md > "$out/notes.md"
+# A pasta temporária não é um repositório: o gh precisa ouvir qual é, e de que commit.
+repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+commit=$(git rev-parse HEAD)
 cd "$out"
-gh release create "v$ver" --title "larperCord $ver" --notes-file notes.md "${assets[@]}" SHA256SUMS SHA256SUMS.sig
+gh release create "v$ver" --repo "$repo" --target "$commit" --title "larperCord $ver" --notes-file notes.md "${assets[@]}" SHA256SUMS SHA256SUMS.sig
