@@ -17,10 +17,13 @@ Modelo: o grande do pacote, compilado dentro do executável (1,4 MB de pesos).
 Nada é lido do disco nem da rede em tempo de execução.
 
 Só os arquivos usados, sem alterações. Ficaram de fora o treinamento, o
-exemplo, o autotools e a detecção de CPU em tempo de execução (src/x86, menos
-x86_arch_macros.h, que o vec.h inclui). Sem assembly: o vetor é escolhido na
-compilação, por intrínsecas, pelas opções do alvo (AVX2, AVX, SSE2 ou NEON).
+exemplo, o autotools e a detecção de CPU do pacote (src/x86, menos
+x86_arch_macros.h, que o vec.h inclui). Sem assembly: o vetor vem de intrínsecas,
+pelas opções do alvo (AVX2, AVX, SSE2 ou NEON).
 vec_neon.h e o caminho sem vetor do vec.h pedem um os_support.h que o pacote não
 traz: compat/os_support.h é nosso, tem só a macro que eles usam, e x86-64 não o lê.
+
+A release compila para o mínimo comum do x86-64, então a rede neural escolhe AVX2
+e FMA ao rodar. compat/x86 é nosso e faz isso sem alterar os arquivos do pacote.
 
 README.upstream é o README do pacote.

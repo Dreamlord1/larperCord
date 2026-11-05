@@ -28,6 +28,8 @@ fn addLua(b: *std.Build, m: *std.Build.Module) void {
 /// C puro, sem detecção de CPU em tempo de execução. -O2 também no debug do QA,
 /// que escuta o microfone em tempo real; -Wno-cpp cala o aviso dele sobre AVX2.
 fn addRnnoise(b: *std.Build, m: *std.Build.Module) void {
+    const cpu = m.resolved_target.?.result.cpu;
+    const rtcd = cpu.arch == .x86_64 and !cpu.has(.x86, .avx2);
     m.addIncludePath(b.path("third_party/rnnoise/include"));
     m.addIncludePath(b.path("third_party/rnnoise/compat"));
     m.addCSourceFiles(.{
@@ -36,8 +38,27 @@ fn addRnnoise(b: *std.Build, m: *std.Build.Module) void {
             "celt_lpc.c",    "denoise.c", "kiss_fft.c",             "nnet.c",        "nnet_default.c",
             "parse_lpcnet_weights.c", "pitch.c",   "rnn.c", "rnnoise_data.c", "rnnoise_tables.c",
         },
-        .flags = &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined", "-Wno-cpp" },
+        .flags = if (rtcd) &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined", "-Wno-cpp", "-DRNN_ENABLE_X86_RTCD", "-DCPU_INFO_BY_ASM" } else &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined", "-Wno-cpp" },
     });
+    if (!rtcd) return;
+    // Compilado para o mínimo comum (a release): a rede neural escolhe AVX2 ao rodar.
+    m.addIncludePath(b.path("third_party/rnnoise/src"));
+    m.addCSourceFile(.{ .file = b.path("third_party/rnnoise/compat/x86/select_arch.c"), .flags = &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined" } });
+    // Um objeto por caminho: um -mavx2 nas opções do arquivo não vale, o alvo manda.
+    const X = std.Target.x86.Feature;
+    for ([_]struct { name: []const u8, file: []const u8, add: []const X }{
+        .{ .name = "rnnoise-avx", .file = "nnet_avx.c", .add = &.{.avx} },
+        .{ .name = "rnnoise-avx2", .file = "nnet_avx2.c", .add = &.{ .avx2, .fma } },
+    }) |path| {
+        var query = m.resolved_target.?.query;
+        query.cpu_features_add = std.Target.x86.featureSet(path.add);
+        const vec = b.createModule(.{ .target = b.resolveTargetQuery(query), .optimize = .ReleaseFast, .link_libc = true });
+        vec.addIncludePath(b.path("third_party/rnnoise/include"));
+        vec.addIncludePath(b.path("third_party/rnnoise/compat"));
+        vec.addIncludePath(b.path("third_party/rnnoise/src"));
+        vec.addCSourceFile(.{ .file = b.path(b.fmt("third_party/rnnoise/compat/x86/{s}", .{path.file})), .flags = &.{ "-std=gnu99", "-O2", "-fno-sanitize=undefined", "-Wno-cpp", "-DRNN_ENABLE_X86_RTCD" } });
+        m.addObject(b.addObject(.{ .name = path.name, .root_module = vec }));
+    }
 }
 
 /// Windows: FreeType compilado junto (o baixado por tools/windows_deps.sh).

@@ -11,6 +11,11 @@ jobs:
       # Os testes cobrem as partes puras (KDL, cores, layout, markdown, Store,
       # temas embutidos, protobuf, APNG, URLs de mídia) e não precisam de SDL.
       - run: zig build test
+      # O mínimo comum, como na release: o supressor de ruído escolhe o caminho ao rodar.
+      - name: Caminhos do supressor de ruído
+        run: |
+          zig build test -Dcpu=baseline
+          for arch in 0 1 2; do LARPER_RNNOISE_ARCH=$arch zig build ruido-custo -Dcpu=baseline; done
 
   # O build para Windows sai do Linux (as bibliotecas vêm de tools/windows_deps.sh).
   windows:
