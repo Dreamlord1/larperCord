@@ -9,6 +9,9 @@ const rich = @import("rich.zig");
 const md = @import("../core/markdown.zig");
 const updater = @import("../net/updater.zig");
 const att = @import("attachments.zig");
+const anim = @import("anim.zig");
+const icons = @import("icons.zig");
+const log = @import("../core/changelog.zig");
 
 const changelog_en = @embedFile("changelog_en");
 const changelog_pt = @embedFile("changelog_pt");
@@ -108,11 +111,128 @@ fn textOpts(ctx: *d.Ctx) rich.Opts {
         .ctx = ctx,
         .family = ctx.ui,
         .size = 14,
-        .line_h = 20,
-        .color = ctx.col(.text).mix(ctx.col(.muted), 0.15),
+        .line_h = 21,
+        .color = ctx.col(.text).mix(ctx.col(.muted), 0.12),
         .underline_links = ctx.st.settings.underline_links,
     };
-    const t = rich.layout(p.dl, ctx.store, ctx.th, spans, p.x, p.y, p.w, o, ctx.mouse);
-    qa.mark(.{ .x = p.x, .y = p.y, .w = p.w, .h = t.h }, "changelog", .{});
-    p.y += t.h + 16;
+}
+
+/// O miolo de uma versão: desenha com `dl`, só mede sem. Retorna a altura.
+fn body(ctx: *d.Ctx, dl: ?*c.ImDrawList, v: Version, x: f32, y0: f32, wd: f32) f32 {
+    var y = y0;
+    const o = textOpts(ctx);
+    var item_n: usize = 0;
+    for (v.sections, 0..) |sec, si| {
+        if (si > 0) y += 18;
+        if (sec.title.len > 0) {
+            var ub: [64]u8 = undefined;
+            const up = d.upper(&ub, sec.title);
+            const font = ctx.ui.get(.bold);
+            if (dl) |l| {
+                const tw = d.width(font, 11.5, up);
+                d.text(l, font, 11.5, x, y, ctx.col(.accent).mix(ctx.col(.text), 0.25), up);
+                d.line(l, x + tw + 10, y + 7.5, x + wd, y + 7.5, ctx.col(.border), 1);
+                qa.mark(.{ .x = x, .y = y, .w = tw, .h = 15 }, "changelog-section:{s}", .{sec.title});
+            }
+            y += 25;
+        }
+        for (sec.items, 0..) |it, ii| {
+            if (ii > 0) y += 6;
+            const tx = if (it.bullet) x + 15 else x;
+            const t = rich.layout(dl, ctx.store, ctx.th, it.spans, tx, y, wd - (tx - x), o, ctx.mouse);
+            if (dl) |l| {
+                if (it.bullet) d.circle(l, x + 4, y + 10.5, 2, ctx.col(.faint).mix(ctx.col(.muted), 0.5));
+                qa.mark(.{ .x = x, .y = y, .w = wd, .h = t.h }, "changelog-item:{s}:{d}", .{ v.name, item_n });
+            }
+            item_n += 1;
+            y += t.h;
+        }
+    }
+    return y - y0;
+}
+
+/// Uma linha com o que tem numa versão fechada ("Windows · Voz · …").
+fn summary(buf: []u8, v: Version) []const u8 {
+    var wr = std.Io.Writer.fixed(buf);
+    for (v.sections, 0..) |sec, i| {
+        if (sec.title.len == 0) {
+            // Sem seções: o começo do texto (o clip corta o que não couber).
+            if (sec.items.len > 0 and sec.items[0].spans.len > 0) wr.writeAll(sec.items[0].spans[0].text) catch {};
+            continue;
+        }
+        if (i > 0) wr.writeAll("  ·  ") catch {};
+        wr.writeAll(sec.title) catch {};
+    }
+    return d.utf8Prefix(wr.buffered(), buf.len);
+}
+
+pub fn changelog(p: anytype) void {
+    const ctx = p.ctx;
+    p.title(i18n.tr("Novidades", "What's new"));
+    const list = versions() orelse return;
+    const top = p.y;
+    const rail_x = p.x + 7;
+    const card_x = p.x + rail_w;
+    const card_w = p.w - rail_w;
+    const radius = @max(ctx.th.radius + 2, 4);
+    var prev_dot: ?f32 = null;
+    for (list, 0..) |v, i| {
+        const current = std.mem.eql(u8, v.name, updater.current);
+        const open_default = i == 0 or current;
+        const flip = i < flipped.len and flipped[i];
+        const open = open_default != flip;
+        const inner_w = card_w - pad * 2;
+        const body_h = if (open) body(ctx, null, v, 0, 0, inner_w) else 0;
+        const card: d.Rect = .{ .x = card_x, .y = p.y, .w = card_w, .h = head_h + (if (open) body_h + pad else 0) };
+        const hr: d.Rect = .{ .x = card.x, .y = card.y, .w = card.w, .h = head_h };
+        const hb = d.hit(ctx, p.id(), hr);
+        qa.mark(hr, "changelog-version:{s}", .{v.name});
+        if (hb.clicked and i < flipped.len) flipped[i] = !flipped[i];
+
+        const hk = anim.to(anim.id("cl-hover", i), if (hb.hovered) 1 else 0, 22);
+        d.rect(p.dl, card, ctx.col(.rail).mix(ctx.col(.elevated), 0.25).alpha(0.62), radius);
+        if (hk > 0.01) d.rectFlags(p.dl, hr, ctx.col(.hover).alpha(hk), radius, if (open) c.ImDrawFlags_RoundTop else 0);
+        d.border(p.dl, card, if (current) ctx.col(.accent).alpha(0.5) else ctx.col(.border), radius, 1);
+
+        // A linha do tempo: um ponto por versão, ligado ao anterior.
+        const dot_y = card.y + head_h / 2;
+        if (prev_dot) |py| d.rect(p.dl, .{ .x = rail_x - 1, .y = py + 11, .w = 2, .h = dot_y - py - 18 }, ctx.col(.border).mix(ctx.col(.text), 0.08), 1);
+        prev_dot = dot_y;
+        if (current) {
+            d.circle(p.dl, rail_x, dot_y, 9, ctx.col(.accent).alpha(0.22));
+            d.circle(p.dl, rail_x, dot_y, 5, ctx.col(.accent));
+        } else {
+            d.circle(p.dl, rail_x, dot_y, 5, ctx.col(.surface));
+            c.ImDrawList_AddCircleEx(p.dl, d.v(rail_x, dot_y), 4.5, ctx.col(.faint).u(), 0, 2, 0);
+        }
+
+        // Cabeçalho: versão, "atual" e, fechada, o que tem nela.
+        const vf = p.font(.bold);
+        const vw = d.width(vf, 18, v.name);
+        d.text(p.dl, vf, 18, hr.x + pad, d.centerY(hr, 18), ctx.col(.text), v.name);
+        var nx = hr.x + pad + vw + 10;
+        if (current) {
+            const lbl = i18n.tr("Versão atual", "Current version");
+            const lf = p.font(.semibold);
+            const lw = d.width(lf, 11.5, lbl);
+            const pill: d.Rect = .{ .x = nx, .y = hr.y + hr.h / 2 - 10, .w = lw + 16, .h = 20 };
+            d.rect(p.dl, pill, ctx.col(.accent), 10);
+            d.text(p.dl, lf, 11.5, pill.x + 8, d.centerY(pill, 11.5), ctx.col(.accent_text), lbl);
+            qa.mark(pill, "changelog-current:{s}", .{v.name});
+            nx = pill.right() + 10;
+        }
+        const chev_x = hr.right() - pad - 4;
+        const ok = anim.to(anim.id("cl-open", i), if (open) 1 else 0, 22);
+        icons.chevron(p.dl, chev_x, hr.y + hr.h / 2, ctx.col(.muted).mix(ctx.col(.text), hk).u(), ok);
+        if (!open) {
+            var sb: [240]u8 = undefined;
+            _ = d.textClipped(p.dl, p.font(.regular), 13, nx + 4, d.centerY(hr, 13), ctx.col(.muted), summary(&sb, v), chev_x - 16 - (nx + 4));
+        }
+        if (open) {
+            d.line(p.dl, hr.x + pad, hr.bottom() - 1, hr.right() - pad, hr.bottom() - 1, ctx.col(.border), 1);
+            _ = body(ctx, p.dl, v, card.x + pad, hr.bottom() + 14, inner_w);
+        }
+        p.y += card.h + 12;
+    }
+    qa.mark(.{ .x = p.x, .y = top, .w = p.w, .h = p.y - top }, "changelog", .{});
 }

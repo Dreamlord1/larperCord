@@ -269,6 +269,8 @@ pub fn build(b: *std.Build) void {
     });
     test_mod.addImport("builtin_themes", builtin_themes);
     test_mod.addImport("plugin_examples", plugin_examples);
+    test_mod.addAnonymousImport("changelog_en", .{ .root_source_file = b.path("CHANGELOG.md") });
+    test_mod.addAnonymousImport("changelog_pt", .{ .root_source_file = b.path("CHANGELOG.pt-BR.md") });
     addLua(b, test_mod);
     addRnnoise(b, test_mod);
     const tests = b.addTest(.{ .root_module = test_mod });
