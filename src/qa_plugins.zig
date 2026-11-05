@@ -644,10 +644,16 @@ const qa_slow_plugin =
     \\-- @name QA lento
     \\-- @capabilities notify
     \\larper.command("/qa-lento", function()
-    \\  local t = os.clock()
+    \\  -- Mais de um segundo na thread dos plugins, com poucas instruções: o tempo
+    \\  -- passa em C. Um laço de Lua contra o relógio estoura o limite de instruções
+    \\  -- onde ler o relógio é barato (no Windows).
+    \\  local s = string.rep("a", 100000)
+    \\  local t = os.time()
     \\  local n = 0
-    \\  -- Abaixo do limite de instruções, mas um bom tempo na thread dos plugins.
-    \\  while os.clock() - t < 0.25 and n < 4000000 do n = n + 1 end
+    \\  while os.time() - t < 2 and n < 200 do
+    \\    pcall(string.find, s, ".-.-.-b")
+    \\    n = n + 1
+    \\  end
     \\  larper.notify("lento acabou")
     \\end)
 ;
@@ -691,15 +697,17 @@ fn loopsSame(app: *App) bool {
 }
 
 var frames_seen: u32 = 0;
-var frames_needed_start = false;
+var frames_until_done: ?u32 = null;
 fn clearFrames(_: *App) void {
     frames_seen = 0;
-    frames_needed_start = true;
+    frames_until_done = null;
 }
-/// Cada conferência é um quadro: a interface seguiu desenhando enquanto o Lua rodava.
+/// Cada conferência é um quadro; valem os de antes do Lua acabar. Com o plugin na
+/// thread da interface, o aviso já estaria lá na primeira.
 fn framesWhileBusy(app: *App) bool {
     frames_seen += 1;
-    return toastHas(app, "lento acabou") and frames_seen >= 5;
+    if (frames_until_done == null and toastHas(app, "lento acabou")) frames_until_done = frames_seen;
+    return (frames_until_done orelse 0) >= 2;
 }
 
 // --- Roteiros -----------------------------------------------------------------------------
