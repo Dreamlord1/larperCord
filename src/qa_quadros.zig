@@ -115,12 +115,13 @@ pub const ops = [_]Op{
     .{ .wait = 300 },
     click("settings:Sobre"),
     .{ .run = markFrames },
-    .{ .expect = .{ .name = "página parada, os quadros saem todos iguais", .check = framesSettled, .timeout_ms = 4000 } },
+    // (Às vezes algo ainda anima por alguns segundos: em 4 s, falhava 1 vez em 3.)
+    .{ .expect = .{ .name = "página parada, os quadros saem todos iguais", .check = framesSettled, .timeout_ms = 15000 } },
     .{ .run = markFrames },
     .{ .hover = .{ .mark = "settings:Chat" } },
     .{ .expect = .{ .name = "o destaque do mouse muda o quadro", .check = framesChanged, .timeout_ms = 2000 } },
     .{ .run = markFrames },
-    .{ .expect = .{ .name = "o mouse parou, volta a sair igual", .check = framesSettled, .timeout_ms = 4000 } },
+    .{ .expect = .{ .name = "o mouse parou, volta a sair igual", .check = framesSettled, .timeout_ms = 15000 } },
 
     s("página de desempenho mostra a memória por partes"),
     click("settings:Desempenho"),

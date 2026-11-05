@@ -38,7 +38,7 @@ Everything here works in demo mode, except where it needs the real network. For 
 
 ## Reading and pins
 
-- **Read state synced with Discord**: unreads and mentions are right when you open the app, and reading on another device clears them here. Read confirmations work like the official client's, at most one per channel every 3 seconds, and none while the window is unfocused or you're invisible.
+- **Read state synced with Discord**: unreads and mentions are right when you open the app, and reading on another device clears them here. Read confirmations work like the official client's, at most one per channel every 3 seconds, and none on its own while the window is unfocused.
 - **Mark as read** per channel and per server, and **mark as unread** from any message.
 - **The new messages line** comes with a button that jumps to the first one. Channels open at the first unread, which you can turn off in Settings → Chat.
 - **Pinned messages**: the pin icon in the header, and pin or unpin from the menu. Jumping to any old message loads the history around it, with **Jump to present** to come back.

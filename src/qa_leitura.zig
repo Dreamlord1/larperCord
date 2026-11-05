@@ -188,8 +188,8 @@ fn invisible(app: *App) void {
 fn visible(app: *App) void {
     app.st.settings.my_status = 0;
 }
-fn readWithoutAck(app: *App) bool {
-    return !active(app).info.unread and load(&gw.sent.acks) == acks0;
+fn readAndAcked(app: *App) bool {
+    return !active(app).info.unread and load(&gw.sent.acks) > acks0;
 }
 
 // --- Outro dispositivo --------------------------------------------------------------
@@ -521,7 +521,7 @@ pub const ops = [_]Op{
     .{ .run = invisible },
     .{ .run = injectOne },
     .{ .wait = 300 },
-    expect("invisível: lido aqui, sem ack", readWithoutAck),
+    expect("invisível: lido e confirmado (o status não muda a leitura)", readAndAcked),
     .{ .run = visible },
 
     s("outro dispositivo"),
@@ -542,9 +542,14 @@ pub const ops = [_]Op{
 
     s("marcar servidor como lido"),
     .{ .run = markBulk },
+    // Pedido pela pessoa vale mesmo sem foco, e mesmo invisível.
+    .{ .run = blur },
+    .{ .run = invisible },
     .{ .run = guildMenu },
     click("menu:Marcar como lido"),
-    expect("POST ack-bulk com os canais e o servidor limpo", serverRead),
+    expect("POST ack-bulk com os canais e o servidor limpo, mesmo sem foco e invisível", serverRead),
+    .{ .run = unblur },
+    .{ .run = visible },
 
     s("mensagens fixadas"),
     click("header-pins"),

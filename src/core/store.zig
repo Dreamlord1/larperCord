@@ -10,6 +10,9 @@ const Event = @import("event.zig").Event;
 const event = @import("event.zig");
 const Id = types.Id;
 
+/// LARPER_READ_DEBUG: conta no log por que cada canal ficou não lido (só IDs).
+pub var read_debug = false;
+
 /// Strings que chegam em eventos são alocadas com o c_allocator (podem vir
 /// de outra thread) e liberadas com ele também.
 const ev_alloc = std.heap.c_allocator;
@@ -1797,6 +1800,7 @@ pub const Store = struct {
             // Estava tudo lido: o marcador é a última de antes desta.
             if (!cs.info.unread and prev_last > cs.read_id) cs.read_id = prev_last;
             if (!cs.info.unread) {
+                if (read_debug) std.log.info("leitura: canal {d} (servidor {d}) acendeu: mensagem nova {d}", .{ m.channel, cs.info.guild, m.id });
                 cs.info.unread = true;
                 s.refreshGuildUnread(cs.info.guild);
             }
@@ -2031,6 +2035,7 @@ pub const Store = struct {
         const unread = cs.info.last_message > new_read;
         cs.hold_unread = manual and unread;
         if (new_read == cs.read_id and unread == cs.info.unread) return;
+        if (read_debug and unread and !cs.info.unread) std.log.info("leitura: canal {d} (servidor {d}) acendeu: ack até {d}, última conhecida {d}, manual {}", .{ channel_id, cs.info.guild, message, cs.info.last_message, manual });
         cs.read_id = new_read;
         cs.info.unread = unread;
         s.refreshGuildUnread(cs.info.guild);

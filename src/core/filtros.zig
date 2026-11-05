@@ -176,6 +176,7 @@ pub const Filtros = struct {
 
     /// Mais uma menção no canal (e no servidor dele, para o ícone da barra).
     pub fn bump(f: *Filtros, gpa: std.mem.Allocator, store: *store_mod.Store, ch: Id) void {
+        if (store_mod.read_debug) std.log.info("leitura: canal {d} ganhou uma menção", .{ch});
         const gop = f.mentions.getOrPut(gpa, ch) catch return;
         if (!gop.found_existing) gop.value_ptr.* = 0;
         gop.value_ptr.* +|= 1;
@@ -187,6 +188,7 @@ pub const Filtros = struct {
     /// Quantas menções o canal tem, como o Discord disse (o servidor acompanha).
     pub fn setCount(f: *Filtros, gpa: std.mem.Allocator, store: *store_mod.Store, ch: Id, n: u16) void {
         const old = f.count(ch);
+        if (store_mod.read_debug) std.log.info("leitura: canal {d} ficou com {d} menções (tinha {d})", .{ ch, n, old });
         if (n == 0) {
             _ = f.mentions.remove(ch);
         } else f.mentions.put(gpa, ch, n) catch return;

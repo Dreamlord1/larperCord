@@ -126,6 +126,7 @@ fn applyOne(store: *Store, f: *Filtros, gpa: std.mem.Allocator, cs: *store_mod.C
         unread = false;
         mentions = 0;
     }
+    if (store_mod.read_debug and unread) std.log.info("leitura: canal {d} (servidor {d}) acendeu: registro do Discord, lido até {d}, última {d}, menções {d}", .{ cs.info.id, cs.info.guild, cs.read_id, cs.info.last_message, mentions });
     cs.info.unread = unread;
     if (mentions > 0) f.setCount(gpa, store, cs.info.id, mentions);
     // Modo foco: só DMs e menções marcam não lido; o resto volta no fim.

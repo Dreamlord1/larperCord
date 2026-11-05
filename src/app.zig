@@ -6,7 +6,8 @@ const sys = @import("platform/sys.zig");
 const c = @import("c");
 const platform = @import("platform/window.zig");
 const timeline = @import("platform/timeline.zig");
-const Store = @import("core/store.zig").Store;
+const store_mod = @import("core/store.zig");
+const Store = store_mod.Store;
 const ev = @import("core/event.zig");
 const types = @import("core/types.zig");
 const Gateway = @import("net/fake_gateway.zig").Gateway;
@@ -926,28 +927,24 @@ pub const App = struct {
         cs.pos_unread = app.st.settings.open_at_unread;
     }
 
-    /// Confirmar leitura: a janela precisa estar em foco e não pode ser invisível.
-    fn ackAllowed(app: *const App) bool {
-        return app.st.window_focused and app.st.settings.my_status != 3;
-    }
-
-    /// Canal lido: limpa aqui e, se pode, avisa o Discord (a thread de rede
-    /// junta os que chegam em sequência).
-    fn readChannel(app: *App, id: types.Id) void {
+    /// Canal lido: limpa aqui e avisa o Discord (a thread de rede junta os que
+    /// chegam em sequência). Sozinho, só com a janela em foco: sem ela, ninguém leu.
+    /// Pedido pela pessoa (`asked`) vale sempre. O status não entra nisso: o estado
+    /// de leitura é da conta, ninguém mais vê.
+    fn readChannel(app: *App, id: types.Id, asked: bool) void {
         const cs = app.store.channel(id) orelse return;
         const target = cs.info.last_message;
         app.store.markRead(id);
         app.st.filtros.clear(&app.store, id);
-        if (target != 0 and app.ackAllowed()) app.cmd(.{ .ack = .{ .channel = id, .message = target, .last_viewed = leitura.lastViewed(now()) } });
+        if (target != 0 and (asked or app.st.window_focused)) app.cmd(.{ .ack = .{ .channel = id, .message = target, .last_viewed = leitura.lastViewed(now()) } });
     }
 
     /// "Marcar como lido" (canal ou servidor), pedido pela pessoa.
     fn markReadAction(app: *App, id: types.Id) void {
         const st = &app.st;
-        if (st.settings.my_status == 3) st.showToast(now(), false, "invisível: marcado como lido só aqui", "invisible: marked as read only here", .{});
         if (app.store.channel(id)) |cs| {
             cs.divider_after = 0;
-            app.readChannel(id);
+            app.readChannel(id, true);
             return;
         }
         const g = app.store.guild(id) orelse return;
@@ -969,7 +966,8 @@ pub const App = struct {
         }
         g.unread = false;
         g.mentions = 0;
-        if (bulk.items.len == 0 or !app.ackAllowed()) return bulk.deinit(ca);
+        if (store_mod.read_debug) std.log.info("leitura: servidor {d} marcado como lido, {d} canais no ack", .{ id, bulk.items.len });
+        if (bulk.items.len == 0) return bulk.deinit(ca);
         const owned = bulk.toOwnedSlice(ca) catch return bulk.deinit(ca);
         app.cmd(.{ .ack_bulk = owned });
     }
@@ -999,9 +997,7 @@ pub const App = struct {
         st.filtros.setCount(app.gpa, &app.store, cs.info.id, pings);
         app.store.refreshGuildUnread(cs.info.guild);
         app.store.rev +%= 1;
-        if (app.ackAllowed()) {
-            app.cmd(.{ .ack = .{ .channel = cs.info.id, .message = prev, .manual = true, .mentions = pings } });
-        } else if (st.settings.my_status == 3) st.showToast(now(), false, "invisível: marcada como não lida só aqui", "invisible: marked as unread only here", .{});
+        app.cmd(.{ .ack = .{ .channel = cs.info.id, .message = prev, .manual = true, .mentions = pings } });
     }
 
     /// Envia uma mensagem: aparece na hora como "pendente" e vai pra rede.
@@ -1411,7 +1407,7 @@ pub const App = struct {
                 st.jump_asked = 0;
             },
             .mark_read => |id| app.markReadAction(id),
-            .channel_seen => |id| app.readChannel(id),
+            .channel_seen => |id| app.readChannel(id, false),
             .deco_dismiss => |dd| app.plugins.deco.remove(dd.run, dd.id),
             .mark_unread => |id| app.markUnreadAction(id),
             .typing => |id| {
@@ -1768,6 +1764,7 @@ pub const App = struct {
             .guild_create => |gc| leitura.applyGuild(&app.store, &st.filtros, app.gpa, gc.guild.id, now()),
             .read => |r| {
                 const cs = app.store.channel(r.channel) orelse return;
+                if (store_mod.read_debug) std.log.info("leitura: ack do Discord no canal {d}: até {d}, menções {?d}, manual {}", .{ r.channel, r.message, r.mentions, r.manual });
                 if (!cs.info.unread) {
                     st.filtros.clear(&app.store, r.channel);
                 } else if (r.mentions) |n| st.filtros.setCount(app.gpa, &app.store, r.channel, n);
@@ -2055,6 +2052,18 @@ pub const App = struct {
     var prof_cmds: u64 = 0;
     var prof_texs: u64 = 0;
     var prof_vtx: u64 = 0;
+    // --stats: por que cada quadro foi feito, e que eventos e ações pediram quadros.
+    var prof_why: [7]u32 = @splat(0);
+    var prof_events: [8]struct { t: u32 = 0, n: u32 = 0 } = @splat(.{});
+    var prof_actions: std.enums.EnumArray(std.meta.Tag(ev.Action), u32) = .initFill(0);
+
+    fn profEvent(t: u32) void {
+        for (&prof_events) |*pe| if (pe.n == 0 or pe.t == t) {
+            pe.t = t;
+            pe.n += 1;
+            return;
+        };
+    }
 
     pub fn run(app: *App) bool {
         if (!app.opts.qa and app.opts.shot == null and app.st.settings.check_updates) updater.check();
@@ -2083,6 +2092,7 @@ pub const App = struct {
         var lang_setting: i16 = -1;
         // LARPER_BENCH=1: redesenha sem parar (medir o custo de um quadro parado).
         const bench = c.SDL_getenv("LARPER_BENCH") != null;
+        store_mod.read_debug = c.SDL_getenv("LARPER_READ_DEBUG") != null;
         // O que chega da rede (presença, digitando, lista de membros) redesenha
         // no máximo a cada `bg_frame_ms`; o mouse só andando, a cada
         // `MousePace.interval_ms`; clique, roda e teclado redesenham na hora.
@@ -2119,7 +2129,9 @@ pub const App = struct {
                 const since_frame = now() - last_frame_ms;
                 if (since_frame < 16) c.SDL_Delay(@intCast(16 - since_frame));
             }
-            const busy = pending > 0 or anim.active or app.opts.shot != null or app.opts.qa or bench or
+            // Com o mouse andando, a animação de destaque também espera o limite dele:
+            // é o que mais pede quadro, e só volta ao ritmo da tela quando o mouse para.
+            const busy = pending > 0 or (anim.active and !mouse.wanted()) or app.opts.shot != null or app.opts.qa or bench or
                 (login_anim and !app.st.settings.reduce_motion);
             // Dorme até o próximo quadro de um GIF, de uma animação lenta ou
             // do redesenho adiado da rede (o que vier primeiro).
@@ -2186,7 +2198,12 @@ pub const App = struct {
                 } else {
                     // Sem botão apertado, passar por cima das coisas pode esperar o
                     // próximo quadro (o ImGui guarda onde o mouse está).
-                    if (e.type == c.SDL_EVENT_MOUSE_MOTION and e.motion.state == 0) mouse.motion() else input = true;
+                    if (e.type == c.SDL_EVENT_MOUSE_MOTION and e.motion.state == 0) {
+                        mouse.motion();
+                    } else {
+                        input = true;
+                        if (app.opts.stats) profEvent(e.type);
+                    }
                     // A janela mudou ou o contexto foi refeito: o que está na tela
                     // não vale mais, mesmo que o próximo quadro saia igual.
                     if ((e.type >= c.SDL_EVENT_WINDOW_FIRST and e.type <= c.SDL_EVENT_WINDOW_LAST) or
@@ -2263,8 +2280,12 @@ pub const App = struct {
             hidden_since_ms = 0;
             // Só coisa da rede ou o mouse passando, e o último quadro foi agora há pouco: espera.
             const soft_ms = if (mouse.wanted()) ritmo.MousePace.interval_ms else bg_frame_ms;
-            if ((bg_dirty or mouse.wanted()) and pending == 0 and !was_active and app.opts.shot == null and !app.opts.qa and
+            if ((bg_dirty or mouse.wanted()) and pending == 0 and (!was_active or mouse.wanted()) and app.opts.shot == null and !app.opts.qa and
                 !app.login.visible() and now_ms - last_frame_ms < soft_ms and now_ms < @min(app.images.next_frame_ms, anim.next_wake_ms)) continue;
+            if (app.opts.stats) {
+                const why: usize = if (pending > 0) 0 else if (was_active) 1 else if (now_ms >= app.images.next_frame_ms) 2 else if (now_ms >= anim.next_wake_ms) 3 else if (mouse.wanted()) 4 else if (bg_dirty) 5 else 6;
+                prof_why[why] += 1;
+            }
             bg_dirty = false;
             mouse.frame();
             last_frame_ms = now_ms;
@@ -2424,6 +2445,9 @@ pub const App = struct {
                 pending = 3;
             }
             // Ações acumuladas no quadro.
+            if (app.opts.stats) for (app.actions.items) |a| {
+                prof_actions.getPtr(std.meta.activeTag(a)).* += 1;
+            };
             for (app.actions.items) |a| app.handle(a);
             if (app.actions.items.len > 0) pending = 3;
             app.actions.clearRetainingCapacity();
@@ -2448,6 +2472,13 @@ pub const App = struct {
                     S.skipped = app.gate.skipped;
                     std.log.info("   root.frame {d} µs, ImGui_Render {d} µs, RenderDrawData {d} µs (por quadro)", .{ prof_frame / S.n, prof_render / S.n, prof_gpu / S.n });
                     std.log.info("   {d} comandos, {d} trocas de textura, {d} vértices (por quadro)", .{ prof_cmds / S.n, prof_texs / S.n, prof_vtx / S.n });
+                    std.log.info("   por quê: pedido {d}, animação {d}, GIF {d}, hora marcada {d}, mouse {d}, rede {d}, outro {d}", .{ prof_why[0], prof_why[1], prof_why[2], prof_why[3], prof_why[4], prof_why[5], prof_why[6] });
+                    for (prof_events) |pe| if (pe.n > 0) std.log.info("   evento 0x{x}: {d}", .{ pe.t, pe.n });
+                    var acts = prof_actions.iterator();
+                    while (acts.next()) |x| if (x.value.* > 0) std.log.info("   ação {s}: {d}", .{ @tagName(x.key), x.value.* });
+                    prof_why = @splat(0);
+                    prof_events = @splat(.{});
+                    prof_actions = .initFill(0);
                     prof_cmds = 0;
                     prof_texs = 0;
                     prof_vtx = 0;

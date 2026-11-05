@@ -15,7 +15,7 @@ It's only sent to Discord.
 
 ## Read confirmations
 
-Like the official client, the app tells Discord what you've read, at most once per channel every 3 seconds. It sends nothing while the window is unfocused or your status is invisible.
+Like the official client, the app tells Discord what you've read, at most once per channel every 3 seconds. It sends nothing on its own while the window is unfocused. Marking something as read or unread yourself always goes through, and your status doesn't change any of this.
 
 ## What stays on your computer
 

@@ -2922,6 +2922,7 @@ pub const Gateway = struct {
                     b.appendSlice(alloc, "]}") catch return;
                     var resp = g.request("POST", "/read-states/ack-bulk", b.items) orelse return;
                     defer resp.body.deinit(alloc);
+                    if (@import("../core/store.zig").read_debug) std.log.info("leitura: ack-bulk de {d} canais respondeu HTTP {d}", .{ @min(100, list.len - i), resp.status });
                     if (resp.status >= 300) g.noticeHttp(i18n.tr("não deu para marcar como lido", "couldn't mark as read"), &resp);
                     if (g.stopping) return;
                 }

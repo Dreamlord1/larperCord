@@ -38,7 +38,7 @@ Tudo aqui funciona no modo demonstração, exceto onde precisa da rede de verdad
 
 ## Leitura e fixadas
 
-- **Leitura sincronizada com o Discord**: não lidos e menções certos ao abrir o app, e ler em outro aparelho limpa aqui. As confirmações de leitura funcionam como as do cliente oficial, no máximo uma por canal a cada 3 segundos, e nenhuma com a janela sem foco ou no modo invisível.
+- **Leitura sincronizada com o Discord**: não lidos e menções certos ao abrir o app, e ler em outro aparelho limpa aqui. As confirmações de leitura funcionam como as do cliente oficial, no máximo uma por canal a cada 3 segundos, e nenhuma sozinha com a janela sem foco.
 - **Marcar como lido** por canal e por servidor, e **marcar como não lida** a partir de qualquer mensagem.
 - **A linha de novas mensagens** vem com um botão que pula para a primeira. O canal abre na primeira não lida, o que dá para desligar em Configurações → Chat.
 - **Mensagens fixadas**: o alfinete no cabeçalho, e fixar ou desafixar pelo menu. Ir para qualquer mensagem antiga carrega o histórico em volta dela, com **Voltar ao presente** para retornar.

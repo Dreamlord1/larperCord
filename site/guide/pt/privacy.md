@@ -15,7 +15,7 @@ Ele só é enviado ao Discord.
 
 ## Confirmações de leitura
 
-Como o cliente oficial, o app avisa o Discord do que você leu, no máximo uma vez por canal a cada 3 segundos. Nada é enviado com a janela sem foco ou com o status invisível.
+Como o cliente oficial, o app avisa o Discord do que você leu, no máximo uma vez por canal a cada 3 segundos. Sozinho, nada é enviado com a janela sem foco. Marcar como lido ou não lido à mão sempre vai, e o seu status não muda nada disso.
 
 ## O que fica no seu computador
 
