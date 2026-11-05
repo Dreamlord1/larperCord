@@ -589,9 +589,13 @@ fn header(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, uid: Id, pf: ?types.Profile
                 const v0 = (1 - vh) / 2;
                 c.ImDrawList_AddImageRounded(dl, t.ref, d.v(br.x, br.y), d.v(br.right(), br.bottom()), d.v(0, v0), d.v(1, v0 + vh), d.Rgba.white.col(1), radius, c.ImDrawFlags_RoundCornersTop);
                 drew = true;
-                const hb = d.hit(ctx, ids + 1, br);
+                // Por baixo do botão do canto: quem está em cima ganha o clique.
+                const hb = d.hitUnder(ctx, ids + 1, br);
                 qa.mark(br, "profile-banner", .{});
-                if (hb.clicked) att.openImage(ctx, url, i18n.tr("banner", "banner"), @intCast(t.w * 2), @intCast(t.h * 2));
+                if (hb.clicked) {
+                    var fb: [192]u8 = undefined;
+                    att.openOriginal(ctx, w.bannerFull(&fb, uid, p.banner), u.name, @intCast(t.w), @intCast(t.h));
+                }
             },
             else => {},
         }
@@ -622,12 +626,16 @@ fn header(ctx: *d.Ctx, dl: *c.ImDrawList, r: d.Rect, uid: Id, pf: ?types.Profile
     d.tip(ctx, ar, if (held_back) i18n.tr("Carregar foto", "Load picture") else i18n.tr("Ver foto", "View picture"), hb.hovered and u.avatar != null);
     if (hb.clicked and held_back) {
         ctx.images.allow(small);
-    } else if (hb.clicked) if (u.avatar) |h| {
-        var zb: [192]u8 = undefined;
-        const big = if (std.mem.startsWith(u8, h, "demo:")) h else std.fmt.bufPrint(&zb, "https://cdn.discordapp.com/avatars/{d}/{s}.png?size=1024", .{ uid, h }) catch "";
-        att.openImage(ctx, big, u.name, 1024, 1024);
-    };
+    } else if (hb.clicked) viewAvatar(ctx, uid);
     return acy + av / 2 + 14;
+}
+
+/// A foto de alguém no visualizador, em tamanho cheio.
+pub fn viewAvatar(ctx: *d.Ctx, uid: Id) void {
+    const u = ctx.store.user(uid) orelse return;
+    const h = u.avatar orelse return;
+    var zb: [192]u8 = undefined;
+    att.openOriginal(ctx, w.cdnFull(&zb, .avatar, uid, h), u.name, 1024, 1024);
 }
 
 /// Botão redondo pequeno no canto do banner.
@@ -669,11 +677,7 @@ pub fn card(ctx: *d.Ctx, uid: Id, x: f32, y: f32) void {
     // Abre o perfil grande.
     const fr: d.Rect = .{ .x = r.right() - 40, .y = r.y + 10, .w = 28, .h = 28 };
     if (cornerButton(ctx, dl, 905, fr, i18n.tr("Ver perfil completo", "View Full Profile"), "profile-full")) ctx.act(.{ .open_full_profile = .{ .user = uid } });
-    // Setinhas de "expandir".
-    const ec = d.Rgba.white.alpha(0.9);
-    d.line(dl, fr.x + 9, fr.y + 19, fr.x + 19, fr.y + 9, ec, 1.5);
-    d.line(dl, fr.x + 13, fr.y + 9, fr.x + 19, fr.y + 9, ec, 1.5);
-    d.line(dl, fr.x + 19, fr.y + 9, fr.x + 19, fr.y + 15, ec, 1.5);
+    icons.expand(dl, fr.x + 14, fr.y + 14, d.Rgba.white.alpha(0.9).u());
 
     var col: Col = .{ .ctx = ctx, .dl = dl, .x = r.x + 16, .w = width - 32, .y = top, .ids = 1000 };
     body(&col, uid, pf, gid);

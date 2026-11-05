@@ -54,6 +54,9 @@ pub const Viewer = struct {
     name_len: u8 = 0,
     w: u16 = 0,
     h: u16 = 0,
+    /// Banner, ícone ou foto: o CDN não diz o tamanho antes. `w` e `h` são um
+    /// palpite até a imagem chegar, e ela é pedida inteira.
+    original: bool = false,
 };
 
 /// Arquivo escolhido para ir junto com a próxima mensagem.

@@ -111,6 +111,9 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
     const dl = d.beginRegion(ctx, "##channels", r, c.ImGuiWindowFlags_NoScrollbar);
     banner_scroll = if (banner_img) c.ImGui_GetScrollY() else 0;
     const o = c.ImGui_GetCursorScreenPos();
+    // O banner embaixo do nome abre a imagem; o nome (fora daqui) continua com o
+    // menu do servidor. A região da lista fica por cima dele, e o clique é dela.
+    if (banner_img) bannerOpen(ctx, dl, g, .{ .x = r.x, .y = o.y, .w = r.w, .h = banner_h - 48 });
     // A lista começa embaixo do banner (o cabeçalho já tirou 48 dele).
     var y = o.y + (if (variant == .tree) @as(f32, 2) else 8) + (if (banner_img) banner_h - 48 else 0);
     const ids = ctx.store.channelsOf(g.id);
@@ -169,6 +172,29 @@ pub fn channelList(ctx: *d.Ctx, n: *const kdl.Node, r_in: d.Rect) void {
         list_h = y - y_top;
     }
     d.endRegion(ctx, y + 12, r.x);
+}
+
+fn bannerOpen(ctx: *d.Ctx, dl: *c.ImDrawList, g: *const types.Guild, br: d.Rect) void {
+    const hb = d.hit(ctx, 7, br);
+    qa.mark(br, "guild-banner-open", .{});
+    if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+    if (hb.clicked) viewBanner(ctx, g);
+    const k = anim.to(anim.id("gbanner", 0), if (hb.hovered) 1 else 0, 22);
+    if (k < 0.01) return;
+    d.rect(dl, br, d.Rgba.black.alpha(0.14 * k), 0);
+    // O canto mostra que dá para abrir.
+    const bx = br.right() - 22;
+    const by = br.bottom() - 22;
+    d.circle(dl, bx, by, 14, d.Rgba.black.alpha(0.55 * k));
+    icons.expand(dl, bx, by, d.Rgba.white.alpha(k).u());
+    d.tip(ctx, .{ .x = bx - 14, .y = by - 14, .w = 28, .h = 28 }, i18n.tr("Ver banner", "View banner"), hb.hovered);
+}
+
+/// O banner do servidor no visualizador, em tamanho cheio.
+pub fn viewBanner(ctx: *d.Ctx, g: *const types.Guild) void {
+    const hash = g.banner orelse return;
+    var ub: [192]u8 = undefined;
+    @import("attachments.zig").openOriginal(ctx, w.bannerFull(&ub, g.id, hash), g.name, 960, 540);
 }
 
 /// O que muda a altura da lista de canais.

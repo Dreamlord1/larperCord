@@ -35,14 +35,31 @@ pub fn statusColor(ctx: *const d.Ctx, s: types.Status) d.Rgba {
 pub const Cdn = enum { avatar, guild, group };
 
 pub fn cdnUrl(buf: []u8, kind: Cdn, id: types.Id, hash: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, hash, "demo:")) return hash;
+    return cdnSized(buf, kind, id, hash, 128);
+}
+
+/// A mesma imagem no tamanho que o visualizador mostra (o CDN dá o que tiver,
+/// até esse tamanho).
+pub fn cdnFull(buf: []u8, kind: Cdn, id: types.Id, hash: []const u8) []const u8 {
+    return cdnSized(buf, kind, id, hash, 1024);
+}
+
+fn cdnSized(buf: []u8, kind: Cdn, id: types.Id, hash: []const u8, size: u16) []const u8 {
+    // A demonstração e a foto de um webhook (que mora no ID dele) já são a URL.
+    if (std.mem.startsWith(u8, hash, "demo:") or std.mem.startsWith(u8, hash, "https://")) return hash;
     const dir = switch (kind) {
         .avatar => "avatars",
         .guild => "icons",
         .group => "channel-icons",
     };
     // PNG mesmo para os animados (a_…): o primeiro quadro basta aqui.
-    return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/{s}/{d}/{s}.png?size=128", .{ dir, id, hash }) catch "";
+    return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/{s}/{d}/{s}.png?size={d}", .{ dir, id, hash, size }) catch "";
+}
+
+/// Banner (de servidor ou de pessoa: ficam no mesmo lugar) em tamanho cheio.
+pub fn bannerFull(buf: []u8, id: types.Id, hash: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, hash, "demo:")) return hash;
+    return std.fmt.bufPrint(buf, "https://cdn.discordapp.com/banners/{d}/{s}.png?size=4096", .{ id, hash }) catch "";
 }
 
 /// Banner (ou splash) de um servidor.
