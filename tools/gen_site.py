@@ -490,8 +490,9 @@ def markdown(src, rewrite, skip_h1=False):
             out.append("<hr>")
             i += 1
         else:
-            j = i
-            para = []
+            # A primeira linha é sempre do parágrafo: um "|" que não abre tabela chega aqui.
+            j = i + 1
+            para = [ln]
             while j < len(lines) and lines[j].strip() and not re.match(r"(?:```|#{1,6}\s|>|\|)", lines[j]) and not re.match(r"\s*(?:[-*]|\d+\.)\s", lines[j]):
                 para.append(lines[j])
                 j += 1
