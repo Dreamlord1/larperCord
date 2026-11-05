@@ -37,6 +37,7 @@ const usage =
     \\  --no-live         desliga as mensagens automáticas do modo demonstração
     \\  --stats           mostra a linha do tempo da abertura e o custo de cada quadro
     \\  --voice-test G C  entra no canal de voz C do servidor G por 25 s
+    \\  --tls-check URL   confere se a rede do app funciona neste sistema (certificados e WebSocket)
     \\  --restarted       toma o lugar do larperCord que está fechando (usado ao reiniciar)
     \\
     \\atalhos: Ctrl+K paleta · Ctrl+, configurações · F2 próximo tema
@@ -79,6 +80,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
             opts.settings = true;
         } else if (std.mem.eql(u8, arg, "--stats")) {
             opts.stats = true;
+        } else if (std.mem.eql(u8, arg, "--tls-check")) {
+            return tlsCheck(it.next() orelse return fail("--tls-check precisa de um endereço"));
         } else if (std.mem.eql(u8, arg, "--voice-test")) {
             const g = it.next() orelse return fail("--voice-test precisa do servidor e do canal");
             const ch = it.next() orelse return fail("--voice-test precisa do servidor e do canal");
@@ -130,6 +133,28 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // No QA, reiniciar só confere a saída: a cópia nova entraria na conta de quem roda.
     if (restart and !opts.qa) @import("net/updater.zig").spawnSelf();
     if (!ok) std.process.exit(1);
+}
+
+/// O curl do app contra um endereço qualquer, sem conta nenhuma: confere os certificados
+/// deste sistema e se esse curl fala WebSocket, sem o qual o app não conecta.
+fn tlsCheck(url: [:0]const u8) void {
+    _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
+    const h = c.curl_easy_init() orelse std.process.exit(1);
+    _ = c.curl_easy_setopt(h, c.CURLOPT_URL, url.ptr);
+    _ = c.curl_easy_setopt(h, c.CURLOPT_NOBODY, @as(c_long, 1));
+    _ = c.curl_easy_setopt(h, c.CURLOPT_PROTOCOLS_STR, "https");
+    _ = c.curl_easy_setopt(h, c.CURLOPT_CONNECTTIMEOUT, @as(c_long, 20));
+    sys.curlTls(h);
+    const res = c.curl_easy_perform(h);
+    std.debug.print("{s}: {s}\n", .{ url, c.curl_easy_strerror(res) });
+    const info = c.curl_version_info(c.CURLVERSION_NOW);
+    var ws = false;
+    var p = info.*.protocols;
+    while (p.* != null) : (p += 1) {
+        if (std.mem.eql(u8, std.mem.span(p.*), "wss")) ws = true;
+    }
+    std.debug.print("libcurl {s}, WebSocket: {}\n", .{ info.*.version, ws });
+    if (res != c.CURLE_OK or !ws) std.process.exit(1);
 }
 
 fn watchdog(_: ?*anyopaque) callconv(.c) c_int {

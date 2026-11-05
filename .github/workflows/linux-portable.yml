@@ -1,0 +1,105 @@
+name: linux-portable
+# O binário de Linux das releases: compilado num Ubuntu antigo, porque é a glibc
+# de onde ele nasce que decide em quais distros ele abre, e aberto em várias antes
+# de valer. O atestado prova que o arquivo saiu deste código.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, "portable/**"]
+    paths:
+      - ".github/workflows/linux-portable.yml"
+      - "build.zig"
+      - "build.zig.zon"
+      - "src/**"
+      - "third_party/**"
+      - "themes/**"
+      - "docs/plugins/**"
+      - "tools/linux_deps.sh"
+      - "CHANGELOG*.md"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - name: Ferramentas e cabeçalhos
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl xz-utils make gcc g++ cmake ninja-build pkg-config binutils \
+            libssl-dev zlib1g-dev libfreetype-dev libfontconfig1-dev libwebp-dev libopus-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libxkbcommon-dev \
+            libwayland-dev libwayland-bin libdecor-0-dev libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - run: tools/linux_deps.sh
+      - name: Compilar
+        run: PKG_CONFIG_PATH=$PWD/.deps/linux/lib/pkgconfig zig build -Dcpu=baseline -Dportable=true
+      - name: O que o binário exige
+        run: |
+          bin=zig-out/bin/larpercord
+          ls -l "$bin"
+          objdump -p "$bin" | grep NEEDED
+          max=$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9.]+' | sort -t. -k2 -n | uniq | tail -1)
+          echo "glibc exigida: $max"
+          [ "${max#GLIBC_2.}" -le 35 ]
+          if objdump -p "$bin" | grep -qE 'NEEDED +lib(SDL3|curl)'; then echo "SDL3 e curl deviam estar dentro"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: larpercord-linux-x86_64
+          path: zig-out/bin/larpercord
+          if-no-files-found: error
+
+  # Abre de verdade: sem GPU, só com as bibliotecas que um desktop dessas distros já tem.
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "ubuntu:22.04", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libssl3 zlib1g fonts-dejavu-core" }
+          - { image: "ubuntu:24.04", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libssl3t64 zlib1g fonts-dejavu-core" }
+          - { image: "debian:12", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libssl3 zlib1g fonts-dejavu-core" }
+          - { image: "debian:13", install: "apt-get update && apt-get install -y --no-install-recommends ca-certificates libfreetype6 libfontconfig1 libwebp7 libwebpdemux2 libopus0 libssl3t64 zlib1g fonts-dejavu-core" }
+          - { image: "fedora:latest", install: "dnf install -y ca-certificates freetype fontconfig libwebp opus openssl-libs zlib-ng-compat dejavu-sans-fonts" }
+          - { image: "archlinux:latest", install: "pacman -Syu --noconfirm --needed ca-certificates freetype2 fontconfig libwebp opus openssl zlib ttf-dejavu" }
+    steps:
+      - name: Bibliotecas do sistema
+        run: ${{ matrix.install }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: larpercord-linux-x86_64
+      - name: Abrir na demonstração e conferir o TLS
+        env:
+          SDL_VIDEO_DRIVER: offscreen
+          SDL_AUDIODRIVER: dummy
+          LARPER_RENDERER: software
+          HOME: /tmp/home
+        run: |
+          mkdir -p "$HOME"
+          chmod +x larpercord
+          ./larpercord --help > /dev/null
+          ./larpercord --demo --shot /tmp/demo.png
+          test "$(stat -c %s /tmp/demo.png)" -gt 10000
+          # O mesmo curl do app, com os certificados desta distro. Nunca no Discord.
+          ./larpercord --tls-check https://github.com/
+
+  attest:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: larpercord-linux-x86_64
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: larpercord
