@@ -3001,6 +3001,8 @@ pub const Runner = struct {
     mouse: [2]f32 = .{ 640, 400 },
     sweep: Sweep = .{},
     target_pos: [2]f32 = .{ 0, 0 },
+    still_pos: [2]f32 = .{ -1, -1 },
+    still_n: u8 = 0,
     settle: u32 = 0,
 
     fn now() i64 {
@@ -3289,6 +3291,20 @@ pub const Runner = struct {
         c.ImGuiIO_AddMousePosEvent(app.io, p[0], p[1]);
     }
 
+    /// O alvo parou de se mexer? A conversa rola suave depois de uma mensagem, e
+    /// em máquina lenta isso leva muitos quadros: o mouse parava em cima de outra
+    /// coisa. Tem um teto, para o que anima sem parar não travar o roteiro.
+    fn targetStill(r: *Runner, p: [2]f32) bool {
+        if (now() - r.step_ms > slowed(1000)) return true;
+        if (r.still_pos[0] == p[0] and r.still_pos[1] == p[1]) {
+            r.still_n +|= 1;
+        } else {
+            r.still_pos = p;
+            r.still_n = 0;
+        }
+        return r.still_n >= 2;
+    }
+
     /// Clique em 3 quadros: posiciona, aperta, solta.
     fn clickOp(r: *Runner, app: *App, t: Target, button: c_int, ctrl_held: bool, double: bool) void {
         // Só procura o elemento antes de clicar: depois do clique ele pode
@@ -3314,6 +3330,7 @@ pub const Runner = struct {
                 }
                 return;
             }
+            if (!r.targetStill(p)) return;
             r.target_pos = p;
             if (c.SDL_getenv("QA_DEBUG") != null) {
                 std.debug.print("[clique] {s} em {d:.0},{d:.0}\n", .{ targetName(app, t, &buf), p[0], p[1] });
@@ -3361,6 +3378,7 @@ pub const Runner = struct {
             .hover => |t| {
                 var buf: [64]u8 = undefined;
                 if (resolve(app, t, &buf)) |p| {
+                    if (!r.targetStill(p)) return true;
                     r.pos(app, p);
                     r.next();
                 } else if (now() - r.step_ms > slowed(1500)) {

@@ -251,6 +251,7 @@ pub const ops = [_]Op{
     run(wheelDown),
     expect("a rodinha rola a lista e a página fica parada", listScrolled),
     esc,
+    expect("Esc fecha a lista rolada", listClosedSettingsOpen),
     .{ .resize = .{ 900, 260 } },
     // Em máquina sem GPU a janela nova só aparece alguns quadros depois.
     .{ .wait = 800 },

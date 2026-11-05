@@ -71,6 +71,11 @@ jobs:
         env:
           SDL_VIDEO_DRIVER: offscreen
           QA_SLOW: "3"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-qa-out
+          path: qa-out/
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
