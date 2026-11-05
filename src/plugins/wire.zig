@@ -5,6 +5,7 @@ const std = @import("std");
 const lsp_core = @import("../core/lsp.zig");
 const deco = @import("deco.zig");
 const panel = @import("panel.zig");
+const rewrite = @import("rewrite.zig");
 
 /// Onde a pessoa está (canal e servidor abertos). Textos emprestados.
 pub const Where = struct {
@@ -13,6 +14,9 @@ pub const Where = struct {
     guild: u64 = 0,
     guild_name: []const u8 = "",
 };
+
+/// Um arquivo anexado (só com `larper.messages({files=true})`).
+pub const FileRef = struct { name: []const u8, url: []const u8, size: u32 = 0 };
 
 /// Uma mensagem como o plugin vê (nunca o que foi apagado, nem o texto de antes
 /// de uma edição). Textos emprestados, ou de `OwnedMsg`.
@@ -31,6 +35,7 @@ pub const Message = struct {
     /// Segundos desde 1970 (0 = não veio).
     timestamp: i64 = 0,
     attachments: u16 = 0,
+    files: []const FileRef = &.{},
 };
 
 /// Texto de mensagem que uma cópia guarda, no máximo.
@@ -45,9 +50,15 @@ pub const OwnedMsg = struct {
         var keep = @min(m.content.len, max_content);
         while (keep > 0 and keep < m.content.len and (m.content[keep] & 0xC0) == 0x80) keep -= 1;
         const content = m.content[0..keep];
-        const total = content.len + m.author_name.len + m.channel_name.len + m.guild_name.len;
+        var total = content.len + m.author_name.len + m.channel_name.len + m.guild_name.len;
+        for (m.files) |f| total += f.name.len + f.url.len;
         const own = gpa.create(OwnedMsg) catch return null;
         const buf = gpa.alloc(u8, total) catch {
+            gpa.destroy(own);
+            return null;
+        };
+        const files = gpa.alloc(FileRef, m.files.len) catch {
+            gpa.free(buf);
             gpa.destroy(own);
             return null;
         };
@@ -65,10 +76,15 @@ pub const OwnedMsg = struct {
         own.msg.author_name = put(buf, &at, m.author_name);
         own.msg.channel_name = put(buf, &at, m.channel_name);
         own.msg.guild_name = put(buf, &at, m.guild_name);
+        for (m.files, files) |f, *to| {
+            to.* = .{ .name = put(buf, &at, f.name), .url = put(buf, &at, f.url), .size = f.size };
+        }
+        own.msg.files = files;
         return own;
     }
 
     pub fn free(o: *OwnedMsg, gpa: std.mem.Allocator) void {
+        gpa.free(o.msg.files);
         gpa.free(o.buf);
         gpa.destroy(o);
     }
@@ -99,6 +115,9 @@ pub const LspServer = struct { lang: lsp_core.Short, cmd: lsp_core.Command };
 
 pub const MenuKind = enum(u8) { message, user };
 
+/// Uma escolha da segunda lista de uma entrada de menu.
+pub const MenuChoice = struct { value: []u8, pt: []u8, en: []u8 };
+
 /// Entrada num menu de botão direito.
 pub const MenuEntry = struct {
     kind: MenuKind,
@@ -106,6 +125,57 @@ pub const MenuEntry = struct {
     slot: u32,
     pt: []u8,
     en: []u8,
+    /// Com alguma: clicar abre a segunda lista, e a escolha vai para a função.
+    choices: []MenuChoice = &.{},
+    /// Também um botão na barra da mensagem, com este emoji ("" = só no menu).
+    toolbar: []u8 = &.{},
+
+    pub fn free(m: *const MenuEntry, gpa: std.mem.Allocator) void {
+        gpa.free(m.pt);
+        gpa.free(m.en);
+        gpa.free(m.toolbar);
+        for (m.choices) |ch| {
+            gpa.free(ch.value);
+            gpa.free(ch.pt);
+            gpa.free(ch.en);
+        }
+        gpa.free(m.choices);
+    }
+
+    pub fn dup(m: *const MenuEntry, gpa: std.mem.Allocator) !MenuEntry {
+        var out: MenuEntry = .{ .kind = m.kind, .slot = m.slot, .pt = &.{}, .en = &.{} };
+        errdefer out.free(gpa);
+        out.pt = try gpa.dupe(u8, m.pt);
+        out.en = try gpa.dupe(u8, m.en);
+        out.toolbar = try gpa.dupe(u8, m.toolbar);
+        out.choices = try gpa.alloc(MenuChoice, m.choices.len);
+        for (out.choices) |*ch| ch.* = .{ .value = &.{}, .pt = &.{}, .en = &.{} };
+        for (m.choices, out.choices) |ch, *to| {
+            to.value = try gpa.dupe(u8, ch.value);
+            to.pt = try gpa.dupe(u8, ch.pt);
+            to.en = try gpa.dupe(u8, ch.en);
+        }
+        return out;
+    }
+};
+
+/// Uma sugestão de `larper.completions`: fica toda na interface, para a busca
+/// andar a cada tecla sem chamar o plugin.
+pub const Completion = struct { name: []u8, text: []u8, hint: []u8 };
+
+pub const CompletionSet = struct {
+    trigger: u8,
+    items: []Completion,
+
+    pub fn free(s: *CompletionSet, gpa: std.mem.Allocator) void {
+        for (s.items) |it| {
+            gpa.free(it.name);
+            gpa.free(it.text);
+            gpa.free(it.hint);
+        }
+        gpa.free(s.items);
+        gpa.destroy(s);
+    }
 };
 
 /// O que o plugin registrou até agora (comandos, atalhos…). A interface assume.
@@ -119,16 +189,15 @@ pub const Reg = struct {
     n_delete: u16 = 0,
     n_channel: u16 = 0,
     n_lang: u16 = 0,
+    n_edit: u16 = 0,
+    n_dismiss: u16 = 0,
 
     pub fn free(r: *Reg, gpa: std.mem.Allocator) void {
         for (r.commands) |s| gpa.free(s);
         gpa.free(r.commands);
         gpa.free(r.keys);
         gpa.free(r.lsp);
-        for (r.menus) |*m| {
-            gpa.free(m.pt);
-            gpa.free(m.en);
-        }
+        for (r.menus) |*m| m.free(gpa);
         gpa.free(r.menus);
         gpa.destroy(r);
     }
@@ -152,6 +221,8 @@ pub const HttpReq = struct {
     run: u32,
     id: u32,
     post: bool,
+    /// O gesto que pediu: a resposta ainda pode pôr texto na caixa.
+    token: u32 = 0,
     url: [:0]u8,
     body: []u8,
     /// Só os cabeçalhos da lista permitida, prontos ("Nome: valor").
@@ -178,6 +249,7 @@ pub const HttpRes = struct {
     err: HttpError = .none,
     /// Nem chegou a sair (recusado aqui mesmo).
     refused: bool = false,
+    token: u32 = 0,
 };
 
 // --- O app oferece aos plugins ---------------------------------------------------
@@ -201,6 +273,10 @@ pub const Host = struct {
     insert: *const fn (ctx: *anyopaque, text: []const u8) void,
     /// Abre o canal e vai até a mensagem.
     jump: *const fn (ctx: *anyopaque, channel: u64, id: u64) void,
+    /// Copia para a área de transferência.
+    copy: *const fn (ctx: *anyopaque, text: []const u8) void,
+    /// Abre no navegador (o endereço já foi conferido).
+    open_url: *const fn (ctx: *anyopaque, url: []const u8) void,
     /// Copia as mensagens carregadas do canal (0 = o aberto), da mais antiga para
     /// a mais nova; chama `add` para cada uma.
     messages: *const fn (ctx: *anyopaque, channel: u64, limit: u32, out: *MsgList) void,
@@ -225,6 +301,8 @@ pub const MsgList = struct {
     gpa: std.mem.Allocator,
     items: std.ArrayList(*OwnedMsg) = .empty,
     channel: u64 = 0,
+    /// Copiar também a lista de anexos (só quem pede paga por ela).
+    files: bool = false,
 
     pub fn add(l: *MsgList, m: *const Message) void {
         const own = OwnedMsg.dup(l.gpa, m) orelse return;
@@ -258,9 +336,11 @@ pub const StartArgs = struct {
 pub const Gesture = union(enum) {
     command: struct { name: []u8, args: []u8 },
     key: u32,
-    menu_message: struct { slot: u32, msg: *OwnedMsg },
-    menu_user: struct { slot: u32, id: u64, name: []u8 },
-    panel: struct { handle: u32, value: ?[]u8 },
+    /// `value`: a escolha da segunda lista, se tem.
+    menu_message: struct { slot: u32, msg: *OwnedMsg, value: ?[]u8 = null },
+    menu_user: struct { slot: u32, id: u64, name: []u8, value: ?[]u8 = null },
+    /// `toggled`: o estado novo de um interruptor (no lugar de `value`).
+    panel: struct { handle: u32, value: ?[]u8, toggled: ?bool = null },
 };
 
 pub const Ev = union(enum) {
@@ -268,7 +348,10 @@ pub const Ev = union(enum) {
     stop: u32,
     ready,
     message: *OwnedMsg,
+    edit: *OwnedMsg,
     delete: struct { channel: u64, id: u64 },
+    /// A pessoa fechou a nota deste plugin nesta mensagem (o × dela).
+    dismiss: struct { run: u32, id: u64 },
     channel,
     lang,
     /// O painel do plugin abriu ou fechou na tela.
@@ -289,12 +372,17 @@ pub const CmdWhat = union(enum) {
     send: struct { channel: u64, text: []u8, token: u32 },
     insert: struct { text: []u8, token: u32 },
     jump: struct { channel: u64, id: u64, token: u32 },
+    copy: struct { text: []u8, token: u32 },
+    open_url: struct { url: []u8, token: u32 },
     panel_tree: *panel.Tree,
+    settings_tree: *panel.Tree,
+    completions: *CompletionSet,
+    rewrite: []rewrite.Rule,
     panel_show: struct { open: bool, token: u32 },
     deco_set: struct { id: u64, badge: []u8, note: []u8, label: []u8, collapse: bool },
     deco_remove: u64,
     deco_rules: []deco.Rule,
-    want_messages: struct { req: u32, channel: u64, limit: u32 },
+    want_messages: struct { req: u32, channel: u64, limit: u32, files: bool = false },
 };
 
 pub const Cmd = struct { run: u32, what: CmdWhat };

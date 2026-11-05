@@ -16,6 +16,7 @@ const engine = @import("plugins/engine.zig");
 const host = @import("plugins/host.zig");
 const http_curl = @import("plugins/http_curl.zig");
 const exemplos = @import("plugin_examples");
+const attachments = @import("ui/attachments.zig");
 const Id = types.Id;
 const Plugin = engine.Plugin;
 
@@ -109,25 +110,55 @@ fn wipeData(app: *App) void {
     }
 }
 
-fn writeBundled(_: *App) void {
+/// Saíram da lista dos incluídos, mas usam partes da API que nenhum outro usa.
+const fixtures = [_]exemplos.Exemplo{
+    .{ .name = "bookmarks.lua", .source = @embedFile("plugins/testdata/bookmarks.lua") },
+    .{ .name = "filter.lua", .source = @embedFile("plugins/testdata/filter.lua") },
+    .{ .name = "stats.lua", .source = @embedFile("plugins/testdata/stats.lua") },
+};
+
+fn writeFixtures(_: *App) void {
     _ = c.SDL_CreateDirectory("qa-out/plugins");
-    for (exemplos.list) |ex| {
+    for (fixtures) |ex| {
         var b: [96]u8 = undefined;
         const to = std.fmt.bufPrintSentinel(&b, "qa-out/plugins/{s}", .{ex.name}, 0) catch continue;
         _ = c.SDL_SaveFile(to.ptr, ex.source.ptr, ex.source.len);
     }
 }
 
-pub fn removeAllPlugins(_: *App) void {
+fn fixturesLoaded(app: *App) bool {
+    for (fixtures) |ex| {
+        const p = plugin(app, ex.name) orelse return false;
+        if (p.status() != .running) return false;
+    }
+    return bundledRunning(app);
+}
+
+fn writeBundled(app: *App) void {
+    _ = c.SDL_CreateDirectory("qa-out/plugins");
+    for (exemplos.list) |ex| {
+        var b: [96]u8 = undefined;
+        const to = std.fmt.bufPrintSentinel(&b, "qa-out/plugins/{s}", .{ex.name}, 0) catch continue;
+        _ = c.SDL_SaveFile(to.ptr, ex.source.ptr, ex.source.len);
+    }
+    writeFixtures(app);
+}
+
+fn removeAllIn(dir: [:0]const u8) void {
     var count: c_int = 0;
-    if (c.SDL_GlobDirectory("qa-out/plugins", "*.lua", 0, &count)) |names| {
+    if (c.SDL_GlobDirectory(dir.ptr, "*", 0, &count)) |names| {
         defer c.SDL_free(@ptrCast(names));
         for (0..@intCast(count)) |i| {
             var fb: [160]u8 = undefined;
-            const f = std.fmt.bufPrintSentinel(&fb, "qa-out/plugins/{s}", .{std.mem.span(names[i] orelse continue)}, 0) catch continue;
+            const f = std.fmt.bufPrintSentinel(&fb, "{s}/{s}", .{ dir, std.mem.span(names[i] orelse continue) }, 0) catch continue;
             _ = c.SDL_RemovePath(f.ptr);
         }
     }
+}
+
+pub fn removeAllPlugins(_: *App) void {
+    removeAllIn("qa-out/plugins/antigos");
+    removeAllIn("qa-out/plugins");
 }
 
 // --- O servidor de mentira ----------------------------------------------------------
@@ -240,6 +271,12 @@ fn inject(app: *App, channel: Id, author: Id, text: []const u8) Id {
     return id;
 }
 
+fn editMsg(app: *App, channel: Id, id: Id, text: []const u8) void {
+    const content = std.heap.c_allocator.dupe(u8, text) catch return;
+    app.events.push(.{ .message_update = .{ .channel = channel, .id = id, .content = content } });
+    platform.Window.wake(app.win.wake_type, .gateway);
+}
+
 fn deleteMsg(app: *App, channel: Id, id: Id) void {
     app.events.push(.{ .message_delete = .{ .channel = channel, .id = id } });
     platform.Window.wake(app.win.wake_type, .gateway);
@@ -302,6 +339,16 @@ fn cardsShow(_: *App) bool {
 
 fn hostCardShows(_: *App) bool {
     return qa.find("plugin-chip:translate.lua:http") != null and qa.find("host:translate.lua:api.mymemory.translated.net") != null;
+}
+
+fn alertsShow(_: *App) bool {
+    // Lê mensagens e abre endereços: avisa. A tradução só vê o que você escolhe no menu.
+    return qa.find("plugin-alert:links.lua") != null and qa.find("plugin-alert:translate.lua") == null and qa.find("plugin-alert:reminders.lua") == null;
+}
+
+fn newChips(_: *App) bool {
+    return qa.find("plugin-chip:cleanlinks.lua:rewrite") != null and qa.find("plugin-chip:links.lua:links") != null and
+        qa.find("plugin-chip:snippets.lua:completions") != null and qa.find("plugin-chip:translate.lua:settings") != null;
 }
 
 // --- Favoritos ------------------------------------------------------------------------
@@ -432,6 +479,26 @@ fn timeRefused(app: *App) bool {
 fn pendingGone(_: *App) bool {
     return qa.find("pp-btn:in1h") == null and !anyMark("pp-item:r");
 }
+fn tSnooze(_: *App, buf: []u8) []const u8 {
+    return firstMark("pp-btn:snooze", buf);
+}
+fn twoReminders(_: *App) bool {
+    var keys: [4][56]u8 = undefined;
+    var lens: [4]u8 = undefined;
+    return qa.keysWith(&.{"pp-item:r"}, &keys, &lens) >= 2;
+}
+fn hasDatedReminder(app: *App) bool {
+    const p = plugin(app, "reminders.lua") orelse return false;
+    const t = p.tree orelse return false;
+    for (t.nodes.items) |*n| if (n.kind == .item and std.mem.indexOf(u8, n.text, "conferir amanhã") != null) return true;
+    return false;
+}
+fn hasDailyReminder(app: *App) bool {
+    const p = plugin(app, "reminders.lua") orelse return false;
+    const t = p.tree orelse return false;
+    for (t.nodes.items) |*n| if (n.kind == .item and std.mem.indexOf(u8, n.text, "🔁 reunião") != null) return true;
+    return false;
+}
 fn panelLembretesAberto(app: *App) bool {
     return openIs(app, "reminders.lua") and qa.find("pp-panel") != null;
 }
@@ -475,6 +542,47 @@ fn hitDiskClean(app: *App) bool {
     defer c.SDL_free(data);
     const text = @as([*]const u8, @ptrCast(data))[0..size];
     return std.mem.indexOf(u8, text, "pessoal") == null and std.mem.indexOf(u8, text, "urgente") != null;
+}
+fn tabBadge(_: *App) bool {
+    return qa.find("pp-badge:highlights.lua") != null;
+}
+fn headerBadge(_: *App) bool {
+    return qa.find("header-plugins-badge") != null;
+}
+fn noBadges(app: *App) bool {
+    return app.plugins.n_badges == 0 and qa.find("header-plugins-badge") == null;
+}
+fn editHit(app: *App) void {
+    editMsg(app, geral, hit_id, "agora URGENTE de verdade");
+}
+fn hitEdited(app: *App) bool {
+    const p = plugin(app, "highlights.lua") orelse return false;
+    const t = p.tree orelse return false;
+    var kb: [32]u8 = undefined;
+    const k = std.fmt.bufPrint(&kb, "{d}", .{hit_id}) catch return false;
+    for (t.nodes.items) |*n| if (std.mem.eql(u8, n.key, k)) return std.mem.indexOf(u8, n.sub, "de verdade") != null;
+    return false;
+}
+fn editHitNoWord(app: *App) void {
+    editMsg(app, geral, hit_id, "mudei de ideia");
+}
+fn mutedRow(_: *App) bool {
+    return anyMark("pp-btn:unmute");
+}
+fn notMuted(_: *App) bool {
+    return !anyMark("pp-btn:unmute");
+}
+fn tUnmute(_: *App, buf: []u8) []const u8 {
+    return firstMark("pp-btn:unmute", buf);
+}
+fn sendUrgentMuted(app: *App) void {
+    _ = inject(app, geral, 1001, "URGENTE no canal silenciado");
+}
+fn noHighlightToast(app: *App) bool {
+    return !toastHas(app, "★ urgente");
+}
+fn desktopFired(_: *App) bool {
+    return host.qa_desktop > desktop0 and std.mem.indexOf(u8, host.qa_desktop_text[0..host.qa_desktop_len], "urgente") != null;
 }
 fn paletteOpen(app: *App) bool {
     return app.st.palette.open;
@@ -569,6 +677,9 @@ fn insertedAndNotSent(app: *App) bool {
 fn inputEmpty(app: *App) bool {
     return inputText(app).len == 0;
 }
+fn suggestionShown(_: *App) bool {
+    return qa.find("autocomplete") != null and qa.find("ac:0") != null;
+}
 
 // --- Tradução ---------------------------------------------------------------------------
 
@@ -611,6 +722,194 @@ fn tClose(_: *App, buf: []u8) []const u8 {
 }
 fn noteGone(_: *App) bool {
     return qa.find(mark(&mbuf, "deco-note:{d}", msg_id)) == null;
+}
+fn optionsShow(_: *App) bool {
+    return qa.find("pp-select:target") != null and qa.find("pp-select:source") != null;
+}
+fn languageList(_: *App) bool {
+    return qa.find("pp-opt:target:es") != null and qa.find("pp-opt:target:zh-CN") != null;
+}
+fn optionIs(app: *App, name: []const u8, key_name: []const u8, want: []const u8) bool {
+    const p = plugin(app, name) orelse return false;
+    const t = p.settings orelse return false;
+    for (t.nodes.items) |*n| if (std.mem.eql(u8, n.key, key_name)) return std.mem.eql(u8, n.meta, want);
+    return false;
+}
+fn targetEs(app: *App) bool {
+    return optionIs(app, "translate.lua", "target", "es");
+}
+fn optionsKept(app: *App) bool {
+    return targetEs(app) and optionIs(app, "translate.lua", "source", "en");
+}
+fn requestEs(_: *App) bool {
+    return serverLastHas("langpair=Autodetect%7Ces");
+}
+fn requestFr(_: *App) bool {
+    return serverLastHas("langpair=Autodetect%7Cfr");
+}
+fn requestSource(_: *App) bool {
+    return serverLastHas("langpair=en%7Ces");
+}
+fn requestDe(_: *App) bool {
+    return serverLastHas("%7Cde");
+}
+fn noteHasText(app: *App, text: []const u8) bool {
+    const v = viewOf(app) orelse return false;
+    for (v.slice()) |*part| if (std.mem.indexOf(u8, part.note, text) != null) return true;
+    return false;
+}
+fn noteEs(app: *App) bool {
+    return noteHasText(app, "🌐 ES · texto traduzido");
+}
+fn noteFr(app: *App) bool {
+    return noteHasText(app, "🌐 FR · texto traduzido");
+}
+fn secondList(_: *App) bool {
+    return qa.find("menu:Francês") != null and qa.find("menu:Chinês") != null;
+}
+fn toolbarGlyph(_: *App) bool {
+    return qa.find("tb-plugin:Translate") != null;
+}
+fn translationInBox(app: *App) bool {
+    return std.mem.eql(u8, inputText(app), "texto traduzido pelo servidor");
+}
+fn translationNotSent(app: *App) bool {
+    const ch = app.st.activeChannel() orelse return false;
+    const cs = app.store.channel(ch) orelse return false;
+    const items = cs.messages.items;
+    return items.len == 0 or !std.mem.eql(u8, items[items.len - 1].msg.content, "texto traduzido pelo servidor");
+}
+fn trWorked(app: *App) bool {
+    return translationInBox(app) and translationNotSent(app) and requestDe(app);
+}
+
+// --- Atualizar e arquivar ---------------------------------------------------------------
+
+const old_translate =
+    \\-- @name Translate
+    \\-- @version 1.0.0
+    \\-- @capabilities menu
+    \\-- arquivo-antigo
+    \\larper.menu("message", "Velho", function() end)
+;
+
+fn writeOldTranslate(_: *App) void {
+    _ = c.SDL_SaveFile("qa-out/plugins/translate.lua", old_translate.ptr, old_translate.len);
+}
+fn oldLoaded(app: *App) bool {
+    const p = plugin(app, "translate.lua") orelse return false;
+    return std.mem.eql(u8, p.man.version, "1.0.0") and p.isRunning();
+}
+fn updateOffered(_: *App) bool {
+    return qa.find("plugin-update:translate.lua") != null;
+}
+fn updateGone(app: *App) bool {
+    const p = plugin(app, "translate.lua") orelse return false;
+    return !std.mem.eql(u8, p.man.version, "1.0.0") and p.isRunning() and qa.find("plugin-card:translate.lua") != null and qa.find("plugin-update:translate.lua") == null;
+}
+fn fileHas(path: [*:0]const u8, needle: []const u8) bool {
+    var size: usize = 0;
+    const data = c.SDL_LoadFile(path, &size) orelse return false;
+    defer c.SDL_free(data);
+    return std.mem.indexOf(u8, @as([*]const u8, @ptrCast(data))[0..size], needle) != null;
+}
+fn bakKept(_: *App) bool {
+    return fileHas("qa-out/plugins/translate.lua.bak", "arquivo-antigo") and !fileHas("qa-out/plugins/translate.lua", "arquivo-antigo");
+}
+fn writeBakMarker(_: *App) void {
+    const text = "copia-de-antes";
+    _ = c.SDL_SaveFile("qa-out/plugins/translate.lua.bak", text.ptr, text.len);
+}
+fn bakNotOverwritten(_: *App) bool {
+    return fileHas("qa-out/plugins/translate.lua.bak", "copia-de-antes") and fileHas("qa-out/plugins/translate.lua.bak2", "arquivo-antigo");
+}
+fn writeCollision(_: *App) void {
+    _ = c.SDL_CreateDirectory("qa-out/plugins/antigos");
+    const text = "ja-estava-aqui";
+    _ = c.SDL_SaveFile("qa-out/plugins/antigos/bookmarks.lua", text.ptr, text.len);
+}
+fn archiveOffered(_: *App) bool {
+    return qa.find("plugin-archive") != null;
+}
+fn archived(app: *App) bool {
+    if (plugin(app, "bookmarks.lua") != null or plugin(app, "stats.lua") != null or plugin(app, "shrug.lua") != null) return false;
+    // Nada é apagado, nem o que já estava na pasta.
+    return bundledRunning(app) and qa.find("plugin-archive") == null and
+        fileHas("qa-out/plugins/antigos/bookmarks.lua", "ja-estava-aqui") and
+        fileHas("qa-out/plugins/antigos/bookmarks-2.lua", "@name") and
+        fileHas("qa-out/plugins/antigos/stats.lua", "@name");
+}
+
+// --- Links limpos, horários, links e arquivos ----------------------------------------------
+
+fn lastContentIs(app: *App, want: []const u8) bool {
+    const ch = app.st.activeChannel() orelse return false;
+    const cs = app.store.channel(ch) orelse return false;
+    const items = cs.messages.items;
+    if (items.len == 0) return false;
+    return std.mem.eql(u8, items[items.len - 1].msg.content, want);
+}
+fn linkCleaned(app: *App) bool {
+    return lastContentIs(app, "olha https://youtu.be/abc?t=30");
+}
+fn linkInCodeKept(app: *App) bool {
+    return lastContentIs(app, "`https://youtu.be/abc?si=xyz`");
+}
+fn stampInBox(app: *App) bool {
+    const t = inputText(app);
+    return std.mem.startsWith(u8, t, "<t:") and std.mem.endsWith(u8, t, ":f>");
+}
+fn stampRelative(app: *App) bool {
+    const t = inputText(app);
+    return std.mem.startsWith(u8, t, "<t:") and std.mem.endsWith(u8, t, ":R>");
+}
+fn stampShown(_: *App) bool {
+    return anyMark("stamp:");
+}
+/// Em todos os formatos, na mesma hora: número sem sinal, e o ano onde deveria estar.
+fn stampReadable(_: *App) bool {
+    const rich = @import("ui/rich.zig");
+    const when: u64 = 1_800_000_000;
+    for ("tTdDfFR") |style| {
+        var b: [96]u8 = undefined;
+        const t = rich.stampText(&b, when << 8 | style);
+        if (t.len < 2 or std.mem.indexOfScalar(u8, t, '+') != null or std.mem.eql(u8, t, "?")) return false;
+        if (std.mem.indexOfScalar(u8, "dDfF", style) != null and std.mem.indexOf(u8, t, "2027") == null) return false;
+    }
+    return true;
+}
+fn sendLink(app: *App) void {
+    _ = inject(app, geral, 1001, "olha https://exemplo.com/pagina.");
+}
+fn panelLinks(app: *App) bool {
+    return openIs(app, "links.lua");
+}
+fn linkItemUrl(app: *App) ?[]const u8 {
+    const p = plugin(app, "links.lua") orelse return null;
+    const t = p.tree orelse return null;
+    for (t.nodes.items) |*n| if (std.mem.eql(u8, n.key, "i1")) return n.sub;
+    return null;
+}
+fn linkListed(app: *App) bool {
+    return panelLinks(app) and std.mem.eql(u8, linkItemUrl(app) orelse "", "https://exemplo.com/pagina") and qa.find("pp-item:i1") != null;
+}
+fn linkFiltered(app: *App) bool {
+    return linkItemUrl(app) == null;
+}
+fn urlOpened(_: *App) bool {
+    return std.mem.eql(u8, attachments.last_opened[0..attachments.last_opened_len], "https://exemplo.com/pagina");
+}
+fn urlCopied(app: *App) bool {
+    return toastHas(app, "copiado");
+}
+fn kindMenu(_: *App) bool {
+    return qa.find("pp-opt:kind:file") != null;
+}
+fn linkJumped(app: *App) bool {
+    return app.st.activeChannel() == geral;
+}
+fn linksForgotten(app: *App) bool {
+    return panelClosed(app) and linkItemUrl(app) == null;
 }
 
 // --- Estatísticas ------------------------------------------------------------------------
@@ -658,13 +957,29 @@ const qa_slow_plugin =
     \\end)
 ;
 
+const qa_noisy_plugin =
+    \\-- @name QA barulhento
+    \\-- @capabilities notify
+    \\larper.command("/qa-barulho", function()
+    \\  for i = 1, 12 do larper.notify("barulho " .. i, { desktop = true }) end
+    \\end)
+;
+
 fn writeExtra(_: *App) void {
     _ = c.SDL_SaveFile("qa-out/plugins/qahttp.lua", qa_http_plugin.ptr, qa_http_plugin.len);
     _ = c.SDL_SaveFile("qa-out/plugins/qalento.lua", qa_slow_plugin.ptr, qa_slow_plugin.len);
+    _ = c.SDL_SaveFile("qa-out/plugins/qabarulho.lua", qa_noisy_plugin.ptr, qa_noisy_plugin.len);
 }
 fn removeExtra(_: *App) void {
     _ = c.SDL_RemovePath("qa-out/plugins/qahttp.lua");
     _ = c.SDL_RemovePath("qa-out/plugins/qalento.lua");
+    _ = c.SDL_RemovePath("qa-out/plugins/qabarulho.lua");
+}
+fn noisyLimited(_: *App) bool {
+    return host.qa_desktop - desktop0 == 6 and std.mem.indexOf(u8, host.qa_desktop_text[0..host.qa_desktop_len], "barulho 6") != null;
+}
+fn reminderAfterNoise(_: *App) bool {
+    return host.qa_desktop - desktop0 == 7 and std.mem.indexOf(u8, host.qa_desktop_text[0..host.qa_desktop_len], "depois do barulho") != null;
 }
 fn extraLoaded(app: *App) bool {
     const a = plugin(app, "qahttp.lua") orelse return false;
@@ -715,10 +1030,15 @@ fn framesWhileBusy(app: *App) bool {
 /// Entra depois de "Instalar os incluídos" na bateria geral (configurações abertas).
 pub const ops = [_]Op{
     s("plugins: a página"),
+    run(writeFixtures),
+    run(reloadNow),
+    expectLong("os plugins de teste ligam junto com os incluídos", fixturesLoaded),
     expect("os incluídos estão ligados, numa thread própria", threadUp),
     expect("todos os plugins incluídos rodam sem erro", bundledRunning),
     expect("cartão com o cabeçalho, as permissões e o botão do painel", cardsShow),
     expect("plugin antigo aparece como API antiga", cardsShow),
+    expect("as capacidades novas aparecem como etiquetas", newChips),
+    expect("quem lê mensagens e manda para fora ganha um aviso, os outros não", alertsShow),
     .{ .shot = "plugins-pagina" },
     .{ .key = .{ .key = c.ImGuiKey_Escape } },
 
@@ -786,11 +1106,16 @@ pub const ops = [_]Op{
     run(pickOther),
     rmsg,
     click("menu:Lembrar desta mensagem"),
-    expect("lembrar de uma mensagem abre o painel com os tempos", panelLembretes),
+    click("menu:Outro tempo…"),
+    expect("\"Outro tempo…\" abre o painel com os tempos", panelLembretes),
     .{ .shot = "plugin-lembrete" },
     click("pp-btn:in1h"),
     expect("escolher o tempo cria o lembrete", hasReminder),
     expect("o que já avisou fica na lista", firedOldShown),
+    dyn(tSnooze),
+    expect("\"mais 10 min\" põe o que já avisou de volta na lista", twoReminders),
+    dyn(tReminderCancel),
+    expect("e dá para cancelar", hasReminder),
     run(restartAll),
     expect("o painel volta sozinho depois de reiniciar", panelLembretesAberto),
     expect("o lembrete sobrevive a reiniciar", hasReminder),
@@ -799,6 +1124,44 @@ pub const ops = [_]Op{
     run(pickOther),
     rmsg,
     click("menu:Lembrar desta mensagem"),
+    .{ .shot = "plugin-lembrete-lista" },
+    click("menu:Em 10 minutos"),
+    expect("a segunda lista cria o lembrete direto", hasReminder),
+    dyn(tReminderCancel),
+    expect("cancelar", noReminder),
+    rmsg,
+    click("menu:Lembrar desta mensagem"),
+    click("menu:Em 1 hora"),
+    expect("em 1 hora", hasReminder),
+    dyn(tReminderCancel),
+    expect("cancelar", noReminder),
+    rmsg,
+    click("menu:Lembrar desta mensagem"),
+    click("menu:Em 3 horas"),
+    expect("em 3 horas", hasReminder),
+    dyn(tReminderCancel),
+    expect("cancelar", noReminder),
+    rmsg,
+    click("menu:Lembrar desta mensagem"),
+    click("menu:Amanhã"),
+    expect("amanhã", hasReminder),
+    dyn(tReminderCancel),
+    expect("cancelar", noReminder),
+    click("composer"),
+    .{ .text = "/remind amanhã 9h conferir amanhã" },
+    key(c.ImGuiKey_Enter),
+    expect("/remind entende dia e hora", hasDatedReminder),
+    dyn(tReminderCancel),
+    expect("cancelar", noReminder),
+    click("composer"),
+    .{ .text = "/remind todo dia 8:30 reunião" },
+    key(c.ImGuiKey_Enter),
+    expect("/remind todo dia marca a repetição", hasDailyReminder),
+    dyn(tReminderCancel),
+    expect("cancelar", noReminder),
+    rmsg,
+    click("menu:Lembrar desta mensagem"),
+    click("menu:Outro tempo…"),
     expect("o painel pergunta o tempo de novo", panelLembretes),
     click("pp-btn:in10m"),
     expect("10 min cria o lembrete", hasReminder),
@@ -806,6 +1169,7 @@ pub const ops = [_]Op{
     expect("cancelar", noReminder),
     rmsg,
     click("menu:Lembrar desta mensagem"),
+    click("menu:Outro tempo…"),
     expect("o painel pergunta o tempo de novo", panelLembretes),
     click("pp-btn:in3h"),
     expect("3 h cria o lembrete", hasReminder),
@@ -813,6 +1177,7 @@ pub const ops = [_]Op{
     expect("cancelar", noReminder),
     rmsg,
     click("menu:Lembrar desta mensagem"),
+    click("menu:Outro tempo…"),
     expect("o painel pergunta o tempo de novo", panelLembretes),
     click("pp-btn:in1d"),
     expect("amanhã cria o lembrete", hasReminder),
@@ -822,6 +1187,7 @@ pub const ops = [_]Op{
     expect("cancelar", noReminder),
     rmsg,
     click("menu:Lembrar desta mensagem"),
+    click("menu:Outro tempo…"),
     expect("o painel pergunta o tempo de novo", panelLembretes),
     click("pp-input:custom"),
     .{ .text = "banana" },
@@ -834,6 +1200,7 @@ pub const ops = [_]Op{
     expect("cancelar", noReminder),
     rmsg,
     click("menu:Lembrar desta mensagem"),
+    click("menu:Outro tempo…"),
     expect("o painel pergunta o tempo de novo", panelLembretes),
     click("pp-btn:pending-off"),
     expect("deixar para lá não cria nada", pendingGone),
@@ -856,6 +1223,41 @@ pub const ops = [_]Op{
     .{ .shot = "plugin-destaques" },
     .{ .wait = 1800 },
     expect("no disco fica a palavra, nunca o texto de quem escreveu", hitDiskClean),
+    click("pp-tab:bookmarks.lua"),
+    run(sendUrgent),
+    expect("com outro painel na frente, o número aparece na etiqueta", tabBadge),
+    .{ .shot = "plugin-numero" },
+    click("pp-close"),
+    expect("fecha o painel", panelClosed),
+    expect("e o botão do cabeçalho avisa", headerBadge),
+    // O aviso passa por cima do botão: espera ele sair, para o print mostrar o ponto.
+    .{ .wait = 4000 },
+    .{ .shot = "plugin-numero-cabecalho" },
+    click("header-plugins"),
+    expect("o botão abre quem tem novidade", panelDestaques),
+    expect("abriu, viu: o número some", noBadges),
+    run(editHit),
+    expect("editaram: o histórico mostra o texto novo", hitEdited),
+    run(editHitNoWord),
+    expect("sem a palavra, sai do histórico", hitGone),
+    run(sendUrgent),
+    expect("outra com a palavra", hitInPanel),
+    click("pp-btn:mute"),
+    expect("silenciar o canal põe na lista", mutedRow),
+    run(clearToast),
+    run(sendUrgentMuted),
+    .{ .wait = 300 },
+    expect("no canal silenciado, nenhum aviso", noHighlightToast),
+    dyn(tUnmute),
+    expect("reativar tira da lista", notMuted),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("pp-toggle:desktop"),
+    .{ .wait = 100 },
+    key(c.ImGuiKey_Escape),
+    run(rememberDesktop),
+    run(sendUrgent),
+    expect("com a opção ligada, sai a notificação do sistema", desktopFired),
     run(toMemes),
     expect("muda de canal", onMemes),
     dyn(tHit),
@@ -913,6 +1315,13 @@ pub const ops = [_]Op{
     click("pp-btn:add"),
     expect("guardar um trecho", snippetSaved),
     click("composer"),
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    .{ .text = ";ol" },
+    expect("digitar ;ol mostra o trecho na lista", suggestionShown),
+    .{ .shot = "plugin-sugestao" },
+    key(c.ImGuiKey_Tab),
+    expect("Tab põe o texto na caixa, sem enviar", insertedAndNotSent),
     ctrl(c.ImGuiKey_A),
     key(c.ImGuiKey_Backspace),
     click("pp-item:ola"),
@@ -973,11 +1382,167 @@ pub const ops = [_]Op{
     expect("o pedido não leva nada da conta", requestOk),
     dyn(tClose),
     expect("o × dispensa a nota", noteGone),
+    rmsg,
+    click("menu:Traduzir"),
+    expectLong("depois do ×, traduzir de novo traduz (e não só tira a nota)", noteShows),
+    rmsg,
+    click("menu:Traduzir"),
+    expect("clicar outra vez tira", noteGone),
+
+    s("plugins: opções da tradução"),
     ctrl(c.ImGuiKey_Comma),
     click("settings:Plugins"),
+    expect("o cartão mostra as opções", optionsShow),
+    click("pp-select:target"),
+    expect("a lista de idiomas abre", languageList),
+    .{ .shot = "plugin-opcoes" },
+    click("pp-opt:target:es"),
+    expect("escolher um idioma fica marcado", targetEs),
+    key(c.ImGuiKey_Escape),
+    rmsg,
+    click("menu:Traduzir"),
+    expectLong("o pedido vai para o idioma da página", requestEs),
+    expectLong("a nota mostra o idioma", noteEs),
+    .{ .shot = "plugin-traducao-idioma" },
+    dyn(tClose),
+    expect("o × dispensa a nota", noteGone),
+    rmsg,
+    click("menu:Traduzir para…"),
+    expect("\"Traduzir para…\" abre a segunda lista", secondList),
+    .{ .shot = "plugin-menu-idiomas" },
+    click("menu:Francês"),
+    expectLong("o pedido vai para o idioma da lista", requestFr),
+    expectLong("a nota mostra esse idioma", noteFr),
+    rmsg,
+    click("menu:Traduzir"),
+    expect("\"Traduzir\" tira a nota", noteGone),
+    rmsg,
+    click("menu:Traduzir"),
+    expectLong("a lista não mudou a página: volta ao idioma escolhido", requestEs),
+    expectLong("a nota volta", noteEs),
+    dyn(tClose),
+    expect("o × dispensa a nota", noteGone),
+    .{ .hover = .{ .dyn = tMsgText } },
+    .{ .wait = 150 },
+    expect("o botão aparece na barra da mensagem", toolbarGlyph),
+    .{ .shot = "plugin-barra" },
+    click("tb-plugin:Translate"),
+    expectLong("o botão da barra traduz", noteEs),
+    dyn(tClose),
+    expect("o × dispensa a nota", noteGone),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("pp-select:source"),
+    click("pp-opt:source:en"),
+    .{ .wait = 100 },
+    key(c.ImGuiKey_Escape),
+    rmsg,
+    click("menu:Traduzir"),
+    expectLong("a origem muda a primeira metade do par", requestSource),
+    dyn(tClose),
+    run(restartAll),
+    expectLong("reiniciar o plugin mantém as duas opções", optionsKept),
+    run(clearToast),
+    click("composer"),
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    .{ .text = "/tr de bom dia" },
+    key(c.ImGuiKey_Enter),
+    expectLong("/tr põe a tradução na caixa, sem enviar", trWorked),
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+
+    s("plugins: atualizar um incluído"),
+    run(writeOldTranslate),
+    run(reloadNow),
+    expectLong("com o arquivo velho na pasta, ele continua rodando", oldLoaded),
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    expect("o cartão oferece a versão nova", updateOffered),
+    .{ .shot = "plugin-atualizar" },
+    click("plugin-update:translate.lua"),
+    expectLong("atualizar troca o arquivo, e o botão some", updateGone),
+    expect("o arquivo de antes fica guardado como .bak", bakKept),
+    run(writeBakMarker),
+    run(writeOldTranslate),
+    run(reloadNow),
+    expectLong("de novo com o arquivo velho", oldLoaded),
+    expect("o cartão oferece de novo", updateOffered),
+    click("plugin-update:translate.lua"),
+    expectLong("atualizar outra vez", updateGone),
+    expect("um .bak que já existe não é sobrescrito", bakNotOverwritten),
     click(translate_host),
     expect("tirar a aprovação", notApproved),
     key(c.ImGuiKey_Escape),
+
+    s("plugins: links limpos"),
+    click("composer"),
+    .{ .text = "olha https://youtu.be/abc?si=xyz&t=30" },
+    key(c.ImGuiKey_Enter),
+    expect("o rastreio sai do link enviado", linkCleaned),
+    click("composer"),
+    .{ .text = "`https://youtu.be/abc?si=xyz`" },
+    key(c.ImGuiKey_Enter),
+    expect("em bloco de código, fica como está", linkInCodeKept),
+
+    s("plugins: horários"),
+    click("composer"),
+    .{ .text = "/ts em 2h" },
+    key(c.ImGuiKey_Enter),
+    expect("/ts põe o horário na caixa, sem enviar", stampInBox),
+    key(c.ImGuiKey_Enter),
+    expect("enviado, aparece como horário", stampShown),
+    expect("e é legível em todos os formatos", stampReadable),
+    .{ .shot = "plugin-horario" },
+    ctrl(c.ImGuiKey_Comma),
+    click("settings:Plugins"),
+    click("pp-select:style"),
+    click("pp-opt:style:R"),
+    .{ .wait = 100 },
+    key(c.ImGuiKey_Escape),
+    click("composer"),
+    .{ .text = "/ts em 2h" },
+    key(c.ImGuiKey_Enter),
+    expect("o formato vem das opções", stampRelative),
+    key(c.ImGuiKey_Enter),
+    expect("\"em 2 horas\" também aparece como horário", stampShown),
+
+    s("plugins: links e arquivos"),
+    run(toGeral),
+    .{ .wait = 150 },
+    run(sendLink),
+    .{ .wait = 150 },
+    click("composer"),
+    .{ .text = "/links" },
+    key(c.ImGuiKey_Enter),
+    key(c.ImGuiKey_Enter),
+    expectLong("/links abre o painel, com o link da mensagem", linkListed),
+    .{ .shot = "plugin-links" },
+    click("pp-input:search"),
+    .{ .text = "nada-disso-existe" },
+    expect("a busca filtra", linkFiltered),
+    ctrl(c.ImGuiKey_A),
+    key(c.ImGuiKey_Backspace),
+    expect("sem busca, volta", linkListed),
+    click("pp-select:kind"),
+    expect("a lista de tipos abre", kindMenu),
+    click("pp-opt:kind:file"),
+    expect("só arquivos: o link sai", linkFiltered),
+    click("pp-select:kind"),
+    click("pp-opt:kind:all"),
+    expect("tudo: o link volta", linkListed),
+    click("pp-btn:open1"),
+    expect("abrir vai para o navegador", urlOpened),
+    click("pp-btn:copy1"),
+    expect("copiar avisa", urlCopied),
+    click("pp-item:i1"),
+    expect("clicar no item vai até a mensagem", linkJumped),
+    .{ .wait = 600 },
+    click("pp-btn:refresh"),
+    .{ .wait = 150 },
+    expect("atualizar mantém a lista", linkListed),
+    click("pp-close"),
+    expectLong("fechou: a lista some da memória", linksForgotten),
 
     s("plugins: estatísticas"),
     click("composer"),
@@ -1027,6 +1592,18 @@ pub const ops = [_]Op{
     key(c.ImGuiKey_Enter),
     expect("http:// sem TLS é recusado", plainRefused),
 
+    s("plugins: um barulhento não come o aviso dos outros"),
+    run(rememberDesktop),
+    click("composer"),
+    .{ .text = "/qa-barulho" },
+    key(c.ImGuiKey_Enter),
+    key(c.ImGuiKey_Enter),
+    expectLong("só 6 notificações do sistema por minuto, por plugin", noisyLimited),
+    click("composer"),
+    .{ .text = "/remind 1s depois do barulho" },
+    key(c.ImGuiKey_Enter),
+    expectLong("e o lembrete avisa mesmo assim", reminderAfterNoise),
+
     s("plugins: o Lua não segura a interface"),
     run(clearFrames),
     click("composer"),
@@ -1047,6 +1624,13 @@ pub const ops = [_]Op{
     click("settings:Plugins"),
     click("plugin-open:bookmarks.lua"),
     expect("com ele aberto, o mesmo botão fecha", panelClosed),
+
+    s("plugins: arquivar os que saíram do app"),
+    run(writeCollision),
+    expect("a página mostra o botão de arquivar", archiveOffered),
+    .{ .shot = "plugin-arquivar" },
+    click("plugin-archive"),
+    expectLong("arquivar tira da pasta, sem apagar nada", archived),
 
     s("plugins: varredura da página"),
 };
@@ -1179,6 +1763,11 @@ pub const ops_theme = [_]Op{
     click("settings:Plugins"),
     expect("os cartões aparecem", themeCards),
     .{ .shot = "tema-plugins" },
+    expect("as opções aparecem no cartão", optionsShow),
+    click("pp-select:target"),
+    expect("a lista de idiomas abre", languageList),
+    .{ .shot = "tema-plugin-opcoes" },
+    key(c.ImGuiKey_Escape),
     key(c.ImGuiKey_Escape),
     click("header-plugins"),
     expect("o botão do cabeçalho abre o painel", panelFavoritos),
@@ -1192,6 +1781,15 @@ pub const ops_theme = [_]Op{
     expect("o favorito aparece no painel", itemThere),
     expect("a mensagem ganha o selo", bookmarkBadge),
     .{ .shot = "tema-plugin-painel" },
+    rmsg,
+    click("menu:Traduzir para…"),
+    expect("a segunda lista abre", secondList),
+    .{ .shot = "tema-plugin-segunda-lista" },
+    key(c.ImGuiKey_Escape),
+    .{ .hover = .{ .dyn = tMsgText } },
+    .{ .wait = 150 },
+    expect("o botão aparece na barra da mensagem", toolbarGlyph),
+    .{ .shot = "tema-plugin-barra" },
     click("pp-side"),
     expect("encaixado à esquerda", dockedLeft),
     .{ .shot = "tema-plugin-esquerda" },

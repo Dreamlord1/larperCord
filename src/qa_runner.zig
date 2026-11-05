@@ -1843,7 +1843,7 @@ const ops_plugin_section = [_]Op{
     ctrl(c.ImGuiKey_Comma),
     click("settings:Plugins"),
 } ++ @import("qa_plugins.zig").ops ++ [_]Op{
-    .{ .sweep = &.{ "toggle:", "button:", "plugin-open:", "host:" } },
+    .{ .sweep = &.{ "toggle:", "button:", "plugin-open:", "host:", "pp-select:", "pp-toggle:" } },
     key(c.ImGuiKey_Escape),
     // O resto da bateria começa sem plugins e sem painel (o layout volta ao normal).
     .{ .run = @import("qa_plugins.zig").endSection },

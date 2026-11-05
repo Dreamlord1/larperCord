@@ -9,6 +9,8 @@ const i18n = @import("i18n.zig");
 const inbox = @import("inbox.zig");
 const plugin_panel = @import("plugin_panel.zig");
 const engine = @import("../plugins/engine.zig");
+const manifest = @import("../plugins/manifest.zig");
+const version = @import("../core/version.zig");
 const exemplos = @import("plugin_examples");
 const c = @import("c");
 
@@ -28,7 +30,18 @@ const labels = [_]Label{
     .{ .cap = .panel, .pt = "Painel", .en = "Panel", .tip_pt = "Um painel lateral próprio", .tip_en = "Its own side panel" },
     .{ .cap = .menu, .pt = "Menus", .en = "Menus", .tip_pt = "Entradas no botão direito de mensagens e pessoas", .tip_en = "Entries on the right-click menu of messages and people" },
     .{ .cap = .decorate, .pt = "Marca mensagens", .en = "Decorates messages", .tip_pt = "Selos, notas e recolher, só na sua tela", .tip_en = "Badges, notes and collapsing, only on your screen" },
+    .{ .cap = .rewrite, .pt = "Altera o que você envia", .en = "Changes what you send", .tip_pt = "Regras fixas aplicadas ao texto ao enviar; o plugin não vê o que você escreve", .tip_en = "Fixed rules applied to the text as you send; the plugin doesn't see what you write", .strong = true },
+    .{ .cap = .links, .pt = "Abre links", .en = "Opens links", .tip_pt = "Abre endereços no navegador quando você clica em algo dele", .tip_en = "Opens addresses in the browser when you click something of its own", .strong = true },
+    .{ .cap = .completions, .pt = "Sugere ao digitar", .en = "Suggests as you type", .tip_pt = "Uma lista na caixa de mensagem; o que você escolhe vai para a caixa, nunca é enviado sozinho", .tip_en = "A list in the message box; what you pick goes in the box and is never sent on its own" },
+    .{ .cap = .settings, .pt = "Opções", .en = "Options", .tip_pt = "As opções dele aparecem neste cartão", .tip_en = "Its options show up on this card" },
 };
+
+/// Vinham com o app e saíram: uns viraram funções do próprio app, outros eram só
+/// demonstração. Quem já tem continua usando até decidir arquivar.
+const retired = [_][]const u8{ "alerta.lua", "calc.lua", "dado.lua", "relogio.lua", "resumo.lua", "shrug.lua", "zoeira.lua", "bookmarks.lua", "filter.lua", "stats.lua" };
+
+/// Um clique troca a lista de plugins: quem clicou fica aqui até o fim do desenho.
+var pending_update: ?*const exemplos.Exemplo = null;
 
 /// `p` é a página das configurações (settings.zig).
 pub fn draw(p: anytype) void {
@@ -54,9 +67,10 @@ pub fn draw(p: anytype) void {
     }
     p.y += 6;
     if (missingExamples(e) > 0) {
-        para(p, i18n.tr("Instalar copia para a pasta os que faltam: favoritos, lembretes, destaques, filtro, trechos, tradução e estatísticas. O que você já tem não é mexido.", "Install copies the missing ones to the folder: bookmarks, reminders, highlights, filter, snippets, translate and stats. What you already have is left alone."), .faint);
+        para(p, i18n.tr("Instalar copia para a pasta os que faltam: tradução, lembretes, destaques, trechos, links limpos, horários e links e arquivos. O que você já tem não é mexido.", "Install copies the missing ones to the folder: translate, reminders, highlights, snippets, clean links, timestamps and links and files. What you already have is left alone."), .faint);
         p.y += 4;
     }
+    if (retiredLoaded(e) > 0 and archiveRow(p, e)) return;
 
     if (e.list.items.len == 0) {
         para(p, i18n.tr("Nenhum plugin encontrado. Ponha arquivos .lua na pasta acima e clique em Recarregar.", "No plugins found. Put .lua files in the folder above and click Reload."), .faint);
@@ -64,6 +78,11 @@ pub fn draw(p: anytype) void {
     } else {
         p.heading(i18n.fmt(&buf, "{d} encontrados", "{d} found", .{e.list.items.len}));
         for (e.list.items) |pl| card(p, e, pl);
+        if (pending_update) |ex| {
+            pending_update = null;
+            updateBundled(e, ex);
+            return;
+        }
     }
 
     p.divider();
@@ -132,6 +151,7 @@ fn card(p: anytype, e: *engine.Engine, pl: *Plugin) void {
 
     // O que pede.
     y = chips(p, pl, x, y, w);
+    y = alertLine(p, pl, x, y, w);
 
     // Comandos e atalhos, se está rodando.
     if (pl.isRunning() and (pl.commands.items.len > 0 or pl.keys.items.len > 0)) {
@@ -142,6 +162,24 @@ fn card(p: anytype, e: *engine.Engine, pl: *Plugin) void {
 
     // Hosts: a aprovação é por plugin e por host.
     for (pl.man.hostList(), 0..) |h, i| y = hostRow(p, e, pl, h, i, x, y, w);
+
+    // Opções do próprio plugin (só ligado: desligado não tem quem responda).
+    if (pl.settings) |tree| {
+        y += 2;
+        d.line(dl, x, y, x + w, y, ctx.col(.border), 1);
+        y += 10;
+        y += plugin_panel.embedded(ctx, dl, e, pl, tree, x, y, w);
+    }
+
+    // Veio uma versão nova com o app: só troca com o clique, e guarda a de antes.
+    if (bundledNewer(pl)) |ex| {
+        var ub: [64]u8 = undefined;
+        const lbl = i18n.fmt(&ub, "Atualizar para v{s}", "Update to v{s}", .{manifest.parse(ex.source).version});
+        const r: d.Rect = .{ .x = x, .y = y, .w = inbox.buttonWidth(ctx, lbl), .h = 28 };
+        qa.mark(r, "plugin-update:{s}", .{pl.name});
+        if (inbox.button(ctx, dl, 0xCC000 + @as(usize, pl.slot) * 16, r, lbl, false)) pending_update = ex;
+        y += 36;
+    }
 
     // Painel.
     if (pl.tree != null) {
@@ -241,6 +279,21 @@ fn chips(p: anytype, pl: *const Plugin, x: f32, y_in: f32, w: f32) f32 {
     return if (any) y + line_h + 2 else y;
 }
 
+/// Lê mensagens e consegue mandar algo para fora: uma linha clara, além das etiquetas.
+fn alertLine(p: anytype, pl: *const Plugin, x: f32, y: f32, w: f32) f32 {
+    if (pl.man.legacy or !pl.man.has(.messages)) return y;
+    const text = if (pl.man.has(.http))
+        i18n.tr("Lê suas mensagens e fala com a internet. Só ligue se confiar em quem fez.", "Reads your messages and talks to the internet. Only turn it on if you trust who made it.")
+    else if (pl.man.has(.links))
+        i18n.tr("Lê suas mensagens e abre endereços quando você clica. Só ligue se confiar em quem fez.", "Reads your messages and opens addresses when you click. Only turn it on if you trust who made it.")
+    else
+        return y;
+    const ctx = p.ctx;
+    const h = inbox.wrapText(p.dl, p.font(.regular), 12.5, x, y, w, text, 3, ctx.col(.idle));
+    qa.mark(.{ .x = x, .y = y, .w = w, .h = h }, "plugin-alert:{s}", .{pl.name});
+    return y + h + 8;
+}
+
 fn hostRow(p: anytype, e: *engine.Engine, pl: *Plugin, host: []const u8, i: usize, x: f32, y: f32, w: f32) f32 {
     const ctx = p.ctx;
     const dl = p.dl;
@@ -293,6 +346,98 @@ fn installExamples(e: *engine.Engine) void {
     e.reload();
 }
 
+/// O incluído de mesmo nome, se a versão dele é maior que a do arquivo. Arquivo sem
+/// versão fica de fora: não dá para saber se é o mesmo plugin.
+fn bundledNewer(pl: *const Plugin) ?*const exemplos.Exemplo {
+    if (pl.man.version.len == 0) return null;
+    for (&exemplos.list) |*ex| {
+        if (!std.mem.eql(u8, ex.name, pl.name)) continue;
+        return if (version.newer(manifest.parse(ex.source).version, pl.man.version)) ex else null;
+    }
+    return null;
+}
+
+/// O caminho livre: "x.lua.bak", "x.lua.bak2"… Nunca sobrescreve uma cópia antiga.
+fn freeBackup(buf: []u8, path: []const u8) ?[:0]const u8 {
+    var n: u32 = 1;
+    while (n < 100) : (n += 1) {
+        const out = (if (n == 1) std.fmt.bufPrintSentinel(buf, "{s}.bak", .{path}, 0) else std.fmt.bufPrintSentinel(buf, "{s}.bak{d}", .{ path, n }, 0)) catch return null;
+        var info: c.SDL_PathInfo = undefined;
+        if (!c.SDL_GetPathInfo(out.ptr, &info)) return out;
+    }
+    return null;
+}
+
+/// Troca pelo incluído, depois de guardar o arquivo atual. Sem a cópia, não troca.
+fn updateBundled(e: *engine.Engine, ex: *const exemplos.Exemplo) void {
+    var pb: [600]u8 = undefined;
+    const path = std.fmt.bufPrintSentinel(&pb, "{s}/{s}", .{ e.dir(), ex.name }, 0) catch return;
+    var bb: [640]u8 = undefined;
+    const bak = freeBackup(&bb, path) orelse return;
+    if (!c.SDL_CopyFile(path.ptr, bak.ptr)) return;
+    _ = c.SDL_SaveFile(path.ptr, ex.source.ptr, ex.source.len);
+    e.reload();
+}
+
+fn isRetired(name: []const u8) bool {
+    for (retired) |r| if (std.mem.eql(u8, r, name)) return true;
+    return false;
+}
+
+fn retiredLoaded(e: *const engine.Engine) usize {
+    var n: usize = 0;
+    for (e.list.items) |pl| {
+        if (isRetired(pl.name)) n += 1;
+    }
+    return n;
+}
+
+/// Os que não vêm mais com o app. true = arquivou, e a lista foi refeita.
+fn archiveRow(p: anytype, e: *engine.Engine) bool {
+    const ctx = p.ctx;
+    var names: [320]u8 = undefined;
+    var at: usize = 0;
+    for (e.list.items) |pl| {
+        if (!isRetired(pl.name)) continue;
+        const piece = std.fmt.bufPrint(names[at..], "{s}{s}", .{ if (at > 0) ", " else "", pl.name }) catch break;
+        at += piece.len;
+    }
+    var tb: [460]u8 = undefined;
+    para(p, i18n.fmt(&tb, "Não vêm mais com o app: {s}. Continuam funcionando; arquivar só os tira da pasta, e nada é apagado.", "No longer bundled with the app: {s}. They keep working; archiving only moves them out of the folder, nothing is deleted.", .{names[0..at]}), .faint);
+    var lb: [80]u8 = undefined;
+    const lbl = i18n.fmt(&lb, "Arquivar em antigos/ ({d})", "Archive to antigos/ ({d})", .{retiredLoaded(e)});
+    const r: d.Rect = .{ .x = p.x, .y = p.y, .w = inbox.buttonWidth(ctx, lbl), .h = 28 };
+    qa.mark(r, "plugin-archive", .{});
+    const clicked = inbox.button(ctx, p.dl, 0xCD000, r, lbl, false);
+    p.y += 38;
+    if (!clicked) return false;
+    archiveRetired(e);
+    return true;
+}
+
+/// Move para plugins/antigos/, sem sobrescrever nada que já esteja lá.
+fn archiveRetired(e: *engine.Engine) void {
+    var db: [560]u8 = undefined;
+    const sub = std.fmt.bufPrintSentinel(&db, "{s}/antigos", .{e.dir()}, 0) catch return;
+    _ = c.SDL_CreateDirectory(sub.ptr);
+    for (retired) |name| {
+        if (!loaded(e, name)) continue;
+        var fb: [600]u8 = undefined;
+        const from = std.fmt.bufPrintSentinel(&fb, "{s}/{s}", .{ e.dir(), name }, 0) catch continue;
+        var tb: [640]u8 = undefined;
+        var n: u32 = 1;
+        while (n < 100) : (n += 1) {
+            const stem = name[0 .. name.len - 4];
+            const to = (if (n == 1) std.fmt.bufPrintSentinel(&tb, "{s}/{s}", .{ sub, name }, 0) else std.fmt.bufPrintSentinel(&tb, "{s}/{s}-{d}.lua", .{ sub, stem, n }, 0)) catch break;
+            var info: c.SDL_PathInfo = undefined;
+            if (c.SDL_GetPathInfo(to.ptr, &info)) continue;
+            _ = c.SDL_RenamePath(from.ptr, to.ptr);
+            break;
+        }
+    }
+    e.reload();
+}
+
 /// "bookmarks.lua · ligado · 120 KB".
 fn stateLine(buf: []u8, pl: *const Plugin) []const u8 {
     const state = switch (pl.status()) {
@@ -301,7 +446,11 @@ fn stateLine(buf: []u8, pl: *const Plugin) []const u8 {
         .waiting => i18n.tr("liga ao entrar na conta", "starts when you log in"),
         .running => i18n.tr("ligado", "on"),
     };
-    if (pl.status() == .running) return std.fmt.bufPrint(buf, "{s}  ·  {s}  ·  {d} KB", .{ pl.name, state, pl.memBytes() / 1024 }) catch pl.name;
+    if (pl.status() == .running) {
+        const shed = pl.shedCount();
+        if (shed > 0) return i18n.fmt(buf, "{s}  ·  {s}  ·  {d} KB  ·  lento: pulou {d} mensagens", "{s}  ·  {s}  ·  {d} KB  ·  slow: skipped {d} messages", .{ pl.name, state, pl.memBytes() / 1024, shed });
+        return std.fmt.bufPrint(buf, "{s}  ·  {s}  ·  {d} KB", .{ pl.name, state, pl.memBytes() / 1024 }) catch pl.name;
+    }
     return std.fmt.bufPrint(buf, "{s}  ·  {s}", .{ pl.name, state }) catch pl.name;
 }
 

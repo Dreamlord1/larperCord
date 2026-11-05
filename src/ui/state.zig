@@ -6,7 +6,8 @@ const i18n = @import("i18n.zig");
 pub const Settings = @import("settings_state.zig").Settings;
 
 /// `voice_move`: os canais de voz para onde dá para mover alguém (id = a pessoa).
-pub const MenuKind = enum { message, user, channel, guild, status, voice_move, thread_delete };
+/// `plugin_choices`: a segunda lista de uma entrada de plugin (id = a mensagem ou a pessoa).
+pub const MenuKind = enum { message, user, channel, guild, status, voice_move, thread_delete, plugin_choices };
 
 pub const Popup = union(enum) {
     none,

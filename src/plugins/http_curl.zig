@@ -71,7 +71,7 @@ fn threadMain(raw: ?*anyopaque) callconv(.c) c_int {
         body.deinit(gpa);
         return 0;
     };
-    res.* = .{ .run = req.run, .id = req.id, .status = status, .err = res_err, .body = body.toOwnedSlice(gpa) catch &.{} };
+    res.* = .{ .run = req.run, .id = req.id, .token = req.token, .status = status, .err = res_err, .body = body.toOwnedSlice(gpa) catch &.{} };
     req.done(req.done_ctx, res);
     return 0;
 }

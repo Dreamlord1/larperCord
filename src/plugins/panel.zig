@@ -3,7 +3,7 @@
 //! ponteiro e desenha (ui/plugin_panel.zig), sem nunca chamar o plugin por quadro.
 const std = @import("std");
 
-pub const Kind = enum(u8) { text, heading, separator, row, button, input, list, item, bar };
+pub const Kind = enum(u8) { text, heading, separator, row, button, input, list, item, bar, select, option, toggle };
 pub const Style = enum(u8) { normal, muted, accent, danger };
 
 pub const none: u32 = std.math.maxInt(u32);
@@ -17,11 +17,12 @@ pub const Node = struct {
     style: Style = .normal,
     next: u32 = none,
     child: u32 = none,
-    /// Texto, rótulo do botão ou título do item.
+    /// Texto, rótulo do botão, da lista de opções ou da opção, ou título do item.
     text: []const u8 = "",
-    /// Dica do campo de texto ou subtítulo do item.
+    /// Dica do campo de texto ou do interruptor, ou subtítulo do item.
     sub: []const u8 = "",
-    /// Valor inicial do campo, ou o texto à direita do item e da barra.
+    /// Valor inicial do campo, o texto à direita do item e da barra, ou o valor da
+    /// lista de opções e de cada opção.
     meta: []const u8 = "",
     /// Nome estável (campos de texto e QA).
     key: []const u8 = "",
@@ -29,6 +30,7 @@ pub const Node = struct {
     click: u32 = 0,
     change: u32 = 0,
     submit: u32 = 0,
+    /// A barra, ou o interruptor (0 ou 1).
     value: f32 = 0,
     max: f32 = 0,
     /// Campo de texto que se esvazia ao enviar.
@@ -46,6 +48,10 @@ pub const Tree = struct {
     nodes: std.ArrayList(Node) = .empty,
     first: u32 = none,
     title: []const u8 = "",
+    /// Número curto na etiqueta e no botão do painel ("" = nenhum).
+    badge: []const u8 = "",
+    /// As opções do cartão na página de plugins, não o painel lateral.
+    settings: bool = false,
     bytes: usize = 0,
     /// Número desta árvore (a interface dá ao receber).
     serial: u32 = 0,

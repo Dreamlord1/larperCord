@@ -9,6 +9,9 @@ const d = @import("draw.zig");
 const qa = @import("qa.zig");
 const i18n = @import("i18n.zig");
 const inbox = @import("inbox.zig");
+const anim = @import("anim.zig");
+const dropdown = @import("dropdown.zig");
+const icons = @import("icons.zig");
 const engine = @import("../plugins/engine.zig");
 const panel = engine.panel;
 
@@ -80,6 +83,10 @@ pub fn toggle(p: *engine.Plugin) void {
 pub fn toggleAny() void {
     const e = current() orelse return;
     if (e.panel_open != null) return e.openPanel(null);
+    // Quem tem novidade vem primeiro.
+    if (e.n_badges > 0) for (e.list.items) |p| if (p.tree) |t| {
+        if (t.badge.len > 0) return e.openPanel(p);
+    };
     for (e.list.items) |p| if (p.tree != null) return e.openPanel(p);
 }
 
@@ -203,7 +210,9 @@ fn tabs(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin, r:
     for (e.list.items, 0..) |other, i| {
         if (other.tree == null) continue;
         const label = other.title();
-        const tw = d.width(f, fs, label) + 18;
+        const badge = other.tree.?.badge;
+        const bw: f32 = if (badge.len > 0) d.width(f, 11, badge) + 12 else 0;
+        const tw = d.width(f, fs, label) + 18 + bw;
         if (x + tw > r.right() - pad and x > r.x + pad) {
             x = r.x + pad;
             y += 28;
@@ -214,7 +223,13 @@ fn tabs(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin, r:
         const on = other == p;
         d.rect(dl, tr, if (on) ctx.col(.selected) else if (hb.hovered) ctx.col(.hover) else ctx.col(.rail).alpha(0.5), 12);
         if (on) d.border(dl, tr, ctx.col(.accent).alpha(0.7), 12, 1);
-        _ = d.textClipped(dl, f, fs, tr.x + 9, d.centerY(tr, fs), if (on) ctx.col(.text) else ctx.col(.muted), label, tr.w - 16);
+        _ = d.textClipped(dl, f, fs, tr.x + 9, d.centerY(tr, fs), if (on) ctx.col(.text) else ctx.col(.muted), label, tr.w - 16 - bw);
+        if (badge.len > 0) {
+            const br: d.Rect = .{ .x = tr.right() - bw - 3, .y = tr.y + 4, .w = bw, .h = 16 };
+            d.rect(dl, br, ctx.col(.danger), 8);
+            d.text(dl, f, 11, br.x + 6, d.centerY(br, 11), d.Rgba.white, badge);
+            qa.mark(br, "pp-badge:{s}", .{other.name});
+        }
         if (hb.clicked) e.openPanel(other);
         x += tr.w + 6;
     }
@@ -272,6 +287,9 @@ fn measure(ctx: *d.Ctx, t: *Tree, i: u32, x: f32, y: f32, w: f32) f32 {
         .button => 28,
         .input => 34,
         .bar => 28,
+        .select => select_label_h + select_box_h + 4,
+        .toggle => toggleH(ctx, n, w),
+        .option => 0,
         .row => measureRow(ctx, t, n.child, x, y, w),
         .list => measureList(ctx, t, n, x, y, w),
         .item => measureItem(ctx, t, n, x, y, w),
@@ -326,6 +344,16 @@ fn measureItem(ctx: *d.Ctx, t: *Tree, n: *Node, x: f32, y: f32, w: f32) f32 {
     return h + 6;
 }
 
+const select_label_h: f32 = 19;
+const select_box_h: f32 = 34;
+const select_max_w: f32 = 340;
+const select_row_h: f32 = 32;
+
+fn toggleH(ctx: *d.Ctx, n: *const Node, w: f32) f32 {
+    if (n.sub.len == 0) return 28;
+    return 22 + inbox.wrapText(null, ctx.ui.get(.regular), 12.5, 0, 0, w - 52, n.sub, 4, ctx.col(.muted)) + 4;
+}
+
 fn layout(ctx: *d.Ctx, t: *Tree, w: f32) void {
     const key = @as(u32, ctx.st.theme_gen) ^ @as(u32, @intFromFloat(d.text_scale * 100)) << 8;
     if (t.layout_w == w and t.layout_key == key) return;
@@ -341,6 +369,14 @@ fn layout(ctx: *d.Ctx, t: *Tree, w: f32) void {
 }
 
 // --- Desenho ------------------------------------------------------------------------
+
+/// As opções do cartão na página de plugins. Devolve a altura.
+pub fn embedded(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin, t: *Tree, x: f32, y: f32, w: f32) f32 {
+    layout(ctx, t, w);
+    // São poucos nós: sem cortar o que está fora da tela, a rolagem da página nem conta.
+    drawNodes(ctx, dl, e, p, t, t.first, x, y, .{ .x = 0, .y = -1e7, .w = 1e7, .h = 2e7 });
+    return t.height;
+}
 
 fn drawNodes(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin, t: *Tree, first: u32, ox: f32, oy: f32, clip: d.Rect) void {
     var at = first;
@@ -374,9 +410,12 @@ fn drawNode(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin
             _ = inbox.wrapText(dl, textFont(ctx, n), 12, r.x, r.y + 6, r.w, d.upper(&buf, n.text), 3, ctx.col(.muted));
         },
         .separator => d.line(dl, r.x, r.y + 7, r.right(), r.y + 7, ctx.col(.border), 1),
-        .button => drawButton(ctx, dl, e, p, at, n, r),
+        .button => drawButton(ctx, dl, e, p, t, at, n, r),
         .input => drawInput(ctx, dl, e, p, t, n, r),
         .bar => drawBar(ctx, dl, n, r),
+        .select => drawSelect(ctx, dl, e, p, t, at, n, r),
+        .toggle => drawToggle(ctx, dl, e, p, t, at, n, r),
+        .option => {},
         .row => drawNodes(ctx, dl, e, p, t, n.child, ox, oy, clip),
         .list => {
             if (n.child == panel.none) {
@@ -387,12 +426,80 @@ fn drawNode(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin
     }
 }
 
-fn nodeId(p: *const engine.Plugin, at: u32) usize {
-    return @as(usize, p.slot) * 100_000 + at + 0xA0000;
+fn nodeId(p: *const engine.Plugin, t: *const Tree, at: u32) usize {
+    return @as(usize, p.slot) * 100_000 + at + 0xA0000 + (if (t.settings) @as(usize, 50_000) else 0);
 }
 
-fn drawButton(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin, at: u32, n: *const Node, r: d.Rect) void {
-    const hb = d.hit(ctx, nodeId(p, at), r);
+fn drawSelect(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin, t: *Tree, at: u32, n: *Node, r: d.Rect) void {
+    const rad = @max(ctx.th.radius, 4);
+    _ = d.textClipped(dl, ctx.ui.get(.semibold), 12.5, r.x, r.y, ctx.col(.muted), n.text, r.w);
+    const box: d.Rect = .{ .x = r.x, .y = r.y + select_label_h, .w = @min(r.w, select_max_w), .h = select_box_h };
+    const id = nodeId(p, t, at);
+    const hb = d.hit(ctx, id, box);
+    qa.mark(box, "pp-select:{s}", .{n.key});
+    const key = id + 0x5E00000;
+    if (hb.clicked) dropdown.toggle(key);
+    const opened = dropdown.isOpen(key);
+    d.rect(dl, box, ctx.col(.rail).mix(ctx.col(.elevated), if (hb.hovered) 0.4 else 0.2), rad);
+    d.border(dl, box, if (hb.hovered or opened) ctx.col(.accent).alpha(0.6) else ctx.col(.border), rad, 1);
+    // O rótulo da escolhida, e quantas são.
+    var shown: []const u8 = n.meta;
+    var rows: usize = 0;
+    var sel_at: usize = 0;
+    var o = n.child;
+    while (o != panel.none) : (o = t.nodes.items[o].next) {
+        const opt = &t.nodes.items[o];
+        if (std.mem.eql(u8, opt.meta, n.meta)) {
+            shown = opt.text;
+            sel_at = rows;
+        }
+        rows += 1;
+    }
+    const f = ctx.ui.get(.medium);
+    _ = d.textClipped(dl, f, 13.5, box.x + 10, d.centerY(box, 13.5), ctx.col(.text), shown, box.w - 34);
+    icons.chevron(dl, box.right() - 17, box.y + select_box_h / 2, ctx.col(.muted).u(), if (opened) 0 else 1);
+    const total = select_row_h * @as(f32, @floatFromInt(rows));
+    const scroll = select_row_h * @as(f32, @floatFromInt(sel_at));
+    if (dropdown.beginAt(ctx, key, box, box.w, total, scroll)) |dd_c| {
+        var dd = dd_c;
+        defer dd.end();
+        o = n.child;
+        while (o != panel.none) : (o = t.nodes.items[o].next) {
+            const opt = &t.nodes.items[o];
+            const sel = std.mem.eql(u8, opt.meta, n.meta);
+            const ro = dd.row(select_row_h, sel);
+            qa.mark(ro.rect, "pp-opt:{s}:{s}", .{ n.key, opt.meta });
+            _ = d.textClipped(dd.dl, ctx.ui.get(if (sel) .semibold else .regular), 13.5, ro.rect.x + 8, d.centerY(ro.rect, 13.5), if (sel) ctx.col(.text) else ctx.col(.muted), opt.text, ro.rect.w - 14);
+            if (ro.hit.clicked) {
+                // Mostra na hora; o plugin guarda e, se quiser, publica de novo.
+                n.meta = opt.meta;
+                e.generation +%= 1;
+                e.panelGesture(p, n.change, opt.meta);
+                dropdown.close();
+            }
+        }
+    }
+}
+
+fn drawToggle(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin, t: *const Tree, at: u32, n: *Node, r: d.Rect) void {
+    const id = nodeId(p, t, at);
+    const hb = d.hit(ctx, id, r);
+    qa.mark(r, "pp-toggle:{s}", .{n.key});
+    const sw: d.Rect = .{ .x = r.right() - 40, .y = r.y + 2, .w = 40, .h = 24 };
+    const is_on = n.value > 0.5;
+    const on = anim.to(anim.id("plugin-toggle", id), if (is_on) 1 else 0, 22);
+    d.rect(dl, sw, ctx.col(.faint).mix(ctx.col(.accent), on), 12);
+    d.circle(dl, sw.x + 12 + on * 16, sw.y + 12, 9, d.Rgba.white);
+    _ = d.textClipped(dl, ctx.ui.get(.semibold), 13.5, r.x, r.y + 4, ctx.col(.text), n.text, r.w - 52);
+    if (n.sub.len > 0) _ = inbox.wrapText(dl, ctx.ui.get(.regular), 12.5, r.x, r.y + 24, r.w - 52, n.sub, 4, ctx.col(.muted));
+    if (hb.clicked) {
+        n.value = if (is_on) 0 else 1;
+        e.panelToggle(p, n.change, !is_on);
+    }
+}
+
+fn drawButton(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin, t: *const Tree, at: u32, n: *const Node, r: d.Rect) void {
+    const hb = d.hit(ctx, nodeId(p, t, at), r);
     const key = if (n.key.len > 0) n.key else n.text;
     qa.mark(r, "pp-btn:{s}", .{key});
     const f = ctx.ui.get(.semibold);
@@ -438,7 +545,7 @@ fn drawItem(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin
     const key = if (n.key.len > 0) n.key else n.text;
     const clickable = n.click != 0;
     // Os botões do item ficam por cima e pegam o clique antes dele.
-    const hb = if (clickable) d.hitUnder(ctx, nodeId(p, at), r) else d.Hit{ .hovered = false, .clicked = false, .held = false, .middle = false, .right = false, .ctrl = false };
+    const hb = if (clickable) d.hitUnder(ctx, nodeId(p, t, at), r) else d.Hit{ .hovered = false, .clicked = false, .held = false, .middle = false, .right = false, .ctrl = false };
     qa.mark(r, "pp-item:{s}", .{key});
     const rad = @max(ctx.th.radius, 5);
     d.rect(dl, r, if (hb.hovered) ctx.col(.hover) else ctx.col(.rail).alpha(0.35), rad);
@@ -456,7 +563,7 @@ fn drawItem(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin
 }
 
 fn drawInput(ctx: *d.Ctx, dl: *c.ImDrawList, e: *engine.Engine, p: *engine.Plugin, t: *const Tree, n: *const Node, r: d.Rect) void {
-    const id = hash2(p.name, n.key);
+    const id = hash2(p.name, n.key) +% @intFromBool(t.settings);
     const in = inputFor(id);
     const label_id = @as(c_int, @truncate(@as(i64, @bitCast(id))));
     const f = ctx.ui.get(.regular);

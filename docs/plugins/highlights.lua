@@ -1,17 +1,23 @@
 -- @name Highlights
 -- @name:pt Destaques
--- @description Pick words to watch across all channels. When someone writes one you get a notification, and the panel keeps a history that takes you to the message.
--- @description:pt Escolha palavras para acompanhar em todos os canais. Quando alguém escreve uma, você recebe um aviso, e o painel guarda um histórico que leva à mensagem.
--- @version 1.0.0
--- @capabilities messages, panel, storage, notify, decorate
+-- @description Pick words to watch across all channels. When someone writes one you get a notification, the panel shows how many you haven't seen, and its history takes you to the message. You can mute a channel, and choose below whether it also uses desktop notifications.
+-- @description:pt Escolha palavras para acompanhar em todos os canais. Quando alguém escreve uma, você recebe um aviso, o painel mostra quantas você ainda não viu, e o histórico leva à mensagem. Dá para silenciar um canal, e escolher aqui embaixo se também usa as notificações do sistema.
+-- @version 1.1.0
+-- @capabilities messages, panel, storage, notify, decorate, settings
 
 local tr = larper.tr
 local MAX_HITS = 200
 local words = larper.storage.get("words") or {}
 -- Guardado no disco: onde e quem, nunca o texto de ninguém.
 local hits = larper.storage.get("hits") or {}
+-- Canais silenciados: id -> nome.
+local muted = larper.storage.get("muted") or {}
+local desktop = larper.storage.get("desktop") or false
 -- O trecho da mensagem fica só na memória, e sai se ela for apagada.
 local snippets = {}
+-- Quantas chegaram desde a última vez que o painel abriu.
+local unread = 0
+local panel_open = false
 
 local function fold(s)
   -- Minúsculas, inclusive as letras acentuadas.
@@ -42,6 +48,7 @@ end
 local function save()
   larper.storage.set("words", words)
   larper.storage.set("hits", hits)
+  larper.storage.set("muted", muted)
 end
 
 local function when(t)
@@ -49,7 +56,16 @@ local function when(t)
   return os.date(larper.lang() == "pt" and "%d/%m %H:%M" or "%b %d %H:%M", t)
 end
 
+local function short(content)
+  local s = content:gsub("%s+", " ")
+  if #s <= 200 then return s end
+  local cut = 200
+  while cut > 0 and (s:byte(cut + 1) or 0) & 0xC0 == 0x80 do cut = cut - 1 end
+  return s:sub(1, cut) .. "…"
+end
+
 local render
+local listen
 
 local function add_word(w)
   w = fold(trim(w))
@@ -63,6 +79,7 @@ local function add_word(w)
   end
   words[#words + 1] = w
   save()
+  listen()
   render()
 end
 
@@ -90,18 +107,45 @@ render = function()
   end
   local tree = {
     title = tr("Destaques", "Highlights"),
+    badge = unread > 0 and tostring(unread) or nil,
     { type = "input", key = "new", placeholder = tr("Nova palavra (Enter)", "New word (Enter)"), clear = true,
       on_submit = function(v) add_word(v) end },
     { type = "list", key = "words", items = word_items,
       empty = tr("Nenhuma palavra ainda. Escreva uma acima.", "No words yet. Type one above.") },
-    { type = "heading", text = tr("Histórico", "History") },
-    { type = "list", key = "hits", items = hit_items, empty = tr("Nada por enquanto.", "Nothing so far.") },
+    { type = "row",
+      { type = "button", label = tr("Silenciar este canal", "Mute this channel"), key = "mute", on_click = function()
+        local ch = larper.channel()
+        if not ch then return end
+        muted[ch.id] = ch.name
+        save()
+        render()
+      end },
+    },
   }
+  local mute_items = {}
+  for id, name in pairs(muted) do
+    mute_items[#mute_items + 1] = {
+      title = "#" .. name, key = "muted" .. id,
+      actions = { { label = tr("Reativar", "Unmute"), key = "unmute" .. id, on_click = function()
+        muted[id] = nil
+        save()
+        render()
+      end } },
+    }
+  end
+  if #mute_items > 0 then
+    table.sort(mute_items, function(a, b) return a.title < b.title end)
+    tree[#tree + 1] = { type = "heading", text = tr("Canais silenciados", "Muted channels") }
+    tree[#tree + 1] = { type = "list", key = "muted", items = mute_items }
+  end
+  tree[#tree + 1] = { type = "heading", text = tr("Histórico", "History") }
+  tree[#tree + 1] = { type = "list", key = "hits", items = hit_items, empty = tr("Nada por enquanto.", "Nothing so far.") }
   if #hits > 0 then
     tree[#tree + 1] = { type = "row",
       { type = "button", label = tr("Limpar histórico", "Clear history"), key = "clear", on_click = function()
         hits = {}
         snippets = {}
+        unread = 0
         save()
         render()
       end },
@@ -110,31 +154,59 @@ render = function()
   larper.panel.set(tree)
 end
 
-larper.on("message", function(m)
-  if m.mine or m.ignored or #words == 0 or m.content == "" then return end
-  local text = fold(m.content)
+local function word_in(content)
+  local text = fold(content)
   for _, w in ipairs(words) do
-    if has_word(text, w) then
-      local snippet = m.content:gsub("%s+", " ")
-      if #snippet > 200 then
-        local cut = 200
-        while cut > 0 and (snippet:byte(cut + 1) or 0) & 0xC0 == 0x80 do cut = cut - 1 end
-        snippet = snippet:sub(1, cut) .. "…"
+    if has_word(text, w) then return w end
+  end
+end
+
+local function take(m)
+  if m.mine or m.ignored or #words == 0 or m.content == "" or muted[m.channel.id] then return end
+  local w = word_in(m.content)
+  if not w then return end
+  snippets[m.id] = short(m.content)
+  table.insert(hits, 1, { id = m.id, channel = m.channel.id, channel_name = m.channel.name, author = m.author.name, word = w, time = m.time })
+  if #hits > MAX_HITS then
+    snippets[hits[#hits].id] = nil
+    hits[#hits] = nil
+  end
+  if not panel_open then unread = unread + 1 end
+  save()
+  render()
+  larper.decorate(m, { badge = "★ " .. w })
+  larper.notify("★ " .. w .. ": " .. m.author.name .. " #" .. m.channel.name, { desktop = desktop })
+end
+
+-- Editaram: o trecho acompanha o texto novo, e sem a palavra sai da lista. Uma edição
+-- que passa a ter a palavra conta como nova.
+local function edited(m)
+  for i, h in ipairs(hits) do
+    if h.id == m.id then
+      if word_in(m.content) then
+        snippets[m.id] = short(m.content)
+      else
+        table.remove(hits, i)
+        snippets[m.id] = nil
+        larper.undecorate(m)
+        save()
       end
-      snippets[m.id] = snippet
-      table.insert(hits, 1, { id = m.id, channel = m.channel.id, channel_name = m.channel.name, author = m.author.name, word = w, time = m.time })
-      if #hits > MAX_HITS then
-        snippets[hits[#hits].id] = nil
-        hits[#hits] = nil
-      end
-      save()
       render()
-      larper.decorate(m, { badge = "★ " .. w })
-      larper.notify("★ " .. w .. ": " .. m.author.name .. " #" .. m.channel.name)
       return
     end
   end
-end)
+  take(m)
+end
+
+-- Só escuta as mensagens quando tem palavra para procurar: até lá, nenhuma delas
+-- chega perto deste plugin.
+local listening = false
+listen = function()
+  if listening or #words == 0 then return end
+  listening = true
+  larper.on("message", take)
+  larper.on("edit", edited)
+end
 
 larper.command("/highlights", function(args)
   if args ~= "" then add_word(args) end
@@ -155,5 +227,30 @@ larper.on("delete", function(d)
   end
 end)
 
-larper.on("lang", render)
+larper.on("panel", function(open)
+  panel_open = open
+  if open and unread > 0 then
+    unread = 0
+    render()
+  end
+end)
+
+local function options()
+  larper.settings.set({
+    { type = "toggle", key = "desktop", label = tr("Notificação do sistema", "Desktop notification"),
+      hint = tr("Também com a janela em foco. Sem isto, só um aviso no app, e a notificação quando você está longe.", "Even with the window focused. Without this, just a notice in the app, and the notification when you're away."),
+      value = desktop,
+      on_change = function(on)
+        desktop = on
+        larper.storage.set("desktop", on)
+      end },
+  })
+end
+
+larper.on("lang", function()
+  options()
+  render()
+end)
+listen()
+options()
 render()

@@ -45,6 +45,8 @@ pub fn init(app: *App) void {
         .failed = &failed,
         .insert = &insert,
         .jump = &jump,
+        .copy = &copy,
+        .open_url = &openUrl,
         .messages = &messages,
         .wake = &wake,
         .read_data = &readData,
@@ -150,11 +152,35 @@ pub fn savePrefs() void {
 
 // --- Host -------------------------------------------------------------------
 
-/// Quantas notificações do sistema os plugins mandam em 1 minuto: nem um plugin
-/// com defeito nem uma rajada de mensagens enche a área de trabalho.
+/// Quantas notificações do sistema cada plugin manda em 1 minuto, e todos juntos:
+/// nem um plugin com defeito nem uma rajada de mensagens enche a área de trabalho,
+/// e um plugin barulhento não come o aviso de um lembrete.
 const desktop_per_minute = 6;
-var desktop_from: i64 = 0;
-var desktop_n: u32 = 0;
+const desktop_all_per_minute = 20;
+const Quota = struct { key: u64 = 0, from: i64 = 0, n: u32 = 0 };
+var desktop_quota: [engine.max_plugins + 1]Quota = @splat(.{});
+
+fn quotaFor(plugin: []const u8, now: i64) *Quota {
+    const key = std.hash.Wyhash.hash(0, plugin) | 1;
+    var oldest = &desktop_quota[1];
+    for (desktop_quota[1..]) |*q| {
+        if (q.key == key) return q;
+        if (q.from < oldest.from) oldest = q;
+    }
+    oldest.* = .{ .key = key, .from = now };
+    return oldest;
+}
+
+/// Mais uma notificação cabe nesta cota?
+fn quotaTake(q: *Quota, limit: u32, now: i64) bool {
+    if (now - q.from >= 60_000) {
+        q.from = now;
+        q.n = 0;
+    }
+    if (q.n >= limit) return false;
+    q.n += 1;
+    return true;
+}
 
 fn notify(ctx: *anyopaque, plugin: []const u8, text: []const u8, desktop: bool) void {
     const app: *App = @ptrCast(@alignCast(ctx));
@@ -167,12 +193,8 @@ fn notify(ctx: *anyopaque, plugin: []const u8, text: []const u8, desktop: bool) 
     if (!desktop and (focused or app.st.filtros.focusOn(nowMs()))) return;
     if (!app.st.settings.desktop_notifs) return;
     const now = nowMs();
-    if (now - desktop_from >= 60_000) {
-        desktop_from = now;
-        desktop_n = 0;
-    }
-    if (desktop_n >= desktop_per_minute) return;
-    desktop_n += 1;
+    if (!quotaTake(quotaFor(plugin, now), desktop_per_minute, now)) return;
+    if (!quotaTake(&desktop_quota[0], desktop_all_per_minute, now)) return;
     var tb: [160]u8 = undefined;
     const title = std.fmt.bufPrintSentinel(&tb, "larperCord · {s}", .{plugin}, 0) catch return;
     var cut = @min(text.len, 200);
@@ -227,6 +249,15 @@ fn jump(ctx: *anyopaque, channel: u64, id: u64) void {
     app.handle(.{ .open_message = .{ .channel = channel, .id = id } });
 }
 
+fn copy(ctx: *anyopaque, text: []const u8) void {
+    const app: *App = @ptrCast(@alignCast(ctx));
+    app.handle(.{ .copy = app.gpa.dupe(u8, text) catch return });
+}
+
+fn openUrl(_: *anyopaque, url: []const u8) void {
+    @import("../ui/attachments.zig").openUrl(url);
+}
+
 /// A mensagem como o plugin vê. Nunca o que foi apagado (com o registro ligado
 /// ela continua na memória) nem o texto de antes de uma edição.
 pub fn pluginMessage(app: *const App, store: *const Store, m: *const types.Message) engine.Message {
@@ -264,7 +295,18 @@ fn messages(ctx: *anyopaque, channel: u64, limit: u32, out: *engine.MsgList) voi
     }
     for (items[first..]) |*m| {
         if (!visible(m)) continue;
-        const pm = pluginMessage(app, &app.store, &m.msg);
+        var pm = pluginMessage(app, &app.store, &m.msg);
+        var refs: [16]engine.FileRef = undefined;
+        if (out.files) {
+            var n: usize = 0;
+            for (m.msg.attachments) |*att| {
+                // O que veio de um link já está no texto da mensagem.
+                if (att.embed or n == refs.len) continue;
+                refs[n] = .{ .name = att.filename, .url = att.url, .size = att.size };
+                n += 1;
+            }
+            pm.files = refs[0..n];
+        }
         out.add(&pm);
     }
 }
@@ -347,6 +389,15 @@ pub fn onMessage(app: *App, m: types.Message) void {
     app.plugins.onMessage(&msg);
 }
 
+/// MESSAGE_UPDATE com texto novo (o Store acabou de aplicar). Nunca passa o de antes.
+pub fn onEdit(app: *App, id: types.Id) void {
+    if (app.plugins.n_edit == 0 or !app.store.ready) return;
+    const f = app.store.findAny(id) orelse return;
+    if (f.m.deleted or f.m.pending or f.m.msg.system != .none) return;
+    const msg = pluginMessage(app, &app.store, &f.m.msg);
+    app.plugins.onEdit(&msg);
+}
+
 /// MESSAGE_DELETE: a nota de plugin dessa mensagem sai, e quem pediu fica sabendo.
 pub fn onDelete(app: *App, channel: types.Id, id: types.Id) void {
     app.plugins.onDelete(channel, id);
@@ -372,30 +423,36 @@ pub fn pollKeys(app: *App) void {
     app.plugins.pollKeys(app.io, &pressed);
 }
 
-/// Clicou na entrada `index` dos menus de plugin (a ordem de `eachMenu`).
-pub fn menuClick(app: *App, kind: engine.MenuKind, index: usize, id: types.Id) void {
-    const e = &app.plugins;
+pub const MenuHit = struct { plugin: *engine.Plugin, entry: *const engine.MenuEntry };
+
+/// A entrada `index` dos menus de plugin (a ordem em que o menu lista).
+pub fn menuEntry(app: *App, kind: engine.MenuKind, index: usize) ?MenuHit {
     var i: usize = 0;
-    for (e.list.items) |p| {
+    for (app.plugins.list.items) |p| {
         if (!p.isRunning()) continue;
         for (p.menus.items) |*entry| {
             if (entry.kind != kind) continue;
-            if (i == index) {
-                switch (kind) {
-                    .message => {
-                        const f = app.store.findAny(id) orelse return;
-                        if (f.m.deleted) return;
-                        const pm = pluginMessage(app, &app.store, &f.m.msg);
-                        e.menuMessage(p, entry, &pm);
-                    },
-                    .user => {
-                        const u = app.store.user(id) orelse return;
-                        e.menuUser(p, entry, id, u.name);
-                    },
-                }
-                return;
-            }
+            if (i == index) return .{ .plugin = p, .entry = entry };
             i += 1;
         }
+    }
+    return null;
+}
+
+/// Clicou na entrada `index` dos menus de plugin. `value`: a escolha da segunda lista.
+pub fn menuClick(app: *App, kind: engine.MenuKind, index: usize, id: types.Id, value: ?[]const u8) void {
+    const e = &app.plugins;
+    const hit = menuEntry(app, kind, index) orelse return;
+    switch (kind) {
+        .message => {
+            const f = app.store.findAny(id) orelse return;
+            if (f.m.deleted) return;
+            const pm = pluginMessage(app, &app.store, &f.m.msg);
+            e.menuMessage(hit.plugin, hit.entry, &pm, value);
+        },
+        .user => {
+            const u = app.store.user(id) orelse return;
+            e.menuUser(hit.plugin, hit.entry, id, u.name, value);
+        },
     }
 }

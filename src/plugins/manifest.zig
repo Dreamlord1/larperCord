@@ -28,6 +28,10 @@ pub const Cap = enum(u4) {
     composer,
     http,
     lsp,
+    settings,
+    completions,
+    rewrite,
+    links,
 };
 
 pub const max_hosts = 8;

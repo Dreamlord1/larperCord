@@ -1,15 +1,45 @@
 -- @name Translate
 -- @name:pt Traduzir
--- @description Right-click a message to see a translation under it, in the app's language. The text goes to api.mymemory.translated.net (a free public service) only when you ask, and only after you approve the host below.
--- @description:pt Botão direito numa mensagem para ver a tradução embaixo dela, no idioma do app. O texto vai para api.mymemory.translated.net (um serviço público e gratuito) só quando você pede, e só depois de aprovar o host aqui embaixo.
--- @version 1.0.0
--- @capabilities menu, decorate, http, notify
+-- @description Right-click a message, or use the 🌐 on its toolbar, to see a translation under it. "Translate to…" picks another language for one message, the options below set the default, and /tr es hello puts a translation in the message box. The text goes to api.mymemory.translated.net (a free public service) only when you ask, and only after you approve the host below.
+-- @description:pt Botão direito numa mensagem, ou o 🌐 na barra dela, para ver a tradução embaixo. "Traduzir para…" escolhe outro idioma só para aquela mensagem, as opções abaixo definem o padrão, e /tr es olá põe uma tradução na caixa de mensagem. O texto vai para api.mymemory.translated.net (um serviço público e gratuito) só quando você pede, e só depois de aprovar o host aqui embaixo.
+-- @version 1.1.0
+-- @capabilities menu, decorate, http, notify, storage, settings, composer
 -- @hosts api.mymemory.translated.net
 
 local tr = larper.tr
 local HOST = "api.mymemory.translated.net"
 -- O serviço aceita até 500 bytes de cada vez.
 local MAX = 480
+
+-- Os códigos foram conferidos no próprio serviço.
+local LANGS = {
+  { code = "pt", pt = "Português", en = "Portuguese" },
+  { code = "en", pt = "Inglês", en = "English" },
+  { code = "es", pt = "Espanhol", en = "Spanish" },
+  { code = "fr", pt = "Francês", en = "French" },
+  { code = "de", pt = "Alemão", en = "German" },
+  { code = "it", pt = "Italiano", en = "Italian" },
+  { code = "nl", pt = "Holandês", en = "Dutch" },
+  { code = "pl", pt = "Polonês", en = "Polish" },
+  { code = "ru", pt = "Russo", en = "Russian" },
+  { code = "uk", pt = "Ucraniano", en = "Ukrainian" },
+  { code = "tr", pt = "Turco", en = "Turkish" },
+  { code = "ar", pt = "Árabe", en = "Arabic" },
+  { code = "ja", pt = "Japonês", en = "Japanese" },
+  { code = "ko", pt = "Coreano", en = "Korean" },
+  { code = "zh-CN", pt = "Chinês", en = "Chinese" },
+}
+
+local by_code = { zh = "zh-CN" }
+for _, l in ipairs(LANGS) do by_code[l.code:lower()] = l.code end
+
+-- "auto": o idioma do app, e descobrir sozinho o idioma de origem.
+local target = larper.storage.get("target") or "auto"
+local source = larper.storage.get("source") or "auto"
+
+local function target_code()
+  return target == "auto" and larper.lang() or target
+end
 
 local function cut(text)
   if #text <= MAX then return text, false end
@@ -23,26 +53,17 @@ local function clean(text)
   return (text:gsub("<a?:([%w_]+):%d+>", ":%1:"):gsub("<@[!&]?%d+>", "@…"):gsub("<#%d+>", "#…"))
 end
 
--- Traduzidas agora: clicar de novo tira.
-local shown = {}
+-- O serviço às vezes devolve marcas de formatação e entidades de HTML na tradução.
+local ENTITIES = { ["&#39;"] = "'", ["&quot;"] = '"', ["&lt;"] = "<", ["&gt;"] = ">", ["&amp;"] = "&" }
 
-larper.menu("message", { pt = "Traduzir", en = "Translate" }, function(m)
-  if shown[m.id] then
-    shown[m.id] = nil
-    larper.undecorate(m)
-    return
-  end
-  if not larper.http.allowed(HOST) then
-    larper.notify(tr("Aprove " .. HOST .. " em Configurações → Plugins", "Approve " .. HOST .. " in Settings → Plugins"))
-    return
-  end
-  local text, partial = cut(clean(m.content))
-  if text:gsub("%s", "") == "" then
-    larper.notify(tr("Essa mensagem não tem texto", "That message has no text"))
-    return
-  end
-  larper.decorate(m, { note = tr("Traduzindo…", "Translating…") })
-  local url = "https://" .. HOST .. "/get?q=" .. larper.urlencode(text) .. "&langpair=" .. larper.urlencode("Autodetect|" .. larper.lang())
+local function tidy(text)
+  return (text:gsub("</?g[^>]*>", ""):gsub("&#?%w+;", ENTITIES))
+end
+
+-- Chama done(tradução), ou done(nil, "same") ou done(nil, "fail", detalhe).
+local function fetch(text, code, done)
+  local from = source == "auto" and "Autodetect" or source
+  local url = "https://" .. HOST .. "/get?q=" .. larper.urlencode(text) .. "&langpair=" .. larper.urlencode(from .. "|" .. code)
   larper.http.get(url, function(res)
     local data = res.ok and larper.json.decode(res.body) or nil
     local out = data and data.responseData and data.responseData.translatedText
@@ -50,16 +71,132 @@ larper.menu("message", { pt = "Traduzir", en = "Translate" }, function(m)
     -- o aviso dele vem no lugar da tradução. Nunca é para mostrar esse aviso.
     local refused = data and data.responseStatus ~= nil and tostring(data.responseStatus) ~= "200"
     if refused and type(out) == "string" and out:find("DISTINCT LANGUAGES", 1, true) then
-      shown[m.id] = true
-      larper.decorate(m, { note = tr("Essa mensagem já está no seu idioma", "That message is already in your language") })
-      return
+      return done(nil, "same")
     end
     if refused or type(out) ~= "string" or out == "" then
-      larper.decorate(m, { note = tr("Não consegui traduzir", "Couldn't translate") .. (res.error and " (" .. res.error .. ")" or "") })
-      return
+      return done(nil, "fail", res.error)
     end
-    shown[m.id] = true
-    if partial then out = out .. " […]" end
-    larper.decorate(m, { note = "🌐 " .. out })
+    done(tidy(out))
+  end)
+end
+
+local function can_ask()
+  if larper.http.allowed(HOST) then return true end
+  larper.notify(tr("Aprove " .. HOST .. " em Configurações → Plugins", "Approve " .. HOST .. " in Settings → Plugins"))
+  return false
+end
+
+-- Com nota agora: clicar em "Traduzir" de novo tira.
+local shown = {}
+-- O pedido mais novo de cada mensagem: uma resposta atrasada não pisa nele.
+local asked = {}
+local serial = 0
+
+-- O × da nota: da próxima vez, "Traduzir" traduz de novo em vez de só tirar.
+larper.on("dismiss", function(d)
+  shown[d.id] = nil
+  asked[d.id] = nil
+end)
+
+local function already(code)
+  if target == "auto" and code == larper.lang() then
+    return tr("Essa mensagem já está no seu idioma", "That message is already in your language")
+  end
+  return tr("Essa mensagem já está nesse idioma", "That message is already in that language")
+end
+
+local function request(m, code)
+  if not can_ask() then return end
+  local text, partial = cut(clean(m.content))
+  if text:gsub("%s", "") == "" then
+    larper.notify(tr("Essa mensagem não tem texto", "That message has no text"))
+    return
+  end
+  serial = serial + 1
+  local mine = serial
+  asked[m.id] = mine
+  larper.decorate(m, { note = tr("Traduzindo…", "Translating…") })
+  fetch(text, code, function(out, why, detail)
+    if asked[m.id] ~= mine then return end
+    asked[m.id] = nil
+    if why == "same" then
+      shown[m.id] = true
+      larper.decorate(m, { note = already(code) })
+    elseif why then
+      shown[m.id] = nil
+      larper.decorate(m, { note = tr("Não consegui traduzir", "Couldn't translate") .. (detail and " (" .. detail .. ")" or "") })
+    else
+      shown[m.id] = true
+      if partial then out = out .. " […]" end
+      -- O idioma só aparece quando não é o de sempre.
+      local tag = code ~= larper.lang() and code:upper() .. " · " or ""
+      larper.decorate(m, { note = "🌐 " .. tag .. out })
+    end
+  end)
+end
+
+larper.menu("message", { pt = "Traduzir", en = "Translate" }, function(m)
+  if shown[m.id] or asked[m.id] then
+    shown[m.id] = nil
+    asked[m.id] = nil
+    larper.undecorate(m)
+    return
+  end
+  request(m, target_code())
+end, { toolbar = "🌐" })
+
+local choices = {}
+for _, l in ipairs(LANGS) do
+  choices[#choices + 1] = { value = l.code, pt = l.pt, en = l.en }
+end
+
+-- Só esta mensagem: a escolha da página continua como está.
+larper.menu("message", { pt = "Traduzir para…", en = "Translate to…" }, function(m, code)
+  request(m, code)
+end, { choices = choices })
+
+-- /tr es bom dia: a tradução vai para a caixa, e quem envia é você.
+larper.command("/tr", function(args)
+  local first, rest = args:match("^(%S+)%s+(.+)$")
+  local code = first and by_code[first:lower()]
+  local text = code and rest or args
+  if text == "" then
+    larper.notify(tr("Use assim: /tr es bom dia", "Use it like this: /tr es good morning"))
+    return
+  end
+  if not can_ask() then return end
+  fetch(cut(clean(text)), code or target_code(), function(out, why, detail)
+    if why == "same" then
+      larper.notify(tr("Esse texto já está nesse idioma", "That text is already in that language"))
+    elseif why then
+      larper.notify(tr("Não consegui traduzir", "Couldn't translate") .. (detail and " (" .. detail .. ")" or ""))
+    else
+      larper.insert(out)
+    end
   end)
 end)
+
+local function options()
+  local to = { { value = "auto", label = tr("Idioma do app", "App language") } }
+  local from = { { value = "auto", label = tr("Detectar sozinho", "Detect automatically") } }
+  for _, l in ipairs(LANGS) do
+    local label = tr(l.pt, l.en)
+    to[#to + 1] = { value = l.code, label = label }
+    from[#from + 1] = { value = l.code, label = label }
+  end
+  larper.settings.set({
+    { type = "select", key = "target", label = tr("Traduzir para", "Translate to"), value = target, options = to,
+      on_change = function(v)
+        target = v
+        larper.storage.set("target", v)
+      end },
+    { type = "select", key = "source", label = tr("Idioma original", "Original language"), value = source, options = from,
+      on_change = function(v)
+        source = v
+        larper.storage.set("source", v)
+      end },
+  })
+end
+
+larper.on("lang", options)
+options()
