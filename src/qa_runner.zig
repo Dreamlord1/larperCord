@@ -959,7 +959,14 @@ fn themeChanged(app: *App) bool {
     return app.themes.current != saved_theme;
 }
 fn composerVisible(_: *App) bool {
-    return qa.find("composer") != null and qa.find("msg-index:0") != null;
+    if (qa.find("composer") == null) return false;
+    // Com não lidas, a conversa abre na primeira delas: a mais nova pode estar abaixo da tela.
+    var b: [32]u8 = undefined;
+    for (0..64) |i| {
+        const name = std.fmt.bufPrint(&b, "msg-index:{d}", .{i}) catch continue;
+        if (qa.find(name) != null) return true;
+    }
+    return false;
 }
 fn rememberTab(app: *App) void {
     saved_tab = app.st.tab;
