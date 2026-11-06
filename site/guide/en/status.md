@@ -41,6 +41,16 @@ larperCord is a young project: version 0.6.0, with its first commit on November 
 - [x] Read state synced with Discord, pinned messages, Discord links in the app
 - [x] Theme engine: gradients, patterns, grain, vignette, display typography, shapes and rules, procedural backgrounds
 
+**Next**
+
+- [ ] Open from the saved servers, channels and messages, then sync when Discord answers
+- [ ] Memory settings: messages kept in channels you left, the image limit and GIF limits
+- [ ] A texture atlas for avatars and emoji
+- [ ] Server and role settings
+- [ ] A better theme editor
+- [ ] More versatile and more powerful plugins
+- [ ] Windows as a single `.exe`
+
 **To make the app complete**
 
 - [ ] Real permissions: hide what you can't see, disable composer and reactions, filter members

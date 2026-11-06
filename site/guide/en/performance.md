@@ -5,14 +5,16 @@
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | 1,279 MB | 12–47% ¹ | 287 MB |
-| **larperCord**, real account ³ | **~130 MB** | **0–0.4%** | **~15 MB** |
-| **larperCord**, demo ² | **44–47 MB** | **0–0.4%** | **~15 MB** |
+| Discord Phoenix (Rust) ² | ~290 MB | 0.1% | not released |
+| **larperCord**, real account ³ | **~130 MB** | **0–0.4%** ⁴ | **~15 MB** |
 
 ¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, a 1280×800 window, `ReleaseFast` build.
 
-² Demo data, all 11 themes, real GPU, a real window on a hidden Hyprland workspace, and GIF autoplay off. A window you're looking at can measure differently.
+² Not measured by us and not a side-by-side test. It's an early Windows 11 build, from a Task Manager screenshot [posted by Discord's CTO](https://x.com/svishnevskiy/status/2118081920194203799) ([coverage](https://www.windowslatest.com/2026/11/05/discord-is-killing-its-electron-app-that-can-eat-4gb-of-ram-on-windows-11-and-the-rust-rebuild-uses-just-290mb/)). The app isn't out yet, and that screenshot says little about normal use.
 
 ³ 125–140 MB in one account's normal use on the same PC, with an i5-2400S, and about 70 MB right after opening. Yours depends on your servers, members and images. Settings → Performance shows where it goes.
+
+⁴ Measured across all 11 themes with demo data, a real GPU, a real window on a hidden Hyprland workspace and GIF autoplay off. A window you're looking at can measure differently.
 
 Read these with the right caveats:
 

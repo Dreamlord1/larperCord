@@ -47,7 +47,7 @@
       <h1><span data-g="O Discord,">O Discord,</span><em data-g="sem o navegador">sem o navegador</em><span data-g="dentro.">dentro.</span></h1>
       <p class="typed" aria-hidden="true"><span class="typed-cmd"></span><span class="typed-out"></span><i class="typed-cur"></i></p>
       <div class="hero-copy">
-        <p>Um cliente nativo que fica perto de <strong>130&nbsp;MB de RAM</strong> com uma conta real, uns 50 na demonstração, e em <strong>0% de CPU</strong> parado. A interface inteira é <strong>um arquivo de texto</strong> que você edita com o app aberto. Olha ela se reorganizando.</p>
+        <p>Um cliente nativo que fica perto de <strong>130&nbsp;MB de RAM</strong> com uma conta real e em <strong>0% de CPU</strong> parado. A interface inteira é <strong>um arquivo de texto</strong> que você edita com o app aberto. Olha ela se reorganizando.</p>
         <div class="cta">
           <a class="btn primary" href="#download">Baixar →</a>
           <a class="btn" href="#install">Testar a demonstração</a>
@@ -74,7 +74,6 @@
     <p class="stage-note" data-stage-note></p>
     <dl class="stats">
       <div><dt>RAM, conta real</dt><dd>~130 MB</dd></div>
-      <div><dt>RAM, demonstração</dt><dd>~50 MB</dd></div>
       <div><dt>CPU parado</dt><dd>0%</dd></div>
       <div><dt>temas</dt><dd>11</dd></div>
       <div><dt>electron</dt><dd>0</dd></div>
@@ -87,32 +86,32 @@
 <section class="node" id="numbers">
   <span class="tag reveal"><b>status-bar</b> <i>items="ram cpu size" {</i></span>
   <h2 class="h reveal">1.279&nbsp;MB para dar <em>bom dia.</em></h2>
-  <p class="lede reveal">Um cliente em Electron é um navegador inteiro fantasiado de app. Mesma máquina, mesmo tamanho de janela. Cada quadradinho é 5&nbsp;MB de RAM.</p>
+  <p class="lede reveal">Um cliente em Electron é um navegador inteiro fantasiado de app. Cada quadradinho é 5&nbsp;MB de RAM.</p>
   <div class="ledger reveal">
     <div class="bar-row">
       <div class="bar-label"><strong data-count="1279">1,279&nbsp;MB</strong><span>Vesktop (Electron)</span></div>
       <div class="units" data-units="1279" role="img" aria-label="Vesktop: 1.279 MB de RAM, cerca de 256 quadradinhos"></div>
     </div>
     <div class="bar-row">
+      <div class="bar-label"><strong>~290&nbsp;MB</strong><span>Discord Phoenix (Rust, ainda não lançado)</span></div>
+      <div class="units" data-units="290" role="img" aria-label="Discord Phoenix: cerca de 290 MB de RAM, 58 quadradinhos"></div>
+    </div>
+    <div class="bar-row">
       <div class="bar-label us"><strong>~130&nbsp;MB</strong><span>larperCord, conta real</span></div>
       <div class="units us" data-units="130" role="img" aria-label="larperCord com uma conta real: cerca de 130 MB de RAM, 26 quadradinhos"></div>
     </div>
-    <div class="bar-row">
-      <div class="bar-label us"><strong>~50&nbsp;MB</strong><span>larperCord, demonstração</span></div>
-      <div class="units us" data-units="50" role="img" aria-label="larperCord na demonstração: cerca de 50 MB de RAM, 10 quadradinhos"></div>
-    </div>
-  </div>
+      </div>
   <div class="table-scroll reveal">
   <table class="facts">
-    <thead><tr><th></th><th>Vesktop (Electron)</th><th>larperCord</th></tr></thead>
+    <thead><tr><th></th><th>Vesktop (Electron)</th><th>Discord Phoenix (Rust)</th><th>larperCord</th></tr></thead>
     <tbody>
-      <tr><th>RAM (PSS)</th><td>1,279 MB</td><td class="us">~130 MB com conta real, 44–47 MB na demonstração</td></tr>
-      <tr><th>CPU parado</th><td>12–47%</td><td class="us">0–0.4%</td></tr>
-      <tr><th>Binário em disco</th><td>287 MB</td><td class="us">~15 MB</td></tr>
+      <tr><th>RAM (PSS)</th><td>1,279 MB</td><td>~290 MB</td><td class="us">~130 MB com conta real</td></tr>
+      <tr><th>CPU parado</th><td>12–47%</td><td>0.1%</td><td class="us">0–0.4%</td></tr>
+      <tr><th>Binário em disco</th><td>287 MB</td><td>não lançado</td><td class="us">~15 MB</td></tr>
     </tbody>
   </table>
   </div>
-  <p class="foot reveal">larperCord: build ReleaseFast, dados de demonstração, janela de verdade na GPU real, nos 11 temas, com a reprodução automática de GIFs desligada. <code>terminal</code> e <code>subsolo</code> às vezes medem mais, e um GIF animado na tela custa cerca de 2,5% de CPU. Uma conta real com muitos servidores usa mais. Vesktop: média desde a abertura, medida com <code>ps</code>. Arch Linux, Hyprland, GTX 1050 Ti, 1280×800. Cerca de metade do PSS do larperCord é o driver da NVIDIA e as bibliotecas do sistema. Reproduza com <code>tools/membench.sh</code>. <a href="../pt/guide/performance.html">Como foi medido →</a></p>
+  <p class="foot reveal">larperCord: 125–140&nbsp;MB no uso normal de uma conta e cerca de 70&nbsp;MB logo depois de abrir. O seu depende dos seus servidores, membros e imagens. O CPU parado foi medido nos 11 temas, com a reprodução automática de GIFs desligada, e um GIF animado na tela custa cerca de 2,5%. Cerca de 35&nbsp;MB do PSS são o driver da NVIDIA, as bibliotecas e as fontes. Vesktop: média desde a abertura, medida com <code>ps</code>. Os dois no mesmo PC: Arch Linux, Hyprland, i5-2400S, GTX 1050 Ti, 1280×800. Discord Phoenix: não medido por nós e não é um teste lado a lado. É uma versão inicial para Windows 11, de um print do Gerenciador de Tarefas <a href="https://x.com/svishnevskiy/status/2118081920194203799">postado pelo CTO do Discord</a>. <a href="../pt/guide/performance.html">Como foi medido →</a></p>
   <span class="close">}</span>
 </section>
 

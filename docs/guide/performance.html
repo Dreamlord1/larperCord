@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Performance · larperCord</title>
-<meta name="description" content="# The numbers RAM (PSS) Idle CPU Binary Vesktop (Electron) 1,279 MB 12–47% ¹ 287 MB larperCord , real account ³ ~130 MB 0–0.4% ~15 MB larperCord , demo ² 4">
+<meta name="description" content="# The numbers RAM (PSS) Idle CPU Binary Vesktop (Electron) 1,279 MB 12–47% ¹ 287 MB Discord Phoenix (Rust) ² ~290 MB 0.1% not released larperCord , real ac">
 <meta name="color-scheme" content="dark light">
 <link rel="canonical" href="https://rshacudevidro.github.io/larperCord/guide/performance.html">
 <link rel="alternate" hreflang="en" href="https://rshacudevidro.github.io/larperCord/guide/performance.html">
 <link rel="alternate" hreflang="pt-BR" href="https://rshacudevidro.github.io/larperCord/pt/guide/performance.html">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Performance · larperCord">
-<meta property="og:description" content="# The numbers RAM (PSS) Idle CPU Binary Vesktop (Electron) 1,279 MB 12–47% ¹ 287 MB larperCord , real account ³ ~130 MB 0–0.4% ~15 MB larperCord , demo ² 4">
+<meta property="og:description" content="# The numbers RAM (PSS) Idle CPU Binary Vesktop (Electron) 1,279 MB 12–47% ¹ 287 MB Discord Phoenix (Rust) ² ~290 MB 0.1% not released larperCord , real ac">
 <meta property="og:image" content="https://rshacudevidro.github.io/larperCord/assets/og.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/svg+xml" href="../assets/icon-live.svg">
@@ -45,10 +45,11 @@
 <main id="main" class="prose">
 <h1>Performance</h1>
 <h2 id="the-numbers"><a class="anchor" href="#the-numbers" aria-hidden="true">#</a>The numbers</h2>
-<div class="table-wrap"><table><thead><tr><th></th><th>RAM (PSS)</th><th>Idle CPU</th><th>Binary</th></tr></thead><tbody><tr><td>Vesktop (Electron)</td><td>1,279 MB</td><td>12–47% ¹</td><td>287 MB</td></tr><tr><td><strong>larperCord</strong>, real account ³</td><td><strong>~130 MB</strong></td><td><strong>0–0.4%</strong></td><td><strong>~15 MB</strong></td></tr><tr><td><strong>larperCord</strong>, demo ²</td><td><strong>44–47 MB</strong></td><td><strong>0–0.4%</strong></td><td><strong>~15 MB</strong></td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th></th><th>RAM (PSS)</th><th>Idle CPU</th><th>Binary</th></tr></thead><tbody><tr><td>Vesktop (Electron)</td><td>1,279 MB</td><td>12–47% ¹</td><td>287 MB</td></tr><tr><td>Discord Phoenix (Rust) ²</td><td>~290 MB</td><td>0.1%</td><td>not released</td></tr><tr><td><strong>larperCord</strong>, real account ³</td><td><strong>~130 MB</strong></td><td><strong>0–0.4%</strong> ⁴</td><td><strong>~15 MB</strong></td></tr></tbody></table></div>
 <p>¹ Average since launch, measured with <code>ps</code>. Arch Linux, Hyprland, GTX 1050 Ti, a 1280×800 window, <code>ReleaseFast</code> build.</p>
-<p>² Demo data, all 11 themes, real GPU, a real window on a hidden Hyprland workspace, and GIF autoplay off. A window you're looking at can measure differently.</p>
+<p>² Not measured by us and not a side-by-side test. It's an early Windows 11 build, from a Task Manager screenshot <a href="https://x.com/svishnevskiy/status/2118081920194203799">posted by Discord's CTO</a> (<a href="https://www.windowslatest.com/2026/11/05/discord-is-killing-its-electron-app-that-can-eat-4gb-of-ram-on-windows-11-and-the-rust-rebuild-uses-just-290mb/">coverage</a>). The app isn't out yet, and that screenshot says little about normal use.</p>
 <p>³ 125–140 MB in one account's normal use on the same PC, with an i5-2400S, and about 70 MB right after opening. Yours depends on your servers, members and images. Settings → Performance shows where it goes.</p>
+<p>⁴ Measured across all 11 themes with demo data, a real GPU, a real window on a hidden Hyprland workspace and GIF autoplay off. A window you're looking at can measure differently.</p>
 <p>Read these with the right caveats:</p>
 <ul><li><strong>A real account uses more</strong> than demo data. More servers, more members, more images.</li><li><strong>Idle means nothing is moving.</strong> An animated GIF on screen costs about 2.5% CPU. The demo's first channel has one, so the measurement turns autoplay off.</li><li><strong>A good part of PSS isn't the app.</strong> It's the NVIDIA driver and system libraries such as libcurl and OpenSSL. In one measurement across the themes, anonymous memory was about 25 MB.</li><li><strong>The published Linux file carries SDL3, libcurl and OpenSSL inside</strong>, so it runs on more distros. Built against the system's copies it's about 7 MB. These RAM figures come from that kind of build; side by side in demo, the published file used about 2 MB more.</li><li>The Vesktop figures come from a single earlier run on the same machine.</li></ul>
 <h2 id="measure-it-yourself"><a class="anchor" href="#measure-it-yourself" aria-hidden="true">#</a>Measure it yourself</h2>

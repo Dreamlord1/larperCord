@@ -47,12 +47,13 @@ O cliente oficial é um navegador inteiro disfarçado de app. No mesmo PC:
 | | RAM (PSS) | CPU parado | Binário |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord**, conta real | **~130 MB**³ | **0–0,4%** | **~15 MB** |
-| **larperCord**, demonstração | **44–47 MB**² | **0–0,4%** | **~15 MB** |
+| Discord Phoenix (Rust) | ~290 MB² | 0,1%² | não lançado |
+| **larperCord**, conta real | **~130 MB**³ | **0–0,4%**⁴ | **~15 MB** |
 
 <sub>¹ média desde a abertura, medida pelo `ps`. Arch Linux, Hyprland, GTX 1050 Ti, janela de 1280×800, build `ReleaseFast`.
-² Dados de demonstração, janela de verdade, reprodução automática de GIFs desligada, medido com `tools/membench.sh`. Um GIF animado na tela custa cerca de 2,5% de CPU. Cerca de metade do total é o driver da NVIDIA e as bibliotecas do sistema (libcurl, OpenSSL). Medido num build que usa as bibliotecas do sistema. O arquivo publicado para Linux traz SDL3, libcurl e OpenSSL dentro: lado a lado na demonstração, usou cerca de 2 MB a mais.
-³ 125–140 MB no uso normal de uma conta, no mesmo PC, cerca de 70 MB logo depois de abrir. O seu depende dos seus servidores, membros e imagens; Configurações → Desempenho mostra para onde vai.</sub>
+² Não medido por nós e não é um teste lado a lado: uma versão inicial para Windows 11, de um print do Gerenciador de Tarefas [postado pelo CTO do Discord](https://x.com/svishnevskiy/status/2118081920194203799). O app ainda não saiu.
+³ 125–140 MB no uso normal de uma conta, no mesmo PC, cerca de 70 MB logo depois de abrir. O seu depende dos seus servidores, membros e imagens; Configurações → Desempenho mostra para onde vai. Cerca de 35 MB do total são o driver da NVIDIA, as bibliotecas e as fontes. O arquivo publicado para Linux traz SDL3, libcurl e OpenSSL dentro: lado a lado na demonstração, usou cerca de 2 MB a mais que um build com as cópias do sistema.
+⁴ Medido com `tools/membench.sh`, com dados de demonstração, janela de verdade e reprodução automática de GIFs desligada. Um GIF animado na tela custa cerca de 2,5% de CPU.</sub>
 
 ## O que tem
 
@@ -284,6 +285,16 @@ gateway falso pelo real não toca na interface.
 - [x] Voz (DAVE/MLS + Opus)
 - [ ] Backend por software (`wl_shm`, sem GPU) para ficar em ~15–20 MB
 - [ ] Componentes de tema escritos em Lua (sandbox)
+
+**A seguir**
+
+- [ ] Abrir pelos servidores, canais e mensagens salvos, e sincronizar quando o Discord responder
+- [ ] Configurações de memória: mensagens guardadas nos canais que você saiu, limite de imagens e de GIFs
+- [ ] Atlas de texturas para avatares e emojis
+- [ ] Configurar servidor e cargos
+- [ ] Um editor de temas melhor
+- [ ] Plugins mais versáteis e com mais poder
+- [ ] Windows em um `.exe` só
 
 ## Licença
 

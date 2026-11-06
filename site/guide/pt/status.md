@@ -41,6 +41,16 @@ O larperCord é um projeto jovem: versão 0.6.0, com o primeiro commit em 2 de n
 - [x] Leitura sincronizada com o Discord, mensagens fixadas, links do Discord no app
 - [x] Motor de temas: gradientes, padrões, grão, vinheta, tipografia de display, formas e linhas, fundos procedurais
 
+**A seguir**
+
+- [ ] Abrir pelos servidores, canais e mensagens salvos, e sincronizar quando o Discord responder
+- [ ] Configurações de memória: mensagens guardadas nos canais que você saiu, limite de imagens e de GIFs
+- [ ] Atlas de texturas para avatares e emojis
+- [ ] Configurar servidor e cargos
+- [ ] Um editor de temas melhor
+- [ ] Plugins mais versáteis e com mais poder
+- [ ] Windows em um `.exe` só
+
 **Para o app ficar completo**
 
 - [ ] Permissões de verdade: esconder o que você não pode ver, desabilitar a caixa de texto e as reações, filtrar os membros

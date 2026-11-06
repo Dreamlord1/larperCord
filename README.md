@@ -46,12 +46,13 @@ The official client is a whole browser dressed up as an app. On the same PC:
 | | RAM (PSS) | Idle CPU | Binary |
 |---|---|---|---|
 | Vesktop (Electron) | **1279 MB** | 12–47%¹ | 287 MB |
-| **larperCord**, real account | **~130 MB**³ | **0–0.4%** | **~15 MB** |
-| **larperCord**, demo | **44–47 MB**² | **0–0.4%** | **~15 MB** |
+| Discord Phoenix (Rust) | ~290 MB² | 0.1%² | not released |
+| **larperCord**, real account | **~130 MB**³ | **0–0.4%**⁴ | **~15 MB** |
 
 <sub>¹ Average since launch, measured with `ps`. Arch Linux, Hyprland, GTX 1050 Ti, 1280×800 window, `ReleaseFast` build.
-² Demo data, a real window, GIF autoplay off, measured with `tools/membench.sh`. An animated GIF on screen costs about 2.5% CPU. About half of the total is the NVIDIA driver and system libraries (libcurl, OpenSSL). Measured on a build that uses the system's libraries. The published Linux file carries SDL3, libcurl and OpenSSL inside: side by side in demo, it used about 2 MB more.
-³ 125–140 MB in one account's normal use on the same PC, about 70 MB right after opening. Yours depends on your servers, members and images; Settings → Performance shows where it goes.</sub>
+² Not measured by us and not a side-by-side test: an early Windows 11 build, from a Task Manager screenshot [posted by Discord's CTO](https://x.com/svishnevskiy/status/2118081920194203799). The app isn't out yet.
+³ 125–140 MB in one account's normal use on the same PC, about 70 MB right after opening. Yours depends on your servers, members and images; Settings → Performance shows where it goes. About 35 MB of the total is the NVIDIA driver, libraries and fonts. The published Linux file carries SDL3, libcurl and OpenSSL inside: side by side in demo, it used about 2 MB more than a build using the system's copies.
+⁴ Measured with `tools/membench.sh`, with demo data, a real window and GIF autoplay off. An animated GIF on screen costs about 2.5% CPU.</sub>
 
 ## What's in it
 
@@ -285,6 +286,16 @@ swapping the fake gateway for the real one doesn't touch the UI.
 - [x] Voice (DAVE/MLS + Opus)
 - [ ] A software backend (`wl_shm`, no GPU) to get to about 15–20 MB
 - [ ] Theme components written in Lua (sandboxed)
+
+**Next**
+
+- [ ] Open from the saved servers, channels and messages, then sync when Discord answers
+- [ ] Memory settings: messages kept in channels you left, the image limit and GIF limits
+- [ ] A texture atlas for avatars and emoji
+- [ ] Server and role settings
+- [ ] A better theme editor
+- [ ] More versatile and more powerful plugins
+- [ ] Windows as a single `.exe`
 
 ## License
 
